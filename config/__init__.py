@@ -13,8 +13,8 @@ for atr in [f for f in dir(_current) if not '__' in f]:
 
 
 def as_dict():
-   res = {}
-   for atr in [f for f in dir(config) if not '__' in f]:
-       val = getattr(config, atr)
-       res[atr] = val
-   return res    
+    res = {}
+    for atr in [f for f in dir(config) if not '__' in f]:
+        val = getattr(config, atr)
+        res[atr] = val
+    return res    

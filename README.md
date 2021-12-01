@@ -26,4 +26,5 @@ $ pip install -r requirements.txt
 ## References
 
 https://www.toptal.com/flask/flask-production-recipes
+https://apispec.readthedocs.io/en/latest/install.html
 https://github.com/gregbugaj/form-processor
