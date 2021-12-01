@@ -1,4 +1,5 @@
 result/
+models/
 log_eval_result.txt
 
 *.py[cod]
