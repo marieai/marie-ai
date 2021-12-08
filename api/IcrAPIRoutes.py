@@ -102,8 +102,7 @@ def extract(queue_id: str):  # adding self here gives an error
 
     logger.info(f'Starting ICR processing request', extra={"session": queue_id})
 
-    print('extract')
-    print(request.json)
+    # print(request.json)
     raw_data = request.json["data"]
     message_bytes = base64StringToBytes(raw_data)
 
@@ -131,14 +130,14 @@ def extract(queue_id: str):  # adding self here gives an error
         overlay = np.ones((h+padding*2, w+padding*2, 3), dtype=np.uint8)*255
         overlay[padding:h+padding, padding:w+padding] = img
 
-        cv2.imwrite('/tmp/marie/overlay.png', overlay)
+        # cv2.imwrite('/tmp/marie/overlay.png', overlay)
 
         boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
             queue_id, checksum, overlay)
         result, overlay_image = icr_processor.recognize(
             queue_id, checksum, overlay, boxes, img_fragments, lines)
 
-        cv2.imwrite('/tmp/marie/overlay_image.png', overlay_image)
+        # cv2.imwrite('/tmp/marie/overlay_image.png', overlay_image)
 
         result['overlay_b64'] = encodeToBase64(overlay_image)
         serialized = json.dumps(result, sort_keys=True,  separators=(',', ': '), ensure_ascii=False, indent=2, cls=NumpyEncoder)
