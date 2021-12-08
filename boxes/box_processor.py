@@ -296,7 +296,7 @@ class BoxProcessor:
                 image=image_norm,
                 craft_net=self.craft_net,
                 refine_net=None, #self.refine_net,
-                text_threshold=0.5,
+                text_threshold=0.6,
                 link_threshold=0.4,
                 low_text=0.3,
                 cuda=self.cuda,
@@ -304,7 +304,7 @@ class BoxProcessor:
                 # canvas_size=1280,#w + w // 2,
                 canvas_size=w,
                 # canvas_size=w + w // 2,
-                mag_ratio=1
+                mag_ratio=2
             )
             
             prediction_result = dict()
