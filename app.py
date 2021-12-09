@@ -8,8 +8,9 @@ import config
 import api.IcrAPIRoutes as IcrAPIRoutes
 from logger import create_info_logger
 from utils.utils import ensure_exists
+import traceback
 
-log = create_info_logger("marie", "marie.log")
+log = create_info_logger("app", "marie.log")
 
 def create_app():
     log.info(f'Starting app in {config.APP_ENV} environment')

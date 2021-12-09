@@ -16,7 +16,7 @@ from skimage import io
 
 from flask import Blueprint
 
-logger = create_info_logger("marie", "marie.log")
+logger = create_info_logger(__name__, "marie.log")
 
 # app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
@@ -41,7 +41,6 @@ def base64StringToBytes(data:str):
     return message_bytes
 
 
-
 def loadImage(img_file):
     img = io.imread(img_file)           # RGB order
     if img.shape[0] == 2:
@@ -63,7 +62,6 @@ blueprint = Blueprint(
 )
 
 logger.info('IcrAPIRoutes inited')
-
 box_processor = processors.box_processor
 icr_processor = processors.icr_processor
 show_error = True # show predition errors
@@ -93,7 +91,8 @@ def status():
 
 @blueprint.route("/extract/<queue_id>", methods=["POST"])
 def extract(queue_id: str):  # adding self here gives an error
-    """ICR payload to process
+    """
+    ICR payload to process
         Process image via ICR, this is low level API, to get more usable results call extract_icr.
 
     Args:
@@ -148,5 +147,5 @@ def extract(queue_id: str):  # adding self here gives an error
         if show_error:
             return {"error": str(error)}, 500
         else:
-            return {"error": 'inference exception'}, 500              
+            return {"error": 'inference exception'}, 500
 

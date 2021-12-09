@@ -3,7 +3,7 @@ from document.icr_processor import IcrProcessor
 from utils.utils import ensure_exists
 
 def init()->None:
-    print('Initializng processor')
+    print('Initializng processors on load')
 
     global box_processor
     global icr_processor

@@ -38,7 +38,7 @@ def loadImage(img_file):
 
     return img
 
-logger = create_info_logger("marie", "marie.log")
+logger = create_info_logger(__name__, "marie.log")
 
 class IcrExtractAPI(Resource):
     def __init__(self):

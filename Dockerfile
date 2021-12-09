@@ -86,8 +86,13 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # Install and initialize MARIE-ICR, copy all necessary files
 
-RUN python3 --version    
+RUN python3 --version
 
 # RUN all commands below as conteainer user 
 USER ${USER}
 WORKDIR ${HOME}
+
+# Copy app resources
+COPY info.py ${HOME}
+
+RUN python3 ${HOME}/info.py
