@@ -23,8 +23,21 @@ $ pip install -r ./requirements/requirements.txt
 ```
 
 Build Docker Image
+
 ```sh
 DOCKER_BUILDKIT=1 docker build .
+```
+
+Starting in Development mode
+
+```sh
+python ./app.py
+```
+
+Starting in Production mode with `gunicorn`. Config settings [https://docs.gunicorn.org/en/stable/settings.html#settings]
+
+```sh
+gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
 ```
 
 

@@ -8,5 +8,8 @@ natsort
 celery
 flask 
 flask-restful 
-gunicorn
+Werkzeug
 imagecodecs
+torch
+torchvision
+torchaudio
