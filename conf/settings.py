@@ -3,7 +3,6 @@ class BaseConfig():
     TESTING = False
     DEBUG = False
 
-
 class DevConfig(BaseConfig):
     FLASK_ENV = 'development'
     DEBUG = True

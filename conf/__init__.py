@@ -1,11 +1,12 @@
 import os
 import sys
 
-import config.settings
+import conf.settings
 
 # create settings object corresponding to specified env
 APP_ENV = os.environ.get('APP_ENV', 'Dev')
-_current = getattr(sys.modules['config.settings'], '{0}Config'.format(APP_ENV))()
+print(f'APP_ENVX = {APP_ENV}')
+_current = getattr(sys.modules['conf.settings'], '{0}Config'.format(APP_ENV))()
 
 for atr in [f for f in dir(_current) if not '__' in f]:
     val = os.environ.get(atr, getattr(_current, atr))
@@ -14,7 +15,7 @@ for atr in [f for f in dir(_current) if not '__' in f]:
 
 def as_dict():
     res = {}
-    for atr in [f for f in dir(config) if not '__' in f]:
-        val = getattr(config, atr)
+    for atr in [f for f in dir(conf) if not '__' in f]:
+        val = getattr(conf, atr)
         res[atr] = val
     return res    

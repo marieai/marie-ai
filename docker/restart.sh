@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-exec 1> >(exec logger -s -t "ocr-service [${0##*/}]") 2>&1
-echo "Restarting OCR Service container"
+
+source ./container.sh
+exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
+echo "Restarting container : ${CONTAINER_NAME}"
+
 
 if  [ $(id -u) = 0 ]; then
    echo "This script must not be run as root, run under 'rms-svc' account."
    exit 1
 fi
 
-docker stop ocr-service
-docker start ocr-service
-docker ps -f name=ocr-service
+docker stop ${CONTAINER_NAME}
+docker start ${CONTAINER_NAME}
+docker ps -f name=${CONTAINER_NAME}
