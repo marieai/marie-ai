@@ -41,6 +41,13 @@ gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
 ```
 
 
+Build docker container
+
+```sh
+# --no-cache
+docker build . -t marie-icr:1.0
+```
+
 ## References
 
 https://www.toptal.com/flask/flask-production-recipes

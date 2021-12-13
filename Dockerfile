@@ -86,13 +86,30 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # Install and initialize MARIE-ICR, copy all necessary files
 
-RUN python3 --version
+# RUN python3 --version
 
-# RUN all commands below as conteainer user 
+# Copy app resources
+COPY --chown=${USER} info.py ${HOME}/
+COPY --chown=${USER} ssh ${HOME}/.ssh
+COPY --chown=${USER} supervisord.conf ${HOME}/
+
+COPY --chown=${USER} api/ ${HOME}/api
+COPY --chown=${USER} boxes/ ${HOME}/boxes
+COPY --chown=${USER} config/ ${HOME}/config
+COPY --chown=${USER} craft/ ${HOME}/craft
+COPY --chown=${USER} document/ ${HOME}/document
+COPY --chown=${USER} icr/ ${HOME}/icr
+COPY --chown=${USER} models/ ${HOME}/models
+COPY --chown=${USER} processors/ ${HOME}/processors
+COPY --chown=${USER} utils/ ${HOME}/utils
+
+# RUN python3 ${HOME}/info.py
+
+# RUN all commands below as container user 
 USER ${USER}
 WORKDIR ${HOME}
 
-# Copy app resources
-COPY info.py ${HOME}
+RUN mkdir logs /tmp/supervisord
 
-RUN python3 ${HOME}/info.py
+EXPOSE 5000
+ENTRYPOINT ["/usr/bin/supervisord"]
