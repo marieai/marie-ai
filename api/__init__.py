@@ -1,14 +1,12 @@
 from api.QueueAPI import QueueAPI, QueueListAPI
 from api.BoxAPI import BoxAPI, BoxListAPI
 from api.MarkAPI import MarkAPI, MarkListAPI
-from api.IcrAPI import IcrExtractAPI
 from api.SegmenterAPI import SegmenterListAPI, SegmenterAPI
 
 from flask_restful import Api
-import config
+import conf
 
-api = Api(prefix=config.API_PREFIX)
-
+api = Api(prefix=conf.API_PREFIX) # AttributeError: module 'config' has no attribute 'API_PREFIX
 
 # # Queues
 # api.add_resource(QueueListAPI, '/queues', endpoint='queues')

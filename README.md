@@ -45,7 +45,7 @@ Build docker container
 
 ```sh
 # --no-cache
-docker build . -t marie-icr:1.0
+DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host 
 ```
 
 ## References

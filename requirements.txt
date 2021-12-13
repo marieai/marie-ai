@@ -1,5 +1,4 @@
 wheel
-opencv-python
 matplotlib
 albumentations
 dominate
@@ -9,6 +8,7 @@ celery
 flask 
 flask-restful 
 Werkzeug
+opencv-python
 imagecodecs
 torch
 torchvision

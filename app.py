@@ -1,23 +1,30 @@
+from __future__ import absolute_import
 from os import environ
+
+import conf
+print(f'***config pathx {conf}')
+print(f'***config path {conf.APP_ENV}')
 
 from api import api
 from flask import Flask
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
 
-import config
 import api.IcrAPIRoutes as IcrAPIRoutes
 from logger import create_info_logger
 from utils.utils import ensure_exists
 import traceback
 
+#from . import config
+#config.API_PREFIX)
+
 log = create_info_logger("app", "marie.log")
 
 def create_app():
-    log.info(f'Starting app in {config.APP_ENV} environment')
+    log.info(f'Starting app in {conf.APP_ENV} environment')
     ensure_exists(f'/tmp/marie')
 
     app = Flask(__name__)
-    app.config.from_object('config')
+    app.config.from_object(conf)
     api.init_app(app)
 
     @app.route("/")

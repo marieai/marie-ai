@@ -1,6 +1,6 @@
 from flask_restful import Resource, reqparse, request
 from flask import jsonify
-import config
+import conf
 from logger import create_info_logger
 from utils.utils import current_milli_time, ensure_exists
 import werkzeug
@@ -58,7 +58,7 @@ def loadImage(img_file):
 blueprint = Blueprint(
     name='icr_bp',
     import_name=__name__,
-    url_prefix=config.API_PREFIX
+    url_prefix=conf.API_PREFIX
 )
 
 logger.info('IcrAPIRoutes inited')
@@ -143,6 +143,7 @@ def extract(queue_id: str):  # adding self here gives an error
 
         return serialized, 200
     except BaseException as error:
+        raise error
         print(str(error))
         if show_error:
             return {"error": str(error)}, 500

@@ -291,84 +291,88 @@ class IcrProcessor:
             images: A list of input images, supplied as numpy arrays with shape
                 (H, W, 3).
         """
-
+    
         print('ICR processing : recognize_from_boxes via boxes')
-        # debug_dir =  ensure_exists(os.path.join(self.work_dir,id,'icr',key,'debug'))
-        # output_dir = ensure_exists(os.path.join(self.work_dir,id,'icr',key,'output'))
+        try:
+            # debug_dir =  ensure_exists(os.path.join(self.work_dir,id,'icr',key,'debug'))
+            # output_dir = ensure_exists(os.path.join(self.work_dir,id,'icr',key,'output'))
 
-        opt = self.opt
-        model = self.model
-        converter = self.converter
-        opt.batch_size = 192  #
+            opt = self.opt
+            model = self.model
+            converter = self.converter
+            opt.batch_size = 192  #
 
-        # setup data
-        AlignCollate_data = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
-        eval_data = MemoryDataset(images=images, opt=opt)
+            # setup data
+            AlignCollate_data = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+            eval_data = MemoryDataset(images=images, opt=opt)
 
-        eval_loader = torch.utils.data.DataLoader(
-            eval_data, batch_size=opt.batch_size,
-            shuffle=False,
-            num_workers=int(opt.workers),
-            collate_fn=AlignCollate_data, pin_memory=True)
+            eval_loader = torch.utils.data.DataLoader(
+                eval_data, batch_size=opt.batch_size,
+                shuffle=False,
+                num_workers=int(opt.workers),
+                collate_fn=AlignCollate_data, pin_memory=True)
 
-        results = []
-        # predict
-        model.eval()
-        with torch.no_grad():
-            for image_tensors, image_labels in eval_loader:
-                print(f'OCR : {image_labels}')
-                batch_size = image_tensors.size(0)
-                image = image_tensors.to(device)
+            results = []
+            # predict
+            model.eval()
+            with torch.no_grad():
+                for image_tensors, image_labels in eval_loader:
+                    print(f'OCR : {image_labels}')
+                    batch_size = image_tensors.size(0)
+                    image = image_tensors.to(device)
 
-                # For max length prediction
-                length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
-                text_for_pred = torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
+                    # For max length prediction
+                    length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
+                    text_for_pred = torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
 
-                if 'CTC' in opt.Prediction:
-                    preds = model(image, text_for_pred)
-                    # Select max probabilty (greedy decoding) then decode index to character
-                    preds_size = torch.IntTensor([preds.size(1)] * batch_size)
-                    _, preds_index = preds.max(2)
-                    # preds_index = preds_index.view(-1)
-                    preds_str = converter.decode(preds_index, preds_size)
+                    if 'CTC' in opt.Prediction:
+                        preds = model(image, text_for_pred)
+                        # Select max probabilty (greedy decoding) then decode index to character
+                        preds_size = torch.IntTensor([preds.size(1)] * batch_size)
+                        _, preds_index = preds.max(2)
+                        # preds_index = preds_index.view(-1)
+                        preds_str = converter.decode(preds_index, preds_size)
 
-                else:
-                    preds = model(image, text_for_pred, is_train=False)
-                    # select max probabilty (greedy decoding) then decode index to character
-                    _, preds_index = preds.max(2)
-                    preds_str = converter.decode(preds_index, length_for_pred)
+                    else:
+                        preds = model(image, text_for_pred, is_train=False)
+                        # select max probabilty (greedy decoding) then decode index to character
+                        _, preds_index = preds.max(2)
+                        preds_str = converter.decode(preds_index, length_for_pred)
 
-                log = open(f'./log_eval_result.txt', 'a')
-                dashed_line = '-' * 120
-                head = f'{"key":25s}\t{"predicted_labels":32s}\tconfidence score'
+                    log = open(f'./log_eval_result.txt', 'a')
+                    dashed_line = '-' * 120
+                    head = f'{"key":25s}\t{"predicted_labels":32s}\tconfidence score'
 
-                print(f'{dashed_line}\n{head}\n{dashed_line}')
-                log.write(f'{dashed_line}\n{head}\n{dashed_line}\n')
+                    print(f'{dashed_line}\n{head}\n{dashed_line}')
+                    log.write(f'{dashed_line}\n{head}\n{dashed_line}\n')
 
-                preds_prob = F.softmax(preds, dim=2)
-                preds_max_prob, _ = preds_prob.max(dim=2)
+                    preds_prob = F.softmax(preds, dim=2)
+                    preds_max_prob, _ = preds_prob.max(dim=2)
 
-                for img_name, pred, pred_max_prob in zip(image_labels, preds_str, preds_max_prob):
-                    if 'Attn' in opt.Prediction:
-                        pred_EOS = pred.find('[s]')
-                        pred = pred[:pred_EOS]  # prune after "end of sentence" token ([s])
-                        pred_max_prob = pred_max_prob[:pred_EOS]
+                    for img_name, pred, pred_max_prob in zip(image_labels, preds_str, preds_max_prob):
+                        if 'Attn' in opt.Prediction:
+                            pred_EOS = pred.find('[s]')
+                            pred = pred[:pred_EOS]  # prune after "end of sentence" token ([s])
+                            pred_max_prob = pred_max_prob[:pred_EOS]
 
-                    # calculate confidence score (= multiply of pred_max_prob)
-                    confidence_score = pred_max_prob.cumprod(dim=0)[-1]
-                    # get value from the TensorFloat
-                    confidence = confidence_score.item()
-                    txt = pred
-                    results.append({
-                        "confidence": confidence,
-                        "text": txt,
-                        "id": img_name
-                    })
+                        # calculate confidence score (= multiply of pred_max_prob)
+                        confidence_score = pred_max_prob.cumprod(dim=0)[-1]
+                        # get value from the TensorFloat
+                        confidence = confidence_score.item()
+                        txt = pred
+                        results.append({
+                            "confidence": confidence,
+                            "text": txt,
+                            "id": img_name
+                        })
 
-                    print(f'{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}')
-                    log.write(f'{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n')
-                log.close()
+                        print(f'{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}')
+                        log.write(f'{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n')
+                    log.close()
 
+        except Exception as ex:
+            print(ex)
+            raise ex
         return results
 
     def recognize(self, _id, key, img, boxes, image_fragments, lines):
@@ -381,113 +385,116 @@ class IcrProcessor:
         print(f'ICR recognize : {_id}, {key}')
         assert len(boxes) == len(image_fragments), "You must provide the same number of box groups as images."
 
-        shape = img.shape
-        overlay_image = np.ones((shape[0], shape[1], 3), dtype=np.uint8) * 255
-        debug_dir = ensure_exists(os.path.join('/tmp/icr', _id))
-        debug_all_dir = ensure_exists(os.path.join('/tmp/icr', 'fields', key))
+        try:
+            shape = img.shape
+            overlay_image = np.ones((shape[0], shape[1], 3), dtype=np.uint8) * 255
+            debug_dir = ensure_exists(os.path.join('/tmp/icr', _id)) 
+            debug_all_dir = ensure_exists(os.path.join('/tmp/icr', 'fields', key))
 
-        meta = {
-            'imageSize': {'width': img.shape[1], 'height': img.shape[0]},
-            'lang': 'en'
-        }
-
-        words = []
-        max_line_number = 0
-        results = self.recognize_from_fragments(image_fragments)
-
-        for i in range(len(boxes)):
-            box, fragment, line = boxes[i], image_fragments[i], lines[i]
-            # txt, confidence = self.extract_text(id, str(i), fragment)
-            extraction = results[i]
-            txt = extraction['text']
-            confidence = extraction['confidence']
-            print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
-            conf_label = f'{confidence:0.4f}'
-            txt_label = txt
-
-            payload = dict()
-            payload['id'] = i
-            payload['text'] = txt
-            payload['confidence'] = round(confidence, 4)
-            payload['box'] = box
-            payload['line'] = line
-            payload['fragment_b64'] = encodeimg2b64(fragment)
-
-            words.append(payload)
-
-            if line > max_line_number:
-                max_line_number = line
-
-            overlay_image = drawTrueTypeTextOnImage(overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18,
-                                                    (139, 0, 0))
-            overlay_image = drawTrueTypeTextOnImage(overlay_image, conf_label, (box[0], box[1] + box[3]), 10,
-                                                    (0, 0, 255))
-
-        savepath = os.path.join(debug_dir, f'{key}-icr-result.png')
-        imwrite(savepath, overlay_image)
-
-        savepath = os.path.join(debug_all_dir, f'{_id}.png')
-        imwrite(savepath, overlay_image)
-
-        line_ids = np.empty((max_line_number), dtype=object)
-        words = np.array(words)
-
-        for i in range(0, max_line_number):
-            current_lid = i + 1
-            word_ids = []
-            box_picks = []
-            word_picks = []
-
-            for word in words:
-                lid = word['line']
-                if lid == current_lid:
-                    word_ids.append(word['id'])
-                    box_picks.append(word['box'])
-                    word_picks.append(word)
-
-            box_picks = np.array(box_picks)
-            word_picks = np.array(word_picks)
-
-            x1 = box_picks[:, 0]
-            idxs = np.argsort(x1)
-            aligned_words = word_picks[idxs]
-            _w = []
-            _conf = []
-
-            for wd in aligned_words:
-                _w.append(wd['text'])
-                _conf.append(wd['confidence'])
-
-            text = ' '.join(_w)
-
-            min_x = box_picks[:, 0].min()
-            min_y = box_picks[:, 1].min()
-            max_w = box_picks[:, 2].max()
-            max_h = box_picks[:, 3].max()
-            bbox = [min_x, min_y, max_w, max_h]
-
-            line_ids[i] = {
-                'line': i + 1,
-                'wordids': word_ids,
-                'text': text,
-                'bbox': bbox,
-                'confidence': round(np.average(_conf), 4)
+            meta = {
+                'imageSize': {'width': img.shape[1], 'height': img.shape[0]},
+                'lang': 'en'
             }
 
-        result = {
-            'meta': meta,
-            'words': words,
-            'lines': line_ids,
-        }
+            words = []
+            max_line_number = 0
+            results = self.recognize_from_fragments(image_fragments)
 
-        print(result)
+            for i in range(len(boxes)):
+                box, fragment, line = boxes[i], image_fragments[i], lines[i]
+                # txt, confidence = self.extract_text(id, str(i), fragment)
+                extraction = results[i]
+                txt = extraction['text']
+                confidence = extraction['confidence']
+                print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
+                conf_label = f'{confidence:0.4f}'
+                txt_label = txt
 
-        with open('/tmp/icr/data.json', 'w') as f:
-            json.dump(result, f,  sort_keys=True,  separators=(',', ': '), ensure_ascii=False, indent=4, cls=NumpyEncoder)
+                payload = dict()
+                payload['id'] = i
+                payload['text'] = txt
+                payload['confidence'] = round(confidence, 4)
+                payload['box'] = box
+                payload['line'] = line
+                payload['fragment_b64'] = encodeimg2b64(fragment)
 
-        print('------ Extraction ------------')
-        for line in line_ids:
-            txt = line['text']
-            print(f' >> {txt}')
+                words.append(payload)
 
+                if line > max_line_number:
+                    max_line_number = line
+
+                overlay_image = drawTrueTypeTextOnImage(overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18,
+                                                        (139, 0, 0))
+                overlay_image = drawTrueTypeTextOnImage(overlay_image, conf_label, (box[0], box[1] + box[3]), 10,
+                                                        (0, 0, 255))
+
+            savepath = os.path.join(debug_dir, f'{key}-icr-result.png')
+            imwrite(savepath, overlay_image)
+
+            savepath = os.path.join(debug_all_dir, f'{_id}.png')
+            imwrite(savepath, overlay_image)
+
+            line_ids = np.empty((max_line_number), dtype=object)
+            words = np.array(words)
+
+            for i in range(0, max_line_number):
+                current_lid = i + 1
+                word_ids = []
+                box_picks = []
+                word_picks = []
+
+                for word in words:
+                    lid = word['line']
+                    if lid == current_lid:
+                        word_ids.append(word['id'])
+                        box_picks.append(word['box'])
+                        word_picks.append(word)
+
+                box_picks = np.array(box_picks)
+                word_picks = np.array(word_picks)
+
+                x1 = box_picks[:, 0]
+                idxs = np.argsort(x1)
+                aligned_words = word_picks[idxs]
+                _w = []
+                _conf = []
+
+                for wd in aligned_words:
+                    _w.append(wd['text'])
+                    _conf.append(wd['confidence'])
+
+                text = ' '.join(_w)
+
+                min_x = box_picks[:, 0].min()
+                min_y = box_picks[:, 1].min()
+                max_w = box_picks[:, 2].max()
+                max_h = box_picks[:, 3].max()
+                bbox = [min_x, min_y, max_w, max_h]
+
+                line_ids[i] = {
+                    'line': i + 1,
+                    'wordids': word_ids,
+                    'text': text,
+                    'bbox': bbox,
+                    'confidence': round(np.average(_conf), 4)
+                }
+
+            result = {
+                'meta': meta,
+                'words': words,
+                'lines': line_ids,
+            }
+
+            print(result)
+
+            with open('/tmp/icr/data.json', 'w') as f:
+                json.dump(result, f,  sort_keys=True,  separators=(',', ': '), ensure_ascii=False, indent=4, cls=NumpyEncoder)
+
+            print('------ Extraction ------------')
+            for line in line_ids:
+                txt = line['text']
+                print(f' >> {txt}')
+
+        except Exception as ex:
+            raise ex
         return result, overlay_image

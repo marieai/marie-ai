@@ -1,10 +1,10 @@
-import config
+import conf
 from celery import Celery
 
 
 def make_celery():
-   celery = Celery(__name__, broker=config.CELERY_BROKER)
-   celery.conf.update(config.as_dict())
+   celery = Celery(__name__, broker=conf.CELERY_BROKER)
+   celery.conf.update(conf.as_dict())
    return celery
 
 
