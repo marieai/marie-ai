@@ -40,17 +40,41 @@ Starting in Production mode with `gunicorn`. Config settings [https://docs.gunic
 gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
 ```
 
+Activate the environment as we used `PIP` to install `docker-compose` (python -m pip install docker-compose)
+
+```sh
+    source  ~/environments/pytorch/bin/activate
+```
 
 Build docker container
+
 
 ```sh
 # --no-cache
 DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host 
 ```
 
-## References
 
+Start docker compose
+```sh
+DOCKER_BUILDKIT=1 docker-compose up
+```
+
+Cleanup containers
+```sh
+    docker-compose down --volumes --remove-orphans
+```
+
+
+
+## References
+https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/
 https://www.toptal.com/flask/flask-production-recipes
 https://apispec.readthedocs.io/en/latest/install.html
 https://github.com/gregbugaj/form-processor
 https://gradio.app/
+
+Consule / Traefik configuration [https://devonhubner.org/using_traefik_with_consul/]
+
+
+ 

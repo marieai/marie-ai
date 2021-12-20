@@ -16,7 +16,7 @@ def create_info_logger(logname: str, logfile: str):
         return loggers[logname]
 
     log = logging.getLogger(logname)
-    log.setLevel(logging.INFO)
+    log.setLevel(logging.DEBUG)
     
     format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     format = logging.Formatter('[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s')

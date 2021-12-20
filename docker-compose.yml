@@ -1,0 +1,20 @@
+version: "3.7"
+
+services:
+  
+  # Dashboard accessible via `http://localhost:8500/`
+  consul-server:
+    image: consul:1.11.0
+    container_name: consul_marie_server
+    restart: always
+    volumes:
+     - ./consul/server.json:/consul/config/server.json:ro
+    network_mode: host
+    # networks:  -- THIS Will throw ERROR: only one instance of “host” network is allowed
+    #   - delvnet
+    # ports:
+    #   - "8500:8500"
+    #   - "8600:8600/tcp"
+    #   - "8600:8600/udp"
+    # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
+    command: "agent -server -bootstrap-expect 1"
