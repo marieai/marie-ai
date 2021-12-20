@@ -10,6 +10,7 @@ flask-restful
 Werkzeug
 opencv-python
 imagecodecs
+python-consul
 torch
 torchvision
 torchaudio
