@@ -114,10 +114,16 @@ COPY --chown=${USER} wsgi.py /opt/marie-icr/
 COPY --chown=${USER} app.py /opt/marie-icr/
 COPY --chown=${USER} logger.py /opt/marie-icr/
 
+COPY --chown=${USER} register.py /opt/marie-icr/
+
 # RUN python3 /opt/marie-icr/icr/info.py
 
 RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# This is where we will map all of our configs
+RUN mkdir -p /etc/marie
+COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
 
 # RUN all commands below as container user 
 USER ${USER}

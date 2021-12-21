@@ -1,0 +1,32 @@
+checkNewVersion : false
+sendAnonymousUsage : false
+ping: true
+accesslog: true
+
+log:
+  level: DEBUG
+  filepath: "/etc/traefik/log/traefik.log"
+api:
+  dashboard: true
+  insecure: true  
+  debug: true
+entryPoints:
+  traefik:
+    address: ":7777"
+  marie:
+    address: ":5000"
+
+providers:
+  docker:
+    exposedByDefault: false
+
+  consulcatalog:
+    connectAware: false
+    exposedByDefault: true
+    connectByDefault: true
+    cache: false
+    prefix: traefik
+    servicename: traefik-system-ingress
+    endpoint: 
+      datacenter: "dc1"
+      address: "http://localhost:8500"

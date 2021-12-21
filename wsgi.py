@@ -4,4 +4,4 @@ app = create_app()
 
 if __name__ == '__main__':
     from werkzeug.serving import run_simple
-    run_simple(hostname='0.0.0.0', port=5000, application=app)
+    run_simple(hostname='0.0.0.0', port=5100, application=app)
