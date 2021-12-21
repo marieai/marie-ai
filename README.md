@@ -49,9 +49,15 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
 Build docker container
 
 
+Remove dangling containers
+```sh
+docker rmi -f $(docker images -f "dangling=true" -q)
+```
+
+
 ```sh
 # --no-cache
-DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host 
+DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host  --no-cache
 ```
 
 
@@ -64,7 +70,6 @@ Cleanup containers
 ```sh
     docker-compose down --volumes --remove-orphans
 ```
-
 
 
 ## References

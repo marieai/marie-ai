@@ -1,0 +1,13 @@
+RegistryEnabled: True
+DebugWebserver: True
+WatchdogInterval: 60
+
+ConsulEndpoint:
+  Host: 127.0.0.1
+  Port: 8500
+  Scheme: http
+
+ServiceEndpoint: 
+  Port: 5100
+  Host: 
+

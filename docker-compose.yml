@@ -1,4 +1,4 @@
-version: "3.7"
+version: "3.9"
 
 services:
   
@@ -8,7 +8,7 @@ services:
     container_name: consul_marie_server
     restart: always
     volumes:
-     - ./consul/server.json:/consul/config/server.json:ro
+     - ./config/consul/server.json:/consul/config/server.json:ro
     network_mode: host
     # networks:  -- THIS Will throw ERROR: only one instance of “host” network is allowed
     #   - delvnet
@@ -18,3 +18,27 @@ services:
     #   - "8600:8600/udp"
     # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
     command: "agent -server -bootstrap-expect 1"
+
+  # Dashboard accessible via `http://localhost:7777/dashboard/#/'
+  traefik:
+    image: traefik:v2.5.1
+    container_name: "traefik"
+    restart: always
+    network_mode: host
+    depends_on:
+      - consul-server
+    # command:
+    labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dashboard.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)"
+        - "traefik.http.routers.dashboard.entrypoints=traefik"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        
+    volumes:
+      - ./config/traefik:/etc/traefik
+      - ./config/traefik/traefik.yml:/traefik.yml
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"  
+# ############### Networks ###############
+# networks:
+#   delvnet:  # Used by Traefik to get the client REAL IP
+#     driver: host

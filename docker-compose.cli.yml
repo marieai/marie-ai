@@ -23,33 +23,37 @@ services:
   traefik:
     image: traefik:v2.5.1
     container_name: "traefik"
+    restart: always
     network_mode: host
     depends_on:
       - consul-server
     command:
         - "--log.level=DEBUG"
         - "--api.insecure=true"
-        - "--providers.docker=true"
-        - "--providers.docker.exposedbydefault=false"
-
-        - "--entryPoints.traefik.address=:7777" # Changes default port of the dashboards from 8080 to 7777
-        - "--entryPoints.marie.address=:5000"
-        - "--entryPoints.whoami.address=:9000"
+        - "--ping=true"
+        - "--accesslog=true"
 
         # Uncomment to get Traefik dashboard         
         #  - "--entryPoints.dashboard.address=:9988"
         - "--api.dashboard=true"
 
-        # - "--ping=true"
-        - "--accesslog=true"
+        # Entrypoints
+        - "--entryPoints.traefik.address=:7777" # Changes default port of the dashboards from 8080 to 7777
+        - "--entryPoints.marie.address=:5000"
+        - "--entryPoints.whoami.address=:9000"
+
+        # Docker configuration
+        - "--providers.docker=true"
+        - "--providers.docker.exposedbydefault=false"
+
 
         ## Consul config: https://doc.traefik.io/traefik/v1.7/configuration/backends/consulcatalog/
         - "--providers.consulcatalog=true"
         - "--providers.consulcatalog.prefix=traefik"
         - "--providers.consulcatalog.cache=false"
 
-        # Enable Traefik to use Consul Connect:
-        - "--providers.consulcatalog.connectAware=true" 
+        # Enables Traefik to use Consul Connect >> This is deprecated, our service requires to have this disable:
+        - "--providers.consulcatalog.connectAware=false" 
         # Traefik routes should only be created for services with explicit `traefik.enable=true` service-tags:
         - "--providers.consulcatalog.exposedByDefault=true"
         # For routes that are exposed (`traefik.enable=true`) use Consul Connect by default:
@@ -57,10 +61,9 @@ services:
          # Rename the service inside Consul: `traefik-system-ingress`
         - "--providers.consulcatalog.servicename=traefik-system-ingress"
         # Connect Traefik to the Consul service:
-        - "--providers.consulcatalog.endpoint.datacenter=dc-icr"
+        - "--providers.consulcatalog.endpoint.datacenter=dc1"
         - "--providers.consulcatalog.endpoint.address=http://localhost:8500"
         
-
     labels:
         - "traefik.enable=true"
         - "traefik.http.routers.dashboard.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)"
@@ -70,6 +73,7 @@ services:
         
     volumes:
       - ./traefik:/etc/traefik
+      - ./traefik/traefik.yml:/traefik.yml 
       - "/var/run/docker.sock:/var/run/docker.sock:ro"  
 # ############### Networks ###############
 # networks:
