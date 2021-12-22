@@ -64,6 +64,8 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host  --no-cache
 Start docker compose
 ```sh
 DOCKER_BUILDKIT=1 docker-compose up
+
+docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose up
 ```
 
 Cleanup containers
