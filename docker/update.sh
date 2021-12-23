@@ -9,6 +9,13 @@ if  [ $(id -u) = 0 ]; then
    exit 1
 fi
 
-docker stop ${CONTAINER_NAME}
-docker rm ${CONTAINER_NAME}
+if [[ "${CONTAINER_ID}" ]]; then
+   echo "Stoping container[stop] : ${CONTAINER_NAME}"
+   docker stop ${CONTAINER_NAME}
+   docker rm ${CONTAINER_NAME}
+   docker ps -f name=${CONTAINER_NAME}
+else
+   echo "Container not found : ${CONTAINER_NAME}"   
+fi
+
 docker pull ${CONTAINER_REF}

@@ -30,6 +30,22 @@ import craft.file_utils
 
 from craft.craft import CRAFT
 from collections import OrderedDict
+from enum import Enum
+
+class PSMode(Enum):
+    WORD = 'word'
+    SPARSE = 'sparse'
+    LINE = 'line'
+
+    @staticmethod
+    def fromValue(value: str):
+        if value is None:
+            return PSMode.SPARSE
+        for data in PSMode:
+            print('{:15} = {}'.format(data.name, data.value))
+            if data.value == value.lower():
+                return data
+        return PSMode.SPARSE
 
 
 def copyStateDict(state_dict):
@@ -265,48 +281,111 @@ class BoxProcessor:
 
         return net, refine_net
 
-    def extract_bounding_boxes(self, id, key, image):
+    def psm_word(self, image):
+        """
+            Treat the image as a single word.
+        """
+        w = image.shape[1]
+        bboxes, polys, score_text = get_prediction(
+            image=image,
+            craft_net=self.craft_net,
+            refine_net=self.refine_net,
+            text_threshold=0.6,
+            link_threshold=0.4,
+            low_text=0.3,
+            cuda=self.cuda,
+            poly=False,
+            # canvas_size=1280,#w + w // 2,
+            canvas_size=w,
+            # canvas_size=w + w // 2,
+            mag_ratio=1
+        )
+
+        return bboxes, polys, score_text    
+
+    def psm_sparse(self, image):
+        """
+            Find as much text as possible (default).
+        """
+        w = image.shape[1]
+        bboxes, polys, score_text = get_prediction(
+            image=image,
+            craft_net=self.craft_net,
+            refine_net=None, #self.refine_net,
+            text_threshold=0.6,
+            link_threshold=0.4,
+            low_text=0.3,
+            cuda=self.cuda,
+            poly=False,
+            # canvas_size=1280,#w + w // 2,
+            canvas_size=w,
+            # canvas_size=w + w // 2,
+            mag_ratio=1
+        )
+
+        return bboxes, polys, score_text            
+
+    def psm_line(self, image):
+        """
+            Treat the image as a single text line.
+        """
+        w = image.shape[1]
+        bboxes, polys, score_text = get_prediction(
+            image=image,
+            craft_net=self.craft_net,
+            refine_net=None, #self.refine_net,
+            text_threshold=0.6,
+            link_threshold=0.4,
+            low_text=0.3,
+            cuda=self.cuda,
+            poly=False,
+            # canvas_size=1280,#w + w // 2,
+            canvas_size=w,
+            # canvas_size=w + w // 2,
+            mag_ratio=1
+        )
+
+        return bboxes, polys, score_text
+
+    def extract_bounding_boxes(self, _id, key, image, psm=PSMode.SPARSE):
         """Extract bounding boxes for specific image, try to predict line number representing each bounding box.
 
         Args:
             id:  Unique Image ID
             key: Unique image key/Zone
             image: A pre-cropped image containing characters
+            psm: Page Segmenation Mode accepts one of following (sparse, word, line)
         Return:           
             box array, fragment array, line_number array,  prediction results[bboxes, polys, heatmap]
         """
-        print('Extracting bounding boxes : {}, {}'.format(key, id))
+        print('Extracting bounding boxes : mode={} key={}, id={}'.format(psm, key, _id))
         
         try:
-            debug_dir = ensure_exists(os.path.join(self.work_dir,id,'bounding_boxes', key, 'debug'))
-            crops_dir = ensure_exists(os.path.join(self.work_dir,id,'bounding_boxes', key, 'crop'))
-            lines_dir = ensure_exists(os.path.join(self.work_dir,id,'bounding_boxes', key, 'lines'))
-            mask_dir = ensure_exists(os.path.join(self.work_dir,id,'bounding_boxes', key, 'mask'))
+            debug_dir = ensure_exists(os.path.join(self.work_dir,_id,'bounding_boxes', key, 'debug'))
+            crops_dir = ensure_exists(os.path.join(self.work_dir,_id,'bounding_boxes', key, 'crop'))
+            lines_dir = ensure_exists(os.path.join(self.work_dir,_id,'bounding_boxes', key, 'lines'))
+            mask_dir = ensure_exists(os.path.join(self.work_dir,_id,'bounding_boxes', key, 'mask'))
 
             image = copy.deepcopy(image)
             # w = 1280 # image.shape[1] # 1280
             w = image.shape[1] # 1280
             # Invertint the image makes box detection substancially better
+            # Make this an configuration
             image_norm = image
             # image_norm = 255 - image
-            cv2.imwrite(os.path.join('/tmp/icr/fields/', key, "NORM_%s.png" % (id)), image_norm)
+            cv2.imwrite(os.path.join('/tmp/icr/fields/', key, "NORM_%s.png" % (_id)), image_norm)
             # TODO : Externalize as config
 
-            bboxes, polys, score_text = get_prediction(
-                image=image_norm,
-                craft_net=self.craft_net,
-                refine_net=None, #self.refine_net,
-                text_threshold=0.6,
-                link_threshold=0.4,
-                low_text=0.3,
-                cuda=self.cuda,
-                poly=False,
-                # canvas_size=1280,#w + w // 2,
-                canvas_size=w,
-                # canvas_size=w + w // 2,
-                mag_ratio=2
-            )
-            
+            # Page Segmentation Model
+            if psm == PSMode.SPARSE:
+                bboxes, polys, score_text = self.psm_sparse(image_norm)
+            elif psm == PSMode.WORD:
+                bboxes, polys, score_text = self.psm_word(image_norm)
+            elif psm == PSMode.LINE:
+                bboxes, polys, score_text = self.psm_line(image_norm)
+            else:
+                raise Exception(f'PSM mode not supported : {psm}')
+
             prediction_result = dict()
             prediction_result['bboxes'] = bboxes
             prediction_result['polys'] = polys
@@ -386,7 +465,7 @@ class BoxProcessor:
                 color = list(np.random.random(size=3) * 256) 
                 cv2.rectangle(img_line, (x,y),(x+w,y+h), color, 1)
 
-            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (id)), img_line)
+            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (_id)), img_line)
 
             # refine lines as there could be lines that overlap
             print(f'***** Line candidates size {len(lines)}')
@@ -430,7 +509,7 @@ class BoxProcessor:
                 color = list(np.random.random(size=3) * 256) 
                 cv2.rectangle(img_line, (x,y),(x+w,y+h), color, 1)
 
-            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (id)), img_line)
+            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (_id)), img_line)
             
             line_size = len(lines)
             result_folder = './result/'
@@ -439,7 +518,7 @@ class BoxProcessor:
             
             print(f'Estimated line count : {line_size}')
             # save score text
-            filename = id
+            filename = _id
             mask_file = result_folder + "/res_" + filename + '_mask.jpg'
             cv2.imwrite(mask_file, score_text)
 

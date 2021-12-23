@@ -29,7 +29,10 @@ def process_extract(queue_id: str, file_location: str) -> str:
         encoded_bytes = base64.b64encode(file.read())
         base64_str = encoded_bytes.decode('utf-8')
         
-        json_payload = {"data": base64_str}
+        json_payload = {
+            "data": base64_str,
+            "mode": "word"
+        }
 
         # Upload file to api
         print(f'Uploading to marie-icr for processing : {file}')
