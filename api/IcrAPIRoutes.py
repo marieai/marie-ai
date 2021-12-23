@@ -1,9 +1,12 @@
+from enum import Enum
+import enum
+from typing import Any
 from flask_restful import Resource, reqparse, request
 from flask import jsonify
+from boxes.box_processor import PSMode
 import conf
 from logger import create_info_logger
 from utils.utils import current_milli_time, ensure_exists
-import werkzeug
 import cv2
 import numpy as np
 import processors
@@ -33,7 +36,7 @@ def encodeToBase64(img: np.ndarray) -> str:
 
 def base64StringToBytes(data:str):
     """conver base 64 string to byte"""
-    if data == None:
+    if data is None:
         return ""
     base64_message = data
     base64_bytes = base64_message.encode('utf-8')
@@ -66,11 +69,9 @@ box_processor = processors.box_processor
 icr_processor = processors.icr_processor
 show_error = True # show predition errors
 
+
 @blueprint.route('/', methods=['GET'])
 def status():
-    print('status')
-    print(request)
-
     return jsonify(
         {
             "name": "icr",
@@ -88,7 +89,6 @@ def status():
         }
     ), 200
 
-
 @blueprint.route("/extract/<queue_id>", methods=["POST"])
 def extract(queue_id: str):  # adding self here gives an error
     """
@@ -99,10 +99,11 @@ def extract(queue_id: str):  # adding self here gives an error
         queue_id: Unique queue to tie the extraction to
     """
 
-    logger.info(f'Starting ICR processing request', extra={"session": queue_id})
+    logger.info("Starting ICR processing request", extra={"session": queue_id})
 
-    # print(request.json)
+    print(request.json)
     raw_data = request.json["data"]
+    pms_mode = PSMode.fromValue(request.json["mode"])
     message_bytes = base64StringToBytes(raw_data)
 
     m = hashlib.sha256()
@@ -132,7 +133,7 @@ def extract(queue_id: str):  # adding self here gives an error
         # cv2.imwrite('/tmp/marie/overlay.png', overlay)
 
         boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
-            queue_id, checksum, overlay)
+            queue_id, checksum, overlay, pms_mode)
         result, overlay_image = icr_processor.recognize(
             queue_id, checksum, overlay, boxes, img_fragments, lines)
 
@@ -143,8 +144,8 @@ def extract(queue_id: str):  # adding self here gives an error
 
         return serialized, 200
     except BaseException as error:
-        raise error
-        print(str(error))
+        # raise error
+        # print(str(error))
         if show_error:
             return {"error": str(error)}, 500
         else:

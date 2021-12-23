@@ -25,7 +25,7 @@ $ pip install -r ./requirements/requirements.txt
 Build Docker Image
 
 ```sh
-DOCKER_BUILDKIT=1 docker build .
+DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0
 ```
 
 Starting in Development mode
