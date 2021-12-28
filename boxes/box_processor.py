@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception 
-import os, sys
+import os
+import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
 from utils.resize_image import resize_image
@@ -17,12 +18,12 @@ from PIL import Image
 import time
 import numpy as np
 import warnings
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning) 
+
+warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
 import copy
 
 import cv2
-from skimage import io
 import numpy as np
 import craft.craft_utils
 import craft.imgproc
@@ -31,6 +32,7 @@ import craft.file_utils
 from craft.craft import CRAFT
 from collections import OrderedDict
 from enum import Enum
+
 
 class PSMode(Enum):
     WORD = 'word'
