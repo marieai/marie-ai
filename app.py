@@ -1,7 +1,6 @@
 from __future__ import absolute_import
-from os import environ
-
 import conf
+
 print(f'***config pathx {conf}')
 print(f'***config path {conf.APP_ENV}')
 
@@ -14,10 +13,11 @@ from logger import create_info_logger
 from utils.utils import ensure_exists
 import traceback
 
-#from . import config
-#config.API_PREFIX)
+# from . import config
+# config.API_PREFIX)
 
 log = create_info_logger("app", "marie.log")
+
 
 def create_app():
     log.info(f'Starting app in {conf.APP_ENV} environment')
@@ -29,9 +29,9 @@ def create_app():
 
     @app.route("/")
     def index():
-       return {
-           "version": "1.0.1"
-       }
+        return {
+            "version": "1.0.1"
+        }
 
     with app.app_context():
         # Import parts of our application
@@ -40,8 +40,9 @@ def create_app():
 
     return app
 
+
 if __name__ == "__main__":
     log.info('Initializing system')
     app = create_app()
-    app.run(host='0.0.0.0', debug=True)
-   # app.run(threaded=True, port=environ.get('PORT'), debug=True)
+    app.run(host='0.0.0.0', port=5100, debug=True)
+# app.run(threaded=True, port=environ.get('PORT'), debug=True)
