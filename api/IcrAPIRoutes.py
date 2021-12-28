@@ -15,18 +15,16 @@ import json
 import hashlib
 from numpyencoder import NumpyEncoder
 import base64
+import imghdr
 from skimage import io
-
 from flask import Blueprint
 
 logger = create_info_logger(__name__, "marie.log")
 
 # app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-ALLOWED_EXTENSIONS = set(['png', 'jpg', 'jpeg', 'tiff', 'tif'])
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+ALLOWED_TYPES = {'png', 'jpeg', 'tiff'}
+TYPES_TO_EXT = {'png': 'png', 'jpeg': 'jpg', 'tiff': 'tif'}
 
 def encodeToBase64(img: np.ndarray) -> str:
     """encode image to base64"""
@@ -34,7 +32,8 @@ def encodeToBase64(img: np.ndarray) -> str:
     png_as_text = base64.b64encode(buffer).decode()
     return png_as_text
 
-def base64StringToBytes(data:str):
+
+def base64StringToBytes(data: str):
     """conver base 64 string to byte"""
     if data is None:
         return ""
@@ -44,8 +43,19 @@ def base64StringToBytes(data:str):
     return message_bytes
 
 
-def loadImage(img_file):
-    img = io.imread(img_file)           # RGB order
+def loadImage(fname):
+    """"
+        Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
+        array with image as first element
+    """
+    if fname is None:
+        return False, None
+
+    if fname.lower().endswith(('.tiff', '.tif')):
+        loaded, frames = cv2.imreadmulti(fname, [], cv2.IMREAD_ANYCOLOR)
+        return loaded, frames
+
+    img = io.imread(fname)  # RGB order
     if img.shape[0] == 2:
         img = img[0]
     if len(img.shape) == 2:
@@ -54,7 +64,7 @@ def loadImage(img_file):
         img = img[:, :, :3]
     img = np.array(img)
 
-    return img
+    return True, [img]
 
 
 # Blueprint Configuration
@@ -67,11 +77,12 @@ blueprint = Blueprint(
 logger.info('IcrAPIRoutes inited')
 box_processor = processors.box_processor
 icr_processor = processors.icr_processor
-show_error = True # show predition errors
+show_error = True  # show predition errors
 
 
 @blueprint.route('/', methods=['GET'])
 def status():
+    """Get application status"""
     return jsonify(
         {
             "name": "icr",
@@ -89,8 +100,37 @@ def status():
         }
     ), 200
 
+
+def extract_payload(payload):  # -> tuple[bytes, str]:
+    """Extract data from payload"""
+    import io
+    print(f"Payload info ")
+    # determine how to extract payload based on the type of the key supplied
+    # Possible keys
+    # data, srcData, srcFile, srcUrl
+
+    if "data" in payload:
+        raw_data = payload["data"]
+        data = base64StringToBytes(raw_data)
+    elif "srcData" in payload:
+        raw_data = payload["srcData"]
+        data = base64StringToBytes(raw_data)
+    elif "srcFile" in payload:
+        raw_data = payload["srcFile"]
+        print(f'raw_data = {raw_data}')
+    else:
+        raise Exception("Unable to determine datasource in payload")
+
+    with io.BytesIO(data) as inmemfile:
+        file_type = imghdr.what(inmemfile)
+        if file_type not in ALLOWED_TYPES:
+            raise Exception(F"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+
+    print(f'Filetype : {file_type}')
+    return data, file_type
+
 @blueprint.route("/extract/<queue_id>", methods=["POST"])
-def extract(queue_id: str):  # adding self here gives an error
+def extract(queue_id: str):
     """
     ICR payload to process
         Process image via ICR, this is low level API, to get more usable results call extract_icr.
@@ -100,20 +140,21 @@ def extract(queue_id: str):  # adding self here gives an error
     """
 
     logger.info("Starting ICR processing request", extra={"session": queue_id})
-
-    print(request.json)
-    raw_data = request.json["data"]
-    pms_mode = PSMode.fromValue(request.json["mode"])
-    message_bytes = base64StringToBytes(raw_data)
-
-    m = hashlib.sha256()
-    m.update(message_bytes)
-    checksum = m.hexdigest()
-    upload_dir = ensure_exists(f'/tmp/marie/{queue_id}')
-    # ext = file.filename.rsplit('.', 1)[1].lower()
-    ext = 'png'
-    
     try:
+        payload = request.json
+        if payload is None:
+            return {"error": "empty payload"}, 200
+
+        message_bytes, file_type = extract_payload(payload)
+        pms_mode = PSMode.fromValue(payload["mode"] if 'mode' in payload else '')
+
+        m = hashlib.sha256()
+        m.update(message_bytes)
+        checksum = m.hexdigest()
+
+        upload_dir = ensure_exists(f'/tmp/marie/{queue_id}')
+        ext = TYPES_TO_EXT[file_type]
+
         # convert to numpy array
         npimg = np.fromstring(message_bytes, np.uint8)
         # convert numpy array to image
@@ -121,14 +162,19 @@ def extract(queue_id: str):  # adding self here gives an error
         tmp_file = f"{upload_dir}/{checksum}.{ext}"
         cv2.imwrite(tmp_file, img)
 
-        img = loadImage(tmp_file)
-        # snippet = img
+        loaded, frames = loadImage(tmp_file)
+        if not loaded:
+            print(f'Unable to read image : {tmp_file}')
+            raise Exception(f'Unable to read image : {tmp_file}')
+
+        page_index = 0
+        img = frames[page_index]
         h = img.shape[0]
         w = img.shape[1]
         # allow for small padding around the component
         padding = 4
-        overlay = np.ones((h+padding*2, w+padding*2, 3), dtype=np.uint8)*255
-        overlay[padding:h+padding, padding:w+padding] = img
+        overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+        overlay[padding:h + padding, padding:w + padding] = img
 
         # cv2.imwrite('/tmp/marie/overlay.png', overlay)
 
@@ -137,10 +183,11 @@ def extract(queue_id: str):  # adding self here gives an error
         result, overlay_image = icr_processor.recognize(
             queue_id, checksum, overlay, boxes, img_fragments, lines)
 
-        # cv2.imwrite('/tmp/marie/overlay_image.png', overlay_image)
+        cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}.png', overlay_image)
 
         result['overlay_b64'] = encodeToBase64(overlay_image)
-        serialized = json.dumps(result, sort_keys=True,  separators=(',', ': '), ensure_ascii=False, indent=2, cls=NumpyEncoder)
+        serialized = json.dumps(result, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=2,
+                                cls=NumpyEncoder)
 
         return serialized, 200
     except BaseException as error:
@@ -150,4 +197,3 @@ def extract(queue_id: str):  # adding self here gives an error
             return {"error": str(error)}, 500
         else:
             return {"error": 'inference exception'}, 500
-

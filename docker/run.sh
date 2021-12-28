@@ -31,9 +31,12 @@ else
   # Run me if you want logs outside the contianer
   # docker run -d  -u 431 --name marie-icr  -i -t  -v /opt/containers/config/marie-icr:/opt/marie-icr/config -v /opt/logs:/opt/marie-icr/logs:rw  --env-file ./service.env  -p 8099:5000  marie-icr:2.0
 
-  docker run -u 431 --name ${CONTAINER_NAME} -i -t  \
-  -v /opt/containers/config/marie-icr:/opt/marie-icr/config \
+
+  docker run -d  -u 431 --name ${CONTAINER_NAME} -i -t  \
+  -v `pwd`/config:/etc/marie:rw \
   -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw  \
   --env-file ./service.env  \
-  -p 5000:5000  ${CONTAINER_NAME}:${CONTAINER_VERSION}  
+  --network=host  \
+  -p 5100:5100  ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} 
+
 fi
