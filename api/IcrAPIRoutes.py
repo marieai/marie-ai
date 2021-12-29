@@ -24,8 +24,6 @@ from distutils.util import strtobool as strtobool
 
 logger = create_info_logger(__name__, "marie.log")
 
-# app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-# app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 ALLOWED_TYPES = {'png', 'jpeg', 'tiff'}
 TYPES_TO_EXT = {'png': 'png', 'jpeg': 'jpg', 'tiff': 'tif'}
 
