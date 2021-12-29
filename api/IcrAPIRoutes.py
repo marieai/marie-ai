@@ -1,3 +1,4 @@
+import distutils.util
 from enum import Enum
 import enum
 from typing import Any
@@ -18,6 +19,8 @@ import base64
 import imghdr
 from skimage import io
 from flask import Blueprint
+
+from distutils.util import strtobool as strtobool
 
 logger = create_info_logger(__name__, "marie.log")
 
@@ -43,7 +46,7 @@ def base64StringToBytes(data: str):
     return message_bytes
 
 
-def loadImage(fname):
+def load_image(fname, image_type):
     """"
         Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
         array with image as first element
@@ -51,9 +54,18 @@ def loadImage(fname):
     if fname is None:
         return False, None
 
-    if fname.lower().endswith(('.tiff', '.tif')):
+    if image_type == 'tiff':
         loaded, frames = cv2.imreadmulti(fname, [], cv2.IMREAD_ANYCOLOR)
-        return loaded, frames
+        if not loaded:
+            return False, []
+        # each frame needs to be converted to RGB format
+        converted = []
+        for frame in frames:
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            converted.append(frame)
+
+        return loaded, converted
 
     img = io.imread(fname)  # RGB order
     if img.shape[0] == 2:
@@ -101,14 +113,42 @@ def status():
     ), 200
 
 
-def extract_payload(payload):  # -> tuple[bytes, str]:
+def store_temp_file(message_bytes, queue_id, file_type, store_raw):
+    """Store temp file from decoded payload"""
+    m = hashlib.sha256()
+    m.update(message_bytes)
+    checksum = m.hexdigest()
+
+    upload_dir = ensure_exists(f'/tmp/marie/{queue_id}')
+    ext = TYPES_TO_EXT[file_type]
+    tmp_file = f"{upload_dir}/{checksum}.{ext}"
+
+    if store_raw :
+        # message read directly from a file
+        with open(tmp_file, "wb") as tmp:
+            tmp.write(message_bytes)
+    else:
+        # TODO : This does not handle multipage tiffs
+        # convert to numpy array as the message has been passed from base64
+        npimg = np.frombuffer(message_bytes, np.uint8)
+        # convert numpy array to image
+        img = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
+        cv2.imwrite(tmp_file, img)
+
+    return tmp_file, checksum
+
+def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     """Extract data from payload"""
     import io
+    import os
+    from utils.utils import ensure_exists, FileSystem
+
     print(f"Payload info ")
     # determine how to extract payload based on the type of the key supplied
     # Possible keys
     # data, srcData, srcFile, srcUrl
 
+    store_raw = False
     if "data" in payload:
         raw_data = payload["data"]
         data = base64StringToBytes(raw_data)
@@ -116,18 +156,132 @@ def extract_payload(payload):  # -> tuple[bytes, str]:
         raw_data = payload["srcData"]
         data = base64StringToBytes(raw_data)
     elif "srcFile" in payload:
-        raw_data = payload["srcFile"]
-        print(f'raw_data = {raw_data}')
+        img_path = payload["srcFile"]
+        base_dir = FileSystem.get_share_directory()
+        path = os.path.abspath(os.path.join(base_dir, img_path))
+        print(f'raw_data = {img_path}')
+        print(f'resolved path = {path}')
+        if not os.path.exists(path):
+            raise Exception(f"File not found : {img_path}")
+        with open(path, 'rb') as file:
+            data = file.read()
+        store_raw = True
     else:
         raise Exception("Unable to determine datasource in payload")
 
-    with io.BytesIO(data) as inmemfile:
-        file_type = imghdr.what(inmemfile)
-        if file_type not in ALLOWED_TYPES:
-            raise Exception(F"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+    with io.BytesIO(data) as memfile:
+        file_type = imghdr.what(memfile)
 
+    if file_type not in ALLOWED_TYPES:
+        raise Exception(F"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+
+    tmp_file, checksum = store_temp_file(data, queue_id, file_type, store_raw)
     print(f'Filetype : {file_type}')
-    return data, file_type
+    print(f'tmp_file : {tmp_file}')
+
+    return tmp_file, checksum, file_type
+
+
+def process_extract_fullpage(frames, queue_id, checksum, pms_mode, args):
+    """Process full page extraction """
+    # TODO : Implement multipage tiff processing
+
+    page_index = 0
+    img = frames[page_index]
+    h = img.shape[0]
+    w = img.shape[1]
+    # allow for small padding around the component
+    padding = 4
+    overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+    overlay[padding:h + padding, padding:w + padding] = img
+
+    boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
+        queue_id, checksum, overlay, pms_mode)
+    result, overlay_image = icr_processor.recognize(
+        queue_id, checksum, overlay, boxes, img_fragments, lines)
+
+    cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}.png', overlay_image)
+    result['overlay_b64'] = encodeToBase64(overlay_image)
+
+    return result
+
+
+def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args):
+    """Process region based extract"""
+    filter_snippets = bool(strtobool(args['filter_snippets'])) if 'filter_snippets' in args else False
+    output = []
+    extended = []
+
+    for region in regions:
+        # validate required fields
+        if not all(key in region for key in ("id", "pageIndex", "x", "y", "w", "h")):
+            raise Exception(f"Required key missing in region : {region}")
+
+        rid = region['id']
+        page_index = region['pageIndex']
+        x = region['x']
+        y = region['y']
+        w = region['w']
+        h = region['h']
+
+        img = frames[page_index]
+        img = img[y:y + h, x:x + w].copy()
+        # allow for small padding around the component
+        padding = 4
+        overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+        overlay[padding:h + padding, padding:w + padding] = img
+
+        boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
+            queue_id, checksum, overlay, pms_mode)
+        result, overlay_image = icr_processor.recognize(
+            queue_id, checksum, overlay, boxes, img_fragments, lines)
+
+        cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}_{rid}.png', overlay_image)
+        result["overlay_b64"] = encodeToBase64(overlay_image)
+        result["id"] = rid
+
+        extended.append(result)
+
+        # TODO : Implement rendering modes
+        # 1 - Simple
+        # 2 - Full
+        # 3 - HOCR
+
+        rendering_mode = 'simple'
+        region_result = {}
+        if rendering_mode == "simple":
+            if "lines" in result:
+                lines = result["lines"]
+                line = lines[0]
+                region_result["id"] = rid
+                region_result["text"] = line["text"]
+                region_result["confidence"] = line["confidence"]
+                output.append(region_result)
+
+    # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
+    # This is useful when we like to display or process image in the output but has significant payload overhead
+
+    def filter_base64(node, filters):
+        if isinstance(node, (list, tuple, np.ndarray)):
+            for v in node:
+                filter_base64(v, filters)
+        elif isinstance(node, dict):
+            for flt in filters:
+                try:
+                    del node[flt]
+                except KeyError:
+                    pass
+            for key, value in node.items():
+                filter_base64(value, filters)
+        else:
+            pass
+        return node
+
+    if filter_snippets:
+        extended = filter_base64(extended, filters=["fragment_b64", "overlay_b64"])
+
+    return {"regions": output,"extended": extended}
+
 
 @blueprint.route("/extract/<queue_id>", methods=["POST"])
 def extract(queue_id: str):
@@ -145,47 +299,32 @@ def extract(queue_id: str):
         if payload is None:
             return {"error": "empty payload"}, 200
 
-        message_bytes, file_type = extract_payload(payload)
         pms_mode = PSMode.fromValue(payload["mode"] if 'mode' in payload else '')
+        regions = payload["regions"] if "regions" in payload else []
 
-        m = hashlib.sha256()
-        m.update(message_bytes)
-        checksum = m.hexdigest()
+        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
+        args = {}
+        if 'args' in payload:
+            args = payload['args']
+            pms_mode = PSMode.fromValue(payload['args']['mode'] if 'mode' in payload['args'] else '')
 
-        upload_dir = ensure_exists(f'/tmp/marie/{queue_id}')
-        ext = TYPES_TO_EXT[file_type]
+        tmp_file, checksum, file_type = extract_payload(payload, queue_id)
+        loaded, frames = load_image(tmp_file, file_type)
 
-        # convert to numpy array
-        npimg = np.fromstring(message_bytes, np.uint8)
-        # convert numpy array to image
-        img = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
-        tmp_file = f"{upload_dir}/{checksum}.{ext}"
-        cv2.imwrite(tmp_file, img)
-
-        loaded, frames = loadImage(tmp_file)
+        print(f'Frame size : {len(frames)}')
         if not loaded:
             print(f'Unable to read image : {tmp_file}')
             raise Exception(f'Unable to read image : {tmp_file}')
 
-        page_index = 0
-        img = frames[page_index]
-        h = img.shape[0]
-        w = img.shape[1]
-        # allow for small padding around the component
-        padding = 4
-        overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-        overlay[padding:h + padding, padding:w + padding] = img
+        frame_len = len(frames)
+        print(f'frame_len : {frame_len}')
+        print(f'regions_len : {len(regions)}')
 
-        # cv2.imwrite('/tmp/marie/overlay.png', overlay)
+        if len(regions) == 0:
+            result = process_extract_fullpage(frames, queue_id, checksum, pms_mode, args)
+        else:
+            result = process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
 
-        boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
-            queue_id, checksum, overlay, pms_mode)
-        result, overlay_image = icr_processor.recognize(
-            queue_id, checksum, overlay, boxes, img_fragments, lines)
-
-        cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}.png', overlay_image)
-
-        result['overlay_b64'] = encodeToBase64(overlay_image)
         serialized = json.dumps(result, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=2,
                                 cls=NumpyEncoder)
 

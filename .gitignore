@@ -1,6 +1,7 @@
 venv/
 result/
 models/
+share/
 log_eval_result.txt
 
 *.py[cod]
