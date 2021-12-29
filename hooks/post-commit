@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# An example hook script to prepare a packed repository for use over
+# dumb transports.
+#
+# To enable this hook, rename this file to "post-update".
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+short_hash=$(git rev-parse HEAD)
+DATE_WITH_TIME=`date "+%Y%m%d-%H%M%S"` #add %3N as we want millisecond too
+
+template='{"branch":"%s","commit":"%s", "timestamp":"%s"}'
+json_string=$(printf "$template" "$branch" "$short_hash" "$DATE_WITH_TIME")
+
+echo "$json_string" | tee  '../../.build' > /dev/null

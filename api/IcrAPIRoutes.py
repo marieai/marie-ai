@@ -1,4 +1,3 @@
-import distutils.util
 from enum import Enum
 import enum
 from typing import Any
@@ -21,6 +20,7 @@ from skimage import io
 from flask import Blueprint
 
 from distutils.util import strtobool as strtobool
+from utils.network import get_ip_address, find_open_port
 
 logger = create_info_logger(__name__, "marie.log")
 
@@ -93,10 +93,17 @@ show_error = True  # show predition errors
 @blueprint.route('/', methods=['GET'])
 def status():
     """Get application status"""
+    import os
+    build = {}
+    if os.path.exists('.build'):
+        with open('.build', 'r') as fp:
+            build = json.load(fp)
+    host = get_ip_address()
+
     return jsonify(
         {
-            "name": "icr",
-            "version": "1.0.0",
+            "name": "marie-icr",
+            "host": host,
             "component": [
                 {
                     "name": "craft",
@@ -106,7 +113,8 @@ def status():
                     "name": "craft-benchmark",
                     "version": "1.0.0"
                 }
-            ]
+            ],
+            "build": build
         }
     ), 200
 
@@ -215,47 +223,50 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
         if not all(key in region for key in ("id", "pageIndex", "x", "y", "w", "h")):
             raise Exception(f"Required key missing in region : {region}")
 
-        rid = region['id']
-        page_index = region['pageIndex']
-        x = region['x']
-        y = region['y']
-        w = region['w']
-        h = region['h']
+    for region in regions:
+        try:
+            rid = region['id']
+            page_index = region['pageIndex']
+            x = region['x']
+            y = region['y']
+            w = region['w']
+            h = region['h']
 
-        img = frames[page_index]
-        img = img[y:y + h, x:x + w].copy()
-        # allow for small padding around the component
-        padding = 4
-        overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-        overlay[padding:h + padding, padding:w + padding] = img
+            img = frames[page_index]
+            img = img[y:y + h, x:x + w].copy()
+            # allow for small padding around the component
+            padding = 4
+            overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            overlay[padding:h + padding, padding:w + padding] = img
 
-        boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
-            queue_id, checksum, overlay, pms_mode)
-        result, overlay_image = icr_processor.recognize(
-            queue_id, checksum, overlay, boxes, img_fragments, lines)
+            boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
+                queue_id, checksum, overlay, pms_mode)
+            result, overlay_image = icr_processor.recognize(
+                queue_id, checksum, overlay, boxes, img_fragments, lines)
 
-        cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}_{rid}.png', overlay_image)
-        result["overlay_b64"] = encodeToBase64(overlay_image)
-        result["id"] = rid
+            cv2.imwrite(f'/tmp/marie/overlay_image_{page_index}_{rid}.png', overlay_image)
+            result["overlay_b64"] = encodeToBase64(overlay_image)
+            result["id"] = rid
 
-        extended.append(result)
+            extended.append(result)
 
-        # TODO : Implement rendering modes
-        # 1 - Simple
-        # 2 - Full
-        # 3 - HOCR
+            # TODO : Implement rendering modes
+            # 1 - Simple
+            # 2 - Full
+            # 3 - HOCR
 
-        rendering_mode = 'simple'
-        region_result = {}
-        if rendering_mode == "simple":
-            if "lines" in result:
-                lines = result["lines"]
-                line = lines[0]
-                region_result["id"] = rid
-                region_result["text"] = line["text"]
-                region_result["confidence"] = line["confidence"]
-                output.append(region_result)
-
+            rendering_mode = 'simple'
+            region_result = {}
+            if rendering_mode == "simple":
+                if "lines" in result:
+                    lines = result["lines"]
+                    line = lines[0]
+                    region_result["id"] = rid
+                    region_result["text"] = line["text"]
+                    region_result["confidence"] = line["confidence"]
+                    output.append(region_result)
+        except Exception as ex:
+            print(ex)
     # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
     # This is useful when we like to display or process image in the output but has significant payload overhead
 
@@ -278,7 +289,7 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
     if filter_snippets:
         extended = filter_base64(extended, filters=["fragment_b64", "overlay_b64"])
 
-    return {"regions": output,"extended": extended}
+    return {"regions": output, "extended": extended}
 
 
 @blueprint.route("/extract/<queue_id>", methods=["POST"])
@@ -293,6 +304,7 @@ def extract(queue_id: str):
 
     logger.info("Starting ICR processing request", extra={"session": queue_id})
     try:
+        print(request)
         payload = request.json
         if payload is None:
             return {"error": "empty payload"}, 200
