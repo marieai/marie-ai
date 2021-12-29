@@ -115,6 +115,7 @@ COPY --chown=${USER} app.py /opt/marie-icr/
 COPY --chown=${USER} logger.py /opt/marie-icr/
 
 COPY --chown=${USER} register.py /opt/marie-icr/
+COPY --chown=${USER} .build /opt/marie-icr/
 
 # RUN python3 /opt/marie-icr/icr/info.py
 

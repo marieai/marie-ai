@@ -12,6 +12,7 @@ from time import sleep
 import threading
 from threading import Event, Thread
 from logger import create_info_logger
+from utils.network import get_ip_address, find_open_port
 
 logger = create_info_logger("registry", "registry.log")
 config = None
@@ -169,35 +170,6 @@ def register(service_host, service_port, service_id=None) -> str:
         ])
 
     return service_id
-
-def find_open_port():
-    """
-    Find an open port
-    """
-    import socket
-    sock = socket.socket()
-    sock.bind(('', 0))
-
-    _, port = sock.getsockname()
-
-    return port
-
-def get_ip_address():
-    """
-        https://stackoverflow.com/questions/24196932/how-can-i-get-the-ip-address-from-nic-in-python
-    """
-    import socket
-    # TODO : Add support for IP detection
-    ## if there is an access to external network we can try this
-    try:
-      with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except Exception as e:
-        raise e # For debug
-        pass
-
-    return "127.0.0.1"
 
 def start_watchdog(interval, service_host, service_port):
 
