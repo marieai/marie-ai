@@ -3,6 +3,7 @@ result/
 models/
 share/
 log_eval_result.txt
+.build
 
 *.py[cod]
 *.so
