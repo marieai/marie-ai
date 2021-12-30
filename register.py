@@ -159,7 +159,9 @@ def register(service_host, service_port, service_id=None) -> Union[None, str]:
     # Create new service id, otherwise we will re-register same id
     if service_id is None:
         # service_id = f'{service_name}@{service_port}#{uuid.uuid4()}'
-        service_id = f'{service_name}@{service_port}'
+        host = get_ip_address()
+        service_id = f'{service_name}@{host}:{service_port}'
+        # service_id = f'{service_name}@{service_port}'
 
     logger.info('Service url: %s', service_url)
     logger.info('Service id: %s', service_id)
