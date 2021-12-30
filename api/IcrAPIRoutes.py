@@ -163,8 +163,10 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
         data = base64StringToBytes(raw_data)
     elif "srcFile" in payload:
         img_path = payload["srcFile"]
+        # FIXME: relative path resolution is now working as expected
         base_dir = FileSystem.get_share_directory()
         path = os.path.abspath(os.path.join(base_dir, img_path))
+        print(f'base_dir = {base_dir}')
         print(f'raw_data = {img_path}')
         print(f'resolved path = {path}')
         if not os.path.exists(path):
