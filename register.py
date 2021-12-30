@@ -1,55 +1,58 @@
-from os import close
-from typing import Tuple
-import yaml
 import argparse
-import uuid
+import threading
+import time
+# import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Tuple, Union
+
 import consul
+import yaml
 from consul.base import Check
 
-import time
-from time import sleep
-import threading
-from threading import Event, Thread
 from logger import create_info_logger
 from utils.network import get_ip_address, find_open_port
 
 logger = create_info_logger("registry", "registry.log")
 config = None
 current_service_id = None
+
+
 class EndpointConfig:
     Port: int
     Host: str
     Scheme: str
 
     def __str__(self):
-        return self.Scheme + "://"+self.Host + ":" + str(self.Port)
+        return self.Scheme + "://" + self.Host + ":" + str(self.Port)
+
+
 class RepeatedTimer(object):
-  def __init__(self, interval, function, *args, **kwargs):
-    self._timer = None
-    self.interval = interval
-    self.function = function
-    self.args = args
-    self.kwargs = kwargs
-    self.is_running = False
-    self.next_call = time.time()
-    self.start()
+    def __init__(self, interval, function, *args, **kwargs):
+        self._timer = None
+        self.interval = interval
+        self.function = function
+        self.args = args
+        self.kwargs = kwargs
+        self.is_running = False
+        self.next_call = time.time()
+        self.start()
 
-  def _run(self):
-    self.is_running = False
-    self.start()
-    self.function(*self.args, **self.kwargs)
+    def _run(self):
+        self.is_running = False
+        self.start()
+        self.function(*self.args, **self.kwargs)
 
-  def start(self):
-    if not self.is_running:
-      self.next_call += self.interval
-      self._timer = threading.Timer(self.next_call - time.time(), self._run)
-      self._timer.start()
-      self.is_running = True
+    def start(self):
+        if not self.is_running:
+            self.next_call += self.interval
+            self._timer = threading.Timer(self.next_call - time.time(), self._run)
+            self._timer.start()
+            self.is_running = True
 
-  def stop(self):
-    self._timer.cancel()
-    self.is_running = False
+    def stop(self):
+        self._timer.cancel()
+        self.is_running = False
+
 
 class DebugWebServer(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -61,6 +64,7 @@ class DebugWebServer(BaseHTTPRequestHandler):
         self.wfile.write(bytes("<body>", "utf-8"))
         self.wfile.write(bytes("<p>Service status.</p>", "utf-8"))
         self.wfile.write(bytes("</body></html>", "utf-8"))
+
 
 def start_webserver(hostName, serverPort):
     webServer = HTTPServer((hostName, serverPort), DebugWebServer)
@@ -101,21 +105,24 @@ def createClient(cfg: EndpointConfig, verify: bool = True) -> Tuple[consul.Consu
     Create new consul client
     """
     if cfg is None:
-        raise Exception("Configuration is required")
-    port = cfg.Port
-    host = cfg.Host
-    logger.info('Consul Host: %s Port: %s ', host, port)
+        raise Exception("Configuration is required but got None")
+
     try:
+        port = cfg.Port
+        host = cfg.Host
+        logger.info('Consul Host: %s Port: %s ', host, port)
+
         client = consul.Consul(host=host, port=port)
         online = False
         if verify:
             online = verify_connection(cfg)
-            logger.debug('Consule online : %s', online)
+            logger.debug('Consul online : %s', online)
         return client, online
     except Exception:
         pass
 
     return None, False
+
 
 def driver_version():
     return consul.__version__
@@ -132,7 +139,8 @@ def getServiceByNameAndId(service_name, service_id):
 
     return None
 
-def register(service_host, service_port, service_id=None) -> str:
+
+def register(service_host, service_port, service_id=None) -> Union[None, str]:
     """
     Register new service in consul
     """
@@ -141,25 +149,30 @@ def register(service_host, service_port, service_id=None) -> str:
 
     c, online = createClient(config, True)
     if not online:
-        logger.debug('Consule service is offline')
-        return
+        logger.debug('Consul service is offline')
+        return None
 
     service_name = 'traefik-system-ingress'
     service_url = f'http://{service_host}:{service_port}/api'
 
+    # TODO : Service ID generation needs to be configurable
     # Create new service id, otherwise we will re-register same id
     if service_id is None:
-        service_id = f'{service_name}@{service_port}#{uuid.uuid4()}'
+        # service_id = f'{service_name}@{service_port}#{uuid.uuid4()}'
+        service_id = f'{service_name}@{service_port}'
 
     logger.info('Service url: %s', service_url)
     logger.info('Service id: %s', service_id)
+
+    # TODO: De-registration needs to be configurable
 
     c.agent.service.register(
         name=service_name,
         service_id=service_id,
         port=service_port,
         address=service_host,
-        check=Check.http(service_url, '10s', deregister='10m'),
+        # check=Check.http(service_url, '10s', deregister='10m'),
+        check=Check.http(service_url, '10s'),
         tags=[
             "traefik.enable=true",
             "traefik.consulcatalog.connect=false",
@@ -171,9 +184,10 @@ def register(service_host, service_port, service_id=None) -> str:
 
     return service_id
 
-def start_watchdog(interval, service_host, service_port):
 
+def start_watchdog(interval, service_host, service_port):
     sid = current_service_id
+
     def _register(_service_host, _service_port):
         nonlocal sid
         logger.info("watchdog:Host, Port, ServiceId : %s, %s, %s", _service_host, _service_port, sid)
@@ -190,6 +204,7 @@ def start_watchdog(interval, service_host, service_port):
     logger.info("watchdog:starting with interval : %s", interval)
     rt = RepeatedTimer(interval, _register, service_host, service_port)
 
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -200,11 +215,11 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='./config/marie-debug.yml', help='Configuration file')
 
     opt = parser.parse_args()
-    
+
     # Load config
     with open(opt.config, "r") as yamlfile:
         data = yaml.load(yamlfile, Loader=yaml.FullLoader)
-        print("Read successful")
+        logger.info(f"Config read successfully : {opt.config}")
     print(data)
 
     enabled = bool(data['RegistryEnabled'])
@@ -232,8 +247,12 @@ if __name__ == "__main__":
         service_host=hostName, service_port=serverPort, service_id=None)
     logger.info('Registered service: %s', current_service_id)
 
-    def _target(): return start_watchdog(watchdog_interval,
-                                         service_host=hostName, service_port=serverPort)
+
+    def _target():
+        return start_watchdog(watchdog_interval,
+                              service_host=hostName, service_port=serverPort)
+
+
     watchdog_task = threading.Thread(
         target=_target, daemon=debug_server).start()
 
