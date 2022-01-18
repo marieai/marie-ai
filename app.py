@@ -1,9 +1,8 @@
 from __future__ import absolute_import
+
+import os
+
 import conf
-
-print(f'***config pathx {conf}')
-print(f'***config path {conf.APP_ENV}')
-
 from api import api
 from flask import Flask
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
@@ -13,10 +12,10 @@ from logger import create_info_logger
 from utils.utils import ensure_exists
 import traceback
 
-# from . import config
-# config.API_PREFIX)
-
 log = create_info_logger("app", "marie.log")
+# traceback.print_stack()
+# print(repr(traceback.format_stack()))
+# print(repr(traceback.extract_stack()))
 
 
 def create_app():
@@ -30,7 +29,7 @@ def create_app():
     @app.route("/")
     def index():
         return {
-            "version": "1.0.1"
+            "version": "1.0.2"
         }
 
     with app.app_context():
@@ -43,6 +42,14 @@ def create_app():
 
 if __name__ == "__main__":
     log.info('Initializing system')
-    app = create_app()
-    app.run(host='0.0.0.0', port=5100, debug=True)
-# app.run(threaded=True, port=environ.get('PORT'), debug=True)
+
+    print(f'***config PATH {conf}')
+    print(f'***config PATH {conf.APP_ENV}')
+
+    # Setting use_reloader to false prevents application from initializing twice
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    os.environ["FLASK_DEBUG"] = "1"
+
+    service = create_app()
+    service.run(host='0.0.0.0', port=5100, debug=True, use_reloader=True)
+    # service.run(host='0.0.0.0', port=5100, debug=True, use_reloader=False)
