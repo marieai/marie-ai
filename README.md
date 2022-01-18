@@ -78,6 +78,8 @@ Cleanup containers
 
 ```sh
 docker run --name marie_redis -d redis
+
+docker run --rm --name marie_redis redis
 ```
 
 ```sh
