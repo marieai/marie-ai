@@ -100,4 +100,11 @@ Consule / Traefik configuration [https://devonhubner.org/using_traefik_with_cons
 
 Implement secondary box detection method.
 https://github.com/ying09/TextFuseNet
+
+
+## Stream processing
+
+https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/
+
+https://pypi.org/project/ksql/
  
