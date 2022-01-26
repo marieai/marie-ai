@@ -94,9 +94,16 @@ https://apispec.readthedocs.io/en/latest/install.html
 https://github.com/gregbugaj/form-processor
 https://gradio.app/
 
-Consule / Traefik configuration [https://devonhubner.org/using_traefik_with_consul/]
+Consul / Traefik configuration [https://devonhubner.org/using_traefik_with_consul/]
 
 ## Box Detection
 
 Implement secondary box detection method.
 https://github.com/ying09/
+https://github.com/ying09/TextFuseNet
+
+
+## Stream processing
+https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/
+https://pypi.org/project/ksql/
+ 
