@@ -34,3 +34,4 @@ logs/*
 env/
 venv/
 output/
+/venv/

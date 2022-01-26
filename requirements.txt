@@ -14,3 +14,4 @@ python-consul
 torch
 torchvision
 torchaudio
+imutils
