@@ -1,15 +1,20 @@
 from math import ceil
-
 import numpy as np
-
 from renderer.renderer import ResultRenderer
+from utils.types import strtobool
 
 
 class TextRenderer(ResultRenderer):
 
-    def __init__(self):
-        super().__init__()
-        print("TextRenderer base")
+    def __init__(self, config=None):
+        super().__init__(config)
+        if config is None:
+            config = {}
+        print(f"TextRenderer base : {config}")
+
+        self.preserve_interword_spaces = False
+        if "preserve_interword_spaces" in config:
+            self.preserve_interword_spaces = strtobool(config["preserve_interword_spaces"])
 
     @property
     def name(self):
@@ -76,6 +81,8 @@ class TextRenderer(ResultRenderer):
 
             # TODO : This needs to be supplied from the box processor
             estimate_character_width = 26
+            print(f"self.preserve_interword_spaces = {self.preserve_interword_spaces}")
+
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
                 spaces = 0
@@ -89,10 +96,11 @@ class TextRenderer(ResultRenderer):
                 else:
                     gap = x2
 
-                if gap > estimate_character_width:
-                    spaces = max(1, gap // estimate_character_width)
+                if self.preserve_interword_spaces:
+                    if gap > estimate_character_width:
+                        spaces = max(1, gap // estimate_character_width)
 
-                print(f'gap :  {idx} : {curr_box}   >  {gap}, spaces = {spaces}')
+                print(f'gap :  {idx} : >  {gap}, spaces = {spaces}')
 
                 text = word['text']
                 confidence = word['confidence']

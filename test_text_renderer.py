@@ -47,8 +47,8 @@ if __name__ == '__main__':
     # img_path = './assets/english/Scanned_documents/t2.tif'
     img_path = './assets/english/Scanned_documents/Picture_010.tif'
     img_path = './assets/english/Lines/002.png'
-    img_path = './assets/english/Lines/001.png'
-    img_path = './assets/english/Lines/003.png'
+    # img_path = './assets/english/Lines/001.png'
+    # img_path = './assets/english/Lines/003.png'
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
 
@@ -76,6 +76,5 @@ if __name__ == '__main__':
 
         print("Testing text render")
 
-        renderer = TextRenderer()
-        print(f"Using renderer : {renderer.name}")
+        renderer = TextRenderer(config={"preserve_interword_spaces": True})
         renderer.render(image, result)
