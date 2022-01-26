@@ -30,7 +30,7 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
     text_score_comb = np.clip(text_score + link_score, 0, 1)
     nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(text_score_comb.astype(np.uint8), connectivity=4)
 
-    if False:
+    if True:
         cv2.imwrite(os.path.join('/tmp/fragments/',  "linkmap.png"), linkmap*255)
         cv2.imwrite(os.path.join('/tmp/fragments/',  "textmap.png"), textmap*255)
         cv2.imwrite(os.path.join('/tmp/fragments/',  "text_score_comb.png"), text_score_comb*255)
