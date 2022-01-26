@@ -99,5 +99,4 @@ Consule / Traefik configuration [https://devonhubner.org/using_traefik_with_cons
 ## Box Detection
 
 Implement secondary box detection method.
-https://github.com/ying09/TextFuseNet
- 
+https://github.com/ying09/
