@@ -3,7 +3,7 @@ from abc import abstractmethod, ABCMeta
 
 class ResultRenderer(metaclass=ABCMeta):
 
-    def __init__(self):
+    def __init__(self, config={}):
         print("ResultRenderer base")
 
     @property
