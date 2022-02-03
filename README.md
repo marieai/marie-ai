@@ -35,7 +35,7 @@ python ./app.py
 ```
 
 Starting in Production mode with `gunicorn`. Config
-settings [https://docs.gunicorn.org/en/stable/settings.html#settings]
+[gunicorn]settings (https://docs.gunicorn.org/en/stable/settings.html#settings)
 
 ```sh
 gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
@@ -88,22 +88,24 @@ docker exe -it marie_redis sh
 
 ## References
 
-https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/
-https://www.toptal.com/flask/flask-production-recipes
-https://apispec.readthedocs.io/en/latest/install.html
-https://github.com/gregbugaj/form-processor
-https://gradio.app/
+[consul-catalog](https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/)
+[apispec](https://apispec.readthedocs.io/en/latest/install.html)
+[gradio](https://gradio.app/)
 
-Consul / Traefik configuration [https://devonhubner.org/using_traefik_with_consul/]
+[https://devonhubner.org/using_traefik_with_consul/](Consul / Traefik configuration)
 
 ## Box Detection
 
 Implement secondary box detection method.
-https://github.com/ying09/
-https://github.com/ying09/TextFuseNet
+[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
 
 
 ## Stream processing
-https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/
-https://pypi.org/project/ksql/
+[KSQL Stream processing example ](https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/)
+[KSQL](https://pypi.org/project/ksql/)
  
+ 
+## Research 
+
+[DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
+
