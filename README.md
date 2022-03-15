@@ -107,3 +107,8 @@ https://github.com/ying09/TextFuseNet
 https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/
 https://pypi.org/project/ksql/
  
+
+# Research 
+
+https://www.microsoft.com/en-us/research/project/document-ai/
+https://github.com/microsoft/unilm/tree/master/layoutlmv2
