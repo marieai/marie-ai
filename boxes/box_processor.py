@@ -139,36 +139,6 @@ def ensure_exists(dir):
     return dir
 
 
-def line_detection(src):
-    """
-        Detect lines 
-    """
-    print(f'Line detection : {src.shape}')
-    cv2.imwrite('/tmp/fragments/lines.png', src)
-    # conversion required or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
-    src = src.astype('uint8')
-    # Transform source image to gray if it is not already
-    if len(src.shape) != 2:
-        gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = src
-    # Apply adaptiveThreshold at the bitwise_not of gray
-    gray = cv2.bitwise_not(gray)
-    bw = cv2.adaptiveThreshold(gray, 255, cv2.THRESH_BINARY, 15, -2)
-    cv2.imwrite('/tmp/fragments/detected_lines.png', bw)
-
-    # Create the images that will use to extract the horizontal lines
-    thresh = np.copy(bw)
-    image = src
-    rows = thresh.shape[0]
-    verticalsize = rows // 4
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 8))
-    detected_lines = cv2.dilate(thresh, kernel)
-
-    # detected_lines = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, vertical_kernel, iterations=2)
-
-
 def estimate_character_width(src_img, bounding_boxes):
     """
         Estimate Character Width based on the score map.
