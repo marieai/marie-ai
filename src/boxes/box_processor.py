@@ -5,16 +5,8 @@ from __future__ import print_function
 import os
 import sys
 
-import imutils as imutils
-from scipy import ndimage
-# import the necessary packages
-from skimage.feature import peak_local_max
-from skimage.morphology import watershed
-from scipy import ndimage
-
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-from utils.resize_image import resize_image
 from utils.overlap import find_overlap
 from utils.image_utils import paste_fragment
 
@@ -193,6 +185,7 @@ def estimate_character_width(src_img, bounding_boxes):
     # 1 pixel(X) = 0.125 character(X)
     # char_width = 8
     return char_width
+
 
 def get_prediction(craft_net, image, text_threshold, link_threshold, low_text, cuda, poly, canvas_size, mag_ratio,
                    refine_net=None):

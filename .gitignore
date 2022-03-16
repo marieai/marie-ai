@@ -1,4 +1,5 @@
 venv/
+notebooks/.ipynb_checkpoints/
 result/
 models/
 share/

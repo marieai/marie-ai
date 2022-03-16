@@ -74,7 +74,7 @@ if __name__ == '__main__':
 
         result, overlay_image = icr.recognize(key, 'test', image, boxes, img_fragments, lines)
 
-        print("Testing text render")
-
-        renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(image, result)
+        # print("Testing text render")
+        #
+        # renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        # renderer.render(image, result)
