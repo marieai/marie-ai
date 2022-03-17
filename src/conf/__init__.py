@@ -3,7 +3,6 @@ import sys
 
 import conf.settings
 
-
 # create settings object corresponding to specified env
 APP_ENV = os.environ.get("APP_ENV", "Dev")
 print(f"APP_ENVX = {APP_ENV}")

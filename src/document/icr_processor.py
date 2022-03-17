@@ -1,8 +1,11 @@
-# Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception 
+# Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 import os
 import sys
 
-from icr.memory_dataset import MemoryDataset
+from models.icr.dataset import AlignCollate, RawDataset
+from models.icr.memory_dataset import MemoryDataset
+from models.icr.model import Model
+from models.icr.utils import CTCLabelConverter, AttnLabelConverter
 from utils.image_utils import imwrite
 from utils.utils import ensure_exists
 
@@ -17,24 +20,19 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
-from PIL import Image
 
 import cv2
 from draw_truetype import drawTrueTypeTextOnImage
-from icr.dataset import AlignCollate, RawDataset, hierarchical_dataset
-from icr.model import Model
-from icr.single_dataset import SingleDataset
-from icr.utils import AttnLabelConverter, Averager, CTCLabelConverter
-from numpycontainer import NumpyContainer
 from numpyencoder import NumpyEncoder
 
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 # device = torch.device('cpu')
 
 
 class Object(object):
     pass
+
 
 def encodeimg2b64(img: np.ndarray) -> str:
     """encode image to base64"""
@@ -277,7 +275,7 @@ class IcrProcessor:
             images: A list of input images, supplied as numpy arrays with shape
                 (H, W, 3).
         """
-    
+
         print('ICR processing : recognize_from_boxes via boxes')
         try:
             # debug_dir =  ensure_exists(os.path.join(self.work_dir,id,'icr',key,'debug'))
@@ -374,7 +372,7 @@ class IcrProcessor:
         try:
             shape = img.shape
             overlay_image = np.ones((shape[0], shape[1], 3), dtype=np.uint8) * 255
-            debug_dir = ensure_exists(os.path.join('/tmp/icr', _id)) 
+            debug_dir = ensure_exists(os.path.join('/tmp/icr', _id))
             debug_all_dir = ensure_exists(os.path.join('/tmp/icr', 'fields', key))
 
             meta = {
@@ -472,7 +470,8 @@ class IcrProcessor:
             }
 
             with open('/tmp/icr/data.json', 'w') as f:
-                json.dump(result, f,  sort_keys=True,  separators=(',', ': '), ensure_ascii=False, indent=4, cls=NumpyEncoder)
+                json.dump(result, f, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=4,
+                          cls=NumpyEncoder)
 
             print('------ Extraction ------------')
             for line in line_ids:

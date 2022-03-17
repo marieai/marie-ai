@@ -3,7 +3,6 @@
 from __future__ import print_function
 
 import os
-import sys
 import time
 import warnings
 
@@ -18,17 +17,20 @@ import copy
 import cv2
 import numpy as np
 
-import craft.craft_utils
-import craft.file_utils
-import craft.imgproc
-from craft.craft import CRAFT
+from models import craft
+from models.craft.craft import CRAFT
+
+import models.craft.craft_utils
+import models.craft.file_utils
+import models.craft.imgproc
+
 from PIL import Image
 from boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict, Object
 from utils.utils import ensure_exists
 
-sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
+# FIXME : Rework package import
+# sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
-
 
 def crop_poly_low(img, poly):
     """
