@@ -86,6 +86,11 @@ docker run --rm --name marie_redis redis
 docker exe -it marie_redis sh
 ```
 
+## Codestyle / Formatting
+
+```sh
+black  ./utils/ --line-length 119
+```
 ## Issues
 
 There is a segmentation fault happening with `opencv-python==4.5.4.62` switching to `opencv-python==4.5.4.60` fixes the issue. 
