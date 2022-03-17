@@ -5,7 +5,7 @@ import distutils
 
 def strtobool(val: [bool | str]) -> bool:
     """
-        Convert bool string or bool to a bool type
+    Convert bool string or bool to a bool type
     """
     if isinstance(val, bool):
         return val

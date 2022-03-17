@@ -1,9 +1,10 @@
+import matplotlib.pyplot as plt
+import numpy as np
+from numpy.core.fromnumeric import size
+
+import cv2
 
 from .resize_image import resize_image
-import numpy as np
-import matplotlib.pyplot as plt
-from numpy.core.fromnumeric import size
-import cv2
 
 
 def plot_patches(img_arr, org_img_size, stride=None, size=None):
@@ -43,6 +44,7 @@ def plot_patches(img_arr, org_img_size, stride=None, size=None):
             axes[i, j].set_axis_off()
             jj += 1
 
+
 def plot_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None):
     """
     Plots all the patches for the first image in 'img_arr' trying to reconstruct the original image
@@ -65,7 +67,7 @@ def plot_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=Non
     # img_arr.shape >  (4, 256, 256, 3)  [array_zie, H, W, C]
     if size_h is None:
         size_h = img_arr.shape[1]
-    
+
     if size_w is None:
         size_w = img_arr.shape[2]
 
@@ -87,24 +89,25 @@ def plot_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=Non
             axes[i, j].set_axis_off()
             jj += 1
 
+
 def get_patches(img_arr, size=256, stride=256):
     """
     Takes single image or array of images and returns
     crops using sliding window method.
     If stride < size it will do overlapping.
-    
+
     Args:
         img_arr (numpy.ndarray): [description]
         size (int, optional): [description]. Defaults to 256.
         stride (int, optional): [description]. Defaults to 256.
-    
+
     Raises:
         ValueError: [description]
         ValueError: [description]
-    
+
     Returns:
         numpy.ndarray: [description]
-    """    
+    """
     # check size and stride
     if size % stride != 0:
         raise ValueError("size % stride must be equal 0")
@@ -119,14 +122,9 @@ def get_patches(img_arr, size=256, stride=256):
 
         for i in range(i_max):
             for j in range(i_max):
-                print(i*stride, i*stride+size)
-                print(j*stride, j*stride+size)
-                patches_list.append(
-                    img_arr[
-                        i * stride : i * stride + size,
-                        j * stride : j * stride + size
-                    ]
-                )
+                print(i * stride, i * stride + size)
+                print(j * stride, j * stride + size)
+                patches_list.append(img_arr[i * stride : i * stride + size, j * stride : j * stride + size])
 
     elif img_arr.ndim == 4:
         i_max = img_arr.shape[1] // stride - overlapping
@@ -153,19 +151,19 @@ def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=Non
     Takes single image or array of images and returns
     crops using sliding window method.
     If stride < size it will do overlapping.
-    
+
     Args:
         img_arr (numpy.ndarray): [description]
         size (int, optional): [description]. Defaults to 256.
         stride (int, optional): [description]. Defaults to 256.
-    
+
     Raises:
         ValueError: [description]
         ValueError: [description]
-    
+
     Returns:
         numpy.ndarray: [description]
-    """        
+    """
     # check size and stride
 
     if pad == True:
@@ -178,7 +176,7 @@ def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=Non
 
         if adj_w != w or adj_h != h:
             img_arr = resize_image(img_arr, (adj_w, adj_h), color=(255, 255, 255))
-            
+
     if size_w % stride_w != 0:
         raise ValueError("size % stride must be equal 0")
 
@@ -204,12 +202,9 @@ def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=Non
                 # print(i*stride_h, i*stride_h+size_h)
                 # print(j*stride_w, j*stride_w+size_w)
                 # img[starty:starty+cropy,startx:startx+cropx]
-                snip = img_arr[
-                        i * stride_h: i * stride_h + size_h,
-                        j * stride_w : j * stride_w + size_w
-                    ]
+                snip = img_arr[i * stride_h : i * stride_h + size_h, j * stride_w : j * stride_w + size_w]
 
-                # this is not ana empyt border 
+                # this is not ana empyt border
                 if np.count_nonzero(snip != 255) > 0:
                     patches_list.append(snip)
 
@@ -232,18 +227,19 @@ def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=Non
 
     return np.stack(patches_list)
 
+
 def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
     """[summary]
-    
+
     Args:
         img_arr (numpy.ndarray): [description]
         org_img_size (tuple): [description]
         stride ([type], optional): [description]. Defaults to None.
         size ([type], optional): [description]. Defaults to None.
-    
+
     Raises:
         ValueError: [description]
-    
+
     Returns:
         numpy.ndarray: [description]
     """
@@ -269,14 +265,12 @@ def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
     nm_images = img_arr.shape[0]
 
     averaging_value = size // stride
-    print('averaging_value = %s' %(averaging_value))
+    print("averaging_value = %s" % (averaging_value))
 
     images_list = []
     kk = 0
     for img_count in range(total_nm_images):
-        img_bg = np.zeros(
-            (org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype
-        )
+        img_bg = np.zeros((org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype)
 
         for i in range(i_max):
             for j in range(j_max):
@@ -306,16 +300,16 @@ def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
 
 def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None):
     """[summary]
-    
+
     Args:
         img_arr (numpy.ndarray): [description]
         org_img_size (tuple): [description]
         stride ([type], optional): [description]. Defaults to None.
         size ([type], optional): [description]. Defaults to None.
-    
+
     Raises:
         ValueError: [description]
-    
+
     Returns:
         numpy.ndarray: [description]
     """
@@ -342,34 +336,31 @@ def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None
     if stride_w is None:
         stride_w = size_w
 
-
     print(org_img_size)
-    print('size_h : %d' % (size_h))
-    print('stride_h : %d' % (stride_h))
-    print('size_w : %d' % (size_w))
-    print('stride_w : %d' % (stride_w))
-    print('nm_layers : %d' % ( img_arr.shape[3]))
+    print("size_h : %d" % (size_h))
+    print("stride_h : %d" % (stride_h))
+    print("size_w : %d" % (size_w))
+    print("stride_w : %d" % (stride_w))
+    print("nm_layers : %d" % (img_arr.shape[3]))
 
     nm_layers = img_arr.shape[3]
 
     i_max = (org_img_size[0] // stride_h) + 1 - (size_h // stride_h)
     j_max = (org_img_size[1] // stride_w) + 1 - (size_w // stride_w)
 
-    # FIXME : 
+    # FIXME :
     total_nm_images = img_arr.shape[0] // (i_max ** 2)
     total_nm_images = 1
 
     nm_images = img_arr.shape[0]
 
     averaging_value = 4
-    print('averaging_value = %s' %(averaging_value))
+    print("averaging_value = %s" % (averaging_value))
 
     images_list = []
     kk = 0
     for img_count in range(total_nm_images):
-        img_bg = np.zeros(
-            (org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype
-        )
+        img_bg = np.zeros((org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype)
 
         for i in range(i_max):
             for j in range(j_max):
@@ -381,7 +372,7 @@ def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None
                     ] = img_arr[kk, :, :, layer]
 
                 kk += 1
-                
+
         # TODO add averaging for masks - right now it's just overwritting
 
         #         for layer in range(nm_layers):

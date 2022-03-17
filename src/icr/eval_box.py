@@ -1,24 +1,29 @@
 # Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception 
-import os, sys
+import os
+import sys
+
+
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
 import copy
-import cv2
+
 import numpy as np
 from PIL import Image
 
-from craft_text_detector import Craft
+import cv2
 
 # import craft functions
 from craft_text_detector import (
-    read_image,
-    load_craftnet_model,
-    load_refinenet_model,
-    get_prediction,
+    Craft,
+    empty_cuda_cache,
     export_detected_regions,
     export_extra_results,
-    empty_cuda_cache
+    get_prediction,
+    load_craftnet_model,
+    load_refinenet_model,
+    read_image,
 )
+
 
 def crop_poly_low(img, poly):
     """

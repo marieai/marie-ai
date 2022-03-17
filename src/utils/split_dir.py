@@ -1,22 +1,19 @@
-       
-import argparse
 import os
 
-def ensure_exists(dir):
-    if not os.path.exists(dir):
-        os.makedirs(dir)
+from utils.utils import ensure_exists
+
 
 def split_dir(dir_src, dir_dest):
+    import math
     import random
     import shutil
-    import math
 
-    print('dir_src : %s' % (dir_src))
-    print('dir_dest : %s' % (dir_dest))
+    print("dir_src : %s" % (dir_src))
+    print("dir_dest : %s" % (dir_dest))
 
     # expecting two directories [image, masked]
-    image_dir_src = os.path.join(dir_src, 'image')
-    mask_dir_src = os.path.join(dir_src, 'mask')
+    image_dir_src = os.path.join(dir_src, "image")
+    mask_dir_src = os.path.join(dir_src, "mask")
 
     mask_filenames = os.listdir(mask_dir_src)
     mask_filenames = random.sample(mask_filenames, len(mask_filenames))
@@ -26,29 +23,33 @@ def split_dir(dir_src, dir_dest):
     validation_size = math.ceil(size * 0.0)  # 5 percent validation size
     test_size = math.ceil(size * 0.20)  # 25 percent testing size
     training_size = size - validation_size - test_size  # 70 percent training
-    print("Class >>  size = {} training = {} validation = {} test = {} ".format(size, training_size, validation_size, test_size))
+    print(
+        "Class >>  size = {} training = {} validation = {} test = {} ".format(
+            size, training_size, validation_size, test_size
+        )
+    )
 
     validation_files = mask_filenames[:validation_size]
-    testing_files = mask_filenames[validation_size : validation_size+test_size]
-    training_files = mask_filenames[validation_size+test_size:]
+    testing_files = mask_filenames[validation_size : validation_size + test_size]
+    training_files = mask_filenames[validation_size + test_size :]
 
-    print("Number of training images   : {}".format( len(training_files)))
+    print("Number of training images   : {}".format(len(training_files)))
     print("Number of validation images : {}".format(len(validation_files)))
     print("Number of testing images    : {}".format(len(testing_files)))
 
     # prepare output directories
-    test_image_dir_out = os.path.join(dir_dest, 'test', 'image')
-    test_mask_dir_out = os.path.join(dir_dest, 'test', 'mask')
+    test_image_dir_out = os.path.join(dir_dest, "test", "image")
+    test_mask_dir_out = os.path.join(dir_dest, "test", "mask")
 
-    train_image_dir_out = os.path.join(dir_dest, 'train', 'image')
-    train_mask_dir_out = os.path.join(dir_dest, 'train', 'mask')
+    train_image_dir_out = os.path.join(dir_dest, "train", "image")
+    train_mask_dir_out = os.path.join(dir_dest, "train", "mask")
 
-    validation_image_dir_out = os.path.join(dir_dest, 'validation', 'image')
-    validation_mask_dir_out = os.path.join(dir_dest, 'validation', 'mask')
+    validation_image_dir_out = os.path.join(dir_dest, "validation", "image")
+    validation_mask_dir_out = os.path.join(dir_dest, "validation", "mask")
 
     ensure_exists(test_image_dir_out)
     ensure_exists(test_mask_dir_out)
-    
+
     ensure_exists(train_image_dir_out)
     ensure_exists(train_mask_dir_out)
 

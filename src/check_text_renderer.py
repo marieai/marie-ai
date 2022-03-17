@@ -1,14 +1,17 @@
 import os
-import cv2
+
 import numpy as np
 import tqdm
 
+import cv2
+from renderer.textrenderer import TextRenderer
+from boxes.box_processor import PSMode
 from utils.utils import ensure_exists
 
-from renderer.textrenderer import TextRenderer
 
 if True:
-    from boxes.box_processor import BoxProcessor, PSMode
+    from boxes.box_processor_craft import BoxProcessorCraft
+    from boxes.box_processor_textfusenet import BoxProcessorTextFuseNet
     from document.icr_processor import IcrProcessor
 
 
@@ -66,7 +69,7 @@ if __name__ == '__main__':
         print(mean)
         print(std)
 
-        box = BoxProcessor(work_dir=work_dir_boxes, models_dir='./models/craft')
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft', cuda=False)
         icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
@@ -74,7 +77,7 @@ if __name__ == '__main__':
 
         result, overlay_image = icr.recognize(key, 'test', image, boxes, img_fragments, lines)
 
-        # print("Testing text render")
-        #
-        # renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        # renderer.render(image, result)
+        print("Testing text render")
+
+        renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        renderer.render(image, result)

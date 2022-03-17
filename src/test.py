@@ -1,16 +1,17 @@
 
-import json
-import os
 import argparse
 import glob
+import json
+import os
+
 import numpy as np
+
 import cv2
-
-from utils.utils import current_milli_time, ensure_exists
-from utils.image_utils import read_image
-
-from boxes.box_processor import BoxProcessor
+from boxes.box_processor_craft import BoxProcessorCraft
 from document.icr_processor import IcrProcessor
+from utils.image_utils import read_image
+from utils.utils import current_milli_time, ensure_exists
+
 
 if __name__ == '__main__':
 
@@ -25,7 +26,7 @@ if __name__ == '__main__':
         key = img_path.split('/')[-1]
         snippet = cv2.imread(img_path)
 
-        box = BoxProcessor(work_dir=work_dir_boxes, models_dir='./models/craft')
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft')
         icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, 'field', snippet)

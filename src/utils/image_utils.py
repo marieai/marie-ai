@@ -1,6 +1,8 @@
-from PIL import Image
-import cv2
 import numpy as np
+from PIL import Image
+
+import cv2
+
 
 def read_image(image):
     if type(image) == str:
@@ -24,14 +26,14 @@ def read_image(image):
     return img
 
 
-def paste_fragment(overlay, fragment, pos=(0,0)):
+def paste_fragment(overlay, fragment, pos=(0, 0)):
     # You may need to convert the color.
     fragment = cv2.cvtColor(fragment, cv2.COLOR_BGR2RGB)
     fragment_pil = Image.fromarray(fragment)
-    overlay.paste(fragment_pil, pos)     
+    overlay.paste(fragment_pil, pos)
 
 
-def viewImage(image, name='Display'):
+def viewImage(image, name="Display"):
     cv2.namedWindow(name, cv2.WINDOW_AUTOSIZE)
     cv2.imshow(name, image)
     cv2.waitKey(0)

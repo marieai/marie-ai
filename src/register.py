@@ -1,6 +1,7 @@
 import argparse
 import threading
 import time
+
 # import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Tuple, Union
@@ -8,9 +9,9 @@ from typing import Tuple, Union
 import consul
 import yaml
 from consul.base import Check
-
 from logger import create_info_logger
-from utils.network import get_ip_address, find_open_port
+from utils.network import find_open_port, get_ip_address
+
 
 logger = create_info_logger("registry", "registry.log")
 config = None

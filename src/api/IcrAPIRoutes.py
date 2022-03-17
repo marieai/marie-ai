@@ -1,31 +1,31 @@
-from enum import Enum
-import enum
-from typing import Any
-from flask_restful import Resource, reqparse, request
-from flask import jsonify
-from boxes.box_processor import PSMode
-import conf
-from logger import create_info_logger
-from utils.utils import current_milli_time, ensure_exists
-import cv2
-import numpy as np
-import processors
-import json
-
-import hashlib
-from numpyencoder import NumpyEncoder
 import base64
+import enum
+import hashlib
 import imghdr
-from skimage import io
-from flask import Blueprint
-
+import json
 from distutils.util import strtobool as strtobool
-from utils.network import get_ip_address, find_open_port
+from enum import Enum
+from typing import Any
+
+import numpy as np
+
+import conf
+import cv2
+import processors
+from boxes.box_processor import PSMode
+from flask import Blueprint, jsonify
+from flask_restful import Resource, reqparse, request
+from logger import create_info_logger
+from numpyencoder import NumpyEncoder
+from skimage import io
+from utils.network import find_open_port, get_ip_address
+from utils.utils import current_milli_time, ensure_exists
 
 logger = create_info_logger(__name__, "marie.log")
 
 ALLOWED_TYPES = {'png', 'jpeg', 'tiff'}
 TYPES_TO_EXT = {'png': 'png', 'jpeg': 'jpg', 'tiff': 'tif'}
+
 
 def encodeToBase64(img: np.ndarray) -> str:
     """encode image to base64"""
@@ -129,7 +129,7 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
     ext = TYPES_TO_EXT[file_type]
     tmp_file = f"{upload_dir}/{checksum}.{ext}"
 
-    if store_raw :
+    if store_raw:
         # message read directly from a file
         with open(tmp_file, "wb") as tmp:
             tmp.write(message_bytes)
@@ -143,11 +143,13 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
 
     return tmp_file, checksum
 
+
 def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     """Extract data from payload"""
     import io
     import os
-    from utils.utils import ensure_exists, FileSystem
+
+    from utils.utils import FileSystem, ensure_exists
 
     print(f"Payload info ")
     # determine how to extract payload based on the type of the key supplied
@@ -269,6 +271,7 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
                     output.append(region_result)
         except Exception as ex:
             print(ex)
+
     # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
     # This is useful when we like to display or process image in the output but has significant payload overhead
 
@@ -311,14 +314,14 @@ def extract(queue_id: str):
         if payload is None:
             return {"error": "empty payload"}, 200
 
-        pms_mode = PSMode.fromValue(payload["mode"] if 'mode' in payload else '')
+        pms_mode = PSMode.from_value(payload["mode"] if 'mode' in payload else '')
         regions = payload["regions"] if "regions" in payload else []
 
         # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
         args = {}
         if 'args' in payload:
             args = payload['args']
-            pms_mode = PSMode.fromValue(payload['args']['mode'] if 'mode' in payload['args'] else '')
+            pms_mode = PSMode.from_value(payload['args']['mode'] if 'mode' in payload['args'] else '')
 
         tmp_file, checksum, file_type = extract_payload(payload, queue_id)
         loaded, frames = load_image(tmp_file, file_type)

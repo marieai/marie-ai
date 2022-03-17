@@ -1,8 +1,7 @@
-from abc import abstractmethod, ABCMeta
+from abc import ABC, abstractmethod
 
 
-class ResultRenderer(metaclass=ABCMeta):
-
+class ResultRenderer(ABC):
     def __init__(self, config={}):
         print("ResultRenderer base")
 

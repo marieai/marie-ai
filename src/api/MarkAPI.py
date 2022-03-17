@@ -1,5 +1,6 @@
 from flask_restful import Resource, reqparse
 
+
 class MarkListAPI(Resource):
     def __init__(self):
         self.reqparse = reqparse.RequestParser()

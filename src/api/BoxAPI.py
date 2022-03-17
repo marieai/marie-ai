@@ -1,9 +1,8 @@
+import processors
 from boxes import box_processor
 from flask_restful import Resource, reqparse
-
 from utils.utils import current_milli_time
 
-import processors
 
 class BoxListAPI(Resource):
     def __init__(self):        

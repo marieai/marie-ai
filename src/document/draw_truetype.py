@@ -1,6 +1,7 @@
-from PIL import ImageFont, ImageDraw, Image
-import numpy as np
 import os
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 def drawTrueTypeTextOnImage(cv2Image, text, xy, size, fillColor):

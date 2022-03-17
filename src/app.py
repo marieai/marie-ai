@@ -1,16 +1,18 @@
 from __future__ import absolute_import
 
 import os
+import traceback
 
+import api.IcrAPIRoutes as IcrAPIRoutes
 import conf
 from api import api
 from flask import Flask
-# from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
-
-import api.IcrAPIRoutes as IcrAPIRoutes
 from logger import create_info_logger
 from utils.utils import ensure_exists
-import traceback
+
+
+# from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
+
 
 log = create_info_logger("app", "marie.log")
 # traceback.print_stack()

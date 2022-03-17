@@ -6,7 +6,7 @@ def find_open_port():
     Find an open port
     """
     sock = socket.socket()
-    sock.bind(('', 0))
+    sock.bind(("", 0))
     _, port = sock.getsockname()
 
     return port
@@ -14,7 +14,7 @@ def find_open_port():
 
 def get_ip_address():
     """
-        https://stackoverflow.com/questions/24196932/how-can-i-get-the-ip-address-from-nic-in-python
+    https://stackoverflow.com/questions/24196932/how-can-i-get-the-ip-address-from-nic-in-python
     """
     # TODO : Add support for IP detection
     ## if there is an access to external network we can try this

@@ -1,10 +1,10 @@
-from api.QueueAPI import QueueAPI, QueueListAPI
+import conf
 from api.BoxAPI import BoxAPI, BoxListAPI
 from api.MarkAPI import MarkAPI, MarkListAPI
-from api.SegmenterAPI import SegmenterListAPI, SegmenterAPI
-
+from api.QueueAPI import QueueAPI, QueueListAPI
+from api.SegmenterAPI import SegmenterAPI, SegmenterListAPI
 from flask_restful import Api
-import conf
+
 
 api = Api(prefix=conf.API_PREFIX) # AttributeError: module 'config' has no attribute 'API_PREFIX
 
