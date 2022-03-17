@@ -3,35 +3,34 @@ import os
 import sys
 
 from icr.memory_dataset import MemoryDataset
+from utils.image_utils import imwrite
+from utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-import typing
-import numpy as np
-import json
-import copy
-import cv2
-import numpy as np
-from PIL import Image
 import base64
+import json
+import typing
 
+import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.utils.data
 import torch.nn.functional as F
-from icr.utils import CTCLabelConverter, AttnLabelConverter, Averager
-from icr.dataset import hierarchical_dataset, AlignCollate, RawDataset
+import torch.utils.data
+from PIL import Image
+
+import cv2
+from draw_truetype import drawTrueTypeTextOnImage
+from icr.dataset import AlignCollate, RawDataset, hierarchical_dataset
 from icr.model import Model
 from icr.single_dataset import SingleDataset
-
-from numpyencoder import NumpyEncoder
+from icr.utils import AttnLabelConverter, Averager, CTCLabelConverter
 from numpycontainer import NumpyContainer
-from draw_truetype import drawTrueTypeTextOnImage
+from numpyencoder import NumpyEncoder
+
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # device = torch.device('cpu')
-
-from utils.resize_image import resize_image
 
 
 class Object(object):
@@ -42,19 +41,6 @@ def encodeimg2b64(img: np.ndarray) -> str:
     retval, buffer = cv2.imencode('.png', img)
     png_as_text = base64.b64encode(buffer).decode()
     return png_as_text
-
-
-def imwrite(path, img):
-    try:
-        cv2.imwrite(path, img)
-    except Exception as ident:
-        print(ident)
-
-
-def ensure_exists(dir):
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-    return dir
 
 
 def icr_debug(opt):

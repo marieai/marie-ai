@@ -1,17 +1,18 @@
-import os
-import sys
-import re
-import six
 import math
-import lmdb
-import torch
+import os
+import re
+import sys
 
-from natsort import natsorted
-from PIL import Image
 import numpy as np
-from torch.utils.data import Dataset, ConcatDataset, Subset
-from torch._utils import _accumulate
+import torch
 import torchvision.transforms as transforms
+from PIL import Image
+from torch._utils import _accumulate
+from torch.utils.data import ConcatDataset, Dataset, Subset
+
+import lmdb
+import six
+from natsort import natsorted
 
 
 class Batch_Balanced_Dataset(object):

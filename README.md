@@ -86,6 +86,14 @@ docker run --rm --name marie_redis redis
 docker exe -it marie_redis sh
 ```
 
+## Issues
+
+There is a segmentation fault happening with `opencv-python==4.5.4.62` switching to `opencv-python==4.5.4.60` fixes the issue. 
+[connectedComponentsWithStats produces a segfault ](https://github.com/opencv/opencv-python/issues/604)
+```
+pip install opencv-python==4.5.4.60
+```
+
 ## References
 
 [consul-catalog](https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/)

@@ -1,14 +1,16 @@
-import string
 import argparse
+import string
 
 import torch
 import torch.backends.cudnn as cudnn
-import torch.utils.data
 import torch.nn.functional as F
+import torch.utils.data
 
-from utils import CTCLabelConverter, AttnLabelConverter
-from dataset import RawDataset, AlignCollate
+from dataset import AlignCollate, RawDataset
 from model import Model
+from utils import AttnLabelConverter, CTCLabelConverter
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device('cpu')
 

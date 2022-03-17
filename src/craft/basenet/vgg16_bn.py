@@ -6,6 +6,7 @@ import torch.nn.init as init
 from torchvision import models
 from torchvision.models.vgg import model_urls
 
+
 def init_weights(modules):
     for m in modules:
         if isinstance(m, nn.Conv2d):

@@ -1,5 +1,7 @@
-from utils.utils import ensure_exists, FileSystem
 import os
+
+from utils.utils import FileSystem, ensure_exists
+
 
 if __name__ == '__main__':
     img_path = 'word/0001.png'

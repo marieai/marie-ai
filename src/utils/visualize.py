@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 
+
 # helper function for data visualization
 def visualize(imgpath=None, **images):
     """PLot images in one row."""
@@ -16,17 +17,17 @@ def visualize(imgpath=None, **images):
     cols = number_of_columns
 
     # Compute Rows required
-    rows = total // cols 
+    rows = total // cols
     rows += total % cols
 
     # Create a Position index
-    position = range(1,total + 1)
+    position = range(1, total + 1)
 
     # Create main figure
     fig = plt.figure(1)
     for k, (name, image) in enumerate(images.items()):
-        ax = fig.add_subplot(rows,cols,position[k])
-        ax.set_title(' '.join(name.split('_')).title())
+        ax = fig.add_subplot(rows, cols, position[k])
+        ax.set_title(" ".join(name.split("_")).title())
         ax.imshow(image)
 
     if imgpath:

@@ -1,10 +1,10 @@
 import os
-import cv2
 
+import cv2
+from boxes.box_processor_craft import BoxProcessorCraft, PSMode
+from document.icr_processor import IcrProcessor
 from utils.utils import ensure_exists
 
-from boxes.box_processor import BoxProcessor, PSMode
-from document.icr_processor import IcrProcessor
 
 if __name__ == '__main__':
 
@@ -18,7 +18,7 @@ if __name__ == '__main__':
     key = img_path.split('/')[-1]
     snippet = cv2.imread(img_path)
 
-    box = BoxProcessor(work_dir=work_dir_boxes, models_dir='./models/craft')
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft')
     icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     boxes, img_fragments, lines, _ = box.extract_bounding_boxes(

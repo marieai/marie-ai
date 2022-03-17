@@ -1,10 +1,12 @@
 """ a modified version of CRNN torch repository https://github.com/bgshih/crnn/blob/master/tool/create_dataset.py """
 
-import fire
 import os
 import shutil
+
+import fire
 import numpy as np
- 
+
+
 def split(inputPath, outputPath, datalist):
     nSamples = len(datalist)
     gtFile = os.path.join(outputPath, 'labels.txt')
