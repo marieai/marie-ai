@@ -6,7 +6,8 @@ lmdb
 natsort
 celery
 flask 
-flask-restful 
+flask-restful
+flask_restful
 Werkzeug
 opencv-python
 imagecodecs
@@ -14,3 +15,4 @@ python-consul
 torch
 torchvision
 torchaudio
+imutils
