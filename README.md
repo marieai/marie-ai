@@ -35,7 +35,7 @@ python ./app.py
 ```
 
 Starting in Production mode with `gunicorn`. Config
-settings [https://docs.gunicorn.org/en/stable/settings.html#settings]
+[gunicorn]settings (https://docs.gunicorn.org/en/stable/settings.html#settings)
 
 ```sh
 gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
@@ -86,18 +86,35 @@ docker run --rm --name marie_redis redis
 docker exe -it marie_redis sh
 ```
 
+## Issues
+
+There is a segmentation fault happening with `opencv-python==4.5.4.62` switching to `opencv-python==4.5.4.60` fixes the issue. 
+[connectedComponentsWithStats produces a segfault ](https://github.com/opencv/opencv-python/issues/604)
+```
+pip install opencv-python==4.5.4.60
+```
+
 ## References
 
-https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/
-https://www.toptal.com/flask/flask-production-recipes
-https://apispec.readthedocs.io/en/latest/install.html
-https://github.com/gregbugaj/form-processor
-https://gradio.app/
+[consul-catalog](https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/)
+[apispec](https://apispec.readthedocs.io/en/latest/install.html)
+[gradio](https://gradio.app/)
 
-Consule / Traefik configuration [https://devonhubner.org/using_traefik_with_consul/]
+[https://devonhubner.org/using_traefik_with_consul/](Consul / Traefik configuration)
 
 ## Box Detection
 
 Implement secondary box detection method.
-https://github.com/ying09/TextFuseNet
+[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
+
+
+## Stream processing
+[KSQL Stream processing example ](https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/)
+[KSQL](https://pypi.org/project/ksql/)
  
+
+## Research 
+
+[DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
+[DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
+
