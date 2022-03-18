@@ -11,7 +11,8 @@ import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
 from utils.image_utils import paste_fragment
-from utils.overlap import find_overlap
+from line_processor import line_refiner
+from line_processor import find_line_index
 
 import copy
 import cv2
@@ -32,6 +33,7 @@ from utils.utils import ensure_exists
 # sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
+
 def crop_poly_low(img, poly):
     """
     find region using the poly points
@@ -47,7 +49,7 @@ def crop_poly_low(img, poly):
     ## (1) Crop the bounding rect
     rect = cv2.boundingRect(pts)
     x, y, w, h = rect
-    croped = img[y: y + h, x: x + w].copy()
+    croped = img[y : y + h, x : x + w].copy()
 
     ## (2) make mask
     pts = pts - pts.min(axis=0)
@@ -67,16 +69,16 @@ def crop_poly_low(img, poly):
 
 
 def get_prediction(
-        craft_net,
-        image,
-        text_threshold,
-        link_threshold,
-        low_text,
-        cuda,
-        poly,
-        canvas_size,
-        mag_ratio,
-        refine_net=None,
+    craft_net,
+    image,
+    text_threshold,
+    link_threshold,
+    low_text,
+    cuda,
+    poly,
+    canvas_size,
+    mag_ratio,
+    refine_net=None,
 ):
     net = craft_net
     show_time = True
@@ -148,13 +150,13 @@ def get_prediction(
 
 class BoxProcessorCraft(BoxProcessor):
     def __init__(
-            self,
-            work_dir: str = "/tmp/boxes",
-            models_dir: str = "./models/craft",
-            cuda: bool = False,
+        self,
+        work_dir: str = "/tmp/boxes",
+        models_dir: str = "./models/craft",
+        cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
-        print("Box processor [cuda={}]".format(cuda))
+        print("Box processor [craft, cuda={}]".format(cuda))
         self.craft_net, self.refine_net = self.__load(models_dir)
 
     def __load(self, models_dir: str):
@@ -310,134 +312,12 @@ class BoxProcessorCraft(BoxProcessor):
             prediction_result["bboxes"] = bboxes
             prediction_result["polys"] = polys
             prediction_result["heatmap"] = score_text
-
             regions = bboxes
-            img_h = image.shape[0]
-            img_w = image.shape[1]
-            lines = []
-            all_box_lines = []
 
-            for idx, region in enumerate(regions):
-                region = np.array(region).astype(np.int32).reshape((-1))
-                region = region.reshape(-1, 2)
-                poly = region.reshape((-1, 1, 2))
-                box = cv2.boundingRect(poly)
-                box = np.array(box).astype(np.int32)
-                x, y, w, h = box
-                box_line = [0, y, img_w, h]
-                box_line = np.array(box_line).astype(np.int32)
-                all_box_lines.append(box_line)
-                # print(f' >  {idx} : {box} : {box_line}')
-            # print(f'all_box_lines : {len(all_box_lines)}')
-
-            all_box_lines = np.array(all_box_lines)
-            if len(all_box_lines) == 0:
-                return [], [], [], None
-
-            y1 = all_box_lines[:, 1]
-
-            # sort boxes by the  y-coordinate of the bounding box
-            idxs = np.argsort(y1)
-            lines = []
-            size = len(idxs)
-            iter_idx = 0
-
-            while len(idxs) > 0:
-                last = len(idxs) - 1
-                idx = idxs[last]
-                box_line = all_box_lines[idx]
-                overlaps, indexes = find_overlap(box_line, all_box_lines)
-                overlaps = np.array(overlaps)
-
-                min_x = overlaps[:, 0].min()
-                min_y = overlaps[:, 1].min()
-                max_w = overlaps[:, 2].max()
-                max_h = overlaps[:, 3].max()
-                max_y = 0
-
-                for overlap in overlaps:
-                    x, y, w, h = overlap
-                    dh = y + h
-                    if dh > max_y:
-                        max_y = dh
-
-                max_h = max_y - min_y
-                box = [min_x, min_y, max_w, max_h]
-                lines.append(box)
-
-                # there is a bug when there is a box index greater than candidate index
-                # last/idx : 8   ,  2  >  [0 1 4 3 6 5 7 8 2] len = 9  /  [0 1 2 3 4 5 6 7 8 9] len = 10
-                # Ex : 'index 9 is out of bounds for axis 0 with size 9'
-                #  numpy.delete(arr, obj, axis=None)[source]¶
-                indexes = indexes[indexes < idxs.size]
-                idxs = np.delete(idxs, indexes, axis=0)
-                iter_idx = iter_idx + 1
-                # prevent inf loop
-                if iter_idx > size:
-                    print("ERROR:Infinite loop detected")
-                    raise Exception("ERROR:Infinite loop detected")
-
-            # reverse to get the right order
-            lines = np.array(lines)[::-1]
-            img_line = copy.deepcopy(image)
-
-            for line in lines:
-                x, y, w, h = line
-                color = list(np.random.random(size=3) * 256)
-                cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 1)
-
-            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % _id), img_line)
-
-            # refine lines as there could be lines that overlap
-            print(f"***** Line candidates size {len(lines)}")
-
-            # sort boxes by the y-coordinate of the bounding box
-            y1 = lines[:, 1]
-            idxs = np.argsort(y1)
-            refine_lines = []
-
-            while len(idxs) > 0:
-                last = len(idxs) - 1
-                idx = idxs[last]
-
-                box_line = lines[idx]
-                overlaps, indexes = find_overlap(box_line, lines)
-                overlaps = np.array(overlaps)
-
-                min_x = overlaps[:, 0].min()
-                min_y = overlaps[:, 1].min()
-                max_w = overlaps[:, 2].max()
-                max_h = overlaps[:, 3].max()
-
-                box = [min_x, min_y, max_w, max_h]
-                refine_lines.append(box)
-
-                # there is a bug when there is a box index greater than candidate index
-                # last/idx : 8   ,  2  >  [0 1 4 3 6 5 7 8 2] len = 9  /  [0 1 2 3 4 5 6 7 8 9] len = 10
-                # Ex : 'index 9 is out of bounds for axis 0 with size 9'
-                #  numpy.delete(arr, obj, axis=None)[source]¶
-                indexes = indexes[indexes < idxs.size]
-                idxs = np.delete(idxs, indexes, axis=0)
-
-            print(f"Final line size : {len(refine_lines)}")
-            lines = np.array(refine_lines)[::-1]  # Reverse
-            print(lines)
-
-            img_line = copy.deepcopy(image)
-
-            for line in lines:
-                x, y, w, h = line
-                color = list(np.random.random(size=3) * 256)
-                cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 1)
-
-            cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (_id)), img_line)
-
-            line_size = len(lines)
             result_folder = "./result/"
             if not os.path.isdir(result_folder):
                 os.mkdir(result_folder)
 
-            print(f"Estimated line count : {line_size}")
             # save score text
             filename = _id
             mask_file = result_folder + "/res_" + filename + "_mask.jpg"
@@ -509,18 +389,8 @@ class BoxProcessorCraft(BoxProcessor):
                     file_path = os.path.join(mask_dir, "%s_%s.jpg" % (ms, idx))
                     cv2.imwrite(file_path, mask)
 
-                _, line_indexes = find_overlap(box, lines)
-                line_number = -1
-                if len(line_indexes) == 1:
-                    line_number = line_indexes[0] + 1
-
-                if line_number == -1:
-                    print("Line number == -1")
-                    print(line_indexes)
-                    print(box)
-                    raise Exception("Borked")
-
-                # assert line_number == -1 , 'Invalid line number : -1, this looks like a bug'
+                lines = line_refiner(image, bboxes, _id, lines_dir)
+                line_number = find_line_index(lines, box)
 
                 fragments.append(snippet)
                 rect_from_poly.append(box)
@@ -543,8 +413,6 @@ class BoxProcessorCraft(BoxProcessor):
             return rect_from_poly, fragments, rect_line_numbers, prediction_result
         except Exception as ident:
             raise ident
-
-        return [], [], [], None
 
 
 if __name__ == "__main__":

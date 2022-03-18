@@ -45,13 +45,6 @@ def make_power_2(img, base, method=Image.BICUBIC):
     return img.resize((w, h), method)
 
 
-def imwrite(path, img):
-    try:
-        cv2.imwrite(path, img)
-    except Exception as ident:
-        print(ident)
-
-
 def order_points(pts):
     # initialize a list of coordinates that will be ordered
     # such that the first entry in the list is the top-left,
