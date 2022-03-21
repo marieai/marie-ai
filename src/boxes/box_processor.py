@@ -106,11 +106,6 @@ def estimate_character_width(src_img, bounding_boxes):
         x, y, w, h = box
         total_width += w
 
-    char_width = total_width // total_chars
-
-    print(f"total_chars : {total_chars}")
-    print(f"char_width : {char_width}")
-
     # using hardcoded values
     # https://accessibility.psu.edu/legibility/fontsize/
     # https://www.thomasphinney.com/2011/03/point-size/
@@ -119,6 +114,12 @@ def estimate_character_width(src_img, bounding_boxes):
     # 1 character(X) = 8 pixel(X)
     # 1 pixel(X) = 0.125 character(X)
     # char_width = 8
+    if total_chars == 0:
+        char_width = 8
+    else:
+        char_width = total_width // total_chars
+
+    print(f"total_chars, char_width : {total_chars}, {char_width}")
     return char_width
 
 

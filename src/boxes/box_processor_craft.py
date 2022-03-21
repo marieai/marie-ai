@@ -10,6 +10,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
+from timer import Timer
 from utils.image_utils import paste_fragment
 from line_processor import line_refiner
 from line_processor import find_line_index
@@ -269,6 +270,7 @@ class BoxProcessorCraft(BoxProcessor):
 
         return bboxes, polys, score_text
 
+    @Timer(text="BoundingBoxes in {:.2f} seconds")
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
         print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
 
@@ -379,16 +381,20 @@ class BoxProcessorCraft(BoxProcessor):
                     file_path = os.path.join(mask_dir, "%s_%s.jpg" % (ms, idx))
                     cv2.imwrite(file_path, mask)
 
-                lines = line_refiner(image, bboxes, _id, lines_dir)
-                line_number = find_line_index(lines, box)
+                # FIXME  : This is really slow
+                # lines = line_refiner(image, bboxes, _id, lines_dir)
+                # line_number = find_line_index(lines, box)
+                line_number = 0
 
                 fragments.append(snippet)
                 rect_from_poly.append(box)
                 rect_line_numbers.append(line_number)
 
                 # export cropped region
-                file_path = os.path.join(crops_dir, "%s_%s.jpg" % (ms, idx))
-                cv2.imwrite(file_path, snippet)
+                # FIXME : Add debug flags
+                if False:
+                    file_path = os.path.join(crops_dir, "%s_%s.jpg" % (ms, idx))
+                    cv2.imwrite(file_path, snippet)
 
                 # After normalization image is in 0-1 range
                 # snippet = (snippet * 255).astype(np.uint8)

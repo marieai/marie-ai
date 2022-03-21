@@ -6,6 +6,7 @@ from models.icr.dataset import AlignCollate, RawDataset
 from models.icr.memory_dataset import MemoryDataset
 from models.icr.model import Model
 from models.icr.utils import CTCLabelConverter, AttnLabelConverter
+from timer import Timer
 from utils.image_utils import imwrite
 from utils.utils import ensure_exists
 
@@ -359,6 +360,7 @@ class IcrProcessor:
             raise ex
         return results
 
+    @Timer(text="ICR in {:.2f} seconds")
     def recognize(self, _id, key, img, boxes, image_fragments, lines):
         """Recognize text from multiple images.
         Args:
@@ -390,10 +392,11 @@ class IcrProcessor:
                 extraction = results[i]
                 txt = extraction['text']
                 confidence = extraction['confidence']
-                print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
+                # print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
                 conf_label = f'{confidence:0.4f}'
                 txt_label = txt
 
+                # \\172.16.11.30\MedrxProvData\576\PID\20220321\PID_576_7188_0_150459314.pdf
                 payload = dict()
                 payload['id'] = i
                 payload['text'] = txt
@@ -407,16 +410,18 @@ class IcrProcessor:
                 if line > max_line_number:
                     max_line_number = line
 
-                overlay_image = drawTrueTypeTextOnImage(overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18,
-                                                        (139, 0, 0))
-                overlay_image = drawTrueTypeTextOnImage(overlay_image, conf_label, (box[0], box[1] + box[3]), 10,
-                                                        (0, 0, 255))
+                if False:
+                    overlay_image = drawTrueTypeTextOnImage(overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18,
+                                                            (139, 0, 0))
+                    overlay_image = drawTrueTypeTextOnImage(overlay_image, conf_label, (box[0], box[1] + box[3]), 10,
+                                                            (0, 0, 255))
 
-            savepath = os.path.join(debug_dir, f'{key}-icr-result.png')
-            imwrite(savepath, overlay_image)
+            if False:
+                savepath = os.path.join(debug_dir, f'{key}-icr-result.png')
+                imwrite(savepath, overlay_image)
 
-            savepath = os.path.join(debug_all_dir, f'{_id}.png')
-            imwrite(savepath, overlay_image)
+                savepath = os.path.join(debug_all_dir, f'{_id}.png')
+                imwrite(savepath, overlay_image)
 
             line_ids = np.empty((max_line_number), dtype=object)
             words = np.array(words)
@@ -437,7 +442,7 @@ class IcrProcessor:
                 box_picks = np.array(box_picks)
                 word_picks = np.array(word_picks)
 
-                print(f'**** {len(box_picks)}')
+                # print(f'**** {len(box_picks)}')
                 # FIXME : This si a bug and need to be fixed, this should never happen
                 if len(box_picks) == 0:
                     line_ids[i] = {
@@ -481,14 +486,15 @@ class IcrProcessor:
                 'lines': line_ids,
             }
 
-            with open('/tmp/icr/data.json', 'w') as f:
-                json.dump(result, f, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=4,
-                          cls=NumpyEncoder)
+            if False:
+                with open('/tmp/icr/data.json', 'w') as f:
+                    json.dump(result, f, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=4,
+                              cls=NumpyEncoder)
 
-            print('------ Extraction ------------')
-            for line in line_ids:
-                txt = line['text']
-                print(f' >> {txt}')
+                print('------ Extraction ------------')
+                for line in line_ids:
+                    txt = line['text']
+                    print(f' >> {txt}')
 
         except Exception as ex:
             raise ex
