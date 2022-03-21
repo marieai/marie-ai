@@ -270,16 +270,6 @@ class BoxProcessorCraft(BoxProcessor):
         return bboxes, polys, score_text
 
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
-        """Extract bounding boxes for specific image, try to predict line number representing each bounding box.
-
-        Args:
-            _id:  Unique Image ID
-            key: Unique image key/Zone
-            img: A pre-cropped image containing characters
-            psm: Page Segmentation Mode accepts one of following (sparse, word, line)
-        Return:
-            box array, fragment array, line_number array,  prediction results[bboxes, polys, heatmap]
-        """
         print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
 
         try:

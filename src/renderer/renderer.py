@@ -11,5 +11,5 @@ class ResultRenderer(ABC):
         pass
 
     @abstractmethod
-    def render(self, image, result):
+    def render(self, image, result, output_filename):
         pass

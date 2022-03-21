@@ -4,7 +4,7 @@ import numpy as np
 import tqdm
 
 import cv2
-from renderer.textrenderer import TextRenderer
+from renderer.text_renderer import TextRenderer
 from boxes.box_processor import PSMode
 from utils.utils import ensure_exists
 
@@ -54,6 +54,7 @@ if __name__ == '__main__':
     # img_path = './assets/english/Lines/003.png'
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
+    # img_path = './assets/private/PID_576_7188_0_149495857_page_0002.tif'
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
@@ -63,7 +64,6 @@ if __name__ == '__main__':
     if True:
         key = img_path.split('/')[-1]
         image = cv2.imread(img_path)
-
         mean, std = cv2.meanStdDev(image)
 
         print(mean)
