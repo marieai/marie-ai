@@ -21,7 +21,7 @@ class TextRenderer(ResultRenderer):
     def name(self):
         return "TextRenderer"
 
-    def render(self, image, result):
+    def render(self, image, result, output_filename):
         print("Rendering ...")
         # 8px X 22px = 2.75 pytorch
         # 8px X 19px = 2.375 vscode

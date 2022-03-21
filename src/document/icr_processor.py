@@ -437,6 +437,18 @@ class IcrProcessor:
                 box_picks = np.array(box_picks)
                 word_picks = np.array(word_picks)
 
+                print(f'**** {len(box_picks)}')
+                # FIXME : This si a bug and need to be fixed, this should never happen
+                if len(box_picks) == 0:
+                    line_ids[i] = {
+                        'line': i + 1,
+                        'wordids': word_ids,
+                        'text': "",
+                        'bbox': bbox,
+                        'confidence': round(0, 4)
+                    }
+                    continue
+
                 x1 = box_picks[:, 0]
                 idxs = np.argsort(x1)
                 aligned_words = word_picks[idxs]

@@ -19,7 +19,9 @@ def find_line_index(lines, box):
         line_number = line_indexes[0] + 1
 
     if line_number == -1:
+        return 1
         raise Exception(f"Invalid line number : -1, this looks like a bug : {line_indexes}, {box}")
+
     return line_number
 
 
