@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 from shutil import copyfile
 
+from timer import Timer
 from utils.utils import ensure_exists
 from utils.image_utils import imwrite, read_image, viewImage
 from models.pix2pix.util.util import tensor2im
@@ -84,6 +85,7 @@ class OverlayProcessor:
         dataset = create_dataset(opt)
         for i, data in enumerate(dataset):
             model.set_input(data)  # unpack data from data loader
+            # model.test()  # run inference
             model.test()  # run inference
             visuals = model.get_current_visuals()  # get image results
             # Debug
@@ -139,6 +141,7 @@ class OverlayProcessor:
 
         return blended_img
 
+    @Timer(text="Segmented in {:.2f} seconds")
     def segment(self, documentid: str, img_path: str):
         """
         Form overlay segmentation

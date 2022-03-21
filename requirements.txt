@@ -16,3 +16,8 @@ torch
 torchvision
 torchaudio
 imutils
+PyPDF4
+reportlab
+wand
+onnx
+onnxruntime
