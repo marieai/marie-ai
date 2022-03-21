@@ -56,7 +56,7 @@ if __name__ == "__main__":
             filename = _path.split("/")[-1]
             docId = filename.split("/")[-1].split(".")[0]
             key = docId
-            image = cv2.imread(_path)
+            clean_image_path = os.path.join(clean_dir, filename)
             print(f"DocumentId : {docId}")
 
             if not os.path.exists(os.path.join(clean_dir, filename)):
@@ -74,6 +74,7 @@ if __name__ == "__main__":
 
             pdf_save_path = os.path.join(pdf_dir, f"{docId}.pdf")
             if not os.path.exists(pdf_save_path):
+                image = cv2.imread(clean_image_path)
                 boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
                 result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
                 print(f"Rendering PDF document : {pdf_save_path}")
