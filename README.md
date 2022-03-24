@@ -138,3 +138,6 @@ AttributeError: module 'distutils' has no attribute 'version'
 ```
 python3 -m pip install setuptools==59.5.0
 ```
+
+
+[//]: # (https://mmocr.readthedocs.io/en/latest/)

@@ -357,7 +357,7 @@ class IcrProcessorCraft(IcrProcessor):
             raise ex
         return results
 
-    @Timer(text="ICR in {:.2f} seconds")
+    r(text="ICR in {:.2f} seconds")
     def recognize(self, _id, key, img, boxes, image_fragments, lines):
         """Recognize text from multiple images.
         Args:
