@@ -11,6 +11,8 @@ from fairseq_cli import generate
 from PIL import Image
 import torchvision.transforms as transforms
 
+from timer import Timer
+
 
 def init(model_path, beam=5):
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
@@ -39,13 +41,14 @@ def preprocess(img_path, img_transform):
     im = Image.open(img_path).convert('RGB').resize((384, 384))
     im = img_transform(im).unsqueeze(0).to(device).float()
 
+
     sample = {
         'net_input': {"imgs": im},
     }
 
     return sample
 
-
+@Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, generator, model, sample, bpe):
     decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
     decoder_output = decoder_output[0][0]       #top1
@@ -69,7 +72,7 @@ if __name__ == '__main__':
     model_path = '/home/gbugaj/devio/3rdparty/unilm/models/trocr-large-printed.pt'
     burst_dir = "./assets/psm/word"
 
-    beam = 5
+    beam = 15
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
 
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
