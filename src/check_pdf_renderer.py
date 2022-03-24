@@ -12,7 +12,7 @@ from utils.utils import ensure_exists
 
 from boxes.box_processor_craft import BoxProcessorCraft
 from boxes.box_processor_textfusenet import BoxProcessorTextFuseNet
-from document.icr_processor import IcrProcessor
+from document.icr_processor_craft import IcrProcessorCraft
 
 
 if __name__ == "__main__":
@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
+        icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.LINE)
         result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)

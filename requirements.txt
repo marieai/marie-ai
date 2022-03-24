@@ -19,5 +19,8 @@ imutils
 PyPDF4
 reportlab
 wand
+fairseq
 onnx
 onnxruntime
+nltk
+fastwer
