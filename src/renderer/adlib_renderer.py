@@ -1,11 +1,3 @@
-import io
-
-import cv2
-from PIL import Image
-from PyPDF4 import PdfFileWriter, PdfFileReader
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
-
 from renderer.renderer import ResultRenderer
 
 
@@ -31,9 +23,15 @@ class AdlibRenderer(ResultRenderer):
             words = result["words"]
             lines = result["lines"]
 
-            print(meta)
-            im_h = meta['imageSize']['height'] / 72.0
-            im_w = meta['imageSize']['width'] / 72.0
+            # im = PIL.Image.fromarray(img)
+            # print(im.info['dpi'])
+
+            # default DPI
+            dpi_x = 300.0
+            dpi_y = 300.0
+
+            im_h = meta['imageSize']['height'] / dpi_y
+            im_w = meta['imageSize']['width'] / dpi_x
 
             root = gfg.Element("PAGE")
             root.set("HEIGHT", str(im_h))
@@ -43,8 +41,8 @@ class AdlibRenderer(ResultRenderer):
             root.set("OCREndTime", "0")
             root.set("OCRStartTime", "0")
             root.set("Producer", "marie")
-            root.set("XRESOLUTION", "300")
-            root.set("YRESOLUTION", "300")
+            root.set("XRESOLUTION", str(dpi_x))
+            root.set("YRESOLUTION", str(dpi_y))
 
             # Add dummy TEXT element
             root.append(gfg.Element("TEXT"))
@@ -52,10 +50,10 @@ class AdlibRenderer(ResultRenderer):
             for idx, word in enumerate(words):
                 x1, y1, w1, h1 = word["box"]
                 txt = word["text"]
-                x = x1 / 72.0
-                y = y1 / 72.0
-                w = w1 / 72.0
-                h = h1 / 72.0
+                x = x1 / dpi_x
+                y = y1 / dpi_y
+                w = w1 / dpi_x
+                h = h1 / dpi_y
                 left = x
                 right = x + w
                 top = y - h

@@ -7,7 +7,8 @@ from . import (
     icr,
     craft,
     textfusenet,
-    pix2pix
+    pix2pix,
+    unilm,
 )
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))

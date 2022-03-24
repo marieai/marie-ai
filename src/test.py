@@ -8,7 +8,7 @@ import numpy as np
 
 import cv2
 from boxes.box_processor_craft import BoxProcessorCraft
-from document.icr_processor import IcrProcessor
+from document.icr_processor_craft import IcrProcessorCraft
 from utils.image_utils import read_image
 from utils.utils import current_milli_time, ensure_exists
 
@@ -27,7 +27,7 @@ if __name__ == '__main__':
         snippet = cv2.imread(img_path)
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft')
-        icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
+        icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, 'field', snippet)
         icr.recognize(key, 'test', snippet, boxes, img_fragments, lines)

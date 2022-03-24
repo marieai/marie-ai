@@ -40,8 +40,24 @@ def viewImage(image, name="Display"):
     cv2.destroyAllWindows()
 
 
-def imwrite(path, img):
+def imwrite_dpi(output_filename, cv_image, dpi=(300, 300)):
+
+    import PIL.Image
+
+    image = PIL.Image.fromarray(cv_image)
+    image.save(output_filename, dpi=dpi)
+
+
+def imwrite(output_path, img, dpi=None):
+    """Save OpenCV image"""
     try:
-        cv2.imwrite(path, img)
+        if dpi is None:
+            cv2.imwrite(output_path, img)
+        else:
+            """Save OpenCV image with DPI"""
+            import PIL.Image
+
+            pil_img = PIL.Image.fromarray(img)
+            pil_img.save(output_path, dpi=dpi)
     except Exception as ident:
         print(ident)

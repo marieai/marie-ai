@@ -123,3 +123,18 @@ Implement secondary box detection method.
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
+
+
+## 
+Install fairseq from source 
+https://github.com/NVIDIA/apex
+https://github.com/pytorch/fairseq
+
+Fix issue 
+```
+AttributeError: module 'distutils' has no attribute 'version'
+```
+
+```
+python3 -m pip install setuptools==59.5.0
+```

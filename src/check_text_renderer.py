@@ -12,7 +12,7 @@ from utils.utils import ensure_exists
 if True:
     from boxes.box_processor_craft import BoxProcessorCraft
     from boxes.box_processor_textfusenet import BoxProcessorTextFuseNet
-    from document.icr_processor import IcrProcessor
+    from document.icr_processor_craft import IcrProcessorCraft
 
 
 def cal_mean_std(images_dir):
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     # img_path = './assets/english/Lines/003.png'
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
-    # img_path = './assets/private/PID_576_7188_0_149495857_page_0002.tif'
+    img_path = './assets/private/PID_576_7188_0_149495857_page_0002.tif'
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft', cuda=False)
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = IcrProcessor(work_dir=work_dir_icr, cuda=False)
+        icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
             key, 'field', image, PSMode.LINE)

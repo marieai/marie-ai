@@ -392,7 +392,7 @@ class BoxProcessorCraft(BoxProcessor):
 
                 # export cropped region
                 # FIXME : Add debug flags
-                if False:
+                if True:
                     file_path = os.path.join(crops_dir, "%s_%s.jpg" % (ms, idx))
                     cv2.imwrite(file_path, snippet)
 

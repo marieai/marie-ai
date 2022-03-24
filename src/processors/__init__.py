@@ -1,6 +1,6 @@
 from boxes.box_processor_craft import BoxProcessorCraft
 from utils.utils import ensure_exists
-from document.icr_processor import IcrProcessor
+from document.icr_processor_craft import IcrProcessorCraft
 
 
 def init() -> None:
@@ -10,7 +10,7 @@ def init() -> None:
     global icr_processor
 
     box_processor = BoxProcessorCraft(work_dir=ensure_exists("/tmp/boxes"), models_dir="./models/craft")
-    icr_processor = IcrProcessor(work_dir=ensure_exists("/tmp/icr"), cuda=False)
+    icr_processor = IcrProcessorCraft(work_dir=ensure_exists("/tmp/icr"), cuda=False)
 
 
 init()

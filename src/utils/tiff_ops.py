@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import cv2
+
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
 
@@ -27,19 +28,21 @@ def convert_group4(src_path, dst_path):
     from wand.image import Image
 
     # Tell python about the MagickSetOption method
-    library.MagickSetOption.argtypes = [c_void_p,  # MagickWand * wand
-                                        c_char_p,  # const char * option
-                                        c_char_p]  # const char * value
+    library.MagickSetOption.argtypes = [
+        c_void_p,  # MagickWand * wand
+        c_char_p,  # const char * option
+        c_char_p,
+    ]  # const char * value
 
     with Image(filename=src_path) as image:
         # -define quantum:polarity=min-is-white
-        library.MagickSetOption(image.wand,  # MagickWand
-                                "quantum:polarity".encode('utf-8'),  # option
-                                "min-is-white".encode('utf-8'))  # value
+        library.MagickSetOption(
+            image.wand, "quantum:polarity".encode("utf-8"), "min-is-white".encode("utf-8")  # MagickWand  # option
+        )  # value
 
-        library.MagickSetOption(image.wand,  # MagickWand
-                                "tiff:rows-per-strip".encode('utf-8'),  # option
-                                "1".encode('utf-8'))  # value
+        library.MagickSetOption(
+            image.wand, "tiff:rows-per-strip".encode("utf-8"), "1".encode("utf-8")  # MagickWand  # option
+        )  # value
 
         library.MagickSetImageCompression(image.wand, 8)
         library.MagickSetImageDepth(image.wand, 1)
@@ -59,7 +62,7 @@ def burst_tiff(src_img_path, dest_dir):
     name = src_img_path.split("/")[-1].split(".")[0]
 
     with tempfile.TemporaryDirectory() as tmpdirname:
-        print('created temporary directory', tmpdirname)
+        print("created temporary directory", tmpdirname)
         for i, frame in enumerate(frames):
             index = i + 1
             generated_name = f"{name}_page_{index:04}.tif"
@@ -69,19 +72,20 @@ def burst_tiff(src_img_path, dest_dir):
                 print(f"Bursting page# {i} : {name} > {generated_name} > {output_path}")
                 # TODO : Replace this with image magic methods so we can do this  in one step
                 with TiffWriter(output_path_tmp) as tif_writer:
-                    tif_writer.write(frame, photometric='minisblack', description=generated_name, metadata=None)
+                    tif_writer.write(frame, photometric="minisblack", description=generated_name, metadata=None)
                 convert_group4(output_path_tmp, output_path)
             except Exception as ident:
                 raise ident
                 print(ident)
 
 
-def merge_tiff(src_dir, dst_img_path):
+def merge_tiff(src_dir, dst_img_path, sort_key):
     """Merge individual tiff frames into a multipage tiff"""
     from wand.image import Image
+
     print(f"Creating multipage tiff : {dst_img_path}")
     with Image() as composite:
-        for _path in sorted(glob.glob(os.path.join(src_dir, "*.tif*"))):
+        for _path in sorted(glob.glob(os.path.join(src_dir, "*.tif*")), key=sort_key):
             try:
                 print(f"Merging document : {_path}")
                 filename = _path.split("/")[-1].split(".")[0]
