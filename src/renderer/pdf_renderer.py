@@ -88,7 +88,7 @@ class PdfRenderer(ResultRenderer):
 
             packet = io.BytesIO()
             can = canvas.Canvas(packet, pagesize=(img_w, img_h))
-            can.drawImage(ImageReader(im_pil), 0, 0)
+            # can.drawImage(ImageReader(im_pil), 0, 0)
 
             for idx, word in enumerate(words):
                 box = word["box"]
@@ -101,7 +101,7 @@ class PdfRenderer(ResultRenderer):
                 py0 = img_h - y - h * 0.70  # + (h / 2)
                 font_size = determine_font_size(box)
                 # print(can.getAvailableFonts())
-                font_size = 32  # h * .75
+                font_size = 24  # h * .75
                 # print(f'font_size = {font_size}  : {box}')
                 # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
                 can.setFont("Helvetica", font_size)

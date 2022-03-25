@@ -10,9 +10,9 @@ from utils.utils import ensure_exists
 
 
 if True:
-    from boxes.box_processor_craft import BoxProcessorCraft
-    from boxes.box_processor_textfusenet import BoxProcessorTextFuseNet
-    from document.icr_processor_craft import IcrProcessorCraft
+    from boxes.craft_box_processor import BoxProcessorCraft
+    from boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
+    from document.craft_icr_processor import CraftIcrProcessor
 
 
 def cal_mean_std(images_dir):
@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft', cuda=False)
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
+        icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
             key, 'field', image, PSMode.LINE)

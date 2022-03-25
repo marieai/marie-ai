@@ -4,15 +4,15 @@ import numpy as np
 import tqdm
 
 import cv2
+from utils.utils import ensure_exists
 
 from renderer.pdf_renderer import PdfRenderer
 from renderer.text_renderer import TextRenderer
 from boxes.box_processor import PSMode
-from utils.utils import ensure_exists
-
-from boxes.box_processor_craft import BoxProcessorCraft
-from boxes.box_processor_textfusenet import BoxProcessorTextFuseNet
-from document.icr_processor_craft import IcrProcessorCraft
+from boxes.craft_box_processor import BoxProcessorCraft
+from boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
+from document.craft_icr_processor import CraftIcrProcessor
+from document.trocr_icr_processor import TrOcrIcrProcessor
 
 
 if __name__ == "__main__":
@@ -31,8 +31,9 @@ if __name__ == "__main__":
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
 
-    # img_path = './assets/private/PID_576_7188_0_149495857_page_0002.tif'
-    # img_path = "/home/greg/dataset/medprov/PID/150300431/clean/PID_576_7188_0_150300431_page_0005.tif"
+    img_path = "/home/greg/dataset/medprov/PID/150300431/clean/PID_576_7188_0_150300431_page_0005.tif"
+    img_path = "/opt/grapnel/burst/150459314_2_cleaned.tiff"
+    img_path = "/home/gbugaj/data/rms-asp/149495857/clean/PID_576_7188_0_149495857_page_0003.tif"
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
@@ -43,9 +44,11 @@ if __name__ == "__main__":
         key = img_path.split("/")[-1]
         image = cv2.imread(img_path)
 
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
-        # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
+
+        # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
+        box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
+        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+        # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.LINE)
         result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)

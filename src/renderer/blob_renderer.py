@@ -5,7 +5,7 @@ from PIL import Image
 from PyPDF4 import PdfFileWriter, PdfFileReader
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-
+from xml.sax.saxutils import escape, quoteattr
 from renderer.renderer import ResultRenderer
 
 
@@ -40,12 +40,14 @@ class BlobRenderer(ResultRenderer):
 
             # self.page_number
             for idx, word in enumerate(words):
+                text = word["text"]
                 x, y, w, h = word["box"]
                 m1 = gfg.Element("blob")
                 m1.set("x", str(x))
                 m1.set("y", str(y))
                 m1.set("w", str(w))
                 m1.set("h", str(h))
+                m1.set("text", escape(text))
 
                 b1 = gfg.SubElement(m1, "page")
                 b1.text = str(self.page_number)

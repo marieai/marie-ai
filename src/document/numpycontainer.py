@@ -1,7 +1,6 @@
-
 class NumpyContainer:
     """
-        Numpy ndarray wrapper
+    Numpy ndarray wrapper
     """
 
     def __init__(self, value) -> None:

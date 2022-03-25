@@ -9,18 +9,31 @@ from numpycontainer import NumpyContainer
 
 def encodeimg2b64(img: np.array) -> str:
     """encode image to base64"""
-    retval, buffer = cv2.imencode('.png', img)
+    retval, buffer = cv2.imencode(".png", img)
     png_as_text = base64.b64encode(buffer).decode()
     return png_as_text
 
 
 class NumpyEncoder(json.JSONEncoder):
-    """ Custom encoder for numpy data types """
+    """Custom encoder for numpy data types"""
 
     def default(self, obj):
-        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                            np.int16, np.int32, np.int64, np.uint8,
-                            np.uint16, np.uint32, np.uint64)):
+        if isinstance(
+            obj,
+            (
+                np.int_,
+                np.intc,
+                np.intp,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
+            ),
+        ):
 
             return int(obj)
 
@@ -28,7 +41,7 @@ class NumpyEncoder(json.JSONEncoder):
             return float(obj)
 
         elif isinstance(obj, (np.complex_, np.complex64, np.complex128)):
-            return {'real': obj.real, 'imag': obj.imag}
+            return {"real": obj.real, "imag": obj.imag}
 
         elif isinstance(obj, (np.ndarray,)):
             return obj.tolist()
