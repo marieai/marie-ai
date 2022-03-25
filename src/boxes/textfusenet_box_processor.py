@@ -18,6 +18,8 @@ from models.textfusenet.detectron2.engine.defaults import DefaultPredictor
 from PIL import Image
 
 from boxes.box_processor import BoxProcessor, PSMode
+from utils.image_utils import paste_fragment
+from utils.utils import ensure_exists
 
 
 def setup_cfg(args):
@@ -26,6 +28,8 @@ def setup_cfg(args):
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
 
+    import os
+    os.environ["OMP_NUM_THREADS"] = str(16)
     cfg.MODEL.DEVICE = 'cpu'
     cfg.TEST.DETECTIONS_PER_IMAGE = 5000
 
@@ -73,7 +77,7 @@ def get_parser():
     parser.add_argument(
         "--confidence-threshold",
         type=float,
-        default=0.6,
+        default=0.5,
         help="Minimum score for instance predictions to be shown",
     )
     parser.add_argument(
@@ -119,6 +123,9 @@ class BoxProcessorTextFuseNet(BoxProcessor):
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
 
         start_time = time.time()
+        debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
+        crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
+
         predictions = self.predictor(img)
         instances = predictions["instances"].to(self.cpu_device)
         print(f"Number of prediction : {len(instances)}")
@@ -133,8 +140,6 @@ class BoxProcessorTextFuseNet(BoxProcessor):
         prediction_result["bboxes"] = boxes
         prediction_result["polys"] = boxes
         prediction_result["heatmap"] = None
-
-        print(boxes.shape)
 
         # deepcopy image so that original is not altered
         image = copy.deepcopy(img)
@@ -153,13 +158,25 @@ class BoxProcessorTextFuseNet(BoxProcessor):
             x0, y0, x1, y1 = box
             w = x1 - x0
             h = y1 - y0
+            box_adj = [x0, y0, w, h]
 
+            # Class 0 == Text
             if classes[i] == 0:
-                print(box)
                 snippet = image[y0:y0+h, x0:x0+w:]
                 # export cropped region
                 file_path = os.path.join('./result', "snippet_%s.jpg" % (i))
                 cv2.imwrite(file_path, snippet)
+
+                fragments.append(snippet)
+                rect_from_poly.append(box_adj)
+                rect_line_numbers.append(0)
+
+                # After normalization image is in 0-1 range
+                # snippet = (snippet * 255).astype(np.uint8)
+                paste_fragment(pil_image, snippet, (x0, y0))
+
+        savepath = os.path.join(debug_dir, "%s.jpg" % ("txt_overlay"))
+        pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
 
         # we can't return np.array here as t the 'fragments' will throw an error
         # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)

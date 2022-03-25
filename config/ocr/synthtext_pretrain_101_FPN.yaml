@@ -48,7 +48,7 @@ INPUT:
 
 
 TEST:
-  DETECTIONS_PER_IMAGE : 2000
+  DETECTIONS_PER_IMAGE : 5000
 
 
 OUTPUT_DIR: "./out_dir_r101/pre_model/"

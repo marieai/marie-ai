@@ -2,8 +2,6 @@ import glob
 import os
 
 import models.unilm.trocr
-# import deit
-# import deit_models
 import torch
 import fairseq
 from fairseq import utils
@@ -34,6 +32,7 @@ def init(model_path, beam=5):
 
     bpe = task.build_bpe(cfg.bpe)
 
+    print(task)
     return model, cfg, task, generator, bpe, img_transform, device
 
 
@@ -41,17 +40,18 @@ def preprocess(img_path, img_transform):
     im = Image.open(img_path).convert('RGB').resize((384, 384))
     im = img_transform(im).unsqueeze(0).to(device).float()
 
-
     sample = {
         'net_input': {"imgs": im},
     }
 
     return sample
 
+
 @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, generator, model, sample, bpe):
+    print(task)
     decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
-    decoder_output = decoder_output[0][0]       #top1
+    decoder_output = decoder_output[0][0]  # top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
         hypo_tokens=decoder_output["tokens"].int().cpu(),
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     model_path = '/home/gbugaj/devio/3rdparty/unilm/models/trocr-large-printed.pt'
     burst_dir = "./assets/psm/word"
 
-    beam = 15
+    beam = 5
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
 
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
@@ -81,4 +81,3 @@ if __name__ == '__main__':
         print(f"format : {text}  >> {_path}")
 
     print('done')
-

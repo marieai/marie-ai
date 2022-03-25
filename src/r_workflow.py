@@ -1,6 +1,7 @@
 import glob
 import io
 import json
+import multiprocessing
 import os
 import pathlib
 import shutil
@@ -10,9 +11,11 @@ import cv2
 import torch
 
 from boxes.box_processor import PSMode
-from boxes.box_processor_craft import BoxProcessorCraft
-from document.icr_processor_craft import IcrProcessorCraft
+from boxes.craft_box_processor import BoxProcessorCraft
+from boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
+from document.craft_icr_processor import CraftIcrProcessor
 from document.numpyencoder import NumpyEncoder
+from document.trocr_icr_processor import TrOcrIcrProcessor
 from overlay.overlay import OverlayProcessor
 from renderer.adlib_renderer import AdlibRenderer
 from renderer.blob_renderer import BlobRenderer
@@ -103,13 +106,14 @@ if __name__ == "__main__":
     adlib_final_dir = ensure_exists(os.path.join(root_dir, "adlib_final"))
 
     overlay_processor = OverlayProcessor(work_dir=work_dir)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
-    # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-    icr = IcrProcessorCraft(work_dir=work_dir_icr, cuda=False)
+    # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
+    # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     # burst_tiff(img_path, burst_dir)
 
-    # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
+    os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     # os.environ["OMP_NUM_THREADS"] = str(1)
 
     # Improves inference by ~ 13%-18%(verified empirically)
@@ -148,7 +152,7 @@ if __name__ == "__main__":
 
             result = None
 
-            if True or not os.path.exists(pdf_save_path):
+            if not os.path.exists(pdf_save_path):
                 boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image_clean, PSMode.SPARSE)
                 result, overlay_image = icr.recognize(key, "test", image_clean, boxes, img_fragments, lines)
 
@@ -166,7 +170,7 @@ if __name__ == "__main__":
             if not os.path.exists(blob_save_path):
                 print(f'Rendering blob : {blob_save_path}')
                 renderer = BlobRenderer(config={"page_number": pageIndex})
-                renderer.render(image, result, blob_save_path)
+                renderer.render(image_original, result, blob_save_path)
 
             adlib_save_path = os.path.join(adlib_dir, f"{fileId}_{pageIndex}.tif.xml")
             if True or not os.path.exists(adlib_save_path):
@@ -178,7 +182,6 @@ if __name__ == "__main__":
                 break
         except Exception as ident:
             raise ident
-            print(ident)
 
     # Summary info
     adlib_summary_filename = os.path.join(adlib_final_dir, f"{fileId}.tif.xml")
@@ -190,8 +193,3 @@ if __name__ == "__main__":
     merge_zip(blob_dir, os.path.join(assets_dir, f'{fileId}.blobs.xml.zip'))
     merge_pdf(pdf_dir, os.path.join(assets_dir, f'{fileId}.pdf'), __sort_key_files_by_page)
     merge_tiff(clean_dir, os.path.join(assets_dir, f'{fileId}.tif.clean'), __sort_key_files_by_page)
-
-# <TEXTSTRING EFT="3.567069583468967"   BOTTOM="4.486666361490886"  RIGHT="4.475150638156467" TOP="4.390833020210266" WORD="PAYMENT"/>
-# <TEXTSTRING LEFT="3.5533333333333332" BOTTOM="4.523333333333333"  RIGHT="4.38" TOP="4.130000000000001"  WORD="PAYMENT"/>
-
-# MedrxProvData\576\PID\20220321\PID_576_7188_0_150459314.pdf
