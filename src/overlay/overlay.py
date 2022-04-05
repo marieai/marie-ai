@@ -52,7 +52,7 @@ class OverlayProcessor:
             "--preprocess",
             "none",
             "--checkpoints_dir",
-            "./models/overlay",
+            "./model_zoo/overlay",
         ]
 
         opt = TestOptions().parse(args)

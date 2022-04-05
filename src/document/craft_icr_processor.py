@@ -141,7 +141,7 @@ class CraftIcrProcessor(IcrProcessor):
             opt.FeatureExtraction = "ResNet"
             opt.SequenceModeling = "BiLSTM"
             opt.Prediction = "Attn"
-            opt.saved_model = "./models/icr/TPS-ResNet-BiLSTM-Attn-case-sensitive-ft/best_accuracy.pth"
+            opt.saved_model = "./model_zoo/icr/TPS-ResNet-BiLSTM-Attn-case-sensitive-ft/best_accuracy.pth"
             opt.sensitive = True
             opt.imgH = 32
             opt.imgW = 100

@@ -4,7 +4,6 @@ import json
 import numpy as np
 
 import cv2
-from numpycontainer import NumpyContainer
 
 
 def encodeimg2b64(img: np.array) -> str:

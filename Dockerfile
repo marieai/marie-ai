@@ -97,26 +97,29 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # RUN python3 --version
 
 # Copy app resources
-COPY --chown=${USER} ../src/info.py ${HOME}/
+COPY --chown=${USER} ./src/info.py ${HOME}/
 COPY --chown=${USER} ../ssh ${HOME}/.ssh
 # COPY --chown=${USER} supervisord.conf ${HOME}/
 
-COPY --chown=${USER} ../src/api/ /opt/marie-icr/api
-COPY --chown=${USER} ../src/boxes/ /opt/marie-icr/boxes
-COPY --chown=${USER} ../src/conf/ /opt/marie-icr/conf
-COPY --chown=${USER} ../src/document/ /opt/marie-icr/document
-COPY --chown=${USER} ../src/models/ /opt/marie-icr/models
-COPY --chown=${USER} ../src/overlay/ /opt/marie-icr/overlay
-COPY --chown=${USER} ../src/renderer/ /opt/marie-icr/renderer
-COPY --chown=${USER} ../src/processors/ /opt/marie-icr/processors
-COPY --chown=${USER} ../src/tasks/ /opt/marie-icr/tasks
-COPY --chown=${USER} ../src/utils/ /opt/marie-icr/utils
+COPY --chown=${USER} ./src/api/ /opt/marie-icr/api
+COPY --chown=${USER} ./src/boxes/ /opt/marie-icr/boxes
+COPY --chown=${USER} ./src/conf/ /opt/marie-icr/conf
+COPY --chown=${USER} ./src/document/ /opt/marie-icr/document
+COPY --chown=${USER} ./src/models/ /opt/marie-icr/models
+COPY --chown=${USER} ./src/overlay/ /opt/marie-icr/overlay
+COPY --chown=${USER} ./src/renderer/ /opt/marie-icr/renderer
+COPY --chown=${USER} ./src/processors/ /opt/marie-icr/processors
+COPY --chown=${USER} ./src/tasks/ /opt/marie-icr/tasks
+COPY --chown=${USER} ./src/utils/ /opt/marie-icr/utils
 
-COPY --chown=${USER} ../src/wsgi.py /opt/marie-icr/
-COPY --chown=${USER} ../src/app.py /opt/marie-icr/
-COPY --chown=${USER} ../src/logger.py /opt/marie-icr/
+COPY --chown=${USER} ./src/timer.py /opt/marie-icr/
+COPY --chown=${USER} ./src/wsgi.py /opt/marie-icr/
+COPY --chown=${USER} ./src/app.py /opt/marie-icr/
+COPY --chown=${USER} ./src/logger.py /opt/marie-icr/
 
-COPY --chown=${USER} ../src/register.py /opt/marie-icr/
+COPY --chown=${USER} ./src/register.py /opt/marie-icr/
+COPY --chown=${USER} ./src/numpycontainer.py /opt/marie-icr/
+COPY --chown=${USER} ./src/numpyencoder.py /opt/marie-icr/
 COPY --chown=${USER} ../.build /opt/marie-icr/
 
 # RUN python3 /opt/marie-icr/icr/info.py
@@ -126,7 +129,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # This is where we will map all of our configs
 RUN mkdir -p /etc/marie
-COPY --chown=${USER} ../config/marie.yml /etc/marie/marie.yml
+COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
 
 # RUN all commands below as container user 
 USER ${USER}

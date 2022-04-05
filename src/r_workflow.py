@@ -12,9 +12,7 @@ import torch
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
-from boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-from document.craft_icr_processor import CraftIcrProcessor
-from document.numpyencoder import NumpyEncoder
+from numpyencoder import NumpyEncoder
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from overlay.overlay import OverlayProcessor
 from renderer.adlib_renderer import AdlibRenderer
@@ -37,6 +35,7 @@ def from_json_file(filename):
 def merge_zip(src_dir, dst_path):
     """Add files from directory to the zipfile without absolute path"""
     from os.path import basename
+
     with ZipFile(dst_path, "w") as newzip:
         for _path in sorted(glob.glob(os.path.join(src_dir, "*.*"))):
             newzip.write(_path, basename(_path))
@@ -106,9 +105,9 @@ if __name__ == "__main__":
     adlib_final_dir = ensure_exists(os.path.join(root_dir, "adlib_final"))
 
     overlay_processor = OverlayProcessor(work_dir=work_dir)
-    # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-    box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
+    # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
     icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     # burst_tiff(img_path, burst_dir)
@@ -134,6 +133,7 @@ if __name__ == "__main__":
             pageIndex = idx + 1
             print(f"DocumentId : {docId}")
 
+            # make sure we have clean image
             if not os.path.exists(os.path.join(clean_dir, filename)):
                 src_img_path = os.path.join(burst_dir, filename)
                 real, fake, blended = overlay_processor.segment(docId, src_img_path)
@@ -151,14 +151,21 @@ if __name__ == "__main__":
             icr_save_path = os.path.join(result_dir, f"{docId}.json")
 
             result = None
-
-            if not os.path.exists(pdf_save_path):
+            # require both PDF and OCR results
+            if not os.path.exists(pdf_save_path) or not os.path.exists(icr_save_path):
                 boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image_clean, PSMode.SPARSE)
                 result, overlay_image = icr.recognize(key, "test", image_clean, boxes, img_fragments, lines)
 
-                with open(icr_save_path, 'w') as f:
-                    json.dump(result, f, sort_keys=True, separators=(',', ': '), ensure_ascii=False, indent=4,
-                              cls=NumpyEncoder)
+                with open(icr_save_path, "w") as f:
+                    json.dump(
+                        result,
+                        f,
+                        sort_keys=True,
+                        separators=(",", ": "),
+                        ensure_ascii=False,
+                        indent=4,
+                        cls=NumpyEncoder,
+                    )
 
                 print(f"Rendering PDF document : {pdf_save_path}")
                 renderer = PdfRenderer(config={"preserve_interword_spaces": True})
@@ -168,13 +175,13 @@ if __name__ == "__main__":
 
             blob_save_path = os.path.join(blob_dir, f"{fileId}_{pageIndex}.BLOBS.XML")
             if not os.path.exists(blob_save_path):
-                print(f'Rendering blob : {blob_save_path}')
+                print(f"Rendering blob : {blob_save_path}")
                 renderer = BlobRenderer(config={"page_number": pageIndex})
                 renderer.render(image_original, result, blob_save_path)
 
             adlib_save_path = os.path.join(adlib_dir, f"{fileId}_{pageIndex}.tif.xml")
             if True or not os.path.exists(adlib_save_path):
-                print(f'Rendering adlib : {adlib_save_path}')
+                print(f"Rendering adlib : {adlib_save_path}")
                 renderer = AdlibRenderer(config={"page_number": pageIndex})
                 renderer.render(image_original, result, adlib_save_path)
 
@@ -189,7 +196,7 @@ if __name__ == "__main__":
     shutil.copytree(adlib_dir, adlib_final_dir, dirs_exist_ok=True)
 
     # create assets
-    merge_zip(adlib_final_dir, os.path.join(assets_dir, f'{fileId}.ocr.zip'))
-    merge_zip(blob_dir, os.path.join(assets_dir, f'{fileId}.blobs.xml.zip'))
-    merge_pdf(pdf_dir, os.path.join(assets_dir, f'{fileId}.pdf'), __sort_key_files_by_page)
-    merge_tiff(clean_dir, os.path.join(assets_dir, f'{fileId}.tif.clean'), __sort_key_files_by_page)
+    merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{fileId}.ocr.zip"))
+    merge_zip(blob_dir, os.path.join(assets_dir, f"{fileId}.blobs.xml.zip"))
+    merge_pdf(pdf_dir, os.path.join(assets_dir, f"{fileId}.pdf"), __sort_key_files_by_page)
+    merge_tiff(clean_dir, os.path.join(assets_dir, f"{fileId}.tif.clean"), __sort_key_files_by_page)
