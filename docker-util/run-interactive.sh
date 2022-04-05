@@ -18,6 +18,7 @@ fi
 
 docker run --rm  -u 431 --name ${CONTAINER_NAME} -i -t  \
 -v `pwd`/../config:/etc/marie:rw \
+-v `pwd`/../models:/opt/marie-icr/models:rw \
 -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw  \
 --env-file ./service.env  \
 --network=host  \

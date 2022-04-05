@@ -50,7 +50,7 @@ def get_parser():
 
     parser.add_argument(
         "--weights",
-        default="./models/textfusenet/model_0153599.pth",
+        default="./model_zoo/textfusenet/model_0153599.pth",
         metavar="pth",
         help="the model used to inference",
     )

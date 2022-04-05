@@ -1,14 +1,10 @@
-
 import argparse
 import copy
-import glob
 import os
 import time
 import cv2
 import numpy as np
 import torch
-from reportlab.lib.utils import ImageReader
-import io
 
 from models.textfusenet.detectron2.config import get_cfg
 from models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
@@ -29,8 +25,9 @@ def setup_cfg(args):
     cfg.merge_from_list(args.opts)
 
     import os
+
     os.environ["OMP_NUM_THREADS"] = str(16)
-    cfg.MODEL.DEVICE = 'cpu'
+    cfg.MODEL.DEVICE = "cpu"
     cfg.TEST.DETECTIONS_PER_IMAGE = 5000
 
     # Set model
@@ -41,7 +38,6 @@ def setup_cfg(args):
     cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
     cfg.freeze()
     return cfg
-
 
 
 def get_parser():
@@ -55,23 +51,20 @@ def get_parser():
 
     parser.add_argument(
         "--weights",
-        default="./models/textfusenet/model_0153599.pth",
+        default="./model_zoo/textfusenet/model_0153599.pth",
         metavar="pth",
         help="the model used to inference",
     )
 
     parser.add_argument(
-        "--input",
-        default="./assets/private/*.*",
-        nargs="+",
-        help="the folder of totaltext test images"
+        "--input", default="./assets/private/*.*", nargs="+", help="the folder of totaltext test images"
     )
 
     parser.add_argument(
         "--output",
         default="./test_synth/",
         help="A file or directory to save output visualizations. "
-             "If not given, will show output in an OpenCV window.",
+        "If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(
@@ -109,7 +102,7 @@ class BoxProcessorTextFuseNet(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = "./models/textfusenet",
+        models_dir: str = "./model_zoo/textfusenet",
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
@@ -162,9 +155,9 @@ class BoxProcessorTextFuseNet(BoxProcessor):
 
             # Class 0 == Text
             if classes[i] == 0:
-                snippet = image[y0:y0+h, x0:x0+w:]
+                snippet = image[y0 : y0 + h, x0 : x0 + w :]
                 # export cropped region
-                file_path = os.path.join('./result', "snippet_%s.jpg" % (i))
+                file_path = os.path.join("./result", "snippet_%s.jpg" % (i))
                 cv2.imwrite(file_path, snippet)
 
                 fragments.append(snippet)

@@ -214,4 +214,3 @@ class IcrProcessor(ABC):
             raise ex
 
         return result, overlay_image
-

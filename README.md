@@ -47,7 +47,15 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
     source  ~/environments/pytorch/bin/activate
 ```
 
+## Docker
+
+### Docker container
 Build docker container
+
+```sh
+# --no-cache
+DOCKER_BUILDKIT=1 docker build . -t marie-icr:2.0 --network=host  --no-cache
+```
 
 Remove dangling containers
 
@@ -55,10 +63,7 @@ Remove dangling containers
 docker rmi -f $(docker images -f "dangling=true" -q)
 ```
 
-```sh
-# --no-cache
-DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.0 --network=host  --no-cache
-```
+### Docker compose
 
 Start docker compose
 
