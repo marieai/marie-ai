@@ -52,9 +52,15 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
 ### Docker container
 Build docker container
 
+CPU
 ```sh
 # --no-cache
-DOCKER_BUILDKIT=1 docker build . -t marie-icr:2.0 --network=host  --no-cache
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
+```
+
+GPU
+```sh
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile.gpu -t marie-icr:2.0 --network=host --no-cache
 ```
 
 Remove dangling containers
@@ -146,3 +152,4 @@ python3 -m pip install setuptools==59.5.0
 
 
 [//]: # (https://mmocr.readthedocs.io/en/latest/)
+[//]: # (https://github.com/anibali/docker-pytorch)
