@@ -15,7 +15,6 @@ import torch.utils.data
 from .base_dataset import BaseDataset
 from .single_dataset import SingleDataset
 
-
 def find_dataset_using_name(dataset_name):
     """Import the module "data/[dataset_name]_dataset.py".
 
@@ -53,7 +52,6 @@ def get_option_setter(dataset_name):
     dataset_class = find_dataset_using_name(dataset_name)
     return dataset_class.modify_commandline_options
 
-
 def create_dataset(opt):
     """Create a dataset given the option.
 
@@ -86,7 +84,9 @@ class CustomDatasetDataLoader():
             self.dataset,
             batch_size=opt.batch_size,
             shuffle=not opt.serial_batches,
-            num_workers=int(opt.num_threads))
+            num_workers=int(opt.num_threads),
+            pin_memory=False
+        )
 
     def load_data(self):
         return self

@@ -69,7 +69,7 @@ if __name__ == '__main__':
         print(mean)
         print(std)
 
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft', cuda=False)
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
         icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 

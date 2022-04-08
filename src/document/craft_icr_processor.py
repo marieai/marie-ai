@@ -131,7 +131,7 @@ def compute_input(image):
 
 
 class CraftIcrProcessor(IcrProcessor):
-    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = False) -> None:
+    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
         print("CRAFT ICR processor [cuda={}]".format(cuda))
 

@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 import cv2
 import torch
+import torch.backends.cudnn as cudnn
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
@@ -104,7 +105,14 @@ if __name__ == "__main__":
     adlib_dir = ensure_exists(os.path.join(root_dir, "adlib"))
     adlib_final_dir = ensure_exists(os.path.join(root_dir, "adlib_final"))
 
-    overlay_processor = OverlayProcessor(work_dir=work_dir)
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_present = torch.cuda.is_available()
+
+    cudnn.benchmark = True
+    cudnn.deterministic = True
+
+
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=False)
     box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)

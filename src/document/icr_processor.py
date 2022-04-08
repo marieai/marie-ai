@@ -28,7 +28,7 @@ def encodeimg2b64(img: np.ndarray) -> str:
 
 
 class IcrProcessor(ABC):
-    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = False) -> None:
+    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
         print("Base ICR processor [cuda={}]".format(cuda))
         self.cuda = cuda
         self.work_dir = work_dir

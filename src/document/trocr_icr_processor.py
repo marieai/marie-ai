@@ -38,9 +38,7 @@ import threading
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device('cpu')
-
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Object(object):
     pass
@@ -51,8 +49,7 @@ def init(model_path, beam=5):
         [model_path], arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False}
     )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device('cpu')
+    # device = torch.device('cpu')
     model[0].to(device)
 
     img_transform = transforms.Compose(
@@ -129,7 +126,7 @@ def work_process(img, name):
 class TrOcrIcrProcessor(IcrProcessor):
     def __init__(self, work_dir: str = "/tmp/icr",
                  models_dir: str = "./model_zoo/trocr",
-                 cuda: bool = False) -> None:
+                 cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
         model_path = "./model_zoo/trocr/trocr-large-printed.pt"
         print("TROCR ICR processor [cuda={}]".format(cuda))

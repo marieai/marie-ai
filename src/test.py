@@ -26,7 +26,7 @@ if __name__ == '__main__':
         key = img_path.split('/')[-1]
         snippet = cv2.imread(img_path)
 
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./models/craft')
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft')
         icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, 'field', snippet)

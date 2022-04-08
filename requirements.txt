@@ -1,5 +1,9 @@
-wheel
-pybind11
+--extra-index-url https://download.pytorch.org/whl/cu113
+torch
+torchvision
+torchaudio
+# wheel
+# pybind11
 fastwer==0.1.3
 matplotlib
 albumentations
@@ -14,9 +18,6 @@ Werkzeug
 opencv-python
 imagecodecs
 python-consul
-torch
-torchvision
-torchaudio
 imutils
 PyPDF4
 reportlab

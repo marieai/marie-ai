@@ -9,7 +9,7 @@ def init() -> None:
     global box_processor
     global icr_processor
 
-    box_processor = BoxProcessorCraft(work_dir=ensure_exists("/tmp/boxes"), models_dir="./models/craft")
+    box_processor = BoxProcessorCraft(work_dir=ensure_exists("/tmp/boxes"), models_dir="./model_zoo/craft")
     icr_processor = CraftIcrProcessor(work_dir=ensure_exists("/tmp/icr"), cuda=False)
 
 

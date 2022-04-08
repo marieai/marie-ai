@@ -34,7 +34,7 @@ else
 
   docker run -d  -u 431 --name ${CONTAINER_NAME} -i -t  \
   -v `pwd`/config:/etc/marie:rw \
-  -v `pwd`/models:/opt/marie-icr/models:r \
+  -v `pwd`/model_zoo:/opt/marie-icr/model_zoo:r \
   -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw  \
   --env-file ./service.env  \
   --network=host  \

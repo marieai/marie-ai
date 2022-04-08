@@ -45,7 +45,7 @@ if __name__ == "__main__":
         image = cv2.imread(img_path)
 
 
-        # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./models/craft", cuda=False)
+        # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
         box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
         icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
         # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)

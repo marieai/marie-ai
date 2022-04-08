@@ -153,8 +153,8 @@ class BoxProcessorCraft(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = "./models/craft",
-        cuda: bool = False,
+        models_dir: str = "./model_zoo/craft",
+        cuda: bool = True,
     ):
         super().__init__(work_dir, models_dir, cuda)
         print("Box processor [craft, cuda={}]".format(cuda))
@@ -421,7 +421,7 @@ if __name__ == "__main__":
     if not os.path.isdir(result_folder):
         os.mkdir(result_folder)
 
-    boxer = BoxProcessorCraft(work_dir="/tmp/boxes", models_dir="../models/craft")
+    boxer = BoxProcessorCraft(work_dir="/tmp/boxes", models_dir="../model_zoo/craft")
     # load data
     for k, image_path in enumerate(image_list):
         print(
