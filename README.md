@@ -47,21 +47,61 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
     source  ~/environments/pytorch/bin/activate
 ```
 
-## Docker
+## Docker 
 
-### Docker container
-Build docker container
+### CPU
+Building docker container 
 
-CPU
 ```sh
 # --no-cache
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
 ```
 
-GPU
+### GPU
+
+Building GPU version of the framework requires `1.10.2+cu113`. 
+
+If you encounter following error that indicates that we have a wrong version of PyTorch / Cuda
+
+```
+1.11.0+cu102
+Using device: cuda
+
+/opt/venv/lib/python3.8/site-packages/torch/cuda/__init__.py:145: UserWarning: 
+NVIDIA GeForce RTX 3060 Laptop GPU with CUDA capability sm_86 is not compatible with the current PyTorch installation.
+The current PyTorch install supports CUDA capabilities sm_37 sm_50 sm_60 sm_70.
+If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, please check the instructions at https://pytorch.org/get-started/locally/
+
+  warnings.warn(incompatible_device_warn.format(device_name, capability, " ".join(arch_list), device_name))
+
+```
+
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile.gpu -t marie-icr:2.0 --network=host --no-cache
 ```
+
+### Inference on the gpu
+Install following dependencies to ensure docker is setup for GPU processing.
+
+https://docs.nvidia.com/ai-enterprise/deployment-guide/dg-docker.html
+https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+Before continuing we need to ensure that our container is configured b
+```sh
+#### Test nvidia-smi with the latest official CUDA image
+docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  nvidia/cuda:11.0-base nvidia-smi
+```
+
+Overwrite the container `ENTRYPOINT` by using `--entrypoint` from command line and validate the GPU works by executing 
+`nvidia-smi`
+
+```sh
+docker run -it --rm  --gpus all --entrypoint /bin/bash marie-icr:2.0
+```
+
+
+
 
 Remove dangling containers
 
@@ -140,6 +180,8 @@ Implement secondary box detection method.
 Install fairseq from source 
 https://github.com/NVIDIA/apex
 https://github.com/pytorch/fairseq
+https://discuss.pytorch.org/t/cnn-fp16-slower-than-fp32-on-tesla-p100/12146/7
+https://discuss.pytorch.org/t/torch-cuda-amp-inferencing-slower-than-normal/123684
 
 Fix issue 
 ```

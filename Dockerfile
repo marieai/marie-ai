@@ -1,4 +1,4 @@
-FROM ubuntu:20.04 as build-image
+FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
 
 ARG PYTHON_VERSION=3.8
 
@@ -6,32 +6,43 @@ ARG http_proxy
 ARG https_proxy
 ARG no_proxy="${no_proxy}"
 ARG socks_proxy
+ARG TZ="Etc/UTC"
 ARG MARIE_CONFIGURATION="production"
 
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
+        apt-get --no-install-recommends install -yq \
         build-essential \
         curl \
         git \
+        lshw \
+        zlib1g \
         pkg-config \
         python3-dev \
         python3-pip \
         python3-opencv \
-        python3-venv && \
-    rm -rf /var/lib/apt/lists/*
-
+        python3-venv \
+        libopenblas-dev \
+        libopenmpi-dev \
+        openmpi-bin \
+        openmpi-common \
+        gfortran \
+        libomp-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Install requirements
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
-RUN python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 COPY requirements.txt /tmp/requirements/${MARIE_CONFIGURATION}.txt
+RUN python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
+RUN #python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements/${MARIE_CONFIGURATION}.txt
 
-
-FROM ubuntu:20.04
+#FROM ubuntu:20.04
+FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
 
 ARG http_proxy
 ARG https_proxy
@@ -67,8 +78,8 @@ RUN apt-get update && \
         curl && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
-    rm -rf /var/lib/apt/lists/*
-
+    rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Add a non-root user
 
@@ -98,7 +109,7 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # Copy app resources
 COPY --chown=${USER} ./src/info.py ${HOME}/
-COPY --chown=${USER} ../ssh ${HOME}/.ssh
+COPY --chown=${USER} ./ssh ${HOME}/.ssh
 # COPY --chown=${USER} supervisord.conf ${HOME}/
 
 COPY --chown=${USER} ./src/api/ /opt/marie-icr/api
@@ -120,7 +131,7 @@ COPY --chown=${USER} ./src/logger.py /opt/marie-icr/
 COPY --chown=${USER} ./src/register.py /opt/marie-icr/
 COPY --chown=${USER} ./src/numpycontainer.py /opt/marie-icr/
 COPY --chown=${USER} ./src/numpyencoder.py /opt/marie-icr/
-COPY --chown=${USER} ../.build /opt/marie-icr/
+COPY --chown=${USER} ./.build /opt/marie-icr/
 
 # RUN python3 /opt/marie-icr/icr/info.py
 

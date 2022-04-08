@@ -21,15 +21,18 @@ debug_visualization_enabled = False
 
 class OverlayProcessor:
     def __init__(self, work_dir, cuda: bool = False):
-        print("Form overlay processor [cuda={}]".format(cuda))
+        print("OverlayProcessor [cuda={}]".format(cuda))
+        self.cuda = cuda
         self.work_dir = work_dir
-        self.opt, self.model = self.__setup()
+        self.opt, self.model = self.__setup(cuda)
 
     @staticmethod
-    def __setup():
+    def __setup(cuda):
         """
         Model setup
         """
+        gpu_id = "0" if cuda else "-1"
+
         args = [
             "--dataroot",
             "./data",
@@ -46,7 +49,7 @@ class OverlayProcessor:
             "--dataset_mode",
             "single",
             "--gpu_id",
-            "-1",
+            gpu_id,
             "--norm",
             "instance",
             "--preprocess",
@@ -71,6 +74,7 @@ class OverlayProcessor:
         print("Model setup complete")
         return opt, model
 
+    @Timer(text="__extract_segmentation_mask in {:.4f} seconds")
     def __extract_segmentation_mask(self, img, dataroot_dir, work_dir, debug_dir):
         """
         Extract overlay segmentation mask for the image
@@ -85,7 +89,6 @@ class OverlayProcessor:
         dataset = create_dataset(opt)
         for i, data in enumerate(dataset):
             model.set_input(data)  # unpack data from data loader
-            # model.test()  # run inference
             model.test()  # run inference
             visuals = model.get_current_visuals()  # get image results
             # Debug
