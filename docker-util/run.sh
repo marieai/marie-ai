@@ -13,7 +13,7 @@ fi
 
 
 # Running in interactive mode -i on port 8099  to map dest:src
-# add --rm to remove a container after an exit, usefull during troubleshooting
+# add --rm to remove a container after an exit, useful during troubleshooting
 
 if [[ "${CONTAINER_ID}" ]]; then
   # container found.
@@ -28,7 +28,7 @@ if [[ "${CONTAINER_ID}" ]]; then
 else
   # container not found.
   echo 'Container not found, creating new one'
-  # Run me if you want logs outside the contianer
+  # Run me if you want logs outside the container
   # docker run -d  -u 431 --name marie-icr  -i -t  -v /opt/containers/config/marie-icr:/opt/marie-icr/config -v /opt/logs:/opt/marie-icr/logs:rw  --env-file ./service.env  -p 8099:5000  marie-icr:2.0
 
 

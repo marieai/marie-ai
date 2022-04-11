@@ -228,7 +228,8 @@ def process_workflow(src_file: str) -> None:
 
 if __name__ == "__main__":
     # Register VFS handlers
-    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
+    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
 
     src_file = "volume://PID/150300431/PID_576_7188_0_150300431.tif"
     process_workflow(src_file)

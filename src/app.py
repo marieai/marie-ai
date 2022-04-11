@@ -27,7 +27,9 @@ def create_app():
 
     # Register VFS handlers
     base_dir = FileSystem.get_share_directory()
-    PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
+
     log.info(f'*** vfs base_dir :  {base_dir}')
 
     app = Flask(__name__)
