@@ -177,7 +177,15 @@ Implement secondary box detection method.
 
 
 ## 
-Install fairseq from source 
+Install `fairseq` from source, the release version is  missing `convert_namespace_to_omegaconf`
+
+```sh
+git clone https://github.com/pytorch/fairseq.git
+cd fairseq
+pip install -r requirements.txt
+python setup.py build develop
+```
+
 https://github.com/NVIDIA/apex
 https://github.com/pytorch/fairseq
 https://discuss.pytorch.org/t/cnn-fp16-slower-than-fp32-on-tesla-p100/12146/7

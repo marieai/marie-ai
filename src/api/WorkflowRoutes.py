@@ -1,3 +1,10 @@
+from flask import Blueprint, jsonify
+from flask_restful import request
+
+import conf
+from logger import create_info_logger
+from utils.network import get_ip_address
+
 import glob
 import io
 import json
@@ -28,15 +35,36 @@ from utils.utils import ensure_exists, FileSystem
 from utils.zip_ops import merge_zip
 
 
-def from_json_file(filename):
-    with io.open(filename, "r", encoding="utf-8") as json_file:
-        data = json.load(json_file)
-        return data
+logger = create_info_logger(__name__, "marie.log")
+
+# Blueprint Configuration
+blueprint = Blueprint(
+    name='workflow_bp',
+    import_name=__name__,
+    url_prefix=conf.API_PREFIX
+)
+
+logger.info('Workflow Routes inited')
+show_error = True  # show prediction errors
 
 
-def __sort_key_files_by_page(name):
-    page = name.split("/")[-1].split(".")[0].split("_")[-1]
-    return int(page)
+@blueprint.route('/workflow', methods=['GET'])
+def status():
+    """Get status"""
+    host = get_ip_address()
+
+    return jsonify(
+        {
+            "name": "marie-icr",
+            "host": host,
+            "component": [
+                {
+                    "name": "workflow",
+                    "version": "1.0.0"
+                },
+            ],
+        }
+    ), 200
 
 
 def write_adlib_summary(adlib_dir, adlib_summary_filename, file_sorter):
@@ -69,23 +97,26 @@ def write_adlib_summary(adlib_dir, adlib_summary_filename, file_sorter):
         tree.write(files)
 
 
-def process_workflow(src_file: str) -> None:
-    print(f"src_file : {src_file}")
+def from_json_file(filename):
+    with io.open(filename, "r", encoding="utf-8") as json_file:
+        data = json.load(json_file)
+        return data
 
+
+def __sort_key_files_by_page(name):
+    page = name.split("/")[-1].split(".")[0].split("_")[-1]
+    return int(page)
+
+
+def process_workflow(src_file: str) -> None:
+    logger.info(f"src_file : {src_file}")
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     work_dir = ensure_exists("/tmp/form-segmentation")
 
     exists = PathManager.exists(src_file)
-    resolved = PathManager.get_local_path(src_file)
-
-    print(exists)
-    print(resolved)
-    img_path = resolved
-
-    # img_path = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    # img_path = "/home/gbugaj/datasets/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    # img_path = "/home/gbugaj/datasets/medprov/PID/150459314/PID_576_7188_0_150459314.tif"
+    img_path = PathManager.get_local_path(src_file)
+    logger.info(f"resolved : {img_path}, {exists}")
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -97,20 +128,16 @@ def process_workflow(src_file: str) -> None:
     backup_dir = ensure_exists(os.path.join(src_dir, "backup"))
 
     for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{fileId}*"))):
-        print(src_path)
+        print()
         try:
+            logger.error(f"Backing up : {src_path}")
             filename = src_path.split("/")[-1]
             dst_path = os.path.join(backup_dir, filename)
             shutil.copyfile(src_path, dst_path)
         except Exception as e:
-            logger = logging.getLogger(__name__)
             logger.error("Error in file copy - {}".format(str(e)))
 
-    print("------------")
-    print(src_dir)
-    print(root_asset_dir)
     # fileIdZeroed = fileId.replace("_7188_", "_0_").replace("_150459314","_0") # RMSOCR QUIRK
-
     burst_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
     stack_dir = ensure_exists(os.path.join(root_asset_dir, "stack"))
     clean_dir = ensure_exists(os.path.join(root_asset_dir, "clean"))
@@ -226,9 +253,32 @@ def process_workflow(src_file: str) -> None:
     merge_tiff(clean_dir, os.path.join(assets_dir, f"{fileId}.tif.clean"), __sort_key_files_by_page)
 
 
-if __name__ == "__main__":
-    # Register VFS handlers
-    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
+@blueprint.route("/workflow/<queue_id>", methods=["POST"])
+def workflow(queue_id: str):
+    """
+    Workflow to process
+    Args:
+        queue_id: Unique queue to tie the extraction to
+    """
 
-    src_file = "volume://PID/150300431/PID_576_7188_0_150300431.tif"
-    process_workflow(src_file)
+    logger.info("Starting Workflow processing request", extra={"session": queue_id})
+    try:
+        payload = request.json
+        print(payload)
+        if payload is None:
+            return {"error": "empty payload"}, 200
+        if 'src' not in payload:
+            return {"error": 'src missing'}, 200
+
+        src = payload['src']
+        process_workflow(src)
+        serialized = src
+
+        return serialized, 200
+    except BaseException as error:
+        # raise error
+        # print(str(error))
+        if show_error:
+            return {"error": str(error)}, 500
+        else:
+            return {"error": 'inference exception'}, 500

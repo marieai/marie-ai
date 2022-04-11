@@ -180,7 +180,7 @@ class BoxProcessorCraft(BoxProcessor):
         if cuda:
             net = net.cuda()
             net = torch.nn.DataParallel(net)
-            cudnn.benchmark = False
+            cudnn.benchmark = True
 
         net.eval()
 
