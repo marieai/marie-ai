@@ -129,8 +129,10 @@ class TrOcrIcrProcessor(IcrProcessor):
                  cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
         model_path = "./model_zoo/trocr/trocr-large-printed.pt"
-        print("TROCR ICR processor [cuda={}]".format(cuda))
-        print(f"Loading[TROCR] model from : {model_path}")
+        print(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
+
+        if os.path.exists(model_path):
+            raise Exception(f"File not found : {model_path}")
 
         start = time.time()
 

@@ -270,10 +270,12 @@ class BoxProcessorCraft(BoxProcessor):
 
         return bboxes, polys, score_text
 
-    @Timer(text="BoundingBoxes in {:.2f} seconds")
+    # @Timer(text="BoundingBoxes in {:.2f} seconds")
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
         print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
 
+        if img is None:
+            raise Exception
         try:
             debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
             crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
