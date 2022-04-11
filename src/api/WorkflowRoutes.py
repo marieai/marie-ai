@@ -20,7 +20,7 @@ import torch.backends.cudnn as cudnn
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
-from common.file_io import PathManager, VolumeHandler
+from common.file_io import PathManager
 from document.craft_icr_processor import CraftIcrProcessor
 from numpyencoder import NumpyEncoder
 from document.trocr_icr_processor import TrOcrIcrProcessor
@@ -33,7 +33,6 @@ from utils.pdf_ops import merge_pdf
 from utils.tiff_ops import merge_tiff, burst_tiff
 from utils.utils import ensure_exists, FileSystem
 from utils.zip_ops import merge_zip
-
 
 logger = create_info_logger(__name__, "marie.log")
 
@@ -108,7 +107,7 @@ def __sort_key_files_by_page(name):
     return int(page)
 
 
-def process_workflow(src_file: str) -> None:
+def process_workflow(src_file: str, dry_run: bool) -> None:
     logger.info(f"src_file : {src_file}")
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
@@ -123,20 +122,24 @@ def process_workflow(src_file: str) -> None:
 
     # this is the image working directory
     src_dir = pathlib.Path(img_path).parent.absolute()
-    fileId = img_path.split("/")[-1].split(".")[0].split("_")[-1]
-    root_asset_dir = ensure_exists(os.path.join("/tmp", "assets", fileId))
-    backup_dir = ensure_exists(os.path.join(src_dir, "backup"))
+    file_id = img_path.split("/")[-1].split(".")[0].split("_")[-1]
+    root_asset_dir = ensure_exists(os.path.join("/tmp", "assets", file_id))
 
-    for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{fileId}*"))):
-        print()
+    from datetime import datetime
+    backup_time = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+    backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{file_id}_{backup_time}"))
+
+    logger.info("Creating snapshot: %s", backup_dir)
+    for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{file_id}*"))):
         try:
-            logger.error(f"Backing up : {src_path}")
             filename = src_path.split("/")[-1]
             dst_path = os.path.join(backup_dir, filename)
+            logger.info("snapshot: %s", dst_path)
             shutil.copyfile(src_path, dst_path)
         except Exception as e:
             logger.error("Error in file copy - {}".format(str(e)))
 
+    # return
     # fileIdZeroed = fileId.replace("_7188_", "_0_").replace("_150459314","_0") # RMSOCR QUIRK
     burst_dir = ensure_exists(os.path.join(root_asset_dir, "burst"))
     stack_dir = ensure_exists(os.path.join(root_asset_dir, "stack"))
@@ -156,11 +159,11 @@ def process_workflow(src_file: str) -> None:
     cudnn.benchmark = True
     cudnn.deterministic = True
 
-    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=False)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=True)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
-    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     # # os.environ["OMP_NUM_THREADS"] = str(1)
@@ -224,13 +227,13 @@ def process_workflow(src_file: str) -> None:
             else:
                 result = from_json_file(icr_save_path)
 
-            blob_save_path = os.path.join(blob_dir, f"{fileId}_{page_index}.BLOBS.XML")
+            blob_save_path = os.path.join(blob_dir, f"{file_id}_{page_index}.BLOBS.XML")
             if not os.path.exists(blob_save_path):
                 print(f"Rendering blob : {blob_save_path}")
                 renderer = BlobRenderer(config={"page_number": page_index})
                 renderer.render(image_original, result, blob_save_path)
 
-            adlib_save_path = os.path.join(adlib_dir, f"{fileId}_{page_index}.tif.xml")
+            adlib_save_path = os.path.join(adlib_dir, f"{file_id}_{page_index}.tif.xml")
             if not os.path.exists(adlib_save_path):
                 print(f"Rendering adlib : {adlib_save_path}")
                 renderer = AdlibRenderer(config={"page_number": page_index})
@@ -242,15 +245,29 @@ def process_workflow(src_file: str) -> None:
             raise ident
 
     # Summary info
-    adlib_summary_filename = os.path.join(adlib_final_dir, f"{fileId}.tif.xml")
+    adlib_summary_filename = os.path.join(adlib_final_dir, f"{file_id}.tif.xml")
     write_adlib_summary(adlib_dir, adlib_summary_filename, __sort_key_files_by_page)
     shutil.copytree(adlib_dir, adlib_final_dir, dirs_exist_ok=True)
 
     # create assets
-    merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{fileId}.ocr.zip"))
-    merge_zip(blob_dir, os.path.join(assets_dir, f"{fileId}.blobs.xml.zip"))
-    merge_pdf(pdf_dir, os.path.join(assets_dir, f"{fileId}.pdf"), __sort_key_files_by_page)
-    merge_tiff(clean_dir, os.path.join(assets_dir, f"{fileId}.tif.clean"), __sort_key_files_by_page)
+    merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{file_id}.ocr.zip"))
+    merge_zip(blob_dir, os.path.join(assets_dir, f"{file_id}.blobs.xml.zip"))
+    merge_pdf(pdf_dir, os.path.join(assets_dir, f"{file_id}.pdf"), __sort_key_files_by_page)
+    merge_tiff(clean_dir, os.path.join(assets_dir, f"{file_id}.tif.clean"), __sort_key_files_by_page)
+
+    # copy files from assets back to the asset source
+    if dry_run:
+        logger.info("Copying final assets[dry_run]: %s", assets_dir)
+    else:
+        logger.info("Copying final assets: %s", backup_dir)
+        for idx, src_path in enumerate(glob.glob(os.path.join(assets_dir, "*.*"))):
+            try:
+                filename = src_path.split("/")[-1]
+                dst_path = os.path.join(root_asset_dir, filename)
+                logger.info("Copying asset: %s", dst_path)
+                shutil.copyfile(src_path, dst_path)
+            except Exception as e:
+                logger.error("Error in file copy - {}".format(str(e)))
 
 
 @blueprint.route("/workflow/<queue_id>", methods=["POST"])
@@ -267,11 +284,13 @@ def workflow(queue_id: str):
         print(payload)
         if payload is None:
             return {"error": "empty payload"}, 200
+
         if 'src' not in payload:
             return {"error": 'src missing'}, 200
 
+        dry_run = True if 'dry-run' not in payload else False
         src = payload['src']
-        process_workflow(src)
+        process_workflow(src, dry_run)
         serialized = src
 
         return serialized, 200
