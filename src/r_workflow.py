@@ -13,6 +13,7 @@ import torch.backends.cudnn as cudnn
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
+from document.craft_icr_processor import CraftIcrProcessor
 from numpyencoder import NumpyEncoder
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from overlay.overlay import OverlayProcessor
@@ -84,8 +85,8 @@ if __name__ == "__main__":
     work_dir = ensure_exists("/tmp/form-segmentation")
 
     img_path = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    img_path = "/home/gbugaj/datasets/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    img_path = "/home/gbugaj/datasets/medprov/PID/150459314/PID_576_7188_0_150459314.tif"
+    # img_path = "/home/gbugaj/datasets/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
+    # img_path = "/home/gbugaj/datasets/medprov/PID/150459314/PID_576_7188_0_150459314.tif"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -111,12 +112,11 @@ if __name__ == "__main__":
     cudnn.benchmark = True
     cudnn.deterministic = True
 
-
-    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=False)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-    # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=True)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
-    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    # icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     # burst_tiff(img_path, burst_dir)
 
@@ -153,6 +153,7 @@ if __name__ == "__main__":
 
                 save_path = os.path.join(clean_dir, f"{docId}.tif")  # This will have the .tif extension
                 imwrite(save_path, blended, dpi=(300, 300))
+                image_clean = blended
                 print(f"Saved clean img : {save_path}")
 
             pdf_save_path = os.path.join(pdf_dir, f"{docId}.pdf")

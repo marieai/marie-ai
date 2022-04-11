@@ -77,7 +77,7 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 ```
 
 ```sh
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile.gpu -t marie-icr:2.0 --network=host --no-cache
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
 ```
 
 ### Inference on the gpu
