@@ -1,11 +1,14 @@
 import glob
 import os
 import tempfile
+import multiprocessing as mp
+from concurrent.futures.thread import ThreadPoolExecutor
 
 import cv2
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
+
 
 # https://github.com/joeatwork/python-lzw
 # exiftool PID_576_7188_0_150300431.tif
@@ -56,27 +59,32 @@ def convert_group4(src_path, dst_path):
         image.save(filename=dst_path)
 
 
+def __process_burst(frame, name, generated_name, dest_dir, index, tmpdirname):
+    try:
+        output_path_tmp = os.path.join(tmpdirname, generated_name)
+        output_path = os.path.join(dest_dir, generated_name)
+        print(f"Bursting page# {index} : {name} > {generated_name} > {output_path}")
+        # TODO : Replace this with image magic methods so we can do this  in one step
+        with TiffWriter(output_path_tmp) as tif_writer:
+            tif_writer.write(frame, photometric="minisblack", description=generated_name, metadata=None)
+        convert_group4(output_path_tmp, output_path)
+    except Exception as ident:
+        raise ident
+
+
 def burst_tiff(src_img_path, dest_dir):
     """Burst multipage tiff into individual frames and save them to output directory"""
     ret, frames = cv2.imreadmulti(src_img_path, [], cv2.IMREAD_ANYCOLOR)
     name = src_img_path.split("/")[-1].split(".")[0]
 
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        print("created temporary directory", tmpdirname)
-        for i, frame in enumerate(frames):
-            index = i + 1
-            generated_name = f"{name}_page_{index:04}.tif"
-            try:
-                output_path_tmp = os.path.join(tmpdirname, generated_name)
-                output_path = os.path.join(dest_dir, generated_name)
-                print(f"Bursting page# {i} : {name} > {generated_name} > {output_path}")
-                # TODO : Replace this with image magic methods so we can do this  in one step
-                with TiffWriter(output_path_tmp) as tif_writer:
-                    tif_writer.write(frame, photometric="minisblack", description=generated_name, metadata=None)
-                convert_group4(output_path_tmp, output_path)
-            except Exception as ident:
-                raise ident
-                print(ident)
+    # fireup new threads for processing
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+            print("created temporary directory", tmp_dir)
+            for i, frame in enumerate(frames):
+                index = i + 1
+                generated_name = f"{name}_page_{index:04}.tif"
+                executor.submit(__process_burst, frame, name, generated_name, dest_dir, index, tmp_dir)
 
 
 def merge_tiff(src_dir, dst_img_path, sort_key):
@@ -94,7 +102,6 @@ def merge_tiff(src_dir, dst_img_path, sort_key):
                     composite.image_add(frame)
             except Exception as ident:
                 raise ident
-                print(ident)
 
         composite.compression = "group4"
         composite.resolution = (300, 300)

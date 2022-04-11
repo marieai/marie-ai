@@ -16,10 +16,12 @@ fi
 
 # container not found.
 
-docker run --rm  -u 431 --name ${CONTAINER_NAME} -i -t  \
+docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
+--rm  -u 431 --name ${CONTAINER_NAME} -i -t  \
 -v `pwd`/../config:/etc/marie:rw \
 -v `pwd`/../model_zoo:/opt/marie-icr/model_zoo:rw \
--v /opt/logs/marie-icr:/opt/marie-icr/logs:rw  \
+-v /opt/logs/marie-icr:/opt/marie-icr/logs:rw \
+-v /home/greg/dataset/medprov:/opt/marie-icr/share:rw  \
 --env-file ./service.env  \
 --network=host  \
 -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION} 

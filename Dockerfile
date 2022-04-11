@@ -29,6 +29,7 @@ RUN apt-get update && \
         openmpi-common \
         gfortran \
         libomp-dev \
+        ninja-build \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -36,10 +37,15 @@ RUN apt-get update && \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 COPY requirements.txt /tmp/requirements/${MARIE_CONFIGURATION}.txt
-RUN python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+RUN python3 -m pip install -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+RUN python3 -m pip install  Cython
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
-RUN #python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements/${MARIE_CONFIGURATION}.txt
+#RUN #python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
+RUN python3 -m pip install  -r /tmp/requirements/${MARIE_CONFIGURATION}.txt
+
+RUN git clone https://github.com/pytorch/fairseq.git && \
+    cd fairseq  && \
+    python setup.py build install
 
 #FROM ubuntu:20.04
 FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
@@ -122,6 +128,7 @@ COPY --chown=${USER} ./src/renderer/ /opt/marie-icr/renderer
 COPY --chown=${USER} ./src/processors/ /opt/marie-icr/processors
 COPY --chown=${USER} ./src/tasks/ /opt/marie-icr/tasks
 COPY --chown=${USER} ./src/utils/ /opt/marie-icr/utils
+COPY --chown=${USER} ./src/common/ /opt/marie-icr/common
 
 COPY --chown=${USER} ./src/timer.py /opt/marie-icr/
 COPY --chown=${USER} ./src/wsgi.py /opt/marie-icr/

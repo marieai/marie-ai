@@ -4,15 +4,16 @@ import os
 import traceback
 
 import api.IcrAPIRoutes as IcrAPIRoutes
+import api.WorkflowRoutes as WorkflowRoutes
 import conf
 from api import api
 from flask import Flask
-from logger import create_info_logger
-from utils.utils import ensure_exists
 
+from common.file_io import PathManager, VolumeHandler
+from logger import create_info_logger
+from utils.utils import ensure_exists, FileSystem
 
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
-
 
 log = create_info_logger("app", "marie.log")
 # traceback.print_stack()
@@ -23,6 +24,11 @@ log = create_info_logger("app", "marie.log")
 def create_app():
     log.info(f'Starting app in {conf.APP_ENV} environment')
     ensure_exists(f'/tmp/marie')
+
+    # Register VFS handlers
+    base_dir = FileSystem.get_share_directory()
+    PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    log.info(f'*** vfs base_dir :  {base_dir}')
 
     app = Flask(__name__)
     app.config.from_object(conf)
@@ -38,16 +44,15 @@ def create_app():
         # Import parts of our application
         # Register Blueprints
         app.register_blueprint(IcrAPIRoutes.blueprint)
+        app.register_blueprint(WorkflowRoutes.blueprint)
 
     return app
 
 
 if __name__ == "__main__":
     log.info('Initializing system')
-
-    print(f'***config PATH {conf}')
-    print(f'***config PATH {conf.APP_ENV}')
-
+    log.info(f'***config PATH {conf}')
+    log.info(f'***config PATH {conf.APP_ENV}')
     # Setting use_reloader to false prevents application from initializing twice
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"

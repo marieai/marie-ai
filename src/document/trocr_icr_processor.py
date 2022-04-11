@@ -40,6 +40,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+
 class Object(object):
     pass
 
@@ -104,6 +105,7 @@ def work(img, name, img_transform, cfg, task, generator, model, bpe):
     delta = (time.time() - start)
     return {"confidence": confidence, "text": text, "id": name, "dt": delta}
 
+
 def work_process(img, name):
     start = time.time()
     model_path = "./model_zoo/trocr/trocr-large-printed.pt"
@@ -131,7 +133,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         model_path = "./model_zoo/trocr/trocr-large-printed.pt"
         print(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
 
-        if os.path.exists(model_path):
+        if not os.path.exists(model_path):
             raise Exception(f"File not found : {model_path}")
 
         start = time.time()
@@ -181,7 +183,6 @@ class TrOcrIcrProcessor(IcrProcessor):
             print(pool_results)
             pool.close()
             pool.join()
-
 
             print('Time elapsed[submitted]: %s' % (time.time() - start))
             for r in pool_results:
@@ -253,12 +254,13 @@ class TrOcrIcrProcessor(IcrProcessor):
             opt = self.opt
             eval_data = MemoryDataset(images=images, opt=opt)
             results = []
-
+            start = time.time()
             for img, img_name in eval_data:
                 sample = preprocess(img, self.img_transform)
                 text = get_text(self.cfg, self.task, self.generator, self.model, sample, self.bpe)
                 confidence = 0
                 results.append({"confidence": confidence, "text": text, "id": img_name})
+            print('ICR Time elapsed: %s' % (time.time() - start))
 
         except Exception as ex:
             raise ex

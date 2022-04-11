@@ -1,11 +1,7 @@
-import base64
-import enum
 import hashlib
 import imghdr
 import json
 from distutils.util import strtobool as strtobool
-from enum import Enum
-from typing import Any
 
 import numpy as np
 
@@ -18,6 +14,8 @@ from flask_restful import Resource, reqparse, request
 from logger import create_info_logger
 from numpyencoder import NumpyEncoder
 from skimage import io
+
+from utils.base64 import base64StringToBytes, encodeToBase64
 from utils.network import find_open_port, get_ip_address
 from utils.utils import current_milli_time, ensure_exists
 
@@ -25,23 +23,6 @@ logger = create_info_logger(__name__, "marie.log")
 
 ALLOWED_TYPES = {'png', 'jpeg', 'tiff'}
 TYPES_TO_EXT = {'png': 'png', 'jpeg': 'jpg', 'tiff': 'tif'}
-
-
-def encodeToBase64(img: np.ndarray) -> str:
-    """encode image to base64"""
-    retval, buffer = cv2.imencode('.png', img)
-    png_as_text = base64.b64encode(buffer).decode()
-    return png_as_text
-
-
-def base64StringToBytes(data: str):
-    """conver base 64 string to byte"""
-    if data is None:
-        return ""
-    base64_message = data
-    base64_bytes = base64_message.encode('utf-8')
-    message_bytes = base64.b64decode(base64_bytes)
-    return message_bytes
 
 
 def load_image(fname, image_type):
@@ -87,7 +68,7 @@ blueprint = Blueprint(
 logger.info('IcrAPIRoutes inited')
 box_processor = processors.box_processor
 icr_processor = processors.icr_processor
-show_error = True  # show predition errors
+show_error = True  # show prediction errors
 
 
 @blueprint.route('/', methods=['GET'])
@@ -151,7 +132,7 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
 
     from utils.utils import FileSystem, ensure_exists
 
-    print(f"Payload info ")
+    print("Payload info")
     # determine how to extract payload based on the type of the key supplied
     # Possible keys
     # data, srcData, srcFile, srcUrl
@@ -165,7 +146,8 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
         data = base64StringToBytes(raw_data)
     elif "srcFile" in payload:
         img_path = payload["srcFile"]
-        # FIXME: relative path resolution is now working as expected
+        # FIXME: relative path resolution is not working as expected
+        # FIXME : Use PathManager
         base_dir = FileSystem.get_share_directory()
         path = os.path.abspath(os.path.join(base_dir, img_path))
         print(f'base_dir = {base_dir}')
