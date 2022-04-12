@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 source ./container.sh
-exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
+# exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
 echo "Executing container : ${CONTAINER_NAME}"
 
 if  [ $(id -u) = 0 ]; then

@@ -15,16 +15,16 @@ flask
 flask-restful
 flask_restful
 Werkzeug
-opencv-python
+opencv-python~=4.5.4.60
 imagecodecs
 python-consul
 imutils
 PyPDF4
 reportlab
-wand
 # fairseq  # installed from source
 onnx
 onnxruntime
 nltk
 timm
 segmentation-models-pytorch
+Wand

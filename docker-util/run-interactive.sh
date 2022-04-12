@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 source ./container.sh
-exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
+# exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
 echo "Starting interactive/dev container : ${CONTAINER_NAME}"
 
 if  [ $(id -u) = 0 ]; then
    echo "This script must not be run as root, run under 'docker user' account."
-   exit 1
+  #  exit 1
 fi
 
 if [[ "${CONTAINER_ID}" ]]; then
@@ -16,12 +16,12 @@ fi
 
 # container not found.
 
-docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
---rm  -u 431 --name ${CONTAINER_NAME} -i -t  \
+docker run -u 0 --user root -it --rm  --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
+--name ${CONTAINER_NAME} \
 -v `pwd`/../config:/etc/marie:rw \
 -v `pwd`/../model_zoo:/opt/marie-icr/model_zoo:rw \
 -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw \
--v /home/greg/dataset/medprov:/opt/marie-icr/share:rw  \
+-v /opt/shares/medrxprovdata:/opt/marie-icr/share:rw  \
 --env-file ./service.env  \
 --network=host  \
 -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION} 

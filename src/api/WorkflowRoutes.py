@@ -129,6 +129,7 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     from datetime import datetime
     backup_time = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{doc_id}_{backup_time}"))
+    # backup_dir = ensure_exists(os.path.join(src_dir, "backup"))
 
     logger.info("Creating snapshot: %s", backup_dir)
     for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{doc_id}*"))):
@@ -160,11 +161,11 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     cudnn.benchmark = True
     cudnn.deterministic = True
 
-    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=False)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=True)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
-    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     # # os.environ["OMP_NUM_THREADS"] = str(1)
@@ -260,12 +261,12 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     if dry_run:
         logger.info("Copying final assets[dry_run]: %s", assets_dir)
     else:
-        logger.info("Copying final assets: %s", backup_dir)
+        logger.info("Copying final assets: %s", assets_dir)
         for idx, src_path in enumerate(glob.glob(os.path.join(assets_dir, "*.*"))):
             try:
                 filename = src_path.split("/")[-1]
-                dst_path = os.path.join(root_asset_dir, filename)
-                logger.info("Copying asset: %s", dst_path)
+                dst_path = os.path.join(src_dir, filename)
+                logger.info("Copying asset: %s, %s", src_path, dst_path)
                 shutil.copyfile(src_path, dst_path)
             except Exception as e:
                 logger.error("Error in file copy - {}".format(str(e)))
