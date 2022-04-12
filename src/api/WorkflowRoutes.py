@@ -122,15 +122,16 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
 
     # this is the image working directory
     src_dir = pathlib.Path(img_path).parent.absolute()
-    file_id = img_path.split("/")[-1].split(".")[0].split("_")[-1]
-    root_asset_dir = ensure_exists(os.path.join("/tmp", "assets", file_id))
+    doc_id = img_path.split("/")[-1].split(".")[0].split("_")[-1]
+    file_id = img_path.split("/")[-1].split(".")[0]
+    root_asset_dir = ensure_exists(os.path.join("/tmp", "assets", doc_id))
 
     from datetime import datetime
     backup_time = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{file_id}_{backup_time}"))
+    backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{doc_id}_{backup_time}"))
 
     logger.info("Creating snapshot: %s", backup_dir)
-    for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{file_id}*"))):
+    for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{doc_id}*"))):
         try:
             filename = src_path.split("/")[-1]
             dst_path = os.path.join(backup_dir, filename)
