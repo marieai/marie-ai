@@ -30,6 +30,8 @@ RUN apt-get update && \
         gfortran \
         libomp-dev \
         ninja-build \
+        imagemagick \
+        libmagickwand-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -42,6 +44,8 @@ RUN python3 -m pip install  Cython
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 #RUN #python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
 RUN python3 -m pip install  -r /tmp/requirements/${MARIE_CONFIGURATION}.txt
+
+RUN python3 -m pip install Wand
 
 RUN git clone https://github.com/pytorch/fairseq.git && \
     cd fairseq  && \
@@ -81,7 +85,10 @@ RUN apt-get update && \
         git \
         git-lfs \
         ssh \
-        curl && \
+        curl \
+        imagemagick \
+        libtiff-dev \
+        libmagickwand-dev && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/* \
@@ -113,6 +120,8 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # RUN python3 --version
 
+COPY --chown=${USER} ./im-policy.xml /etc/ImageMagick-6/policy.xml
+
 # Copy app resources
 COPY --chown=${USER} ./src/info.py ${HOME}/
 COPY --chown=${USER} ./ssh ${HOME}/.ssh
@@ -140,6 +149,8 @@ COPY --chown=${USER} ./src/numpycontainer.py /opt/marie-icr/
 COPY --chown=${USER} ./src/numpyencoder.py /opt/marie-icr/
 COPY --chown=${USER} ./.build /opt/marie-icr/
 
+
+
 # RUN python3 /opt/marie-icr/icr/info.py
 
 RUN mkdir -p /var/log/supervisor
@@ -157,4 +168,8 @@ RUN mkdir ${HOME}/logs /tmp/supervisord
 RUN chown ${USER} ${HOME}/logs
 
 EXPOSE 5000
-ENTRYPOINT ["/usr/bin/supervisord"]
+# ENTRYPOINT ["/usr/bin/supervisord"]
+
+ENTRYPOINT ["python", "wsgi.py"]
+
+

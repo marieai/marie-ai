@@ -27,8 +27,8 @@ def create_app():
 
     # Register VFS handlers
     base_dir = FileSystem.get_share_directory()
-    # PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
-    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
+    PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
 
     log.info(f'*** vfs base_dir :  {base_dir}')
 
@@ -60,5 +60,5 @@ if __name__ == "__main__":
     os.environ["FLASK_DEBUG"] = "1"
 
     service = create_app()
-    service.run(host='0.0.0.0', port=5100, debug=True, use_reloader=True)
+    service.run(host='0.0.0.0', port=5100, debug=False, use_reloader=False)
     # service.run(host='0.0.0.0', port=5100, debug=True, use_reloader=False)
