@@ -203,3 +203,12 @@ python3 -m pip install setuptools==59.5.0
 
 [//]: # (https://mmocr.readthedocs.io/en/latest/)
 [//]: # (https://github.com/anibali/docker-pytorch)
+
+151904353  92
+
+150459314
+
+{
+	"src":"volume://PID/150300431/PID_576_7188_0_150300431.tif",
+	"dry-run":true
+}
