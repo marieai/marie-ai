@@ -127,7 +127,8 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
 
     from datetime import datetime
     backup_time = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{file_id}_{backup_time}"))
+    # backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{file_id}_{backup_time}"))
+    backup_dir = ensure_exists(os.path.join(src_dir, "backup"))
 
     logger.info("Creating snapshot: %s", backup_dir)
     for idx, src_path in enumerate(glob.glob(os.path.join(src_dir, f"*{file_id}*"))):
@@ -159,11 +160,11 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     cudnn.benchmark = True
     cudnn.deterministic = True
 
-    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=False)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=True)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
-    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     # # os.environ["OMP_NUM_THREADS"] = str(1)
