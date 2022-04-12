@@ -204,6 +204,12 @@ python3 -m pip install setuptools==59.5.0
 [//]: # (https://mmocr.readthedocs.io/en/latest/)
 [//]: # (https://github.com/anibali/docker-pytorch)
 
+ImageMagic 6 policy
+```sh
+/etc/ImageMagick-6/policy.xml
+```
+
+
 151904353  92
 
 150459314
