@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify
 from flask_restful import request
 
 import conf
-from logger import create_info_logger
+from logger import setup_logger
 from utils.network import get_ip_address
 
 import glob
@@ -34,7 +34,7 @@ from utils.tiff_ops import merge_tiff, burst_tiff
 from utils.utils import ensure_exists, FileSystem
 from utils.zip_ops import merge_zip
 
-logger = create_info_logger(__name__, "marie.log")
+logger = setup_logger(__file__)
 
 # Blueprint Configuration
 blueprint = Blueprint(

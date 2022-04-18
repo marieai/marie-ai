@@ -55,6 +55,7 @@ if __name__ == '__main__':
     # img_path = './assets/english/Lines/005.png'
     # img_path = './assets/english/Lines/004.png'
     img_path = './assets/private/PID_576_7188_0_149495857_page_0002.tif'
+    img_path = '/home/gbugaj/data/private/coco-text/000005.tif'
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
@@ -66,19 +67,16 @@ if __name__ == '__main__':
         image = cv2.imread(img_path)
         mean, std = cv2.meanStdDev(image)
 
-        print(mean)
-        print(std)
-
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
-        # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-
+        # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
+        box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
             key, 'field', image, PSMode.LINE)
 
-        result, overlay_image = icr.recognize(key, 'test', image, boxes, img_fragments, lines)
+        if False:
+            icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
+            result, overlay_image = icr.recognize(key, 'test', image, boxes, img_fragments, lines)
 
-        print("Testing text render")
+            print("Testing text render")
 
-        renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(image, result)
+            renderer = TextRenderer(config={"preserve_interword_spaces": True})
+            renderer.render(image, result)

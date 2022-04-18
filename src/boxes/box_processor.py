@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from base_handler import BaseHandler
+
 
 class Object(object):
     pass
@@ -141,7 +143,7 @@ class PSMode(Enum):
         return PSMode.SPARSE
 
 
-class BoxProcessor(ABC):
+class BoxProcessor(BaseHandler):
     """Box processor extract bounding boxes"""
 
     def __init__(

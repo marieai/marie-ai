@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 from shutil import copyfile
 
+from base_handler import BaseHandler
 from timer import Timer
 from utils.utils import ensure_exists
 from utils.image_utils import imwrite, read_image, viewImage
@@ -19,12 +20,13 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 debug_visualization_enabled = False
 
 
-class OverlayProcessor:
+class OverlayProcessor(BaseHandler):
     def __init__(self, work_dir, cuda: bool = False):
         print("OverlayProcessor [cuda={}]".format(cuda))
         self.cuda = cuda
         self.work_dir = work_dir
         self.opt, self.model = self.__setup(cuda)
+        self.initialized = False
 
     @staticmethod
     def __setup(cuda):
