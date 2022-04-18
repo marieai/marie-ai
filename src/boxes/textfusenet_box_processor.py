@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import torch
 
+from logger import setup_logger
 from models.textfusenet.detectron2.config import get_cfg
 from models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
 from models.textfusenet.detectron2.utils.colormap import random_color
@@ -14,8 +15,10 @@ from models.textfusenet.detectron2.engine.defaults import DefaultPredictor
 from PIL import Image
 
 from boxes.box_processor import BoxProcessor, PSMode
-from utils.image_utils import paste_fragment
+from utils.image_utils import paste_fragment, imwrite
 from utils.utils import ensure_exists
+
+logger = setup_logger(__name__)
 
 
 def setup_cfg(args):
@@ -24,12 +27,13 @@ def setup_cfg(args):
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
 
-    import os
+    os.environ["OMP_NUM_THREADS"] = str(18)
+    os.environ["KMP_BLOCKTIME"] = str(1)
 
-    os.environ["OMP_NUM_THREADS"] = str(16)
     cfg.MODEL.DEVICE = "cpu"
-    cfg.TEST.DETECTIONS_PER_IMAGE = 5000
+    cfg.TEST.DETECTIONS_PER_IMAGE = 2000
 
+    print(args.confidence_threshold)
     # Set model
     cfg.MODEL.WEIGHTS = args.weights
     # Set score_threshold for builtin models
@@ -64,7 +68,7 @@ def get_parser():
         "--output",
         default="./test_synth/",
         help="A file or directory to save output visualizations. "
-        "If not given, will show output in an OpenCV window.",
+             "If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(
@@ -100,29 +104,30 @@ class BoxProcessorTextFuseNet(BoxProcessor):
     """ "TextFuseNet box processor responsible for extracting bounding boxes for given documents"""
 
     def __init__(
-        self,
-        work_dir: str = "/tmp/boxes",
-        models_dir: str = "./model_zoo/textfusenet",
-        cuda: bool = False,
+            self,
+            work_dir: str = "/tmp/boxes",
+            models_dir: str = "./model_zoo/textfusenet",
+            cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
-        print("Box processor [textfusenet, cuda={}]".format(cuda))
+        logger.info("Box processor [textfusenet, cuda={}]".format(cuda))
         args = get_parser().parse_args()
         cfg = setup_cfg(args)
-
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")
 
-    def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
+    def extract_bounding_boxes(self, _id, key, src_img, psm=PSMode.SPARSE):
 
         start_time = time.time()
         debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
         crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
 
+        # deepcopy image so that original is not altered
+        img = copy.deepcopy(src_img)
+
         predictions = self.predictor(img)
-        instances = predictions["instances"].to(self.cpu_device)
-        print(f"Number of prediction : {len(instances)}")
-        predictions = instances
+        predictions = predictions["instances"].to(self.cpu_device)
+        logger.info(f"Number of prediction : {len(predictions)}")
 
         boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
         scores = predictions.scores if predictions.has("scores") else None
@@ -132,19 +137,16 @@ class BoxProcessorTextFuseNet(BoxProcessor):
         prediction_result = dict()
         prediction_result["bboxes"] = boxes
         prediction_result["polys"] = boxes
+        prediction_result["scores"] = scores
         prediction_result["heatmap"] = None
-
-        # deepcopy image so that original is not altered
-        image = copy.deepcopy(img)
-        pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0))
+        pil_image = Image.new("RGB", (img.shape[1], img.shape[0]), color=(0, 255, 0, 0))
 
         rect_from_poly = []
         rect_line_numbers = []
         fragments = []
-        ms = int(time.time() * 1000)
 
-        max_h = image.shape[0]
-        max_w = image.shape[1]
+        max_h = img.shape[0]
+        max_w = img.shape[1]
 
         for i in range(len(boxes)):
             box = np.array(boxes[i]).astype(np.int32)
@@ -155,9 +157,9 @@ class BoxProcessorTextFuseNet(BoxProcessor):
 
             # Class 0 == Text
             if classes[i] == 0:
-                snippet = image[y0 : y0 + h, x0 : x0 + w :]
+                snippet = img[y0: y0 + h, x0: x0 + w:]
                 # export cropped region
-                file_path = os.path.join("./result", "snippet_%s.jpg" % (i))
+                file_path = os.path.join("./result", "snippet_%s.jpg" % i)
                 cv2.imwrite(file_path, snippet)
 
                 fragments.append(snippet)
@@ -168,8 +170,20 @@ class BoxProcessorTextFuseNet(BoxProcessor):
                 # snippet = (snippet * 255).astype(np.uint8)
                 paste_fragment(pil_image, snippet, (x0, y0))
 
-        savepath = os.path.join(debug_dir, "%s.jpg" % ("txt_overlay"))
+        savepath = os.path.join(debug_dir, "txt_overlay.jpg")
         pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
+
+        cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+        stacked = np.hstack((cv_img, img))
+        save_path = os.path.join(debug_dir, "stacked.png")
+        imwrite(save_path, stacked)
+
+        stop_time = time.time()
+        eval_time = round((stop_time - start_time) * 1000, 2)
+
+        # metrics.add_time('HandlerTime', round(
+        #     (stop_time - start_time) * 1000, 2), None, 'ms')
 
         # we can't return np.array here as t the 'fragments' will throw an error
         # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)

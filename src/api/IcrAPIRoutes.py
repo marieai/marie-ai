@@ -1,6 +1,7 @@
 import hashlib
 import imghdr
 import json
+import logging
 from distutils.util import strtobool as strtobool
 
 import numpy as np
@@ -11,7 +12,7 @@ import processors
 from boxes.box_processor import PSMode
 from flask import Blueprint, jsonify
 from flask_restful import Resource, reqparse, request
-from logger import create_info_logger
+from logger import setup_logger
 from numpyencoder import NumpyEncoder
 from skimage import io
 
@@ -19,7 +20,7 @@ from utils.base64 import base64StringToBytes, encodeToBase64
 from utils.network import find_open_port, get_ip_address
 from utils.utils import current_milli_time, ensure_exists
 
-logger = create_info_logger(__name__, "marie.log")
+setup_logger(__name__)
 
 ALLOWED_TYPES = {'png', 'jpeg', 'tiff'}
 TYPES_TO_EXT = {'png': 'png', 'jpeg': 'jpg', 'tiff': 'tif'}
@@ -65,9 +66,10 @@ blueprint = Blueprint(
     url_prefix=conf.API_PREFIX
 )
 
-logger.info('IcrAPIRoutes inited')
-box_processor = processors.box_processor
-icr_processor = processors.icr_processor
+logging.info('IcrAPIRoutes inited')
+
+# box_processor = processors.box_processor
+# icr_processor = processors.icr_processor
 show_error = True  # show prediction errors
 
 
