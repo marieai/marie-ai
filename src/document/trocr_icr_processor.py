@@ -102,7 +102,7 @@ def work(img, name, img_transform, cfg, task, generator, model, bpe):
     sample = preprocess(img, img_transform)
     text = get_text(cfg, task, generator, model, sample, bpe)
     confidence = 0
-    delta = (time.time() - start)
+    delta = time.time() - start
     return {"confidence": confidence, "text": text, "id": name, "dt": delta}
 
 
@@ -110,25 +110,21 @@ def work_process(img, name):
     start = time.time()
     model_path = "./model_zoo/trocr/trocr-large-printed.pt"
     beam = 5
-    model, cfg, task, generator, bpe, img_transform, device = init(
-        model_path, beam
-    )
-    print('Model load elapsed PP: %s' % (time.time() - start))
+    model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
+    print("Model load elapsed PP: %s" % (time.time() - start))
 
     # sample = preprocess(img, img_transform)
     # text = get_text(cfg, task, generator, model, sample, bpe)
     text = "A"
     confidence = 0
-    delta = (time.time() - start)
+    delta = time.time() - start
     result = {"confidence": confidence, "text": text, "id": name, "dt": delta}
     print(result)
     return result
 
 
 class TrOcrIcrProcessor(IcrProcessor):
-    def __init__(self, work_dir: str = "/tmp/icr",
-                 models_dir: str = "./model_zoo/trocr",
-                 cuda: bool = True) -> None:
+    def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/trocr", cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
         model_path = "./model_zoo/trocr/trocr-large-printed.pt"
         print(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
@@ -142,7 +138,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         self.model, self.cfg, self.task, self.generator, self.bpe, self.img_transform, self.device = init(
             model_path, beam
         )
-        print('Model load elapsed: %s' % (time.time() - start))
+        print("Model load elapsed: %s" % (time.time() - start))
 
         opt = Object()
         opt.rgb = False
@@ -173,7 +169,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
             from multiprocessing import Pool
 
-            print('Time elapsed: %s' % (time.time() - start))
+            print("Time elapsed: %s" % (time.time() - start))
             max_workers = mp.cpu_count() // 4
 
             print("\nPool Executor:")
@@ -184,11 +180,11 @@ class TrOcrIcrProcessor(IcrProcessor):
             pool.close()
             pool.join()
 
-            print('Time elapsed[submitted]: %s' % (time.time() - start))
+            print("Time elapsed[submitted]: %s" % (time.time() - start))
             for r in pool_results:
-                print('Time elapsed[result]: %s  , %s' % (time.time() - start, r))
+                print("Time elapsed[result]: %s  , %s" % (time.time() - start, r))
                 # results.append(result)
-            print('Time elapsed[all]: %s' % (time.time() - start))
+            print("Time elapsed[all]: %s" % (time.time() - start))
         except Exception as ex:
             raise ex
         return results
@@ -217,22 +213,33 @@ class TrOcrIcrProcessor(IcrProcessor):
             args = [(img, name, self.img_transform) for img, name in eval_data]
 
             start = time.time()
-            print('Time elapsed: %s' % (time.time() - start))
+            print("Time elapsed: %s" % (time.time() - start))
 
             print("\nThreadPoolExecutor:")
             f = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=mp.cpu_count() // 4) as executor:
                 for img, name in eval_data:
-                    f.append(executor.submit(work, img, name, self.img_transform, self.cfg, self.task, self.generator,
-                                             self.model, self.bpe))
+                    f.append(
+                        executor.submit(
+                            work,
+                            img,
+                            name,
+                            self.img_transform,
+                            self.cfg,
+                            self.task,
+                            self.generator,
+                            self.model,
+                            self.bpe,
+                        )
+                    )
 
-            print('Time elapsed[submitted]: %s' % (time.time() - start))
+            print("Time elapsed[submitted]: %s" % (time.time() - start))
 
             for r in concurrent.futures.as_completed(f):
                 result = r.result()
-                print('Time elapsed[result]: %s  , %s' % (time.time() - start, result))
+                print("Time elapsed[result]: %s  , %s" % (time.time() - start, result))
                 results.append(result)
-            print('Time elapsed[all]: %s' % (time.time() - start))
+            print("Time elapsed[all]: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex
@@ -260,7 +267,7 @@ class TrOcrIcrProcessor(IcrProcessor):
                 text = get_text(self.cfg, self.task, self.generator, self.model, sample, self.bpe)
                 confidence = 0
                 results.append({"confidence": confidence, "text": text, "id": img_name})
-            print('ICR Time elapsed: %s' % (time.time() - start))
+            print("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex

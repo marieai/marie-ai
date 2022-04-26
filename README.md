@@ -202,21 +202,16 @@ python3 -m pip install setuptools==59.5.0
 ```
 
 
+
 [//]: # (https://mmocr.readthedocs.io/en/latest/)
 [//]: # (https://github.com/anibali/docker-pytorch)
+
+
 
 ImageMagic 6 policy
 ```sh
 /etc/ImageMagick-6/policy.xml
 ```
 
-Final PDF Result is wrong it needs to genereate : PID_576_7188_0_151904353.pdf instead of 151904353.pdf
-
-151904353  92
-
-150459314
-
-{
-	"src":"volume://PID/150300431/PID_576_7188_0_150300431.tif",
-	"dry-run":true
-}
+## Models to implement
+https://github.com/ibm-aur-nlp/PubLayNet

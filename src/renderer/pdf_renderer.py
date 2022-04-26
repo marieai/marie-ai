@@ -9,6 +9,8 @@ from reportlab.pdfgen import canvas
 
 from renderer.renderer import ResultRenderer
 
+# https://github.com/JonathanLink/PDFLayoutTextStripper
+# https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java
 
 def determine_font_size(box):
     """
@@ -89,7 +91,7 @@ class PdfRenderer(ResultRenderer):
 
             with contextlib.closing(io.BytesIO()) as packet:
                 can = canvas.Canvas(packet, pagesize=(img_w, img_h))
-                # can.drawImage(ImageReader(im_pil), 0, 0)
+                can.drawImage(ImageReader(im_pil), 0, 0)
 
                 if len(words) == 0:
                     can.setFont("Helvetica", 0)
@@ -105,9 +107,10 @@ class PdfRenderer(ResultRenderer):
                         left_pad = 5  # By observation
                         px0 = x
                         py0 = img_h - y - h * 0.70  # + (h / 2)
+                        # py0 = img_h - y # + (h / 2)
                         font_size = determine_font_size(box)
                         # print(can.getAvailableFonts())
-                        font_size = 24  # h * .75
+                        font_size = 12 # 24  # h * .75
                         # print(f'font_size = {font_size}  : {box}')
                         # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
                         can.setFont("Helvetica", font_size)
