@@ -123,3 +123,8 @@ Implement secondary box detection method.
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
+
+
+
+#Funsd Dataset
+https://huggingface.co/datasets/nielsr/funsd/blob/main/funsd.py
