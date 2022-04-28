@@ -1,3 +1,4 @@
+import PIL.Image
 import numpy as np
 from PIL import Image
 
@@ -5,6 +6,7 @@ import cv2
 
 
 def read_image(image):
+    """Read image and convert to OpenCV compatible format"""
     if type(image) == str:
         img = cv2.imread(image)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -22,12 +24,19 @@ def read_image(image):
         elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBAscale
             img = image[:, :, :3]
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    elif type(image) == PIL.Image.Image: # convert pil to OpenCV
+        img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    else:
+        raise Exception(f"Unhandled image type : {type(image)}")
 
     return img
 
 
 def paste_fragment(overlay, fragment, pos=(0, 0)):
-    # You may need to convert the color.
+    col = (list(np.random.choice(range(256), size=3)))
+    color = [int(col[0]), int(col[1]), int(col[2])]
+    fragment = cv2.copyMakeBorder(fragment, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=color)
+
     fragment = cv2.cvtColor(fragment, cv2.COLOR_BGR2RGB)
     fragment_pil = Image.fromarray(fragment)
     overlay.paste(fragment_pil, pos)

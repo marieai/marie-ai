@@ -11,7 +11,7 @@ import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
 from timer import Timer
-from utils.image_utils import paste_fragment
+from utils.image_utils import paste_fragment, viewImage
 from line_processor import line_refiner
 from line_processor import find_line_index
 
@@ -85,7 +85,7 @@ def get_prediction(
     show_time = True
     t0 = time.time()
 
-    image[image >= 1] = [200]
+    # image[image >= 1] = [200]
     # resize
     img_resized, target_ratio, size_heatmap = craft.imgproc.resize_aspect_ratio(
         image, canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=mag_ratio
@@ -244,7 +244,7 @@ class BoxProcessorCraft(BoxProcessor):
             # canvas_size=1280,#w + w // 2,
             canvas_size=w,
             # canvas_size=w + w // 2,
-            mag_ratio=1,
+            mag_ratio=1.0,
         )
 
         return bboxes, polys, score_text
@@ -275,7 +275,7 @@ class BoxProcessorCraft(BoxProcessor):
         print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
 
         if img is None:
-            raise Exception
+            raise Exception("Input image can't be empty")
         try:
             debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
             crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
@@ -284,12 +284,12 @@ class BoxProcessorCraft(BoxProcessor):
 
             image = copy.deepcopy(img)
             w = image.shape[1]  # 1280
+
             # Inverting the image makes box detection substantially better in many case, I think that this make sense
             # to make this a configurable option
             # Make this a configuration
             image_norm = image
             # image_norm = 255 - image
-            cv2.imwrite(os.path.join("/tmp/icr/fields/", key, "NORM_%s.png" % _id), image_norm)
             # TODO : Externalize as config
 
             # Page Segmentation Model
@@ -318,8 +318,8 @@ class BoxProcessorCraft(BoxProcessor):
             cv2.imwrite(mask_file, score_text)
 
             # deepcopy image so that original is not altered
-            image = copy.deepcopy(image)
-            pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0))
+            # image = copy.deepcopy(image)
+            pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0))
 
             rect_from_poly = []
             rect_line_numbers = []
@@ -398,13 +398,11 @@ class BoxProcessorCraft(BoxProcessor):
                     file_path = os.path.join(crops_dir, "%s_%s.jpg" % (ms, idx))
                     cv2.imwrite(file_path, snippet)
 
-                # After normalization image is in 0-1 range
-                # snippet = (snippet * 255).astype(np.uint8)
                 paste_fragment(pil_image, snippet, (x, y))
 
                 # break
-            savepath = os.path.join(debug_dir, "%s.jpg" % ("txt_overlay"))
-            pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
+            savepath = os.path.join(debug_dir, "%s.png" % ("txt_overlay"))
+            pil_image.save(savepath, format="PNG", subsampling=0, quality=100)
 
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)
