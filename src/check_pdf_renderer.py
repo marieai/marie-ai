@@ -47,7 +47,6 @@ def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
     return img.resize((int(w), int(h)), method)
 
 
-
 if __name__ == "__main__":
 
     work_dir_boxes = ensure_exists("/tmp/boxes")
@@ -67,7 +66,9 @@ if __name__ == "__main__":
     img_path = "/home/greg/dataset/medprov/PID/150300431/clean/PID_576_7188_0_150300431_page_0005.tif"
     img_path = "/opt/grapnel/burst/150459314_2_cleaned.tiff"
     img_path = "/home/gbugaj/data/rms-asp/149495857/clean/PID_576_7188_0_149495857_page_0003.tif"
-    img_path = "/home/gbugaj/Downloads/task_training-01-2022_04_26_14_31_23-coco/images/corr-indexing/train/152606114_2.png"
+    img_path = (
+        "/home/gbugaj/Downloads/task_training-01-2022_04_26_14_31_23-coco/images/corr-indexing/train/152606114_2.png"
+    )
     img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
     img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
 
@@ -91,7 +92,7 @@ if __name__ == "__main__":
         boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
         result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
 
-        output_filename = '/tmp/result-2048-craf.pdf'
+        output_filename = "/tmp/result-2048-craf-lines.pdf"
         print("Testing pdf render")
 
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})

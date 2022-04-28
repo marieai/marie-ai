@@ -73,12 +73,13 @@ class IcrProcessor(ABC):
     def recognize(self, _id, key, img, boxes, image_fragments, lines):
         """Recognize text from multiple images.
         Args:
-            id: Unique Image ID
+            _id: Unique Image ID
             key: Unique image key/region for the extraction
             img: A pre-cropped image containing characters
         """
         print(f"ICR recognize : {_id}, {key}")
         assert len(boxes) == len(image_fragments), "You must provide the same number of box groups as images."
+        encode_fragments = False
 
         try:
             shape = img.shape
@@ -108,7 +109,9 @@ class IcrProcessor(ABC):
                 payload["confidence"] = round(confidence, 4)
                 payload["box"] = box
                 payload["line"] = line
-                payload["fragment_b64"] = encodeimg2b64(fragment)
+
+                if encode_fragments:
+                    payload["fragment_b64"] = encodeimg2b64(fragment)
 
                 words.append(payload)
 
@@ -123,18 +126,18 @@ class IcrProcessor(ABC):
                         overlay_image, conf_label, (box[0], box[1] + box[3]), 10, (0, 0, 255)
                     )
 
-            if False:
+            if True:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
-                imwrite(savepath, overlay_image)
+                cv2.imwrite(savepath, overlay_image)
 
                 savepath = os.path.join(debug_all_dir, f"{_id}.png")
-                imwrite(savepath, overlay_image)
+                cv2.imwrite(savepath, overlay_image)
 
-            line_ids = np.empty((max_line_number), dtype=object)
+            line_ids = np.empty((max(1, max_line_number)), dtype=object)
             words = np.array(words)
 
-            for i in range(0, max_line_number):
-                current_lid = i + 1
+            for i in range(0, max(1, max_line_number)):
+                current_lid = i #+ 1
                 word_ids = []
                 box_picks = []
                 word_picks = []
@@ -150,7 +153,7 @@ class IcrProcessor(ABC):
                 word_picks = np.array(word_picks)
 
                 # print(f'**** {len(box_picks)}')
-                # FIXME : This si a bug and need to be fixed, this should never happen
+                # FIXME : This is a bug and need to be fixed, this should never happen
                 if len(box_picks) == 0:
                     line_ids[i] = {
                         "line": i + 1,
