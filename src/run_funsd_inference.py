@@ -15,7 +15,8 @@ import numpy as np
 from transformers.utils import check_min_version
 
 from PIL import Image
-from transformers import LayoutLMv2Processor, LayoutLMv2FeatureExtractor, LayoutLMv2ForTokenClassification
+from transformers import LayoutLMv2Processor, LayoutLMv2FeatureExtractor, LayoutLMv2ForTokenClassification, \
+    LayoutLMv2TokenizerFast
 
 # https://github.com/huggingface/transformers/blob/d3ae2bd3cf9fc1c3c9c9279a8bae740d1fd74f34/tests/layoutlmv2/test_processor_layoutlmv2.py
 
@@ -44,6 +45,7 @@ def from_json_file(filename):
 
 
 def unnormalize_box(bbox, width, height):
+    return bbox
     return [
         width * (bbox[0] / 1000),
         height * (bbox[1] / 1000),
@@ -178,11 +180,12 @@ def main_image():
     # prepare for the model
     # we do not want to use the pytesseract
     # LayoutLMv2FeatureExtractor requires the PyTesseract library but it was not found in your environment. You can install it with pip:
-    processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
+    # processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
 
     # Create Layout processor with custom future extractor
-    # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    # processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
+    processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     image = Image.open("/home/gbugaj/data/eval/funsd/__results___28_0.png").convert("RGB")
     # image = Image.open('./document.png').convert("RGB")
@@ -205,22 +208,14 @@ def main_image():
         w_box = word["box"]
         x, y, w, h = w_box
         words.append(w_text)
-        # boxes.append([10, 10, 120, 40])
-        # boxes.append([100, 100, 400, 180])
         boxes.append([x, y, x + w, y + h])
         word_labels.append(0)
-        if i == -1:
-            break
 
     # words = ["hello", "world", "Test"]
     # boxes = [[1, 2, 3, 4], [5, 6, 7, 8], [10, 10, 120, 40]]  # make sure to normalize your bounding boxes
     # word_labels = [0, 1, 2]
 
     print("?????")
-
-    print(type(words))
-    print(type(boxes))
-    print(type(word_labels))
 
     print(words)
     print(boxes)
@@ -283,45 +278,47 @@ def main_image():
 
 
 if __name__ == "__main__":
+
+    os.putenv("TOKENIZERS_PARALLELISM", "false")
     # main_dataset()
     main_image()
 
-    os.exit()
-    image_path = "/home/gbugaj/data/eval/funsd/__results___28_0.png"
-    # image_path = "/home/gbugaj/data/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
-    # image = cv2.imread(image_path)
-    # viewImage(image)
+    if False:
+        image_path = "/home/gbugaj/data/eval/funsd/__results___28_0.png"
+        # image_path = "/home/gbugaj/data/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
+        # image = cv2.imread(image_path)
+        # viewImage(image)
 
-    image = Image.open(image_path).convert("RGB")
-    image.show()
+        image = Image.open(image_path).convert("RGB")
+        image.show()
 
-    results = obtain_words(image)
-    words = []
-    boxes = []
-    word_labels = []
+        results = obtain_words(image)
+        words = []
+        boxes = []
+        word_labels = []
 
-    for word in results["words"]:
-        w_id = word["id"]
-        w_text = word["id"]
-        w_box = word["box"]
+        for word in results["words"]:
+            w_id = word["id"]
+            w_text = word["id"]
+            w_box = word["box"]
 
-        words.append(w_text)
-        boxes.append(w_box)
-        word_labels.append(w_id)
+            words.append(w_text)
+            boxes.append(w_box)
+            word_labels.append(w_id)
 
-    print(results)
-    print(len(words))
-    print(len(boxes))
-    print(len(word_labels))
+        print(results)
+        print(len(words))
+        print(len(boxes))
+        print(len(word_labels))
 
-    json_path = os.path.join("/tmp/ocr-results.json")
-    with open(json_path, "w") as json_file:
-        json.dump(
-            results,
-            json_file,
-            sort_keys=True,
-            separators=(",", ": "),
-            ensure_ascii=False,
-            indent=4,
-            cls=NumpyEncoder,
-        )
+        json_path = os.path.join("/tmp/ocr-results.json")
+        with open(json_path, "w") as json_file:
+            json.dump(
+                results,
+                json_file,
+                sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=4,
+                cls=NumpyEncoder,
+            )

@@ -6,6 +6,7 @@ import shutil
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
@@ -25,7 +26,7 @@ def from_json_file(filename):
         return data
 
 
-def convert_coco_to_funsd(src_dir: str, output_path: str = "/tmp/coco_funsd") -> None:
+def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
@@ -88,6 +89,14 @@ def convert_coco_to_funsd(src_dir: str, output_path: str = "/tmp/coco_funsd") ->
         cat_id_name[category["id"]] = category["name"]
         cat_name_id[category["name"]] = category["id"]
 
+    ner_tags = []
+    for question, answer in question_answer_map.items():
+        ner_tags.append("B-" + question.upper())
+        ner_tags.append("I-" + answer.upper())
+
+    print("Converted ner_tags =>")
+    print(ner_tags)
+
     ano_groups = {}
     # Group annotations by image_id as their key
     for ano in annotations:
@@ -95,6 +104,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str = "/tmp/coco_funsd") ->
             ano_groups[ano["image_id"]] = []
         ano_groups[ano["image_id"]].append(ano)
 
+    errors = []
     for group_id in ano_groups:
         grouping = ano_groups[group_id]
         # Validate that each annotation has associated question/answer pair
@@ -107,18 +117,26 @@ def convert_coco_to_funsd(src_dir: str, output_path: str = "/tmp/coco_funsd") ->
             aid = cat_name_id[answer]
             # we only have question but no answer
             if qid in found_cat_id and aid not in found_cat_id:
-                raise Exception(
-                    f"Pair not found for image_id[{group_id}] : {question} [{qid}] MISSING -> {answer} [{aid}]"
-                )
+                msg = f"Pair notfound for image_id[{group_id}] : {question} [{qid}] MISSING -> {answer} [{aid}]"
+                print(msg)
+                errors.append(msg)
             else:
                 print(f"Pair found : {question} [{qid}] -> {answer} [{aid}]")
+
+        if len(errors) > 0:
+            payload = "\n".join(errors)
+            raise Exception(f"Missing mapping \n {payload}")
 
         # start conversion
         form_dict = {"form": []}
 
         for ano in grouping:
             category_id = ano["category_id"]
+
+            # Convert form XYWH -> X0,Y0,X1,Y1
             bbox = [int(x) for x in ano["bbox"]]
+            bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+
             category_name = cat_id_name[category_id]
 
             item = {
@@ -139,10 +157,10 @@ def convert_coco_to_funsd(src_dir: str, output_path: str = "/tmp/coco_funsd") ->
         filename = file_name.split("/")[-1].split(".")[0]
 
         src_img_path = os.path.join(src_dir, "images", file_name)
-        os.makedirs(os.path.join(output_path, "annotations"), exist_ok=True)
+        os.makedirs(os.path.join(output_path, "annotations_tmp"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
 
-        json_path = os.path.join(output_path, "annotations", f"{filename}.json")
+        json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
 
         with open(json_path, "w") as json_file:
@@ -158,13 +176,13 @@ def load_image(image_path):
     return image, (w, h)
 
 
-def decorate_funsd(src_dir: str, output_ann_dir: str):
+def decorate_funsd(src_dir: str):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
-    output_ann_dir = ensure_exists(output_ann_dir)
+    output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
 
     logger.info("⏳ Generating examples from = %s", src_dir)
-    ann_dir = os.path.join(src_dir, "annotations")
+    ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
     boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
@@ -179,11 +197,12 @@ def decorate_funsd(src_dir: str, output_ann_dir: str):
         image, size = load_image(image_path)
 
         for i, item in enumerate(data["form"]):
-            # format : xywh
+            # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             print(box)
-            x, y, w, h = box
-            snippet = image[y : y + h, x : x + w :]
+            x0, y0, x1, y1 = box
+            # snippet = image[y : y + h, x : x + w :]
+            snippet = image[y0:y1, x0:x1:]
             # export cropped region
             file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
             cv2.imwrite(file_path, snippet)
@@ -202,10 +221,13 @@ def decorate_funsd(src_dir: str, output_ann_dir: str):
             text = " ".join([line["text"] for line in result["lines"]])
             print(text)
 
+            # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
+            # we need to account for offset from the snippet box
             for word in result["words"]:
                 w_text = word["text"]
-                wx, wy, ww, wh = word["box"]
-                w_box = [wx + x, wy + y, ww, wh]
+                w_x0, w_y1, w_x1, w_h1 = word["box"]
+                w_box = [w_x0 + x0, w_y1 + y0, w_x1 + x1, w_h1 + y1]
+
                 adj_word = {"text": w_text, "box": w_box}
                 words.append(adj_word)
 
@@ -227,9 +249,9 @@ def decorate_funsd(src_dir: str, output_ann_dir: str):
 
 
 if __name__ == "__main__":
-    src_dir = "/home/gbugaj/data/private/corr-indexer/testdeck-raw-01"
-    dst_step_1dir = "/tmp/coco_funsd/"
-    dst_step_2dir = "/tmp/coco_funsd/adjusted_annotations"
+    name = "train"
+    src_dir = f"/home/gbugaj/data/private/corr-indexer/{name}deck-raw-01"
+    dst_path = f"/home/gbugaj/data/private/corr-indexer/{name}_dataset"
 
-    convert_coco_to_funsd(src_dir)
-    decorate_funsd(dst_step_1dir, dst_step_2dir)
+    convert_coco_to_funsd(src_dir, dst_path)
+    decorate_funsd(dst_path)
