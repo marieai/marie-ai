@@ -26,6 +26,20 @@ def from_json_file(filename):
         return data
 
 
+# https://stackoverflow.com/questions/23853632/which-kind-of-interpolation-best-for-resizing-image
+def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(img)
+
+    ow, oh = img.size
+    scale = oh / target_size
+    print(scale)
+    w = ow / scale
+    h = target_size  # int(max(oh / scale, crop_size))
+    return img.resize((int(w), int(h)), method)
+
+
+
 def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
@@ -92,11 +106,14 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     ner_tags = []
     for question, answer in question_answer_map.items():
         ner_tags.append("B-" + question.upper())
+        ner_tags.append("I-" + question.upper())
+        ner_tags.append("B-" + answer.upper())
         ner_tags.append("I-" + answer.upper())
 
     print("Converted ner_tags =>")
     print(ner_tags)
 
+    os.exit()
     ano_groups = {}
     # Group annotations by image_id as their key
     for ano in annotations:
@@ -166,7 +183,9 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         with open(json_path, "w") as json_file:
             json.dump(form_dict, json_file, indent=4)
 
+        # copy and resize to 1000 H
         shutil.copyfile(src_img_path, dst_img_path)
+
         print(form_dict)
 
 
@@ -209,25 +228,34 @@ def decorate_funsd(src_dir: str):
 
             key = "coco"
             boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", snippet, PSMode.SPARSE)
+            if boxes is None or len(boxes) == 0:
+                print('Empty boxes')
+                continue
             result, overlay_image = icrp.recognize(key, "test", snippet, boxes, img_fragments, lines)
 
             print(boxes)
             print(result)
 
+            if result is None or len(result) == 0 or result["lines"] is None or len(result["lines"]) == 0:
+                print(f"No results for : {guid}-{i}")
+                continue
+
             file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
             cv2.imwrite(file_path, snippet)
 
             words = []
-            text = " ".join([line["text"] for line in result["lines"]])
-            print(text)
+            text = ""
+            try:
+                text = " ".join([line["text"] for line in result["lines"]])
+            except Exception as ex:
+                raise ex
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
             for word in result["words"]:
                 w_text = word["text"]
-                w_x0, w_y1, w_x1, w_h1 = word["box"]
-                w_box = [w_x0 + x0, w_y1 + y0, w_x1 + x1, w_h1 + y1]
-
+                w_x0, w_y0, w_x1, w_h1 = word["box"]
+                w_box = [w_x0 + x0, w_y0 + y0, w_x1 + x1, w_h1 + y1]
                 adj_word = {"text": w_text, "box": w_box}
                 words.append(adj_word)
 
@@ -250,8 +278,9 @@ def decorate_funsd(src_dir: str):
 
 if __name__ == "__main__":
     name = "train"
-    src_dir = f"/home/gbugaj/data/private/corr-indexer/{name}deck-raw-01"
-    dst_path = f"/home/gbugaj/data/private/corr-indexer/{name}_dataset"
+    root_dir = "/home/greg/dataset/assets-private/corr-indexer"
+    src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
+    dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
 
     convert_coco_to_funsd(src_dir, dst_path)
     decorate_funsd(dst_path)

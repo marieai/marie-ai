@@ -155,14 +155,15 @@ class IcrProcessor(ABC):
                 # print(f'**** {len(box_picks)}')
                 # FIXME : This is a bug and need to be fixed, this should never happen
                 if len(box_picks) == 0:
-                    line_ids[i] = {
-                        "line": i + 1,
-                        "wordids": word_ids,
-                        "text": "",
-                        "bbox": bbox,
-                        "confidence": round(0, 4),
-                    }
                     continue
+                    if False:
+                        line_ids[i] = {
+                            "line": i + 1,
+                            "wordids": word_ids,
+                            "text": "",
+                            "bbox": [0,0,0,0],
+                            "confidence": round(0, 4),
+                        }
 
                 x1 = box_picks[:, 0]
                 idxs = np.argsort(x1)

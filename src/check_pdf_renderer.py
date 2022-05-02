@@ -64,13 +64,13 @@ if __name__ == "__main__":
     # img_path = './assets/english/Lines/004.png'
 
     img_path = "/home/greg/dataset/medprov/PID/150300431/clean/PID_576_7188_0_150300431_page_0005.tif"
-    img_path = "/opt/grapnel/burst/150459314_2_cleaned.tiff"
-    img_path = "/home/gbugaj/data/rms-asp/149495857/clean/PID_576_7188_0_149495857_page_0003.tif"
-    img_path = (
-        "/home/gbugaj/Downloads/task_training-01-2022_04_26_14_31_23-coco/images/corr-indexing/train/152606114_2.png"
-    )
-    img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
-    img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
+    # img_path = "/opt/grapnel/burst/150459314_2_cleaned.tiff"
+    # img_path = "/home/gbugaj/data/rms-asp/149495857/clean/PID_576_7188_0_149495857_page_0003.tif"
+    # img_path = (
+    #     "/home/gbugaj/Downloads/task_training-01-2022_04_26_14_31_23-coco/images/corr-indexing/train/152606114_2.png"
+    # )
+    # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
+    # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
