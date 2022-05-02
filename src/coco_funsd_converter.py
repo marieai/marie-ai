@@ -39,7 +39,6 @@ def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
     return img.resize((int(w), int(h)), method)
 
 
-
 def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
@@ -229,7 +228,7 @@ def decorate_funsd(src_dir: str):
             key = "coco"
             boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", snippet, PSMode.SPARSE)
             if boxes is None or len(boxes) == 0:
-                print('Empty boxes')
+                print("Empty boxes")
                 continue
             result, overlay_image = icrp.recognize(key, "test", snippet, boxes, img_fragments, lines)
 
