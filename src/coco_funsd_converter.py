@@ -7,6 +7,8 @@ import shutil
 import cv2
 import numpy as np
 from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
 
 from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
@@ -28,15 +30,18 @@ def from_json_file(filename):
 
 # https://stackoverflow.com/questions/23853632/which-kind-of-interpolation-best-for-resizing-image
 def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(img)
-
     ow, oh = img.size
     scale = oh / target_size
     print(scale)
     w = ow / scale
     h = target_size  # int(max(oh / scale, crop_size))
     return img.resize((int(w), int(h)), method)
+
+
+def load_image(image_path):
+    image = cv2.imread(image_path)
+    h, w = image.shape[0], image.shape[1]
+    return image, (w, h)
 
 
 def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
@@ -102,6 +107,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         cat_id_name[category["id"]] = category["name"]
         cat_name_id[category["name"]] = category["id"]
 
+    # Generate NER Tags
     ner_tags = []
     for question, answer in question_answer_map.items():
         ner_tags.append("B-" + question.upper())
@@ -112,7 +118,6 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     print("Converted ner_tags =>")
     print(ner_tags)
 
-    os.exit()
     ano_groups = {}
     # Group annotations by image_id as their key
     for ano in annotations:
@@ -144,23 +149,33 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             raise Exception(f"Missing mapping \n {payload}")
 
         # start conversion
+        img_data = images_by_id[group_id]
+        file_name = img_data["file_name"]
+        filename = file_name.split("/")[-1].split(".")[0]
+        src_img_path = os.path.join(src_dir, "images", file_name)
+        src_img, size = load_image(src_img_path)
+
+        print(f"Image size : {size}")
         form_dict = {"form": []}
 
         for ano in grouping:
             category_id = ano["category_id"]
-
-            # Convert form XYWH -> X0,Y0,X1,Y1
+            # Convert form XYWH -> xmin,ymin,xmax,ymax
             bbox = [int(x) for x in ano["bbox"]]
             bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-
             category_name = cat_id_name[category_id]
+
+            print(f"category_name => {category_name}")
+            label = "QUESTION"
+            if category_name.find("answer") > -1:
+                label = "ANSWER"
 
             item = {
                 "id": id_map[category_name],
                 "text": "POPULATE_VIA_ICR",
                 "box": bbox,
                 "linking": [link_map[category_name]],
-                "label": category_name,
+                "label": label,
                 "words": [
                     {"text": "POPULATE_VIA_ICR", "box": [0, 0, 0, 0]},
                 ],
@@ -168,11 +183,6 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
 
             form_dict["form"].append(item)
 
-        img_data = images_by_id[group_id]
-        file_name = img_data["file_name"]
-        filename = file_name.split("/")[-1].split(".")[0]
-
-        src_img_path = os.path.join(src_dir, "images", file_name)
         os.makedirs(os.path.join(output_path, "annotations_tmp"), exist_ok=True)
         os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
 
@@ -184,14 +194,17 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
 
         # copy and resize to 1000 H
         shutil.copyfile(src_img_path, dst_img_path)
-
         print(form_dict)
+        # break
 
 
-def load_image(image_path):
-    image = cv2.imread(image_path)
-    h, w = image.shape[0], image.shape[1]
-    return image, (w, h)
+def normalize_bbox(bbox, size):
+    return [
+        int(1000 * bbox[0] / size[0]),
+        int(1000 * bbox[1] / size[1]),
+        int(1000 * bbox[2] / size[0]),
+        int(1000 * bbox[3] / size[1]),
+    ]
 
 
 def decorate_funsd(src_dir: str):
@@ -214,13 +227,12 @@ def decorate_funsd(src_dir: str):
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
 
+        print(f"size : {size}")
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
-            print(box)
             x0, y0, x1, y1 = box
-            # snippet = image[y : y + h, x : x + w :]
-            snippet = image[y0:y1, x0:x1:]
+            snippet = image[y0:y1, x0:x1, :]
             # export cropped region
             file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
             cv2.imwrite(file_path, snippet)
@@ -247,14 +259,18 @@ def decorate_funsd(src_dir: str):
             try:
                 text = " ".join([line["text"] for line in result["lines"]])
             except Exception as ex:
-                raise ex
+                # raise ex
+                pass
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
+            # results["word"] are in a xywh format in local position and need to be converted to relative position
+            print("-------------------------------")
+            print(result["words"])
             for word in result["words"]:
                 w_text = word["text"]
-                w_x0, w_y0, w_x1, w_h1 = word["box"]
-                w_box = [w_x0 + x0, w_y0 + y0, w_x1 + x1, w_h1 + y1]
+                x, y, w, h = word["box"]
+                w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
                 adj_word = {"text": w_text, "box": w_box}
                 words.append(adj_word)
 
@@ -275,11 +291,55 @@ def decorate_funsd(src_dir: str):
             )
 
 
+def load_image_pil(image_path):
+    image = Image.open(image_path).convert("RGB")
+    w, h = image.size
+    return image, (w, h)
+
+
+def visualize_funsd(src_dir: str):
+    ann_dir = os.path.join(src_dir, "annotations")
+    img_dir = os.path.join(src_dir, "images")
+
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        file_path = os.path.join(ann_dir, file)
+        with open(file_path, "r", encoding="utf8") as f:
+            data = json.load(f)
+
+        filename = file.split("/")[-1].split(".")[0]
+        image_path = os.path.join(img_dir, file)
+        image_path = image_path.replace("json", "png")
+        print(data)
+        print(f"image_path : {image_path}")
+        print(f"filename : {filename}")
+        image, size = load_image_pil(image_path)
+
+        # draw predictions over the image
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+        label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
+
+        for i, item in enumerate(data["form"]):
+            print(item)
+            box = item["box"]
+            predicted_label = item["label"].lower()
+            draw.rectangle(box, outline=label2color[predicted_label], width=2)
+            draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font)
+
+            for word in item["words"]:
+                box = word["box"]
+                draw.rectangle(box, outline="red")
+
+        image.save(f"/tmp/snippet/viz_{filename}.png")
+
+
 if __name__ == "__main__":
     name = "train"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
+    root_dir = "/home/gbugaj/data/private/corr-indexer"
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
 
     convert_coco_to_funsd(src_dir, dst_path)
     decorate_funsd(dst_path)
+    visualize_funsd(dst_path)
