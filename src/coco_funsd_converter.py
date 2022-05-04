@@ -133,6 +133,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         found_cat_id = []
         for ano in grouping:
             found_cat_id.append(ano["category_id"])
+
         # if we have any missing mapping we will abort and fix the labeling data before continuing
         for question, answer in question_answer_map.items():
             qid = cat_name_id[question]
@@ -211,6 +212,17 @@ def normalize_bbox(bbox, size):
     ]
 
 
+def extract_icr(snippet, boxp, icrp):
+    key = "coco"
+    boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", snippet, PSMode.SPARSE)
+    if boxes is None or len(boxes) == 0:
+        print("Empty boxes")
+        return [], []
+    result, overlay_image = icrp.recognize(key, "test", snippet, boxes, img_fragments, lines)
+
+    return boxes, result
+
+
 def decorate_funsd(src_dir: str):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
@@ -231,7 +243,6 @@ def decorate_funsd(src_dir: str):
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
 
-        print(f"size : {size}")
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
@@ -241,17 +252,12 @@ def decorate_funsd(src_dir: str):
             file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
             cv2.imwrite(file_path, snippet)
 
-            key = "coco"
-            boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", snippet, PSMode.SPARSE)
-            if boxes is None or len(boxes) == 0:
-                print("Empty boxes")
-                continue
-            result, overlay_image = icrp.recognize(key, "test", snippet, boxes, img_fragments, lines)
+            boxes, results = extract_icr(snippet, boxp, icrp)
 
             print(boxes)
-            print(result)
+            print(results)
 
-            if result is None or len(result) == 0 or result["lines"] is None or len(result["lines"]) == 0:
+            if results is None or len(results) == 0 or results["lines"] is None or len(results["lines"]) == 0:
                 print(f"No results for : {guid}-{i}")
                 continue
 
@@ -261,7 +267,7 @@ def decorate_funsd(src_dir: str):
             words = []
             text = ""
             try:
-                text = " ".join([line["text"] for line in result["lines"]])
+                text = " ".join([line["text"] for line in results["lines"]])
             except Exception as ex:
                 # raise ex
                 pass
@@ -270,8 +276,8 @@ def decorate_funsd(src_dir: str):
             # we need to account for offset from the snippet box
             # results["word"] are in a xywh format in local position and need to be converted to relative position
             print("-------------------------------")
-            print(result["words"])
-            for word in result["words"]:
+            print(results["words"])
+            for word in results["words"]:
                 w_text = word["text"]
                 x, y, w, h = word["box"]
                 w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
@@ -281,7 +287,43 @@ def decorate_funsd(src_dir: str):
             item["words"] = words
             item["text"] = text
 
+
+        # create masked image for OTHER label
+        image_masked, _ = load_image(image_path)
+        index = 0
+        for i, item in enumerate(data["form"]):
+            # format : x0,y0,x1,y1
+            box = np.array(item["box"]).astype(np.int32)
+            x0, y0, x1, y1 = box
+            cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
+            index = i + 1
+
+        file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
+        cv2.imwrite(file_path, image_masked)
+
+        boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
+
+        print('>>>>>>>>>>>>>')
+        print(results_masked)
         print(data)
+
+        x0 = 0
+        y0 = 0
+        for i, word in enumerate(results_masked["words"]):
+            w_text = word["text"]
+            x, y, w, h = word["box"]
+            w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
+            adj_word = {"text": w_text, "box": w_box}
+            item = {
+                "id": index + i,
+                "text": w_text,
+                "box": w_box,
+                "linking": [],
+                "label": "other",
+                "words": [adj_word],
+            }
+            data["form"].append(item)
+
         json_path = os.path.join(output_ann_dir, file)
         with open(json_path, "w") as json_file:
             json.dump(
@@ -293,6 +335,8 @@ def decorate_funsd(src_dir: str):
                 indent=4,
                 cls=NumpyEncoder,
             )
+
+        # break
 
 
 def load_image_pil(image_path):
@@ -328,6 +372,7 @@ def visualize_funsd(src_dir: str):
                        "member_number": "blue", "member_number_answer": "green",
                        "member_name": "blue", "member_name_answer": "green",
                        "patient_name": "blue", "patient_name_answer": "green",
+                       "other":"red"
                        }
 
         for i, item in enumerate(data["form"]):
@@ -345,12 +390,14 @@ def visualize_funsd(src_dir: str):
 
 
 if __name__ == "__main__":
-    name = "train"
-    root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-    # root_dir = "/home/gbugaj/data/private/corr-indexer"
+    name = "test"
+    # root_dir = "/home/greg/dataset/assets-private/corr-indexer"
+    root_dir = "/home/gbugaj/data/private/corr-indexer"
+
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
 
     convert_coco_to_funsd(src_dir, dst_path)
+
     decorate_funsd(dst_path)
     visualize_funsd(dst_path)
