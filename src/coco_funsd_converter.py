@@ -112,6 +112,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     for question, answer in question_answer_map.items():
         ner_tags.append("B-" + question.upper())
         ner_tags.append("I-" + question.upper())
+
         ner_tags.append("B-" + answer.upper())
         ner_tags.append("I-" + answer.upper())
 
@@ -166,9 +167,12 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             category_name = cat_id_name[category_id]
 
             print(f"category_name => {category_name}")
-            label = "QUESTION"
-            if category_name.find("answer") > -1:
-                label = "ANSWER"
+
+            label = category_name
+            if False:
+                label = "QUESTION"
+                if category_name.find("answer") > -1:
+                    label = "ANSWER"
 
             item = {
                 "id": id_map[category_name],
@@ -318,6 +322,13 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
+        label2color = {"pan": "blue", "pan_answer": "green",
+                       "dos": "orange", "dos_answer": "violet",
+                       "member": "blue", "member_answer": "green",
+                       "member_number": "blue", "member_number_answer": "green",
+                       "member_name": "blue", "member_name_answer": "green",
+                       "patient_name": "blue", "patient_name_answer": "green",
+                       }
 
         for i, item in enumerate(data["form"]):
             print(item)
@@ -336,7 +347,7 @@ def visualize_funsd(src_dir: str):
 if __name__ == "__main__":
     name = "train"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-    root_dir = "/home/gbugaj/data/private/corr-indexer"
+    # root_dir = "/home/gbugaj/data/private/corr-indexer"
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
 
