@@ -54,12 +54,12 @@ def unnormalize_box(bbox, width, height):
     ]
 
 
-def normalize_box(bbox, width, height):
+def normalize_bbox(bbox, size):
     return [
-        width * (bbox[0] / 1000),
-        height * (bbox[1] / 1000),
-        width * (bbox[2] / 1000),
-        height * (bbox[3] / 1000),
+        int(1000 * bbox[0] / size[0]),
+        int(1000 * bbox[1] / size[1]),
+        int(1000 * bbox[2] / size[0]),
+        int(1000 * bbox[3] / size[1]),
     ]
 
 
@@ -170,8 +170,9 @@ def obtain_words(src_image):
     return result
 
 
-def main_image():
+def main_image(src_image):
     labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
+    labels = ['B-MEMBER_NAME', 'I-MEMBER_NAME', 'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER', 'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER', 'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER', 'B-PAN', 'I-PAN', 'B-PAN_ANSWER', 'I-PAN_ANSWER', 'B-DOS', 'I-DOS', 'B-DOS_ANSWER', 'I-DOS_ANSWER', 'B-PATIENT_NAME', 'I-PATIENT_NAME', 'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER']
     logger.info("Labels : {}", labels)
 
     id2label = {v: k for v, k in enumerate(labels)}
@@ -187,9 +188,10 @@ def main_image():
     tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
     processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
-    image = Image.open("/home/gbugaj/data/eval/funsd/__results___28_0.png").convert("RGB")
-    # image = Image.open('./document.png').convert("RGB")
+    image = Image.open(src_image).convert("RGB")
     image.show()
+
+    width, height = image.size
 
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -203,18 +205,23 @@ def main_image():
     word_labels = []
 
     for i, word in enumerate(results["words"]):
-        w_id = word["id"]
-        w_text = word["text"]
-        w_box = word["box"]
-        x, y, w, h = w_box
-        words.append(w_text)
-        boxes.append([x, y, x + w, y + h])
-        word_labels.append(0)
+        text = word["text"]
+        box = word["box"]
+        words.append(text)
+        box_norm = normalize_bbox(box, (width, height))
+        print(box)
+        print(box_norm)
+        boxes.append(box_norm)
+        word_labels.append(2)
+        # break
+
+
 
     # words = ["hello", "world", "Test"]
     # boxes = [[1, 2, 3, 4], [5, 6, 7, 8], [10, 10, 120, 40]]  # make sure to normalize your bounding boxes
-    # word_labels = [0, 1, 2]
+    # word_labels = [0, 1, 2, 3, 4 , 5, 6, 7, 8]
 
+    assert len(words) == len(boxes)
     print("?????")
 
     print(words)
@@ -236,7 +243,8 @@ def main_image():
         encoded_inputs[k] = v.to(device)
 
     # load the fine-tuned model from the hub
-    model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
+    # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
+    model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     model.to(device)
 
     # forward pass
@@ -268,7 +276,14 @@ def main_image():
         return label
 
     label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-
+    label2color = {"pan": "blue", "pan_answer": "green",
+                   "dos": "orange", "dos_answer": "violet",
+                   "member": "blue", "member_answer": "green",
+                   "member_number": "blue", "member_number_answer": "green",
+                   "member_name": "blue", "member_name_answer": "green",
+                   "patient_name": "blue", "patient_name_answer": "green",
+                   }
+    
     for prediction, box in zip(true_predictions, true_boxes):
         predicted_label = iob_to_label(prediction).lower()
         draw.rectangle(box, outline=label2color[predicted_label])
@@ -277,18 +292,32 @@ def main_image():
     image.show()
 
 
+def visualize_icr(image, icr_data):
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+
+    for i, item in enumerate(icr_data["words"]):
+        box = item["box"]
+        text = item["text"]
+        draw.rectangle(box, outline="red")
+        draw.text((box[0], box[1]), text=text, fill="blue", font=font)
+
+    image.show()
+
+
 if __name__ == "__main__":
 
     os.putenv("TOKENIZERS_PARALLELISM", "false")
     # main_dataset()
-    main_image()
+    image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
+    main_image(image_path)
 
     if False:
-        image_path = "/home/gbugaj/data/eval/funsd/__results___28_0.png"
-        # image_path = "/home/gbugaj/data/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
-        # image = cv2.imread(image_path)
-        # viewImage(image)
+        image = Image.open(image_path).convert("RGB")
+        results = from_json_file("/tmp/ocr-results.json")
+        visualize_icr(image, results)
 
+    if False:
         image = Image.open(image_path).convert("RGB")
         image.show()
 
@@ -297,19 +326,14 @@ if __name__ == "__main__":
         boxes = []
         word_labels = []
 
+        x0 = 0
+        y0 = 0
+
         for word in results["words"]:
-            w_id = word["id"]
-            w_text = word["id"]
-            w_box = word["box"]
-
-            words.append(w_text)
-            boxes.append(w_box)
-            word_labels.append(w_id)
-
+            x, y, w, h = word["box"]
+            w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
+            word["box"] = w_box
         print(results)
-        print(len(words))
-        print(len(boxes))
-        print(len(word_labels))
 
         json_path = os.path.join("/tmp/ocr-results.json")
         with open(json_path, "w") as json_file:
