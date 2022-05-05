@@ -158,10 +158,13 @@ pip install opencv-python==4.5.4.60
 
 [https://devonhubner.org/using_traefik_with_consul/](Consul / Traefik configuration)
 
-## Box Detection
+## Implement models
 
 Implement secondary box detection method.
 [TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
+
+Implement DocFormer: End-to-End Transformer for Document Understanding
+[DocFormer_End-to-End_Transforme](https://openaccess.thecvf.com/content/ICCV2021/papers/Appalaraju_DocFormer_End-to-End_Transformer_for_Document_Understanding_ICCV_2021_paper.pdf)
 
 
 ## Stream processing
@@ -173,7 +176,6 @@ Implement secondary box detection method.
 
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
-
 
 
 ## 
