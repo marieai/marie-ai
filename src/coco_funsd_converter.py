@@ -372,7 +372,7 @@ def visualize_funsd(src_dir: str):
                        "member_number": "blue", "member_number_answer": "green",
                        "member_name": "blue", "member_name_answer": "green",
                        "patient_name": "blue", "patient_name_answer": "green",
-                       "other":"red"
+                       "other": "red"
                        }
 
         for i, item in enumerate(data["form"]):
@@ -390,14 +390,13 @@ def visualize_funsd(src_dir: str):
 
 
 if __name__ == "__main__":
-    name = "test"
-    # root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-    root_dir = "/home/gbugaj/data/private/corr-indexer"
+    name = "train"
+    root_dir = "/home/greg/dataset/assets-private/corr-indexer"
+    # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
 
     convert_coco_to_funsd(src_dir, dst_path)
-
     decorate_funsd(dst_path)
     visualize_funsd(dst_path)
