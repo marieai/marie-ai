@@ -222,7 +222,13 @@ if __name__ == "__main__":
     os.putenv("TOKENIZERS_PARALLELISM", "false")
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/test_dataset-QA/images/152658533_2.png"
-    main_image(image_path)
+
+    # width, height = image.size
+    # w_scale = 1000 / width
+    # h_scale = 1000 / height
+    #
+    # main_image(image_path)
+
 
     if False:
         image = Image.open(image_path).convert("RGB")

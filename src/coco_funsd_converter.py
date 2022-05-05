@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -28,14 +29,38 @@ def from_json_file(filename):
         return data
 
 
-# https://stackoverflow.com/questions/23853632/which-kind-of-interpolation-best-for-resizing-image
-def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
+def __scale_heightXX(img, target_size, crop_size, method=Image.LANCZOS):
     ow, oh = img.size
     scale = oh / target_size
     print(scale)
     w = ow / scale
     h = target_size  # int(max(oh / scale, crop_size))
-    return img.resize((int(w), int(h)), method)
+    resized = img.resize((int(w), int(h)), method)
+    return resized, resized.size
+
+
+def __scale_height(img, target_size=1000, method=Image.LANCZOS):
+    ow, oh = img.size
+    old_size = (ow, oh)
+
+    # paste the image if the width or height is smaller than the requested target size
+    if max((ow, oh)) < target_size:
+        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
+        new_im.paste(img)
+        return new_im, new_im.size
+
+    ratio = float(target_size) / max((ow, oh))
+    new_size = tuple([int(x * ratio) for x in old_size])
+    resized = img.resize(new_size, method)
+
+    # if resized height is less than target then we pad it
+    rw, rh = resized.size
+    if rh < target_size:
+        new_im = Image.new("RGB", (target_size, target_size), color=(255, 255, 255))
+        new_im.paste(resized)
+        return new_im, new_im.size
+
+    return resized, resized.size
 
 
 def load_image(image_path):
@@ -287,7 +312,6 @@ def decorate_funsd(src_dir: str):
             item["words"] = words
             item["text"] = text
 
-
         # create masked image for OTHER label
         image_masked, _ = load_image(image_path)
         index = 0
@@ -303,7 +327,7 @@ def decorate_funsd(src_dir: str):
 
         boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
 
-        print('>>>>>>>>>>>>>')
+        print(">>>>>>>>>>>>>")
         print(results_masked)
         print(data)
 
@@ -351,6 +375,8 @@ def visualize_funsd(src_dir: str):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         file_path = os.path.join(ann_dir, file)
+
+        print(f"file_path : {file_path}")
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
 
@@ -366,20 +392,27 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-        label2color = {"pan": "blue", "pan_answer": "green",
-                       "dos": "orange", "dos_answer": "violet",
-                       "member": "blue", "member_answer": "green",
-                       "member_number": "blue", "member_number_answer": "green",
-                       "member_name": "blue", "member_name_answer": "green",
-                       "patient_name": "blue", "patient_name_answer": "green",
-                       "other": "red"
-                       }
+        label2color = {
+            "pan": "blue",
+            "pan_answer": "green",
+            "dos": "orange",
+            "dos_answer": "violet",
+            "member": "blue",
+            "member_answer": "green",
+            "member_number": "blue",
+            "member_number_answer": "green",
+            "member_name": "blue",
+            "member_name_answer": "green",
+            "patient_name": "blue",
+            "patient_name_answer": "green",
+            "other": "red",
+        }
 
         for i, item in enumerate(data["form"]):
-            print(item)
+            # print(item)
             box = item["box"]
             predicted_label = item["label"].lower()
-            draw.rectangle(box, outline=label2color[predicted_label], width=2)
+            draw.rectangle(box, outline=label2color[predicted_label], width=1)
             draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font)
 
             for word in item["words"]:
@@ -388,15 +421,96 @@ def visualize_funsd(src_dir: str):
 
         image.save(f"/tmp/snippet/viz_{filename}.png")
 
+        break
+
+
+@lru_cache(maxsize=10)
+def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
+    x_scale = target_w / orig_w
+    y_scale = target_h / orig_h
+    orig_left, orig_top, orig_right, orig_bottom = bbox
+    x = int(np.round(orig_left * x_scale))
+    y = int(np.round(orig_top * y_scale))
+    xmax = int(np.round(orig_right * x_scale))
+    ymax = int(np.round(orig_bottom * y_scale))
+    return [x, y, xmax, ymax]
+
+
+def rescale_annotation_frame(src_json_path, src_image_path):
+    print(f"Recalling annotation json: {src_json_path}")
+    print(f"Recalling annotation frame: {src_image_path}")
+
+    filename = src_image_path.split("/")[-1].split(".")[0]
+    image, orig_size = load_image_pil(src_image_path)
+    resized, target_size = __scale_height(image, 1000)
+    resized.save(f"/tmp/snippet/resized_{filename}.png")
+
+    print(f"orig_size   = {orig_size}")
+    print(f"target_size = {target_size}")
+    orig_w, orig_h = orig_size
+    target_w, target_h = target_size
+    data = from_json_file(src_json_path)
+
+    for i, item in enumerate(data["form"]):
+        bbox = tuple(item["box"])  # np.array(item["box"]).astype(np.int32)
+        item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+        for word in item["words"]:
+            bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
+            word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+
+    return data, resized
+
+
+def rescale_annotate_frames(src_dir: str, dest_dir: str):
+    ann_dir = os.path.join(src_dir, "annotations")
+    img_dir = os.path.join(src_dir, "images")
+
+    ann_dir_dest = ensure_exists(os.path.join(dest_dir, "annotations"))
+    img_dir_dest = ensure_exists(os.path.join(dest_dir, "images"))
+
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        json_path = os.path.join(ann_dir, file)
+        filename = file.split("/")[-1].split(".")[0]
+        image_path = os.path.join(img_dir, file)
+        image_path = image_path.replace("json", "png")
+        print(f"filename : {filename}")
+        print(f"json_path : {json_path}")
+        print(f"image_path : {image_path}")
+
+        data, image = rescale_annotation_frame(json_path, image_path)
+
+        json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
+        image_path_dest = os.path.join(img_dir_dest,  f"{filename}.png")
+
+        # save image and json data
+        image.save(image_path_dest)
+
+        with open(json_path_dest, "w") as json_file:
+            json.dump(
+                data,
+                json_file,
+                sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=4,
+                cls=NumpyEncoder,
+            )
+
+        break
+
 
 if __name__ == "__main__":
-    name = "train"
+    name = "test"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-    # root_dir = "/home/gbugaj/data/private/corr-indexer"
+    root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
+    aligned_dst_path = os.path.join("/tmp/snippet/converted", "dataset", f"{name}_dataset")
 
-    convert_coco_to_funsd(src_dir, dst_path)
-    decorate_funsd(dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
+    # decorate_funsd(dst_path)
+
     visualize_funsd(dst_path)
+    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    visualize_funsd(aligned_dst_path)
