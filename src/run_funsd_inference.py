@@ -118,22 +118,16 @@ def main_image(src_image):
 
     words = []
     boxes = []
-    word_labels = []
-
     for i, word in enumerate(results["words"]):
         words.append( word["text"])
         box_norm = normalize_bbox(word["box"], (width, height))
         boxes.append(box_norm)
 
-    word_labels = ["O", 'B-MEMBER_NAME', 'I-MEMBER_NAME', 'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER', 'B-MEMBER_NUMBER',
-             'I-MEMBER_NUMBER', 'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER', 'B-PAN', 'I-PAN', 'B-PAN_ANSWER',
-             'I-PAN_ANSWER', 'B-DOS', 'I-DOS', 'B-DOS_ANSWER', 'I-DOS_ANSWER', 'B-PATIENT_NAME', 'I-PATIENT_NAME',
-             'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER']
+
 
     assert len(words) == len(boxes)
     print(words)
     print(boxes)
-    print(word_labels)
 
     encoded_inputs = processor(image, words, boxes=boxes, return_tensors="pt")
     expected_keys = ["attention_mask", "bbox", "image", "input_ids", "token_type_ids"]
@@ -152,7 +146,6 @@ def main_image(src_image):
 
     # load the fine-tuned model from the hub
     model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
-
     model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     model.to(device)
 
@@ -170,9 +163,6 @@ def main_image(src_image):
 
     true_predictions = [id2label[prediction] for prediction in predictions]
     true_boxes = [unnormalize_box(box, width, height) for box in token_boxes]
-
-    # true_predictions = [id2label[prediction] for prediction, label in zip(predictions, labels) if label != -100]
-    # true_boxes = [unnormalize_box(box, width, height) for box, label in zip(token_boxes, labels) if label != -100]
 
     print(true_predictions)
     print(true_boxes)
@@ -222,13 +212,9 @@ if __name__ == "__main__":
     os.putenv("TOKENIZERS_PARALLELISM", "false")
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/test_dataset-QA/images/152658533_2.png"
+    image_path = "/home/greg/dataset/assets-private/corr-indexer-converted/dataset/test_dataset/images/152658533_2.png"
 
-    # width, height = image.size
-    # w_scale = 1000 / width
-    # h_scale = 1000 / height
-    #
-    # main_image(image_path)
-
+    main_image(image_path)
 
     if False:
         image = Image.open(image_path).convert("RGB")
