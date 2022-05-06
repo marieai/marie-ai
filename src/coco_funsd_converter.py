@@ -29,7 +29,7 @@ def from_json_file(filename):
         return data
 
 
-def __scale_heightXX(img, target_size, crop_size, method=Image.LANCZOS):
+def __scale_height(img, target_size, method=Image.LANCZOS):
     ow, oh = img.size
     scale = oh / target_size
     print(scale)
@@ -39,7 +39,7 @@ def __scale_heightXX(img, target_size, crop_size, method=Image.LANCZOS):
     return resized, resized.size
 
 
-def __scale_height(img, target_size=1000, method=Image.LANCZOS):
+def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
     ow, oh = img.size
     old_size = (ow, oh)
 
@@ -56,11 +56,36 @@ def __scale_height(img, target_size=1000, method=Image.LANCZOS):
     # if resized height is less than target then we pad it
     rw, rh = resized.size
     if rh < target_size:
-        new_im = Image.new("RGB", (target_size, target_size), color=(255, 255, 255))
+        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
         new_im.paste(resized)
         return new_im, new_im.size
 
     return resized, resized.size
+
+
+def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
+    ow, oh = img.size
+    old_size = (ow, oh)
+
+    # paste the image if the width or height is smaller than the requested target size
+    if max((ow, oh)) < target_size:
+        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
+        new_im.paste(img)
+        return new_im, new_im.size
+
+    ratio = float(target_size) / max((ow, oh))
+    new_size = tuple([int(x * ratio) for x in old_size])
+    resized = img.resize(new_size, method)
+
+    # if resized height is less than target then we pad it
+    rw, rh = resized.size
+    if rh < target_size:
+        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
+        new_im.paste(resized)
+        return new_im, new_im.size
+
+    return resized, resized.size
+
 
 
 def load_image(image_path):
@@ -392,7 +417,7 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-        label2color = {
+        label2colorXXX = {
             "pan": "blue",
             "pan_answer": "green",
             "dos": "orange",
@@ -420,8 +445,6 @@ def visualize_funsd(src_dir: str):
                 draw.rectangle(box, outline="red")
 
         image.save(f"/tmp/snippet/viz_{filename}.png")
-
-        break
 
 
 @lru_cache(maxsize=10)
@@ -462,6 +485,7 @@ def rescale_annotation_frame(src_json_path, src_image_path):
 
 
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
+
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
 
@@ -473,11 +497,21 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
         filename = file.split("/")[-1].split(".")[0]
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
+
+        if False and filename != "152618378_2":
+            continue
+        # 152630220_3  152618378_2 152618400  152624795_3
         print(f"filename : {filename}")
         print(f"json_path : {json_path}")
         print(f"image_path : {image_path}")
 
         data, image = rescale_annotation_frame(json_path, image_path)
+
+        # Figure out how to handle this
+        # if the width > 1000 SKIP for now
+        if max(image.size) > 1000:
+            print(f"Skipping image due to size[{image.size}] : {filename}")
+            continue
 
         json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
         image_path_dest = os.path.join(img_dir_dest,  f"{filename}.png")
@@ -496,21 +530,22 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
                 cls=NumpyEncoder,
             )
 
-        break
-
 
 if __name__ == "__main__":
     name = "test"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-    root_dir = "/home/gbugaj/data/private/corr-indexer"
+    root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
+    # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
-    aligned_dst_path = os.path.join("/tmp/snippet/converted", "dataset", f"{name}_dataset")
+    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}_dataset")
 
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
 
-    visualize_funsd(dst_path)
-    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    visualize_funsd(aligned_dst_path)
+    # visualize_funsd(dst_path)
+
+    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    # visualize_funsd(aligned_dst_path)
+    visualize_funsd("/home/greg/dataset/funsd/dataset/testing_data")
