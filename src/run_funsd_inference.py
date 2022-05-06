@@ -18,6 +18,7 @@ from PIL import Image
 from transformers import LayoutLMv2Processor, LayoutLMv2FeatureExtractor, LayoutLMv2ForTokenClassification, \
     LayoutLMv2TokenizerFast
 
+# https://programtalk.com/vs4/python/huggingface/transformers/tests/layoutlmv2/test_processor_layoutlmv2.py/
 # https://github.com/huggingface/transformers/blob/d3ae2bd3cf9fc1c3c9c9279a8bae740d1fd74f34/tests/layoutlmv2/test_processor_layoutlmv2.py
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -86,8 +87,8 @@ def obtain_words(src_image):
 
 
 def main_image(src_image):
-    labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
-    # labels = ["O", 'B-MEMBER_NAME', 'I-MEMBER_NAME', 'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER', 'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER', 'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER', 'B-PAN', 'I-PAN', 'B-PAN_ANSWER', 'I-PAN_ANSWER', 'B-DOS', 'I-DOS', 'B-DOS_ANSWER', 'I-DOS_ANSWER', 'B-PATIENT_NAME', 'I-PATIENT_NAME', 'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER']
+    # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
+    labels = ["O", 'B-MEMBER_NAME', 'I-MEMBER_NAME', 'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER', 'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER', 'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER', 'B-PAN', 'I-PAN', 'B-PAN_ANSWER', 'I-PAN_ANSWER', 'B-DOS', 'I-DOS', 'B-DOS_ANSWER', 'I-DOS_ANSWER', 'B-PATIENT_NAME', 'I-PATIENT_NAME', 'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER']
     logger.info("Labels : {}", labels)
 
     id2label = {v: k for v, k in enumerate(labels)}
@@ -103,6 +104,9 @@ def main_image(src_image):
     tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
     processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
+    # Display vocabulary
+    # print(tokenizer.get_vocab())
+    
     image = Image.open(src_image).convert("RGB")
     image.show()
 
@@ -119,10 +123,9 @@ def main_image(src_image):
     words = []
     boxes = []
     for i, word in enumerate(results["words"]):
-        words.append( word["text"])
+        words.append(word["text"].lower())
         box_norm = normalize_bbox(word["box"], (width, height))
         boxes.append(box_norm)
-
 
 
     assert len(words) == len(boxes)
@@ -139,14 +142,15 @@ def main_image(src_image):
     # for key in expected_keys:
     #     print(encoded_inputs[key])
 
-    # labels = encoded_inputs.pop("labels").squeeze().tolist()
-    # labels = encoded_inputs.pop("token_type_ids").squeeze().tolist()
     for k, v in encoded_inputs.items():
         encoded_inputs[k] = v.to(device)
 
     # load the fine-tuned model from the hub
-    model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
-    model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
+    # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
+    # model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
+    # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
+    model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch_epoch_1.pth")
+
     model.to(device)
 
     # forward pass
@@ -210,9 +214,13 @@ def visualize_icr(image, icr_data):
 
 if __name__ == "__main__":
     os.putenv("TOKENIZERS_PARALLELISM", "false")
+
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/test_dataset-QA/images/152658533_2.png"
     image_path = "/home/greg/dataset/assets-private/corr-indexer-converted/dataset/test_dataset/images/152658533_2.png"
+
+    image_path = "/tmp/snippet/resized_152625510_2.png"
+    
 
     main_image(image_path)
 
@@ -250,3 +258,4 @@ if __name__ == "__main__":
                 indent=4,
                 cls=NumpyEncoder,
             )
+

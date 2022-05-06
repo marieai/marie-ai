@@ -408,7 +408,6 @@ def visualize_funsd(src_dir: str):
         filename = file.split("/")[-1].split(".")[0]
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
-        print(data)
         print(f"image_path : {image_path}")
         print(f"filename : {filename}")
         image, size = load_image_pil(image_path)
@@ -417,7 +416,7 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-        label2colorXXX = {
+        label2color = {
             "pan": "blue",
             "pan_answer": "green",
             "dos": "orange",
@@ -532,9 +531,14 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "test"
+    name = "train"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
+
+
+    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    
     # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
@@ -546,6 +550,6 @@ if __name__ == "__main__":
 
     # visualize_funsd(dst_path)
 
-    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    # visualize_funsd(aligned_dst_path)
-    visualize_funsd("/home/greg/dataset/funsd/dataset/testing_data")
+    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    visualize_funsd(aligned_dst_path)
+    # visualize_funsd("/home/greg/dataset/funsd/dataset/testing_data")
