@@ -83,6 +83,7 @@ def obtain_words(src_image):
 
     print(boxes)
     print(result)
+
     return result
 
 
@@ -97,12 +98,12 @@ def main_image(src_image):
     # prepare for the model
     # we do not want to use the pytesseract
     # LayoutLMv2FeatureExtractor requires the PyTesseract library but it was not found in your environment. You can install it with pip:
-    # processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
+    processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
 
-    # Create Layout processor with custom future extractor
-    feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
-    processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    # Method:2 Create Layout processor with custom future extractor
+    # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+    # tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
+    # processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     # Display vocabulary
     # print(tokenizer.get_vocab())
@@ -117,7 +118,7 @@ def main_image(src_image):
 
     ## Need to obtain boxes and OCR for the document
 
-    results = from_json_file("/tmp/ocr-results.json")
+    results = from_json_file("/tmp/ocr-results.json") 
     # results = obtain_words(image)
 
     words = []
@@ -139,17 +140,22 @@ def main_image(src_image):
     print("Expected Keys : ", expected_keys)
     print("Actual Keys : ", actual_keys)
 
-    # for key in expected_keys:
-    #     print(encoded_inputs[key])
+    for key in expected_keys:
+        print(f"key: {key}")
+        print(encoded_inputs[key])
 
     for k, v in encoded_inputs.items():
-        encoded_inputs[k] = v.to(device)
+        encoded_inputs[k] = v.to(device) 
 
     # load the fine-tuned model from the hub
     # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
+    # model = LayoutLMv2ForTokenClassification.from_pretrained("/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints")
+    # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord")
+    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-500")
+
     # model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
-    model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch_epoch_1.pth")
+    # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch_epoch_1.pth")
 
     model.to(device)
 
@@ -157,6 +163,7 @@ def main_image(src_image):
     outputs = model(**encoded_inputs)
     print(outputs.logits.shape)
 
+    
     # Let's create the true predictions, true labels (in terms of label names) as well as the true boxes.
 
     # predictions
@@ -182,7 +189,7 @@ def main_image(src_image):
 
     label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
 
-    label2colorXX = {"pan": "blue", "pan_answer": "green",
+    label2colorXXX = {"pan": "blue", "pan_answer": "green",
                    "dos": "orange", "dos_answer": "violet",
                    "member": "blue", "member_answer": "green",
                    "member_number": "blue", "member_number_answer": "green",
@@ -216,12 +223,9 @@ if __name__ == "__main__":
     os.putenv("TOKENIZERS_PARALLELISM", "false")
 
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
-    image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/test_dataset-QA/images/152658533_2.png"
-    image_path = "/home/greg/dataset/assets-private/corr-indexer-converted/dataset/test_dataset/images/152658533_2.png"
+    image_path = "/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/152658535_2.png"
 
-    image_path = "/tmp/snippet/resized_152625510_2.png"
-    
-
+    # image_path = "/tmp/snippet/resized_152625510_2.png"
     main_image(image_path)
 
     if False:
