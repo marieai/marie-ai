@@ -151,7 +151,7 @@ def main_image(src_image):
     # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
     # model = LayoutLMv2ForTokenClassification.from_pretrained("/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints")
     # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord")
-    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-500")
+    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-3000")
 
     # model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
@@ -189,7 +189,7 @@ def main_image(src_image):
 
     label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
 
-    label2colorXXX = {"pan": "blue", "pan_answer": "green",
+    label2color = {"pan": "blue", "pan_answer": "green",
                    "dos": "orange", "dos_answer": "violet",
                    "member": "blue", "member_answer": "green",
                    "member_number": "blue", "member_number_answer": "green",
@@ -199,9 +199,14 @@ def main_image(src_image):
                    }
 
     for prediction, box in zip(true_predictions, true_boxes):
+        # don't draw other 
+        label = prediction[2:]
+        if not label:
+            continue
+
         predicted_label = iob_to_label(prediction).lower()
-        draw.rectangle(box, outline=label2color[predicted_label])
-        draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font)
+        draw.rectangle(box, outline=label2color[predicted_label], width=1)
+        draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font, width=1)
 
     image.show()
 
