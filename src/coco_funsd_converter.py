@@ -416,7 +416,7 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-        label2color = {
+        label2colorXXX = {
             "pan": "blue",
             "pan_answer": "green",
             "dos": "orange",
@@ -448,6 +448,8 @@ def visualize_funsd(src_dir: str):
 
 @lru_cache(maxsize=10)
 def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
+    clip_to_y = 1000
+
     x_scale = target_w / orig_w
     y_scale = target_h / orig_h
     orig_left, orig_top, orig_right, orig_bottom = bbox
@@ -455,7 +457,7 @@ def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
     y = int(np.round(orig_top * y_scale))
     xmax = int(np.round(orig_right * x_scale))
     ymax = int(np.round(orig_bottom * y_scale))
-    return [x, y, xmax, ymax]
+    return [x, y, xmax, min(ymax, clip_to_y)]
 
 
 def rescale_annotation_frame(src_json_path, src_image_path):
@@ -465,7 +467,7 @@ def rescale_annotation_frame(src_json_path, src_image_path):
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
     resized, target_size = __scale_height(image, 1000)
-    resized.save(f"/tmp/snippet/resized_{filename}.png")
+    # resized.save(f"/tmp/snippet/resized_{filename}.png")
 
     print(f"orig_size   = {orig_size}")
     print(f"target_size = {target_size}")
@@ -531,7 +533,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "train"
+    name = "test"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
 
@@ -542,14 +544,16 @@ if __name__ == "__main__":
     # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
-    dst_path = os.path.join(root_dir, "dataset", f"{name}_dataset")
-    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}_dataset")
+    dst_path = os.path.join(root_dir, "dataset", f"{name}ing_dataset")
+    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_dataset")
 
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
 
     # visualize_funsd(dst_path)
 
-    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    visualize_funsd(aligned_dst_path)
+    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    # visualize_funsd(aligned_dst_path)
     # visualize_funsd("/home/greg/dataset/funsd/dataset/testing_data")
+    visualize_funsd("/home/gbugaj/dataset/funsd/dataset/testing_data")
+    
