@@ -1,3 +1,4 @@
+import glob
 import io
 import json
 
@@ -68,23 +69,30 @@ def iob_to_label(label):
     return label
 
 
-
 def obtain_words(src_image):
     image = read_image(src_image)
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     key = "funsd"
     boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
-    result, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
+    results, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
 
     print(boxes)
-    print(result)
+    print(results)
+    # change from xywy -> xyxy
+    x0 = 0
+    y0 = 0
 
-    return result
+    for word in results["words"]:
+        x, y, w, h = word["box"]
+        w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
+        word["box"] = w_box
+
+    return results
 
 
 def main_image(src_image):
@@ -107,7 +115,7 @@ def main_image(src_image):
 
     # Display vocabulary
     # print(tokenizer.get_vocab())
-    
+
     image = Image.open(src_image).convert("RGB")
     image.show()
 
@@ -117,8 +125,18 @@ def main_image(src_image):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ## Need to obtain boxes and OCR for the document
+    from pathlib import Path
+    home = str(Path.home())
+    ocr_output_dir = os.path.join(home, '.marie')
 
-    results = from_json_file("/tmp/ocr-results.json") 
+    print(f"output dir : {ocr_output_dir}")
+    filename = src_image.split("/")[-1]
+    json_path = os.path.join(home, '.marie', f'{filename}.json')
+
+    if not os.path.exists(json_path):
+        raise Exception("OCR File not found")
+    results = from_json_file("/tmp/ocr-results.json")
+    # results = from_json_file(json_path)
     # results = obtain_words(image)
 
     words = []
@@ -145,25 +163,28 @@ def main_image(src_image):
         print(encoded_inputs[key])
 
     for k, v in encoded_inputs.items():
-        encoded_inputs[k] = v.to(device) 
+        encoded_inputs[k] = v.to(device)
+
+    from pathlib import Path
+    home = str(Path.home())
+    model_dir = os.path.join(home, './tmp/models/layoutlmv2-finetuned-gb', "checkpoint-15500")
+    model_dir = "/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000"
+    print(f"output dir : {model_dir}")
 
     # load the fine-tuned model from the hub
-    # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
-    # model = LayoutLMv2ForTokenClassification.from_pretrained("/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints")
     # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord")
-    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000")
-
+    # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000")
     # model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch_epoch_1.pth")
 
+    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
     model.to(device)
 
     # forward pass
     outputs = model(**encoded_inputs)
     print(outputs.logits.shape)
 
-    
     # Let's create the true predictions, true labels (in terms of label names) as well as the true boxes.
 
     # predictions
@@ -203,7 +224,6 @@ def main_image(src_image):
         label = prediction[2:]
         if not label:
             continue
-
         predicted_label = iob_to_label(prediction).lower()
         draw.rectangle(box, outline=label2color[predicted_label], width=1)
         draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font, width=1)
@@ -218,42 +238,101 @@ def visualize_icr(image, icr_data):
     for i, item in enumerate(icr_data["words"]):
         box = item["box"]
         text = item["text"]
-        draw.rectangle(box, outline="red")
-        draw.text((box[0], box[1]), text=text, fill="blue", font=font)
+        draw.rectangle(box, outline="red", width=1)
+        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=1)
 
     image.show()
 
 
+def hash_file(filename):
+   """"This function returns the SHA-1 hash
+   of the file passed into it"""
+   import hashlib
+
+   # make a hash object
+   h = hashlib.sha1()
+
+   # open file for reading in binary mode
+   with open(filename,'rb') as file:
+
+       # loop till the end of the file
+       chunk = 0
+       while chunk != b'':
+           # read only 1024 bytes at a time
+           chunk = file.read(1024)
+           h.update(chunk)
+
+   # return the hex representation of digest
+   return h.hexdigest()
+
+
+def ocr_dir(src_dir):
+    from pathlib import Path
+    home = str(Path.home())
+    output_dir = os.path.join(home, '.marie')
+
+    print(f"output dir : {output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    for idx, _path in enumerate(glob.glob(os.path.join(src_dir, "*.png"))):
+        filename = _path.split("/")[-1]
+        json_path = os.path.join(home, '.marie', f'{filename}.json')
+        print(f" : {_path}")
+        print(f" : {filename}")
+        print(f" : {json_path}")
+        image = Image.open(image_path).convert("RGB")
+        # image.show()
+        results = obtain_words(image)
+        print(results)
+
+        # json_path = os.path.join("/tmp/ocr-results.json")
+        with open(json_path, "w") as json_file:
+            json.dump(
+                results,
+                json_file,
+                sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=4,
+                cls=NumpyEncoder,
+            )
+    return
+
+
+
 if __name__ == "__main__":
     os.putenv("TOKENIZERS_PARALLELISM", "false")
-
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
     image_path = "/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/152658535_2.png"
+    image_path = "/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/152658533_2.png"
 
-    # image_path = "/tmp/snippet/resized_152625510_2.png"
+    fname = "152658561_4.png"
+    image_path = f"/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/{fname}"
+    json_path = f"/home/greg/.marie/{fname}.json"
+    json_path = f"/tmp/ocr-results.json"
+
     main_image(image_path)
+
+    # message = hash_file(image_path)
+    # print(message)
+    # ocr_dir("/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images")
 
     if False:
         image = Image.open(image_path).convert("RGB")
-        results = from_json_file("/tmp/ocr-results.json")
+        results = from_json_file(json_path)
         visualize_icr(image, results)
 
     if False:
         image = Image.open(image_path).convert("RGB")
         image.show()
-
         results = obtain_words(image)
-        words = []
-        boxes = []
-        word_labels = []
-
-        x0 = 0
-        y0 = 0
-
-        for word in results["words"]:
-            x, y, w, h = word["box"]
-            w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-            word["box"] = w_box
+        # x0 = 0
+        # y0 = 0
+        #
+        # for word in results["words"]:
+        #     x, y, w, h = word["box"]
+        #     w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
+        #     word["box"] = w_box
         print(results)
 
         json_path = os.path.join("/tmp/ocr-results.json")
@@ -268,3 +347,6 @@ if __name__ == "__main__":
                 cls=NumpyEncoder,
             )
 
+        visualize_icr(image, results)
+
+# happy gra day love from izabella
