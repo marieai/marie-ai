@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import os
+import random
 import shutil
 from functools import lru_cache
 
@@ -85,7 +86,6 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
         return new_im, new_im.size
 
     return resized, resized.size
-
 
 
 def load_image(image_path):
@@ -218,12 +218,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             category_name = cat_id_name[category_id]
 
             print(f"category_name => {category_name}")
-
             label = category_name
-            if False:
-                label = "QUESTION"
-                if category_name.find("answer") > -1:
-                    label = "ANSWER"
 
             item = {
                 "id": id_map[category_name],
@@ -250,7 +245,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         # copy and resize to 1000 H
         shutil.copyfile(src_img_path, dst_img_path)
         print(form_dict)
-        # break
+        break
 
 
 def normalize_bbox(bbox, size):
@@ -388,6 +383,136 @@ def decorate_funsd(src_dir: str):
         # break
 
 
+def augment_decorated_anotation(src_dir: str):
+    work_dir_boxes = ensure_exists("/tmp/boxes")
+    work_dir_icr = ensure_exists("/tmp/icr")
+    output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations_aug"))
+
+    logger.info("⏳ Generating examples from = %s", src_dir)
+    # ann_dir = os.path.join(src_dir, "annotations_tmp")
+    ann_dir = os.path.join(src_dir, "annotations")
+    img_dir = os.path.join(src_dir, "images")
+
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        file_path = os.path.join(ann_dir, file)
+        print(f"File: {file_path}")
+        with open(file_path, "r", encoding="utf8") as f:
+            data = json.load(f)
+        image_path = os.path.join(img_dir, file)
+        image_path = image_path.replace("json", "png")
+        image, size = load_image(image_path)
+        # create masked image for OTHER label
+        # image_masked, _ = load_image(image_path)
+
+        image_masked, size = load_image_pil(image_path)
+        draw = ImageDraw.Draw(image_masked)
+        font = ImageFont.load_default()
+
+        fontFace = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
+        fontPath = os.path.join("./assets/fonts", "FreeMono.ttf")
+
+        from faker import Faker
+
+        fake = Faker()
+
+        index = 0
+        for i, item in enumerate(data["form"]):
+            label = item["label"]
+            if label == "other" or not label.endswith("_answer"):
+                continue
+
+            index = label.endswith("_answer")
+            # pan_answer  dos_answer member_number_answer
+            print(item)
+            print(index)
+            # format : x0,y0,x1,y1
+            box = np.array(item["box"]).astype(np.int32)
+            x0, y0, x1, y1 = box
+            w = x1 - x0
+            h = y1 - y0
+            xoffset = 5
+            yoffset = 0
+
+            label_text = ""
+            if label == "dos_answer":
+                # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
+                patterns = [
+                    "%Y%m%d",
+                    "%Y-%m-%d",
+                    "%Y/%m/%d",
+                    "%d/%m/%Y",
+                    "%m/%d/%Y",
+                    "%d.%m.%Y",
+                    "%d %B %Y",
+                    "%b %d, %Y",
+                ]
+                label_text = fake.date(pattern=random.choice(patterns))
+
+            if label == "pan_answer":
+                label_text = fake.isbn10()
+            if label == "member_number_answer":
+                label_text = fake.ean(length=8, prefixes=("45", "49"))
+
+            if label == "member_name_answer" or label == "patient_name_answer":
+                label_text = fake.name()
+
+            # name, date, ssn, isbn10
+            print(f"{box}  : {w} , {h}")
+            # x0, y0, x1, y1 = xy
+            # Generate text inside image
+            font_size = int(h * 0.95)
+            font = ImageFont.truetype(fontPath, font_size)
+            ascent, descent = font.getmetrics()
+            (width, baseline), (offset_x, offset_y) = font.font.getsize(label_text)
+            fw, fh = draw.textsize(label_text, font=font)
+            print(f" {width}  : {fw}, {fh}")
+
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="blue", font=font, stroke_fill=5)
+            index = i + 1
+
+            img1 = Image.new("RGB", (w, h), (255, 255, 255))
+            img1.save(os.path.join("/tmp/snippet", f"{guid}-{index}masked_gen.png"))
+            # break
+
+        image_masked.save(os.path.join("/tmp/snippet", f"{guid}-masked_gen.png"))
+        # cv2.imwrite(file_path, image_masked)
+
+        print(">>>>>>>>>>>>>")
+        print(data)
+        #
+        # x0 = 0
+        # y0 = 0
+        # for i, word in enumerate(results_masked["words"]):
+        #     w_text = word["text"]
+        #     x, y, w, h = word["box"]
+        #     w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
+        #     adj_word = {"text": w_text, "box": w_box}
+        #     item = {
+        #         "id": index + i,
+        #         "text": w_text,
+        #         "box": w_box,
+        #         "linking": [],
+        #         "label": "other",
+        #         "words": [adj_word],
+        #     }
+        #     data["form"].append(item)
+        #
+        # json_path = os.path.join(output_ann_dir, file)
+        # with open(json_path, "w") as json_file:
+        #     json.dump(
+        #         data,
+        #         json_file,
+        #         sort_keys=True,
+        #         separators=(",", ": "),
+        #         ensure_ascii=False,
+        #         indent=4,
+        #         cls=NumpyEncoder,
+        #     )
+
+        break
+
+
 def load_image_pil(image_path):
     image = Image.open(image_path).convert("RGB")
     w, h = image.size
@@ -515,7 +640,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             continue
 
         json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
-        image_path_dest = os.path.join(img_dir_dest,  f"{filename}.png")
+        image_path_dest = os.path.join(img_dir_dest, f"{filename}.png")
 
         # save image and json data
         image.save(image_path_dest)
@@ -537,8 +662,8 @@ if __name__ == "__main__":
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
 
-    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
     #
     # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
@@ -546,9 +671,9 @@ if __name__ == "__main__":
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
     aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
 
-    convert_coco_to_funsd(src_dir, dst_path)
-    decorate_funsd(dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
+    # decorate_funsd(dst_path)
+    augment_decorated_anotation(dst_path)
 
-    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    visualize_funsd(aligned_dst_path)
-
+    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    # visualize_funsd(aligned_dst_path)
