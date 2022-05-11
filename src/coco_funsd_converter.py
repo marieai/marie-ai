@@ -416,7 +416,7 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
-        label2colorXXX = {
+        label2color = {
             "pan": "blue",
             "pan_answer": "green",
             "dos": "orange",
@@ -537,23 +537,18 @@ if __name__ == "__main__":
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
 
-
-    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
-    
+    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    #
     # root_dir = "/home/gbugaj/data/private/corr-indexer"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
-    dst_path = os.path.join(root_dir, "dataset", f"{name}ing_dataset")
-    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_dataset")
+    dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
+    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
 
-    # convert_coco_to_funsd(src_dir, dst_path)
-    # decorate_funsd(dst_path)
+    convert_coco_to_funsd(src_dir, dst_path)
+    decorate_funsd(dst_path)
 
-    # visualize_funsd(dst_path)
+    rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
+    visualize_funsd(aligned_dst_path)
 
-    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    # visualize_funsd(aligned_dst_path)
-    # visualize_funsd("/home/greg/dataset/funsd/dataset/testing_data")
-    visualize_funsd("/home/gbugaj/dataset/funsd/dataset/testing_data")
-    
