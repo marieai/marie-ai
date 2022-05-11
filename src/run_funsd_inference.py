@@ -151,7 +151,7 @@ def main_image(src_image):
     # model = LayoutLMv2ForTokenClassification.from_pretrained("nielsr/layoutlmv2-finetuned-funsd")
     # model = LayoutLMv2ForTokenClassification.from_pretrained("/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints")
     # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord")
-    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-3000")
+    model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000")
 
     # model = torch.load("/home/greg/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
     # model = torch.load("/home/gbugaj/dev/unilm/layoutlmft/examples/tuned/layoutlmv2-finetuned-funsd-torch.pth")
