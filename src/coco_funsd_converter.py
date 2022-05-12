@@ -1,9 +1,11 @@
+import copy
 import io
 import json
 import logging
 import os
 import random
 import shutil
+import uuid
 from functools import lru_cache
 
 import cv2
@@ -17,6 +19,9 @@ from boxes.craft_box_processor import BoxProcessorCraft
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from numpyencoder import NumpyEncoder
 from utils.utils import ensure_exists
+
+from faker.providers import BaseProvider
+from faker import Faker
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
@@ -383,33 +388,71 @@ def decorate_funsd(src_dir: str):
         # break
 
 
-
 def generate_pan(num_char):
     import string
+
     letters = string.ascii_letters.lower()
     if np.random.choice([0, 1], p=[0.5, 0.5]):
         letters = string.digits
     if np.random.choice([0, 1], p=[0.5, 0.5]):
         letters = letters.upper()
-    prefix = ''.join(random.choice(letters) for i in range(num_char))
+    prefix = "".join(random.choice(letters) for i in range(num_char))
     return prefix
 
 
-def generate_text(label, width, height, font_size, fontPath):
-    from faker import Faker
+def generate_text(label, width, height, fontPath):
+    # if label != "member_name_answer":
+    #     return "", 0
+    avg_line_height = 45
+    est_line_count = height // avg_line_height
+
     fake = Faker()
+    # create new provider class
+    import rstr
 
-    rat = height / width
-    if rat > .30:
-        height = height // 2
-        # return "N/A"
+    class MemberProvider(BaseProvider):
+        def __init__(self, regex):
+            self.possible_regexes = [
+                "^C\d{5}$",
+                "^0\d{7}$",
+                "^5\d{9}$",
+                "^C[0-9]*",
+                "^H[0-9]*",
+                "\d{6}-\d+",
+                "^(\d{7})$",
+                "^A\d{14}$",
+                "^[0-9]{9}$",
+                "^\d{10}WF$",
+                "^1N[0-9]+$",
+                "^HRP\d{8}$",
+                "^(0{0}|0{3})1\d{8}$",
+                "^(33)[0-9A-Z]{2,4}$",
+                "^P1.+$|^PZ[0-9]{6}$",
+                "^C\d{1}[A-Z0-9]{6}[A-Z]-{2}$",
+                "^[0-9]{6}\\-C[0-9]{6}$",
+                "^(?!W)[A-Z]{3}[0-9]{5}$",
+                "^[0-9]{5,8}-[0-9]{5,6}P",
+                "(^100\d{1}\.\d{4}$)|(^\d{4}\/\d{4,6}-\d{4,6}$)|(^\d{5}-\d{4,6}$)|(^1\d{7}$)|(^0\d{7,13}$)|^[0-9]{4,6}[-/\\][0-9]{4,6}$",
+                "^(\d{10}(YN))$|^\d{6}[A-Z]{1}\d{3}(YN)$",
+            ]
 
+        def member_id(self) -> str:
+            # print(rstr.xeger(r'[A-Z]\d[A-Z] \d[A-Z]\d'))
+            sel_reg = random.choice(self.possible_regexes)
+            return rstr.xeger(sel_reg)
+
+    # then add new provider to faker instance
+    fake.add_provider(MemberProvider)
+    height = min(height, 60)
     # Generate text inside image
     font_size = int(height * 1)
     font = ImageFont.truetype(fontPath, font_size)
     dec = 1
     index = 0
     label_text = ""
+
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
 
     while True:
         if index > 10:
@@ -432,119 +475,152 @@ def generate_text(label, width, height, font_size, fontPath):
             label_text = fake.date(pattern=random.choice(patterns))
 
         if label == "pan_answer":
-            label_text = generate_pan(num_char = np.random.randint(5, 20))
+            label_text = fake.member_id()
         if label == "member_number_answer":
-            label_text = generate_pan(num_char = np.random.randint(5, 20))
+            label_text = fake.member_id()
         if label == "member_name_answer" or label == "patient_name_answer":
             label_text = fake.name()
 
-        # fw, fh = draw.textsize(label_text, font=font)
-        (fw, baseline), (offset_x, offset_y) = font.font.getsize(label_text)
-        print(f"GEN [{label}] : {width} , {height} :   {fw}    >     {label_text}")
-        if fw < width:
-            break
-        index=index+1
+        # partition data into boxes splitting on blank spaces
+        text_chunks = label_text.split(" ")
+        text_width, text_height = draw.textsize(label_text, font=font)
+        space_w, _ = draw.textsize(" ", font=font)
 
-    return label_text
+        start_x = 0
+        segments = []
+        padding_x = space_w // 2
+
+        if len(text_chunks) == 1:
+            box = [start_x, 0, width, text_height]
+            segments.append({"text": label_text, "box": box})
+        else:
+            for i, chunk in enumerate(text_chunks):
+                chunk_width, chunk_height = draw.textsize(chunk, font=font)
+                # x0, y0, x1, y1
+                end_x = min(start_x + chunk_width + padding_x, width)
+                box = [start_x, 0, end_x, text_height]
+                segments.append({"text": chunk, "box": box})
+                start_x += chunk_width
+                if i < len(text_chunks):
+                    start_x += space_w
+
+        if text_width < width:
+            # print(
+            #     f"GEN [{label}, {font_size}, {est_line_count} : {text_height} :  {round(rat, 2)}] : {width} , {height} :  [{text_width}, {text_height} ] >   {label_text}"
+            # )
+            break
+        index = index + 1
+
+    return font_size, label_text, segments
 
 
 def augment_decorated_anotation(src_dir: str):
-    work_dir_boxes = ensure_exists("/tmp/boxes")
-    work_dir_icr = ensure_exists("/tmp/icr")
-    output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations_aug"))
 
-    logger.info("⏳ Generating examples from = %s", src_dir)
-    # ann_dir = os.path.join(src_dir, "annotations_tmp")
+    output_aug_images_dir = ensure_exists(os.path.join(src_dir, "annotations_aug", "images"))
+    output_aug_annotations_dir = ensure_exists(os.path.join(src_dir, "annotations_aug", "annotations"))
+
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         file_path = os.path.join(ann_dir, file)
         print(f"File: {file_path}")
+
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
+
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
+        filename_img = image_path.split("/")[-1]
+        filename = image_path.split("/")[-1].split(".")[0]
+        print(filename)
+        # if not filename_img == "152658536_0.png":
+        #     continue
 
-        image_masked, size = load_image_pil(image_path)
-        draw = ImageDraw.Draw(image_masked)
-        font = ImageFont.load_default()
+        font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
+        font_path = os.path.join("./assets/fonts", font_face)
 
-        fontFace = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
-        fontPath = os.path.join("./assets/fonts", "FreeMonoBold.ttf")
-        index = 0
+        for k in range(1, 5):
+            image_masked, size = load_image_pil(image_path)
+            draw = ImageDraw.Draw(image_masked)
+            form = copy.deepcopy(data["form"])
 
-        for i, item in enumerate(data["form"]):
-            label = item["label"]
-            if label == "other" or not label.endswith("_answer"):
-                continue
+            for i, item in enumerate(form):
+                label = item["label"]
+                if label == "other" or not label.endswith("_answer"):
+                    continue
 
-            index = label.endswith("_answer")
-            # pan_answer  dos_answer member_number_answer
-            print(item)
-            print(index)
-            # format : x0,y0,x1,y1
-            box = np.array(item["box"]).astype(np.int32)
-            x0, y0, x1, y1 = box
-            w = x1 - x0
-            h = y1 - y0
-            xoffset = 5
-            yoffset = 0
+                # pan_answer  dos_answer member_number_answer
+                # format : x0,y0,x1,y1
+                box = np.array(item["box"]).astype(np.int32)
+                x0, y0, x1, y1 = box
+                w = x1 - x0
+                h = y1 - y0
+                xoffset = 5
+                yoffset = 0
 
-            # Generate text inside image
-            font_size = int(h * 0.95)
-            font = ImageFont.truetype(fontPath, font_size)
-            label_text = generate_text(label, w, h, font_size, fontPath)
+                # Generate text inside image
+                font_size, label_text, segments = generate_text(label, w, h, font_path)
+                font = ImageFont.truetype(font_path, font_size)
 
-            # name, date, ssn, isbn10
-            print(f"{box}  : {w} , {h}")
-            # x0, y0, x1, y1 = xy
+                # x0, y0, x1, y1 = xy
+                # Yellow with outline for debug
+                # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
+                # clear region
+                draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
-            ascent, descent = font.getmetrics()
-            (width, baseline), (offset_x, offset_y) = font.font.getsize(label_text)
-            fw, fh = draw.textsize(label_text, font=font)
-            print(f" {width}  : {fw}, {fh}")
+                dup_item = copy.copy(item)
+                dup_item["text"] = label_text
+                dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+                dup_item["words"] = []
+                dup_item["linking"] = []
+                words = []
 
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC")
-            # #000000
-            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=5)
-            index = i + 1
+                for seg in segments:
+                    seg_text = seg["text"]
+                    sx0, sy0, sx1, sy1 = seg["box"]
+                    sw = sx1 - sx0
+                    adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
+                    word = {"text:": seg_text, "box": adj_box}
+                    words.append(word)
 
-            # break
+                    # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
 
-        image_masked.save(os.path.join("/tmp/snippet", f"{guid}-masked_gen.png"))
-        # cv2.imwrite(file_path, image_masked)
-        print(">>>>>>>>>>>>>")
-        print(data)
-        #
-        # x0 = 0
-        # y0 = 0
-        # for i, word in enumerate(results_masked["words"]):
-        #     w_text = word["text"]
-        #     x, y, w, h = word["box"]
-        #     w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-        #     adj_word = {"text": w_text, "box": w_box}
-        #     item = {
-        #         "id": index + i,
-        #         "text": w_text,
-        #         "box": w_box,
-        #         "linking": [],
-        #         "label": "other",
-        #         "words": [adj_word],
-        #     }
-        #     data["form"].append(item)
-        #
-        # json_path = os.path.join(output_ann_dir, file)
-        # with open(json_path, "w") as json_file:
-        #     json.dump(
-        #         data,
-        #         json_file,
-        #         sort_keys=True,
-        #         separators=(",", ": "),
-        #         ensure_ascii=False,
-        #         indent=4,
-        #         cls=NumpyEncoder,
-        #     )
+                dup_item["words"] = words
+
+                draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#000000", font=font, stroke_fill=1)
+                # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
+
+                index = i + 1
+
+                print("-" * 20)
+                print(item)
+                print(dup_item)
+                data["form"].append(dup_item)
+
+            # Save items
+            out_name_prefix = f"{filename}_{guid}_{k}"
+
+            print(data)
+            json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
+            dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
+
+            with open(json_path, "w") as json_file:
+                json.dump(
+                    data,
+                    json_file,
+                    sort_keys=True,
+                    separators=(",", ": "),
+                    ensure_ascii=False,
+                    indent=2,
+                    cls=NumpyEncoder,
+                )
+
+            # shutil.copyfile(image_path, dst_img_path)
+            image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
+            image_masked.save(dst_img_path)
+
+            del draw
 
         # break
 
@@ -576,7 +652,6 @@ def visualize_funsd(src_dir: str):
         # draw predictions over the image
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
-        label2color = {"question": "blue", "answer": "green", "header": "orange", "other": "violet"}
         label2color = {
             "pan": "blue",
             "pan_answer": "green",
@@ -698,8 +773,8 @@ if __name__ == "__main__":
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
 
-    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
