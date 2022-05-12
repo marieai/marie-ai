@@ -383,6 +383,71 @@ def decorate_funsd(src_dir: str):
         # break
 
 
+
+def generate_pan(num_char):
+    import string
+    letters = string.ascii_letters.lower()
+    if np.random.choice([0, 1], p=[0.5, 0.5]):
+        letters = string.digits
+    if np.random.choice([0, 1], p=[0.5, 0.5]):
+        letters = letters.upper()
+    prefix = ''.join(random.choice(letters) for i in range(num_char))
+    return prefix
+
+
+def generate_text(label, width, height, font_size, fontPath):
+    from faker import Faker
+    fake = Faker()
+
+    rat = height / width
+    if rat > .30:
+        height = height // 2
+        # return "N/A"
+
+    # Generate text inside image
+    font_size = int(height * 1)
+    font = ImageFont.truetype(fontPath, font_size)
+    dec = 1
+    index = 0
+    label_text = ""
+
+    while True:
+        if index > 10:
+            font_size = font_size - dec
+            font = ImageFont.truetype(fontPath, font_size)
+            index = 0
+
+        if label == "dos_answer":
+            # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
+            patterns = [
+                "%Y%m%d",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%d/%m/%Y",
+                "%m/%d/%Y",
+                "%d.%m.%Y",
+                "%d %B %Y",
+                "%b %d, %Y",
+            ]
+            label_text = fake.date(pattern=random.choice(patterns))
+
+        if label == "pan_answer":
+            label_text = generate_pan(num_char = np.random.randint(5, 20))
+        if label == "member_number_answer":
+            label_text = generate_pan(num_char = np.random.randint(5, 20))
+        if label == "member_name_answer" or label == "patient_name_answer":
+            label_text = fake.name()
+
+        # fw, fh = draw.textsize(label_text, font=font)
+        (fw, baseline), (offset_x, offset_y) = font.font.getsize(label_text)
+        print(f"GEN [{label}] : {width} , {height} :   {fw}    >     {label_text}")
+        if fw < width:
+            break
+        index=index+1
+
+    return label_text
+
+
 def augment_decorated_anotation(src_dir: str):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
@@ -400,22 +465,15 @@ def augment_decorated_anotation(src_dir: str):
             data = json.load(f)
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
-        image, size = load_image(image_path)
-        # create masked image for OTHER label
-        # image_masked, _ = load_image(image_path)
 
         image_masked, size = load_image_pil(image_path)
         draw = ImageDraw.Draw(image_masked)
         font = ImageFont.load_default()
 
         fontFace = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
-        fontPath = os.path.join("./assets/fonts", "FreeMono.ttf")
-
-        from faker import Faker
-
-        fake = Faker()
-
+        fontPath = os.path.join("./assets/fonts", "FreeMonoBold.ttf")
         index = 0
+
         for i, item in enumerate(data["form"]):
             label = item["label"]
             if label == "other" or not label.endswith("_answer"):
@@ -433,51 +491,29 @@ def augment_decorated_anotation(src_dir: str):
             xoffset = 5
             yoffset = 0
 
-            label_text = ""
-            if label == "dos_answer":
-                # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
-                patterns = [
-                    "%Y%m%d",
-                    "%Y-%m-%d",
-                    "%Y/%m/%d",
-                    "%d/%m/%Y",
-                    "%m/%d/%Y",
-                    "%d.%m.%Y",
-                    "%d %B %Y",
-                    "%b %d, %Y",
-                ]
-                label_text = fake.date(pattern=random.choice(patterns))
-
-            if label == "pan_answer":
-                label_text = fake.isbn10()
-            if label == "member_number_answer":
-                label_text = fake.ean(length=8, prefixes=("45", "49"))
-
-            if label == "member_name_answer" or label == "patient_name_answer":
-                label_text = fake.name()
+            # Generate text inside image
+            font_size = int(h * 0.95)
+            font = ImageFont.truetype(fontPath, font_size)
+            label_text = generate_text(label, w, h, font_size, fontPath)
 
             # name, date, ssn, isbn10
             print(f"{box}  : {w} , {h}")
             # x0, y0, x1, y1 = xy
-            # Generate text inside image
-            font_size = int(h * 0.95)
-            font = ImageFont.truetype(fontPath, font_size)
+
             ascent, descent = font.getmetrics()
             (width, baseline), (offset_x, offset_y) = font.font.getsize(label_text)
             fw, fh = draw.textsize(label_text, font=font)
             print(f" {width}  : {fw}, {fh}")
 
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
-            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="blue", font=font, stroke_fill=5)
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC")
+            # #000000
+            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=5)
             index = i + 1
 
-            img1 = Image.new("RGB", (w, h), (255, 255, 255))
-            img1.save(os.path.join("/tmp/snippet", f"{guid}-{index}masked_gen.png"))
             # break
 
         image_masked.save(os.path.join("/tmp/snippet", f"{guid}-masked_gen.png"))
         # cv2.imwrite(file_path, image_masked)
-
         print(">>>>>>>>>>>>>")
         print(data)
         #
@@ -510,7 +546,7 @@ def augment_decorated_anotation(src_dir: str):
         #         cls=NumpyEncoder,
         #     )
 
-        break
+        # break
 
 
 def load_image_pil(image_path):
@@ -662,10 +698,8 @@ if __name__ == "__main__":
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
 
-    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
-    #
-    # root_dir = "/home/gbugaj/data/private/corr-indexer"
+    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
