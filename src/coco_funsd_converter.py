@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 fake = Faker()
 # create new provider class
 
+
 class MemberProvider(BaseProvider):
     def __init__(self, regex):
         self.possible_regexes = [
@@ -68,8 +69,8 @@ class MemberProvider(BaseProvider):
         sel_reg = random.choice(self.possible_regexes)
         return rstr.xeger(sel_reg)
 
-fake.add_provider(MemberProvider)
 
+fake.add_provider(MemberProvider)
 
 
 def from_json_file(filename):
@@ -443,6 +444,11 @@ def generate_pan(num_char):
     return prefix
 
 
+# @lru_cache(maxsize=20)
+@lru_cache()
+def get_cached_font(font_path, font_size):
+    return ImageFont.truetype(font_path, font_size)
+
 
 def generate_text(label, width, height, fontPath):
     # if label != "member_name_answer":
@@ -456,10 +462,11 @@ def generate_text(label, width, height, fontPath):
     font_size = int(height * 1)
 
     # print(f":: {font_size} : {fontPath}")
-    font = ImageFont.truetype(fontPath, font_size)
+    # font = ImageFont.truetype(fontPath, font_size)
+    font = get_cached_font(fontPath, font_size)
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    space_w, _ = (4, 0)# draw.textsize(" ", font=font)
+    space_w, _ = draw.textsize(" ", font=font)
 
     dec = 1
     index = 0
@@ -468,9 +475,10 @@ def generate_text(label, width, height, fontPath):
     while True:
         if index > 10:
             font_size = font_size - dec
-            font = ImageFont.truetype(fontPath, font_size)
+            # font = ImageFont.truetype(fontPath, font_size)
+            font = get_cached_font(fontPath, font_size)
             index = 0
-            space_w, _ = (2, 0)# draw.textsize(" ", font=font)
+            space_w, _ = draw.textsize(" ", font=font)
 
         if label == "dos_answer":
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
@@ -526,7 +534,8 @@ def generate_text(label, width, height, fontPath):
 
     return font_size, label_text, segments
 
-def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str, dest_dir:str):
+
+def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
 
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
@@ -546,14 +555,11 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
     filename = image_path.split("/")[-1].split(".")[0]
     print(filename)
 
-
-
     image_masked, size = load_image_pil(image_path)
     for k in range(0, count):
         print(f"Iter : {k} of {count} ; {filename} ")
         font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
         font_path = os.path.join("./assets/fonts", font_face)
-        font = ImageFont.truetype(font_path, 24)
         draw = ImageDraw.Draw(image_masked)
         form = copy.deepcopy(data["form"])
 
@@ -573,7 +579,8 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
 
             # Generate text inside image
             font_size, label_text, segments = generate_text(label, w, h, font_path)
-            font = ImageFont.truetype(font_path, font_size)# need to get this from cache
+            # font = ImageFont.truetype(font_path, font_size)  # need to get this from cache
+            font = get_cached_font(font_path, font_size)
 
             # x0, y0, x1, y1 = xy
             # Yellow with outline for debug
@@ -581,7 +588,7 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
             # clear region
             draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
-            dup_item = item#copy.copy(item)
+            dup_item = item  # copy.copy(item)
             dup_item["text"] = label_text
             dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
             dup_item["words"] = []
@@ -603,7 +610,6 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
             # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
 
             index = i + 1
-
             # print("-" * 20)
             # print(item)
             # print(dup_item)
@@ -615,31 +621,32 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
         json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
 
-        # with open(json_path, "w") as json_file:
-        #     json.dump(
-        #         data,
-        #         json_file,
-        #         # sort_keys=True,
-        #         separators=(",", ": "),
-        #         ensure_ascii=False,
-        #         indent=2,
-        #         cls=NumpyEncoder,
-        #     )
+        with open(json_path, "w") as json_file:
+            json.dump(
+                data,
+                json_file,
+                # sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=2,
+                cls=NumpyEncoder,
+            )
 
         # shutil.copyfile(image_path, dst_img_path)
-        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
+        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
         image_masked.save(dst_img_path)
 
         del draw
 
 
-def augment_decorated_anotation(count:int, src_dir: str, dest_dir:str):
+def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
-        file_path = os.path.join(ann_dir, file)
-        __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
+    if True:
+        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+            file_path = os.path.join(ann_dir, file)
+            __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
 
     if False:
         with ThreadPoolExecutor(max_workers=4) as executor:
@@ -647,7 +654,7 @@ def augment_decorated_anotation(count:int, src_dir: str, dest_dir:str):
                 file_path = os.path.join(ann_dir, file)
                 executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
 
-            print('All tasks has been finished')
+            print("All tasks has been finished")
 
 
 def load_image_pil(image_path):
@@ -798,8 +805,9 @@ if __name__ == "__main__":
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
     root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
-    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
@@ -810,7 +818,7 @@ if __name__ == "__main__":
 
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
-    augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_anotation(count=4, src_dir=dst_path, dest_dir=aug_dest_dir)
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
     # visualize_funsd(aug_aligned_dst_path)
 
