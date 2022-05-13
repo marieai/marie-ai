@@ -23,6 +23,9 @@ from utils.utils import ensure_exists
 from faker.providers import BaseProvider
 from faker import Faker
 
+import multiprocessing as mp
+from concurrent.futures.thread import ThreadPoolExecutor
+
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
 
@@ -480,6 +483,8 @@ def generate_text(label, width, height, fontPath):
             label_text = fake.member_id()
         if label == "member_name_answer" or label == "patient_name_answer":
             label_text = fake.name()
+            if np.random.choice([0, 1], p=[0.5, 0.5]):
+                label_text = label_text.upper()
 
         # partition data into boxes splitting on blank spaces
         text_chunks = label_text.split(" ")
@@ -513,116 +518,124 @@ def generate_text(label, width, height, fontPath):
 
     return font_size, label_text, segments
 
+def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str, dest_dir:str):
 
-def augment_decorated_anotation(src_dir: str):
-
-    output_aug_images_dir = ensure_exists(os.path.join(src_dir, "annotations_aug", "images"))
-    output_aug_annotations_dir = ensure_exists(os.path.join(src_dir, "annotations_aug", "annotations"))
+    output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
+    output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
 
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
 
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
-        file_path = os.path.join(ann_dir, file)
-        print(f"File: {file_path}")
+    # file_path = os.path.join(ann_dir, file)
+    file = file_path.split("/")[-1]
+    print(f"File: {file_path}")
 
-        with open(file_path, "r", encoding="utf8") as f:
-            data = json.load(f)
+    with open(file_path, "r", encoding="utf8") as f:
+        data = json.load(f)
 
-        image_path = os.path.join(img_dir, file)
-        image_path = image_path.replace("json", "png")
-        filename_img = image_path.split("/")[-1]
-        filename = image_path.split("/")[-1].split(".")[0]
-        print(filename)
-        # if not filename_img == "152658536_0.png":
-        #     continue
+    image_path = os.path.join(img_dir, file)
+    image_path = image_path.replace("json", "png")
+    filename = image_path.split("/")[-1].split(".")[0]
+    print(filename)
 
-        font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
-        font_path = os.path.join("./assets/fonts", font_face)
+    font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
+    font_path = os.path.join("./assets/fonts", font_face)
 
-        for k in range(1, 5):
-            image_masked, size = load_image_pil(image_path)
-            draw = ImageDraw.Draw(image_masked)
-            form = copy.deepcopy(data["form"])
+    for k in range(0, count):
+        print(f"Iter : {k} of {count} ; {filename} ")
 
-            for i, item in enumerate(form):
-                label = item["label"]
-                if label == "other" or not label.endswith("_answer"):
-                    continue
+        image_masked, size = load_image_pil(image_path)
+        draw = ImageDraw.Draw(image_masked)
+        form = copy.deepcopy(data["form"])
 
-                # pan_answer  dos_answer member_number_answer
-                # format : x0,y0,x1,y1
-                box = np.array(item["box"]).astype(np.int32)
-                x0, y0, x1, y1 = box
-                w = x1 - x0
-                h = y1 - y0
-                xoffset = 5
-                yoffset = 0
+        for i, item in enumerate(form):
+            label = item["label"]
+            if label == "other" or not label.endswith("_answer"):
+                continue
 
-                # Generate text inside image
-                font_size, label_text, segments = generate_text(label, w, h, font_path)
-                font = ImageFont.truetype(font_path, font_size)
+            # pan_answer  dos_answer member_number_answer
+            # format : x0,y0,x1,y1
+            box = np.array(item["box"]).astype(np.int32)
+            x0, y0, x1, y1 = box
+            w = x1 - x0
+            h = y1 - y0
+            xoffset = 5
+            yoffset = 0
 
-                # x0, y0, x1, y1 = xy
-                # Yellow with outline for debug
-                # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
-                # clear region
-                draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+            # Generate text inside image
+            font_size, label_text, segments = generate_text(label, w, h, font_path)
+            font = ImageFont.truetype(font_path, font_size)
 
-                dup_item = copy.copy(item)
-                dup_item["text"] = label_text
-                dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
-                dup_item["words"] = []
-                dup_item["linking"] = []
-                words = []
+            # x0, y0, x1, y1 = xy
+            # Yellow with outline for debug
+            # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
+            # clear region
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
-                for seg in segments:
-                    seg_text = seg["text"]
-                    sx0, sy0, sx1, sy1 = seg["box"]
-                    sw = sx1 - sx0
-                    adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
-                    word = {"text:": seg_text, "box": adj_box}
-                    words.append(word)
+            dup_item = copy.copy(item)
+            dup_item["text"] = label_text
+            dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+            dup_item["words"] = []
+            dup_item["linking"] = []
+            words = []
 
-                    # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
+            for seg in segments:
+                seg_text = seg["text"]
+                sx0, sy0, sx1, sy1 = seg["box"]
+                sw = sx1 - sx0
+                adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
+                word = {"text:": seg_text, "box": adj_box}
+                words.append(word)
 
-                dup_item["words"] = words
+                # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
 
-                draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#000000", font=font, stroke_fill=1)
-                # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
+            dup_item["words"] = words
 
-                index = i + 1
+            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#000000", font=font, stroke_fill=1)
+            # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
 
-                print("-" * 20)
-                print(item)
-                print(dup_item)
-                data["form"].append(dup_item)
+            index = i + 1
 
-            # Save items
-            out_name_prefix = f"{filename}_{guid}_{k}"
+            # print("-" * 20)
+            # print(item)
+            # print(dup_item)
+            data["form"].append(dup_item)
 
-            print(data)
-            json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
-            dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
+        # Save items
+        out_name_prefix = f"{filename}_{guid}_{k}"
 
-            with open(json_path, "w") as json_file:
-                json.dump(
-                    data,
-                    json_file,
-                    sort_keys=True,
-                    separators=(",", ": "),
-                    ensure_ascii=False,
-                    indent=2,
-                    cls=NumpyEncoder,
-                )
+        json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
+        dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
 
-            # shutil.copyfile(image_path, dst_img_path)
-            image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
-            image_masked.save(dst_img_path)
+        with open(json_path, "w") as json_file:
+            json.dump(
+                data,
+                json_file,
+                sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=2,
+                cls=NumpyEncoder,
+            )
 
-            del draw
+        # shutil.copyfile(image_path, dst_img_path)
+        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
+        image_masked.save(dst_img_path)
 
-        # break
+        del draw
+
+
+def augment_decorated_anotation(count:int, src_dir: str, dest_dir:str):
+
+    ann_dir = os.path.join(src_dir, "annotations")
+    # fireup new threads for processing
+    # mp.cpu_count()
+    with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+            file_path = os.path.join(ann_dir, file)
+            executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
+
+        print('All tasks has been finished')
 
 
 def load_image_pil(image_path):
@@ -772,17 +785,23 @@ if __name__ == "__main__":
     name = "test"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
+    root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
-    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
+    # root_dir = "/home/gbugaj/dataset/private/corr-indexer"
+    # root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
 
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
     aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
 
+    aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{name}ing_data")
+    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{name}ing_data")
+
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
-    augment_decorated_anotation(dst_path)
+    # augment_decorated_anotation(count=2, src_dir=dst_path, dest_dir=aug_dest_dir)
+    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    visualize_funsd(aug_aligned_dst_path)
 
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
