@@ -22,6 +22,7 @@ from utils.utils import ensure_exists
 
 from faker.providers import BaseProvider
 from faker import Faker
+import rstr
 
 import multiprocessing as mp
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -30,6 +31,45 @@ from concurrent.futures.thread import ThreadPoolExecutor
 # https://guillaumejaume.github.io/FUNSD/description/
 
 logger = logging.getLogger(__name__)
+
+# setup data aug
+
+fake = Faker()
+# create new provider class
+
+class MemberProvider(BaseProvider):
+    def __init__(self, regex):
+        self.possible_regexes = [
+            "^C\d{5}$",
+            "^0\d{7}$",
+            "^5\d{9}$",
+            "^C[0-9]*",
+            "^H[0-9]*",
+            "\d{6}-\d+",
+            "^(\d{7})$",
+            "^A\d{14}$",
+            "^[0-9]{9}$",
+            "^\d{10}WF$",
+            "^1N[0-9]+$",
+            "^HRP\d{8}$",
+            "^(0{0}|0{3})1\d{8}$",
+            "^(33)[0-9A-Z]{2,4}$",
+            "^P1.+$|^PZ[0-9]{6}$",
+            "^C\d{1}[A-Z0-9]{6}[A-Z]-{2}$",
+            "^[0-9]{6}\\-C[0-9]{6}$",
+            "^(?!W)[A-Z]{3}[0-9]{5}$",
+            "^[0-9]{5,8}-[0-9]{5,6}P",
+            "(^100\d{1}\.\d{4}$)|(^\d{4}\/\d{4,6}-\d{4,6}$)|(^\d{5}-\d{4,6}$)|(^1\d{7}$)|(^0\d{7,13}$)|^[0-9]{4,6}[-/\\][0-9]{4,6}$",
+            "^(\d{10}(YN))$|^\d{6}[A-Z]{1}\d{3}(YN)$",
+        ]
+
+    def member_id(self) -> str:
+        # print(rstr.xeger(r'[A-Z]\d[A-Z] \d[A-Z]\d'))
+        sel_reg = random.choice(self.possible_regexes)
+        return rstr.xeger(sel_reg)
+
+fake.add_provider(MemberProvider)
+
 
 
 def from_json_file(filename):
@@ -403,65 +443,34 @@ def generate_pan(num_char):
     return prefix
 
 
+
 def generate_text(label, width, height, fontPath):
     # if label != "member_name_answer":
     #     return "", 0
+
     avg_line_height = 45
     est_line_count = height // avg_line_height
 
-    fake = Faker()
-    # create new provider class
-    import rstr
-
-    class MemberProvider(BaseProvider):
-        def __init__(self, regex):
-            self.possible_regexes = [
-                "^C\d{5}$",
-                "^0\d{7}$",
-                "^5\d{9}$",
-                "^C[0-9]*",
-                "^H[0-9]*",
-                "\d{6}-\d+",
-                "^(\d{7})$",
-                "^A\d{14}$",
-                "^[0-9]{9}$",
-                "^\d{10}WF$",
-                "^1N[0-9]+$",
-                "^HRP\d{8}$",
-                "^(0{0}|0{3})1\d{8}$",
-                "^(33)[0-9A-Z]{2,4}$",
-                "^P1.+$|^PZ[0-9]{6}$",
-                "^C\d{1}[A-Z0-9]{6}[A-Z]-{2}$",
-                "^[0-9]{6}\\-C[0-9]{6}$",
-                "^(?!W)[A-Z]{3}[0-9]{5}$",
-                "^[0-9]{5,8}-[0-9]{5,6}P",
-                "(^100\d{1}\.\d{4}$)|(^\d{4}\/\d{4,6}-\d{4,6}$)|(^\d{5}-\d{4,6}$)|(^1\d{7}$)|(^0\d{7,13}$)|^[0-9]{4,6}[-/\\][0-9]{4,6}$",
-                "^(\d{10}(YN))$|^\d{6}[A-Z]{1}\d{3}(YN)$",
-            ]
-
-        def member_id(self) -> str:
-            # print(rstr.xeger(r'[A-Z]\d[A-Z] \d[A-Z]\d'))
-            sel_reg = random.choice(self.possible_regexes)
-            return rstr.xeger(sel_reg)
-
-    # then add new provider to faker instance
-    fake.add_provider(MemberProvider)
     height = min(height, 60)
     # Generate text inside image
     font_size = int(height * 1)
+
+    # print(f":: {font_size} : {fontPath}")
     font = ImageFont.truetype(fontPath, font_size)
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    space_w, _ = (4, 0)# draw.textsize(" ", font=font)
+
     dec = 1
     index = 0
     label_text = ""
-
-    img = Image.new("RGB", (width, height), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
 
     while True:
         if index > 10:
             font_size = font_size - dec
             font = ImageFont.truetype(fontPath, font_size)
             index = 0
+            space_w, _ = (2, 0)# draw.textsize(" ", font=font)
 
         if label == "dos_answer":
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
@@ -489,7 +498,6 @@ def generate_text(label, width, height, fontPath):
         # partition data into boxes splitting on blank spaces
         text_chunks = label_text.split(" ")
         text_width, text_height = draw.textsize(label_text, font=font)
-        space_w, _ = draw.textsize(" ", font=font)
 
         start_x = 0
         segments = []
@@ -538,13 +546,14 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
     filename = image_path.split("/")[-1].split(".")[0]
     print(filename)
 
-    font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
-    font_path = os.path.join("./assets/fonts", font_face)
 
+
+    image_masked, size = load_image_pil(image_path)
     for k in range(0, count):
         print(f"Iter : {k} of {count} ; {filename} ")
-
-        image_masked, size = load_image_pil(image_path)
+        font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
+        font_path = os.path.join("./assets/fonts", font_face)
+        font = ImageFont.truetype(font_path, 24)
         draw = ImageDraw.Draw(image_masked)
         form = copy.deepcopy(data["form"])
 
@@ -564,7 +573,7 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
 
             # Generate text inside image
             font_size, label_text, segments = generate_text(label, w, h, font_path)
-            font = ImageFont.truetype(font_path, font_size)
+            font = ImageFont.truetype(font_path, font_size)# need to get this from cache
 
             # x0, y0, x1, y1 = xy
             # Yellow with outline for debug
@@ -572,7 +581,7 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
             # clear region
             draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
-            dup_item = copy.copy(item)
+            dup_item = item#copy.copy(item)
             dup_item["text"] = label_text
             dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
             dup_item["words"] = []
@@ -590,7 +599,6 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
                 # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
 
             dup_item["words"] = words
-
             draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#000000", font=font, stroke_fill=1)
             # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
 
@@ -607,35 +615,39 @@ def __augment_decorated_process(guid:int, count:int,  file_path:str,src_dir:str,
         json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
 
-        with open(json_path, "w") as json_file:
-            json.dump(
-                data,
-                json_file,
-                sort_keys=True,
-                separators=(",", ": "),
-                ensure_ascii=False,
-                indent=2,
-                cls=NumpyEncoder,
-            )
+        # with open(json_path, "w") as json_file:
+        #     json.dump(
+        #         data,
+        #         json_file,
+        #         # sort_keys=True,
+        #         separators=(",", ": "),
+        #         ensure_ascii=False,
+        #         indent=2,
+        #         cls=NumpyEncoder,
+        #     )
 
         # shutil.copyfile(image_path, dst_img_path)
-        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
+        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
         image_masked.save(dst_img_path)
 
         del draw
 
 
 def augment_decorated_anotation(count:int, src_dir: str, dest_dir:str):
-
     ann_dir = os.path.join(src_dir, "annotations")
-    # fireup new threads for processing
     # mp.cpu_count()
-    with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
-        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
-            file_path = os.path.join(ann_dir, file)
-            executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
 
-        print('All tasks has been finished')
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        file_path = os.path.join(ann_dir, file)
+        __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
+
+    if False:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+                file_path = os.path.join(ann_dir, file)
+                executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
+
+            print('All tasks has been finished')
 
 
 def load_image_pil(image_path):
@@ -765,7 +777,6 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
         json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
         image_path_dest = os.path.join(img_dir_dest, f"{filename}.png")
-
         # save image and json data
         image.save(image_path_dest)
 
@@ -799,9 +810,9 @@ if __name__ == "__main__":
 
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
-    # augment_decorated_anotation(count=2, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-    visualize_funsd(aug_aligned_dst_path)
+    # visualize_funsd(aug_aligned_dst_path)
 
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
