@@ -18,6 +18,7 @@ from boxes.box_processor import PSMode
 from boxes.craft_box_processor import BoxProcessorCraft
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from numpyencoder import NumpyEncoder
+from timer import Timer
 from utils.utils import ensure_exists
 
 from faker.providers import BaseProvider
@@ -226,12 +227,26 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         ano_groups[ano["image_id"]].append(ano)
 
     errors = []
+
     for group_id in ano_groups:
         grouping = ano_groups[group_id]
         # Validate that each annotation has associated question/answer pair
         found_cat_id = []
+        img_data = images_by_id[group_id]
+        file_name = img_data["file_name"]
+        filename = file_name.split("/")[-1].split(".")[0]
+
+        category_counts = {}
         for ano in grouping:
             found_cat_id.append(ano["category_id"])
+            # validate that we don't have duplicate question/answer mappings, we might change this down the road
+            cat_name = cat_id_name[ano["category_id"]]
+            category_counts[cat_name] = 1 if cat_name not in category_counts else category_counts[cat_name] + 1
+            count = category_counts[cat_name]
+            if count > 1:
+                msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}]"
+                print(msg)
+                errors.append(msg)
 
         # if we have any missing mapping we will abort and fix the labeling data before continuing
         for question, answer in question_answer_map.items():
@@ -288,13 +303,13 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
 
-        with open(json_path, "w") as json_file:
-            json.dump(form_dict, json_file, indent=4)
+        if False:
+            with open(json_path, "w") as json_file:
+                json.dump(form_dict, json_file, indent=4)
 
-        # copy and resize to 1000 H
-        shutil.copyfile(src_img_path, dst_img_path)
-        print(form_dict)
-        break
+            # copy and resize to 1000 H
+            shutil.copyfile(src_img_path, dst_img_path)
+            print(form_dict)
 
 
 def normalize_bbox(bbox, size):
@@ -322,12 +337,12 @@ def decorate_funsd(src_dir: str):
     work_dir_icr = ensure_exists("/tmp/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
 
-    logger.info("⏳ Generating examples from = %s", src_dir)
+    logger.info("⏳ Decorating examples from = %s", src_dir)
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         file_path = os.path.join(ann_dir, file)
@@ -364,7 +379,8 @@ def decorate_funsd(src_dir: str):
                 text = " ".join([line["text"] for line in results["lines"]])
             except Exception as ex:
                 # raise ex
-                pass
+                print(ex)
+                # pass
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
@@ -396,12 +412,9 @@ def decorate_funsd(src_dir: str):
 
         boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
 
-        print(">>>>>>>>>>>>>")
-        print(results_masked)
-        print(data)
-
         x0 = 0
         y0 = 0
+
         for i, word in enumerate(results_masked["words"]):
             w_text = word["text"]
             x, y, w, h = word["box"]
@@ -468,12 +481,12 @@ def generate_text(label, width, height, fontPath):
     draw = ImageDraw.Draw(img)
     space_w, _ = draw.textsize(" ", font=font)
 
-    dec = 1
+    dec = 2
     index = 0
     label_text = ""
 
     while True:
-        if index > 10:
+        if index > 5:
             font_size = font_size - dec
             # font = ImageFont.truetype(fontPath, font_size)
             font = get_cached_font(fontPath, font_size)
@@ -535,6 +548,7 @@ def generate_text(label, width, height, fontPath):
     return font_size, label_text, segments
 
 
+@Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
 
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
@@ -556,6 +570,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
     print(filename)
 
     image_masked, size = load_image_pil(image_path)
+
     for k in range(0, count):
         print(f"Iter : {k} of {count} ; {filename} ")
         font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
@@ -632,9 +647,13 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
                 cls=NumpyEncoder,
             )
 
-        # shutil.copyfile(image_path, dst_img_path)
-        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"))
-        image_masked.save(dst_img_path)
+        # saving in JPG format as it is substantially faster than PNG
+        # image_masked.save(
+        #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+        # )  # 100 disables compression
+        #
+        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+        # image_masked.save(dst_img_path)
 
         del draw
 
@@ -649,12 +668,39 @@ def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
 
     if False:
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=mp.cpu_count() // 2) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
                 executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
 
             print("All tasks has been finished")
+
+    if False:
+        import time
+        from multiprocessing import Pool
+
+        args = []
+        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+            file_path = os.path.join(ann_dir, file)
+            __args = (guid, count, file_path, src_dir, dest_dir)
+            args.append(__args)
+
+        results = []
+        start = time.time()
+        print("\nPool Executor:")
+        print("Time elapsed: %s" % (time.time() - start))
+
+        pool = Pool(processes=mp.cpu_count())
+        pool_results = pool.starmap(__augment_decorated_process, args)
+
+        pool.close()
+        pool.join()
+
+        print("Time elapsed[submitted]: %s" % (time.time() - start))
+        for r in pool_results:
+            print("Time elapsed[result]: %s  , %s" % (time.time() - start, r))
+            # results.append(result)
+        print("Time elapsed[all]: %s" % (time.time() - start))
 
 
 def load_image_pil(image_path):
@@ -816,9 +862,10 @@ if __name__ == "__main__":
     aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{name}ing_data")
     aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{name}ing_data")
 
-    # convert_coco_to_funsd(src_dir, dst_path)
-    # decorate_funsd(dst_path)
-    augment_decorated_anotation(count=4, src_dir=dst_path, dest_dir=aug_dest_dir)
+    convert_coco_to_funsd(src_dir, dst_path)
+
+    decorate_funsd(dst_path)
+    # augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
     # visualize_funsd(aug_aligned_dst_path)
 
