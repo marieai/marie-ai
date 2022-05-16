@@ -181,7 +181,7 @@ def main_image(src_image):
 
     from pathlib import Path
     home = str(Path.home())
-    model_dir = os.path.join(home, './tmp/models/layoutlmv2-finetuned-gb', "checkpoint-11500")
+    model_dir = os.path.join(home, './tmp/models/layoutlmv2-finetuned-gb', "checkpoint-6500")
     # model_dir = "/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000"
     print(f"output dir : {model_dir}")
 
@@ -362,15 +362,15 @@ if __name__ == "__main__":
     print(f'image_path : {image_path}')
 
     # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test", fname)
-    main_image(image_path)
+    # main_image(image_path)
 
     # message = hash_file(image_path)
     # print(message)
     # ocr_dir("/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images")
     # 
- 
-    if False:
-        from pathlib import Path 
+
+    if True:
+        from pathlib import Path
         home = str(Path.home())
         marie_home = os.path.join(home, '.marie')
         for idx, _path in enumerate(glob.glob(os.path.join(marie_home, "*"))):
