@@ -34,6 +34,16 @@ class ArgParser(object):
                             dest='workflow_store',
                             help='Workflow store location from where local or default workflows can be loaded')
 
+        parser.add_argument('--enable-crypto',
+                            required=False,
+                            dest='enable_crypto',
+                            help='Enable encryption')
+
+        parser.add_argument('--tls-cert',
+                            required=False,
+                            dest='tls_cert',
+                            help='Certificate location')
+
         return parser
 
     @staticmethod

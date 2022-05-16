@@ -33,12 +33,10 @@ def get_cache_dir(cache_dir: Optional[str] = None) -> str:
             If None, returns the default cache directory as:
 
         1) $MARIE_CACHE, if set
-        2) MARIE_CACHE ~/cache
+        2) MARIE_CACHE ~/.marie
     """
     if cache_dir is None:
-        cache_dir = os.path.expanduser(
-            os.getenv("MARIE_CACHE", "~/cache")
-        )
+        cache_dir = os.path.expanduser(os.getenv("MARIE_CACHE", "~/.marie"))
     return cache_dir
 
 
@@ -125,11 +123,11 @@ class PathHandler:
         raise NotImplementedError()
 
     def _copy(
-            self,
-            src_path: str,
-            dst_path: str,
-            overwrite: bool = False,
-            **kwargs: Any,
+        self,
+        src_path: str,
+        dst_path: str,
+        overwrite: bool = False,
+        **kwargs: Any,
     ) -> bool:
         """
         Copies a source path to a destination path.
@@ -201,14 +199,10 @@ class HTTPURLHandler(PathHandler):
         The resource will only be downloaded if not previously requested.
         """
         self._check_kwargs(kwargs)
-        if path not in self.cache_map or not os.path.exists(
-                self.cache_map[path]
-        ):
+        if path not in self.cache_map or not os.path.exists(self.cache_map[path]):
             logger = logging.getLogger(__name__)
             parsed_url = urlparse(path)
-            dirname = os.path.join(
-                get_cache_dir(), os.path.dirname(parsed_url.path.lstrip("/"))
-            )
+            dirname = os.path.join(get_cache_dir(), os.path.dirname(parsed_url.path.lstrip("/")))
             filename = path.split("/")[-1]
             cached = os.path.join(dirname, filename)
             with file_lock(cached):
@@ -218,33 +212,6 @@ class HTTPURLHandler(PathHandler):
             logger.info("URL {} cached in {}".format(path, cached))
             self.cache_map[path] = cached
         return self.cache_map[path]
-
-
-class VolumeHandler(PathHandler):
-    """
-    Resolve URL like volume://.
-    """
-
-    PREFIX = "volume://"
-
-    def __init__(self,  volume_base_dir="/tmp") -> None:
-        self.cache_map: Dict[str, str] = {}
-        self.volume_base_dir = volume_base_dir
-
-    def _get_supported_prefixes(self):
-        return [self.PREFIX]
-
-    def _get_local_path(self, path):
-        logger = logging.getLogger(__name__)
-        volume_path = path[len(self.PREFIX):]
-        resolved_path = os.path.abspath(os.path.join(self.volume_base_dir, volume_path))
-        logger.info("Catalog entry {} points to {}".format(path, resolved_path))
-        return PathManager.get_local_path(resolved_path)
-
-    def _exists(self, path: str, **kwargs: Any) -> bool:
-        self._check_kwargs(kwargs)
-        resolved_path = self._get_local_path(path)
-        return os.path.exists(resolved_path)
 
 
 class PathManager:
@@ -338,9 +305,7 @@ class PathManager:
         Returns:
             local_path (str): a file path which exists on the local file system
         """
-        return PathManager.__get_path_handler(  # type: ignore
-            path
-        )._get_local_path(path, **kwargs)
+        return PathManager.__get_path_handler(path)._get_local_path(path, **kwargs)  # type: ignore
 
     @staticmethod
     def exists(path: str, **kwargs: Any) -> bool:
@@ -353,10 +318,7 @@ class PathManager:
         Returns:
             bool: true if the path exists
         """
-        return PathManager.__get_path_handler(path)._exists(  # type: ignore
-            path, **kwargs
-        )
+        return PathManager.__get_path_handler(path)._exists(path, **kwargs)  # type: ignore
 
 
 PathManager.register_handler(HTTPURLHandler())
-
