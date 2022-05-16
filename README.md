@@ -34,6 +34,13 @@ Starting in Development mode
 python ./app.py
 ```
 
+Enable encryption 
+
+```sh
+python ./app.py --enable-crypto  --tls-cert ./cert.pem
+```
+
+
 Starting in Production mode with `gunicorn`. Config
 [gunicorn]settings (https://docs.gunicorn.org/en/stable/settings.html#settings)
 
@@ -126,11 +133,18 @@ Cleanup containers
 ```
 
 # Setup Redis
+https://hub.docker.com/_/redis
+https://redis.io/docs/stack/get-started/install/docker/
 
 ```sh
-docker run --name marie_redis -d redis
+  python -m pip install redis
+``
 
-docker run --rm --name marie_redis redis
+
+```sh
+docker run --name marie_redis -p 6379:6379 -d redis 
+
+docker run --rm --name marie_redis -p 6379:6379 redis 
 ```
 
 ```sh
