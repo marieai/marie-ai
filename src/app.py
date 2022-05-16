@@ -50,6 +50,7 @@ def create_app():
 if __name__ == "__main__":
 
     args = ArgParser.server_parser()
+    print(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Initializing Marie-AI : %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
