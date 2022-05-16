@@ -303,7 +303,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
 
-        if False:
+        if True:
             with open(json_path, "w") as json_file:
                 json.dump(form_dict, json_file, indent=4)
 
@@ -662,7 +662,7 @@ def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if True:
+    if False:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -675,7 +675,7 @@ def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if False:
+    if True:
         import time
         from multiprocessing import Pool
 
@@ -846,7 +846,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "test"
+    name = "train"
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
     root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
@@ -865,9 +865,11 @@ if __name__ == "__main__":
     convert_coco_to_funsd(src_dir, dst_path)
 
     decorate_funsd(dst_path)
+    
     # augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
     # visualize_funsd(aug_aligned_dst_path)
+
 
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
