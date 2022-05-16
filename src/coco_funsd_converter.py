@@ -243,7 +243,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             cat_name = cat_id_name[ano["category_id"]]
             category_counts[cat_name] = 1 if cat_name not in category_counts else category_counts[cat_name] + 1
             count = category_counts[cat_name]
-            if count > 1:
+            if False and count > 1:
                 msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}]"
                 print(msg)
                 errors.append(msg)
@@ -615,7 +615,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
                 sx0, sy0, sx1, sy1 = seg["box"]
                 sw = sx1 - sx0
                 adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
-                word = {"text:": seg_text, "box": adj_box}
+                word = {"text": seg_text, "box": adj_box}
                 words.append(word)
 
                 # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
@@ -652,8 +652,8 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
         #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
         # )  # 100 disables compression
         #
-        image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
-        # image_masked.save(dst_img_path)
+        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+        image_masked.save(dst_img_path, compress_level=2)
 
         del draw
 
@@ -862,14 +862,15 @@ if __name__ == "__main__":
     aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{name}ing_data")
     aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{name}ing_data")
 
-    convert_coco_to_funsd(src_dir, dst_path)
-
-    decorate_funsd(dst_path)
+    # STEP 1
+    # convert_coco_to_funsd(src_dir, dst_path)
+    # decorate_funsd(dst_path)
     
-    # augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
-    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-    # visualize_funsd(aug_aligned_dst_path)
+    # STEP 2
+    augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    visualize_funsd(aug_aligned_dst_path)
 
-
+    # # STEP 2 : No Augmentation
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
