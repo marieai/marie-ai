@@ -8,7 +8,7 @@ import yaml
 def ensure_exists(dir_to_validate) -> str:
     """Ensure directory exists"""
     if not os.path.exists(dir_to_validate):
-        os.makedirs(dir_to_validate)
+        os.makedirs(dir_to_validate, exist_ok=True)
     return dir_to_validate
 
 
