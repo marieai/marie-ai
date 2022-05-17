@@ -13,8 +13,9 @@ from api import api
 from flask import Flask
 
 from arg_parser import ArgParser
+from common.volume_handler import VolumeHandler
 from version import __version__
-from common.file_io import PathManager, VolumeHandler
+from common.file_io import PathManager
 from logger import setup_logger
 from utils.utils import ensure_exists, FileSystem
 
