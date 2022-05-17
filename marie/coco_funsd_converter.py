@@ -460,7 +460,9 @@ def generate_pan(num_char):
 # @lru_cache(maxsize=20)
 @lru_cache()
 def get_cached_font(font_path, font_size):
-    return ImageFont.truetype(font_path, font_size)
+    # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMono.ttf", font_size, layout_engine=ImageFont.Layout.BASIC)
+    # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMonoBold.ttf", font_size)
+    return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
 
 
 def generate_text(label, width, height, fontPath):
@@ -573,7 +575,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
 
     for k in range(0, count):
         print(f"Iter : {k} of {count} ; {filename} ")
-        font_face = np.random.choice(["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"])
+        font_face = np.random.choice([ "FreeSansOblique.ttf", "FreeSansBold.ttf", "FreeSansBold.ttf", "FreeSans.ttf"])
         font_path = os.path.join("./assets/fonts", font_face)
         draw = ImageDraw.Draw(image_masked)
         form = copy.deepcopy(data["form"])
@@ -662,7 +664,7 @@ def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if False:
+    if True:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -675,7 +677,7 @@ def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if True:
+    if False:
         import time
         from multiprocessing import Pool
 
