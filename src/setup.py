@@ -4,13 +4,13 @@ except ImportError:
     from distutils.core import setup
 
 setup(
-    name='marie-icr',
+    name='marie-ai',
     version='1.0.2',
     include_package_data=True,
     description='Python library to Integrate AI-powered OCR features into your applications',
     author='Greg',
     url='https://github.com/gregbugaj/marie-icr',
-    packages=['marie-icr'],
+    packages=['marie-ai'],
     license='Apache License 2.0',
     keywords=['ocr', 'omr', 'optical character recognition','optical mark recognition', 'iteligent character recognition'],
     install_requires=[

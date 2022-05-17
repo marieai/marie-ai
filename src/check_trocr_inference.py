@@ -14,21 +14,17 @@ from timer import Timer
 
 def init(model_path, beam=5):
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-        [model_path],
-        arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False})
+        [model_path], arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False}
+    )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model[0].to(device)
 
-    img_transform = transforms.Compose([
-        transforms.Resize((384, 384), interpolation=3),
-        transforms.ToTensor(),
-        transforms.Normalize(0.5, 0.5)
-    ])
-
-    generator = task.build_generator(
-        model, cfg.generation, extra_gen_cls_kwargs={'lm_model': None, 'lm_weight': None}
+    img_transform = transforms.Compose(
+        [transforms.Resize((384, 384), interpolation=3), transforms.ToTensor(), transforms.Normalize(0.5, 0.5)]
     )
+
+    generator = task.build_generator(model, cfg.generation, extra_gen_cls_kwargs={"lm_model": None, "lm_weight": None})
 
     bpe = task.build_bpe(cfg.bpe)
 
@@ -37,11 +33,11 @@ def init(model_path, beam=5):
 
 
 def preprocess(img_path, img_transform):
-    im = Image.open(img_path).convert('RGB').resize((384, 384))
+    im = Image.open(img_path).convert("RGB").resize((384, 384))
     im = img_transform(im).unsqueeze(0).to(device).float()
 
     sample = {
-        'net_input': {"imgs": im},
+        "net_input": {"imgs": im},
     }
 
     return sample
@@ -68,8 +64,8 @@ def get_text(cfg, generator, model, sample, bpe):
     return detok_hypo_str
 
 
-if __name__ == '__main__':
-    model_path = '/home/gbugaj/devio/3rdparty/unilm/models/trocr-large-printed.pt'
+if __name__ == "__main__":
+    model_path = "/home/gbugaj/devio/3rdparty/unilm/models/trocr-large-printed.pt"
     burst_dir = "./assets/psm/word"
 
     beam = 5
@@ -80,4 +76,4 @@ if __name__ == '__main__':
         text = get_text(cfg, generator, model, sample, bpe)
         print(f"format : {text}  >> {_path}")
 
-    print('done')
+    print("done")

@@ -231,3 +231,5 @@ ImageMagic 6 policy
 
 ## Models to implement
 https://github.com/ibm-aur-nlp/PubLayNet
+
+DocFormer: End-to-End Transformer for Document Understanding
