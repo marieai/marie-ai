@@ -20,7 +20,7 @@ from typing import (
 
 from common.download import download
 
-__all__ = ["PathManager", "get_cache_dir", "file_lock", "VolumeHandler"]
+__all__ = ["PathManager", "get_cache_dir", "file_lock"]
 
 
 def get_cache_dir(cache_dir: Optional[str] = None) -> str:
