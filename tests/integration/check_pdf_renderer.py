@@ -5,15 +5,15 @@ import numpy as np
 import tqdm
 
 import cv2
-from utils.utils import ensure_exists
+from marie.utils.utils import ensure_exists
 
-from renderer.pdf_renderer import PdfRenderer
-from renderer.text_renderer import TextRenderer
-from boxes.box_processor import PSMode
-from boxes.craft_box_processor import BoxProcessorCraft
-from boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-from document.craft_icr_processor import CraftIcrProcessor
-from document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.renderer.pdf_renderer import PdfRenderer
+from marie.renderer.text_renderer import TextRenderer
+from marie.boxes.box_processor import PSMode
+from marie.boxes.craft_box_processor import BoxProcessorCraft
+from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
+from marie.document.craft_icr_processor import CraftIcrProcessor
+from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 
 from PIL import Image
 

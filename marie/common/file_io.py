@@ -1,26 +1,20 @@
 # Implementation based on fvcore
 
-import errno
 import logging
 import os
-import shutil
-from urllib.parse import urlparse
-
 from collections import OrderedDict
 from typing import (
-    IO,
     Any,
-    Callable,
     Dict,
     List,
     MutableMapping,
     Optional,
-    Union,
 )
+from urllib.parse import urlparse
 
-from common.download import download
+__all__ = ["PathManager", "get_cache_dir", "file_lock", "PathHandler"]
 
-__all__ = ["PathManager", "get_cache_dir", "file_lock"]
+from marie.common.download import download
 
 
 def get_cache_dir(cache_dir: Optional[str] = None) -> str:

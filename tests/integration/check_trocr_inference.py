@@ -1,7 +1,7 @@
 import glob
 import os
 
-import models.unilm.trocr
+import marie.models.unilm.trocr
 import torch
 import fairseq
 from fairseq import utils
@@ -9,7 +9,7 @@ from fairseq_cli import generate
 from PIL import Image
 import torchvision.transforms as transforms
 
-from timer import Timer
+from marie.timer import Timer
 
 
 def init(model_path, beam=5):

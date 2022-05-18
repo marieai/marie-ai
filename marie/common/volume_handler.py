@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any, Dict
 
-from common.file_io import PathHandler, PathManager
+from marie.common.file_io import PathManager, PathHandler
 
 
 class VolumeHandler(PathHandler):
