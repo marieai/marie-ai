@@ -1,9 +1,9 @@
 from flask import Blueprint, jsonify
 from flask_restful import request
 
-import conf
-from logger import setup_logger
-from utils.network import get_ip_address
+import marie.conf
+from marie.logger import setup_logger
+from marie.utils.network import get_ip_address
 
 import glob
 import io
@@ -18,52 +18,48 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 
-from boxes.box_processor import PSMode
-from boxes.craft_box_processor import BoxProcessorCraft
-from common.file_io import PathManager
-from document.craft_icr_processor import CraftIcrProcessor
+from marie.boxes.box_processor import PSMode
+from marie.boxes.craft_box_processor import BoxProcessorCraft
+from marie.common.file_io import PathManager
+from marie.document.craft_icr_processor import CraftIcrProcessor
 from numpyencoder import NumpyEncoder
-from document.trocr_icr_processor import TrOcrIcrProcessor
-from overlay.overlay import OverlayProcessor
-from renderer.adlib_renderer import AdlibRenderer
-from renderer.blob_renderer import BlobRenderer
-from renderer.pdf_renderer import PdfRenderer
-from utils.image_utils import imwrite
-from utils.pdf_ops import merge_pdf
-from utils.tiff_ops import merge_tiff, burst_tiff
-from utils.utils import ensure_exists, FileSystem
-from utils.zip_ops import merge_zip
+from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.overlay.overlay import OverlayProcessor
+from marie.renderer.adlib_renderer import AdlibRenderer
+from marie.renderer.blob_renderer import BlobRenderer
+from marie.renderer.pdf_renderer import PdfRenderer
+from marie.utils.image_utils import imwrite
+from marie.utils.pdf_ops import merge_pdf
+from marie.utils.tiff_ops import merge_tiff, burst_tiff
+from marie.utils.utils import ensure_exists, FileSystem
+from marie.utils.zip_ops import merge_zip
 
 logger = setup_logger(__file__)
 
 # Blueprint Configuration
-blueprint = Blueprint(
-    name='workflow_bp',
-    import_name=__name__,
-    url_prefix=conf.API_PREFIX
-)
+blueprint = Blueprint(name="workflow_bp", import_name=__name__, url_prefix=marie.conf.API_PREFIX)
 
-logger.info('Workflow Routes inited')
+logger.info("Workflow Routes inited")
 show_error = True  # show prediction errors
 
 
-@blueprint.route('/workflow', methods=['GET'])
+@blueprint.route("/workflow", methods=["GET"])
 def status():
     """Get status"""
     host = get_ip_address()
 
-    return jsonify(
-        {
-            "name": "marie-icr",
-            "host": host,
-            "component": [
-                {
-                    "name": "workflow",
-                    "version": "1.0.0"
-                },
-            ],
-        }
-    ), 200
+    return (
+        jsonify(
+            {
+                "name": "marie-icr",
+                "host": host,
+                "component": [
+                    {"name": "workflow", "version": "1.0.0"},
+                ],
+            }
+        ),
+        200,
+    )
 
 
 def write_adlib_summary(adlib_dir, adlib_summary_filename, file_sorter):
@@ -127,6 +123,7 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     root_asset_dir = ensure_exists(os.path.join("/tmp", "assets", doc_id))
 
     from datetime import datetime
+
     backup_time = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     backup_dir = ensure_exists(os.path.join(src_dir, "backup", f"{doc_id}_{backup_time}"))
     # backup_dir = ensure_exists(os.path.join(src_dir, "backup"))
@@ -287,11 +284,11 @@ def workflow(queue_id: str):
         if payload is None:
             return {"error": "empty payload"}, 200
 
-        if 'src' not in payload:
-            return {"error": 'src missing'}, 200
+        if "src" not in payload:
+            return {"error": "src missing"}, 200
 
-        dry_run = True if 'dry-run' not in payload else False
-        src = payload['src']
+        dry_run = True if "dry-run" not in payload else False
+        src = payload["src"]
         process_workflow(src, dry_run)
         serialized = src
 
@@ -302,4 +299,4 @@ def workflow(queue_id: str):
         if show_error:
             return {"error": str(error)}, 500
         else:
-            return {"error": 'inference exception'}, 500
+            return {"error": "inference exception"}, 500
