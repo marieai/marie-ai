@@ -1,4 +1,6 @@
 
+model_zoo/
+
 # Environments
 .env
 .venv

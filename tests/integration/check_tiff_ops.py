@@ -1,8 +1,6 @@
 import os
 
-import cv2
-
-from utils.tiff_ops import burst_tiff, merge_tiff
+from marie.utils.tiff_ops import burst_tiff, merge_tiff
 
 if __name__ == "__main__":
 
@@ -14,4 +12,4 @@ if __name__ == "__main__":
 
     burst_tiff(img_path, dest_dir)
 
-    merge_tiff(dest_dir, '/tmp/output.tif')
+    merge_tiff(dest_dir, "/tmp/output.tif")
