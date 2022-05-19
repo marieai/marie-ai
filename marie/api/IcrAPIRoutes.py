@@ -165,7 +165,7 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     return tmp_file, checksum, file_type
 
 
-def process_extract_fullpage(frames, queue_id, checksum, pms_mode, **kwargs):
+def process_extract_fullpage(frames, queue_id, checksum, pms_mode, args, **kwargs):
     """Process full page extraction"""
     # TODO : Implement multipage tiff processing
 
@@ -187,7 +187,7 @@ def process_extract_fullpage(frames, queue_id, checksum, pms_mode, **kwargs):
     return result
 
 
-def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args):
+def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args, **kwargs):
     """Process region based extract"""
     filter_snippets = bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
     output = []

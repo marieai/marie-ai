@@ -16,20 +16,20 @@ class MemoryDataset(Dataset):
 
     def __getitem__(self, index):
         image = self.images[index]
-        label = f'img-{index}'
+        label = f"img-{index}"
         if type(image) == str:
             try:
                 if self.opt.rgb:
-                    img = Image.open(image).convert('RGB')  # for color image
+                    img = Image.open(image).convert("RGB")  # for color image
                 else:
-                    img = Image.open(image).convert('L')
+                    img = Image.open(image).convert("L")
             except IOError:
-                print(f'Corrupted image for {index}')
+                print(f"Corrupted image for {index}")
                 # make dummy image and dummy label for corrupted image.
                 if self.opt.rgb:
-                    img = Image.new('RGB', (self.opt.imgW, self.opt.imgH))
+                    img = Image.new("RGB", (self.opt.imgW, self.opt.imgH))
                 else:
-                    img = Image.new('L', (self.opt.imgW, self.opt.imgH))
+                    img = Image.new("L", (self.opt.imgW, self.opt.imgH))
 
         elif type(image) == np.ndarray:
             # Convert color to grayscale
@@ -41,8 +41,8 @@ class MemoryDataset(Dataset):
             img = Image.fromarray(image)
 
         if self.opt.rgb:
-            img = img.convert('RGB')  # for color image
+            img = img.convert("RGB")  # for color image
         else:
-            img = img.convert('L')
+            img = img.convert("L")
 
         return img, label
