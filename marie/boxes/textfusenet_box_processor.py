@@ -68,7 +68,7 @@ def get_parser():
         "--output",
         default="./test_synth/",
         help="A file or directory to save output visualizations. "
-             "If not given, will show output in an OpenCV window.",
+        "If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(
@@ -104,10 +104,10 @@ class BoxProcessorTextFuseNet(BoxProcessor):
     """ "TextFuseNet box processor responsible for extracting bounding boxes for given documents"""
 
     def __init__(
-            self,
-            work_dir: str = "/tmp/boxes",
-            models_dir: str = "./model_zoo/textfusenet",
-            cuda: bool = False,
+        self,
+        work_dir: str = "/tmp/boxes",
+        models_dir: str = "./model_zoo/textfusenet",
+        cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         logger.info("Box processor [textfusenet, cuda={}]".format(cuda))
@@ -157,7 +157,7 @@ class BoxProcessorTextFuseNet(BoxProcessor):
 
             # Class 0 == Text
             if classes[i] == 0:
-                snippet = img[y0: y0 + h, x0: x0 + w:]
+                snippet = img[y0 : y0 + h, x0 : x0 + w :]
                 # export cropped region
                 file_path = os.path.join("./result", "snippet_%s.jpg" % i)
                 cv2.imwrite(file_path, snippet)

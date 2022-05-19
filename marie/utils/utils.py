@@ -13,8 +13,15 @@ def ensure_exists(dir_to_validate) -> str:
 
 
 def current_milli_time():
-    """ "Get current time in milliseconds"""
+    """Get current time in milliseconds"""
     return round(time.time() * 1000)
+
+
+def batchify(iterable, batch_size=1):
+    """Batchify iterable"""
+    size = len(iterable)
+    for ndx in range(0, size, batch_size):
+        yield iterable[ndx : min(ndx + batch_size, size)]
 
 
 class FileSystem:

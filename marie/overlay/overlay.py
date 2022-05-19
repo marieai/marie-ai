@@ -5,14 +5,14 @@ import numpy as np
 import cv2
 from shutil import copyfile
 
-from base_handler import BaseHandler
-from timer import Timer
-from utils.utils import ensure_exists
-from utils.image_utils import imwrite, read_image, viewImage
-from models.pix2pix.util.util import tensor2im
-from models.pix2pix.models import create_model
-from models.pix2pix.data import create_dataset
-from models.pix2pix.options.test_options import TestOptions
+from marie.base_handler import BaseHandler
+from marie.timer import Timer
+from marie.utils.utils import ensure_exists
+from marie.utils.image_utils import imwrite, read_image, viewImage
+from marie.models.pix2pix.util.util import tensor2im
+from marie.models.pix2pix.models import create_model
+from marie.models.pix2pix.data import create_dataset
+from marie.models.pix2pix.options.test_options import TestOptions
 
 # Add parent to the search path, so we can reference the module here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))

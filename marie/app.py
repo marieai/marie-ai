@@ -6,18 +6,20 @@ import traceback
 
 import torch
 
-import api.IcrAPIRoutes as IcrAPIRoutes
-import api.WorkflowRoutes as WorkflowRoutes
 import conf
 from api import api
 from flask import Flask
 
 from arg_parser import ArgParser
-from common.volume_handler import VolumeHandler
-from version import __version__
-from common.file_io import PathManager
-from logger import setup_logger
-from utils.utils import ensure_exists, FileSystem
+
+import marie.api.IcrAPIRoutes as IcrAPIRoutes
+import marie.api.WorkflowRoutes as WorkflowRoutes
+
+from marie.common.volume_handler import VolumeHandler
+from marie.version import __version__
+from marie.common.file_io import PathManager
+from marie.logger import setup_logger
+from marie.utils.utils import ensure_exists, FileSystem
 
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
 logger = setup_logger(__file__)
@@ -50,7 +52,6 @@ def create_app():
 
 if __name__ == "__main__":
 
-    print('🦊')
     args = ArgParser.server_parser()
     print(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -69,6 +70,7 @@ if __name__ == "__main__":
     # Setting use_reloader to false prevents application from initializing twice
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"
+    logger.info("Starting 🦊-marie ")
 
     service = create_app()
     service.run(host="0.0.0.0", port=5100, debug=False, use_reloader=False)

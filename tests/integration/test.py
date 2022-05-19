@@ -1,11 +1,15 @@
 import os
+import time
 
 import cv2
 from marie.boxes import BoxProcessorCraft
 from marie.document import CraftIcrProcessor
 from marie.document import TrOcrIcrProcessor
+from marie.logger import setup_logger
 from marie.timer import Timer
 from marie.utils.utils import current_milli_time, ensure_exists
+
+logger = setup_logger(__name__)
 
 # @Timer(text="Creating zip in {:.2f} seconds")
 if __name__ == "__main__":
@@ -19,11 +23,16 @@ if __name__ == "__main__":
     key = img_path.split("/")[-1]
     snippet = cv2.imread(img_path)
 
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="../../model_zoo/craft", cuda=False)
-    # icr = CraftIcrProcessor(work_dir=work_dir_icr, models_dir="../../model_zoo/icr", cuda=False)
-    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=False)
+    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="../../model_zoo/craft", cuda=True)
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True)
 
     boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", snippet)
-    for xx in range(0, 10):
+
+    start = time.time()
+    for xx in range(0, 1):
+        start_iter = time.time()
         results = icr.recognize(key, "test", snippet, boxes, img_fragments, lines)
-        print(xx)
+        print(len(results))
+        logger.info("iter time: %s" % (time.time() - start_iter))
+
+    logger.info("Elapsed: %s" % (time.time() - start))
