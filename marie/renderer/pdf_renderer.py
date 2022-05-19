@@ -7,7 +7,7 @@ from PyPDF4 import PdfFileWriter, PdfFileReader
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from renderer.renderer import ResultRenderer
+from marie.renderer.renderer import ResultRenderer
 
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java

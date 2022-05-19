@@ -8,11 +8,12 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
 
-from document.icr_processor import IcrProcessor, Object
-from models.icr.dataset import AlignCollate, RawDataset
-from models.icr.memory_dataset import MemoryDataset
-from models.icr.model import Model
-from models.icr.utils import CTCLabelConverter, AttnLabelConverter
+from marie.document.icr_processor import IcrProcessor
+from marie.lang import Object
+from marie.models.icr.dataset import AlignCollate, RawDataset
+from marie.models.icr.memory_dataset import MemoryDataset
+from marie.models.icr.model import Model
+from marie.models.icr.utils import CTCLabelConverter, AttnLabelConverter
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -131,9 +132,11 @@ def compute_input(image):
 
 
 class CraftIcrProcessor(IcrProcessor):
-    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
+    def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/icr", cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
         print("CRAFT ICR processor [cuda={}]".format(cuda))
+
+        saved_model = os.path.join(models_dir, "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft", "best_accuracy.pth")
 
         if True:
             opt = Object()
@@ -141,7 +144,7 @@ class CraftIcrProcessor(IcrProcessor):
             opt.FeatureExtraction = "ResNet"
             opt.SequenceModeling = "BiLSTM"
             opt.Prediction = "Attn"
-            opt.saved_model = "./model_zoo/icr/TPS-ResNet-BiLSTM-Attn-case-sensitive-ft/best_accuracy.pth"
+            opt.saved_model = saved_model
             opt.sensitive = True
             opt.imgH = 32
             opt.imgW = 100

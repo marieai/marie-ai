@@ -12,9 +12,10 @@ import torch
 import torch.backends.cudnn as cudnn
 
 from boxes.box_processor import PSMode
-from boxes.craft_box_processor import BoxProcessorCraft
-from common.file_io import PathManager, VolumeHandler
+from boxes import BoxProcessorCraft
+from common.file_io import PathManager
 from document.craft_icr_processor import CraftIcrProcessor
+from marie.common.volume_handler import VolumeHandler
 from numpyencoder import NumpyEncoder
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from overlay.overlay import OverlayProcessor

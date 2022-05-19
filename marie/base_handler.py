@@ -6,12 +6,11 @@ Also, provides handle method per torch serve custom model specification
 import abc
 import logging
 import os
-import importlib.util
 import time
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 
-from logger import setup_logger
+from marie.logger import setup_logger
 
 logger = setup_logger(__name__)
 

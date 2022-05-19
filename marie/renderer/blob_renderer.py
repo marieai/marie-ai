@@ -6,7 +6,7 @@ from PyPDF4 import PdfFileWriter, PdfFileReader
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from xml.sax.saxutils import escape, quoteattr
-from renderer.renderer import ResultRenderer
+from marie.renderer.renderer import ResultRenderer
 
 
 class BlobRenderer(ResultRenderer):

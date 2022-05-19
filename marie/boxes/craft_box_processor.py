@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-# Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception
 from __future__ import print_function
 
 import os
@@ -10,25 +8,26 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 
-from timer import Timer
-from utils.image_utils import paste_fragment, viewImage
-from line_processor import line_refiner
-from line_processor import find_line_index
+from marie.lang import Object
+from marie.timer import Timer
+from marie.utils.image_utils import paste_fragment, viewImage
+from .line_processor import line_refiner
+from .line_processor import find_line_index
 
 import copy
 import cv2
 import numpy as np
 
-from models import craft
-from models.craft.craft import CRAFT
+from marie.models import craft
+from marie.models.craft.craft import CRAFT
 
-import models.craft.craft_utils
-import models.craft.file_utils
-import models.craft.imgproc
+import marie.models.craft.craft_utils
+import marie.models.craft.file_utils
+import marie.models.craft.imgproc
 
 from PIL import Image
-from boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict, Object
-from utils.utils import ensure_exists
+from marie.boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict
+from marie.utils.utils import ensure_exists
 
 # FIXME : Rework package import
 # sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -85,18 +84,15 @@ def get_prediction(
     show_time = True
     t0 = time.time()
 
-    # image[image >= 1] = [200]
     # resize
     img_resized, target_ratio, size_heatmap = craft.imgproc.resize_aspect_ratio(
         image, canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=mag_ratio
     )
     ratio_h = ratio_w = 1 / target_ratio
-    # image[image == 255] = 80
-
-    cv2.imwrite("/tmp/fragments/img_resized.png", img_resized)
+    # cv2.imwrite("/tmp/fragments/img_resized.png", img_resized)
     # preprocessing
     x = craft.imgproc.normalizeMeanVariance(img_resized)
-    cv2.imwrite("/tmp/fragments/norm.png", x)
+    # cv2.imwrite("/tmp/fragments/norm.png", x)
 
     x = torch.from_numpy(x).permute(2, 0, 1)  # [h, w, c] to [c, h, w]
     x = Variable(x.unsqueeze(0))  # [c, h, w] to [b, c, h, w]
@@ -142,8 +138,8 @@ def get_prediction(
     if show_time:
         print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    cv2.imwrite("/tmp/fragments/render_img.png", render_img)
-    cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
+    # cv2.imwrite("/tmp/fragments/render_img.png", render_img)
+    # cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
 
     estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text
@@ -180,7 +176,8 @@ class BoxProcessorCraft(BoxProcessor):
         if cuda:
             net = net.cuda()
             net = torch.nn.DataParallel(net)
-            cudnn.benchmark = True
+            # this option is good if the input size does not change each time
+            # cudnn.benchmark = True
 
         net.eval()
 
@@ -399,7 +396,6 @@ class BoxProcessorCraft(BoxProcessor):
                     cv2.imwrite(file_path, snippet)
 
                 paste_fragment(pil_image, snippet, (x, y))
-
                 # break
             savepath = os.path.join(debug_dir, "%s.png" % ("txt_overlay"))
             pil_image.save(savepath, format="PNG", subsampling=0, quality=100)

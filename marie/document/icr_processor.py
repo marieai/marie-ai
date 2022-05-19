@@ -8,16 +8,12 @@ import cv2
 import base64
 import json
 
-from timer import Timer
+from marie.timer import Timer
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
-from utils.utils import ensure_exists
+from marie.utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
-
-
-class Object(object):
-    pass
 
 
 def encodeimg2b64(img: np.ndarray) -> str:
@@ -126,7 +122,7 @@ class IcrProcessor(ABC):
                         overlay_image, conf_label, (box[0], box[1] + box[3]), 10, (0, 0, 255)
                     )
 
-            if True:
+            if False:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
                 cv2.imwrite(savepath, overlay_image)
 
@@ -137,7 +133,7 @@ class IcrProcessor(ABC):
             words = np.array(words)
 
             for i in range(0, max(1, max_line_number)):
-                current_lid = i #+ 1
+                current_lid = i  # + 1
                 word_ids = []
                 box_picks = []
                 word_picks = []
@@ -161,7 +157,7 @@ class IcrProcessor(ABC):
                             "line": i + 1,
                             "wordids": word_ids,
                             "text": "",
-                            "bbox": [0,0,0,0],
+                            "bbox": [0, 0, 0, 0],
                             "confidence": round(0, 4),
                         }
 
