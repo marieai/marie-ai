@@ -5,10 +5,11 @@ import time
 import typing
 from random import random
 
-import models.unilm.trocr
+import marie.models.unilm.trocr
 
 # import models.unilm.trocr.task
-from models.unilm.trocr.task import SROIETextRecognitionTask
+from marie.lang import Object
+from marie.models.unilm.trocr.task import SROIETextRecognitionTask
 
 import numpy as np
 import torch
@@ -17,8 +18,8 @@ import torch.nn.functional as F
 import torch.utils.data
 from numpyencoder import NumpyEncoder
 
-from document.icr_processor import IcrProcessor
-from models.icr.memory_dataset import MemoryDataset
+from marie.document.icr_processor import IcrProcessor
+from marie.models.icr.memory_dataset import MemoryDataset
 
 import fairseq
 from fairseq import utils
@@ -26,7 +27,7 @@ from fairseq_cli import generate
 from PIL import Image
 import torchvision.transforms as transforms
 
-from timer import Timer
+from marie.timer import Timer
 
 import multiprocessing as mp
 import functools
@@ -41,11 +42,8 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-class Object(object):
-    pass
-
-
-def init(model_path, beam=5):
+@Timer(text="Preprocess in {:.4f} seconds")
+def initXXX(model_path, beam=5):
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path], arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False}
     )
@@ -64,10 +62,31 @@ def init(model_path, beam=5):
     return model, cfg, task, generator, bpe, img_transform, device
 
 
-# @Timer(text="Preprocess in {:.4f} seconds")
+def init(model_path, beam=5):
+    model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
+        [model_path], arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": True}
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model[0].to(device)
+
+    img_transform = transforms.Compose(
+        [transforms.Resize((384, 384), interpolation=3), transforms.ToTensor(), transforms.Normalize(0.5, 0.5)]
+    )
+
+    generator = inference_task.build_generator(
+        model, cfg.generation, extra_gen_cls_kwargs={"lm_model": None, "lm_weight": None}
+    )
+
+    bpe = inference_task.build_bpe(cfg.bpe)
+
+    return model, cfg, inference_task, generator, bpe, img_transform, device
+
+
+@Timer(text="Preprocess in {:.4f} seconds")
 def preprocess(pil_img, img_transform):
     # im = pil_img.convert("RGB").resize((384, 384))
-    im = pil_img.convert("RGB")  # .resize((384, 384))
+    im = pil_img.convert("RGB").resize((384, 384))
     im = img_transform(im).unsqueeze(0).to(device).float()
 
     sample = {
@@ -77,7 +96,7 @@ def preprocess(pil_img, img_transform):
     return sample
 
 
-# @Timer(text="Text in {:.4f} seconds")
+@Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, sample, bpe):
     decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
     decoder_output = decoder_output[0][0]  # top1
@@ -126,7 +145,7 @@ def work_process(img, name):
 class TrOcrIcrProcessor(IcrProcessor):
     def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/trocr", cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
-        model_path = "./model_zoo/trocr/trocr-large-printed.pt"
+        model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         print(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
 
         if not os.path.exists(model_path):
@@ -265,6 +284,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             for img, img_name in eval_data:
                 sample = preprocess(img, self.img_transform)
                 text = get_text(self.cfg, self.task, self.generator, self.model, sample, self.bpe)
+                # text = ""
                 confidence = 0
                 results.append({"confidence": confidence, "text": text, "id": img_name})
             print("ICR Time elapsed: %s" % (time.time() - start))

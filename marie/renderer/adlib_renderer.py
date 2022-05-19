@@ -1,4 +1,4 @@
-from renderer.renderer import ResultRenderer
+from marie.renderer.renderer import ResultRenderer
 
 
 class AdlibRenderer(ResultRenderer):

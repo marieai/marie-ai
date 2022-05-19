@@ -6,11 +6,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from base_handler import BaseHandler
-
-
-class Object(object):
-    pass
+from marie.base_handler import BaseHandler
 
 
 def copyStateDict(state_dict):

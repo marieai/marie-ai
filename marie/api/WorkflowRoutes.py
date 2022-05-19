@@ -34,6 +34,8 @@ from marie.utils.tiff_ops import merge_tiff, burst_tiff
 from marie.utils.utils import ensure_exists, FileSystem
 from marie.utils.zip_ops import merge_zip
 
+from marie.version import __version__
+
 logger = setup_logger(__file__)
 
 # Blueprint Configuration
@@ -47,15 +49,12 @@ show_error = True  # show prediction errors
 def status():
     """Get status"""
     host = get_ip_address()
-
     return (
         jsonify(
             {
-                "name": "marie-icr",
+                "name": "marie-ai",
                 "host": host,
-                "component": [
-                    {"name": "workflow", "version": "1.0.0"},
-                ],
+                "component": [{"name": "workflow", "version": __version__}],
             }
         ),
         200,
@@ -155,8 +154,9 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cuda_present = torch.cuda.is_available()
 
-    cudnn.benchmark = True
-    cudnn.deterministic = True
+    if False:
+        cudnn.benchmark = True
+        cudnn.deterministic = True
 
     overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
     box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)

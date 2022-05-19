@@ -6,17 +6,17 @@ import cv2
 import numpy as np
 import torch
 
-from logger import setup_logger
-from models.textfusenet.detectron2.config import get_cfg
-from models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
-from models.textfusenet.detectron2.utils.colormap import random_color
+from marie.logger import setup_logger
+from marie.models.textfusenet.detectron2.config import get_cfg
+from marie.models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
+from marie.models.textfusenet.detectron2.utils.colormap import random_color
 
-from models.textfusenet.detectron2.engine.defaults import DefaultPredictor
+from marie.models.textfusenet.detectron2.engine.defaults import DefaultPredictor
 from PIL import Image
 
-from boxes.box_processor import BoxProcessor, PSMode
-from utils.image_utils import paste_fragment, imwrite
-from utils.utils import ensure_exists
+from marie.boxes.box_processor import BoxProcessor, PSMode
+from marie.utils.image_utils import paste_fragment, imwrite
+from marie.utils.utils import ensure_exists
 
 logger = setup_logger(__name__)
 

@@ -242,7 +242,7 @@ class PathManager:
         Args:
             handler (PathHandler)
         """
-        assert isinstance(handler, PathHandler), handler
+        # assert isinstance(handler, PathHandler), handler
         for prefix in handler._get_supported_prefixes():
             assert prefix not in PathManager._PATH_HANDLERS
             PathManager._PATH_HANDLERS[prefix] = handler

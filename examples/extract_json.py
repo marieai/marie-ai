@@ -2,7 +2,7 @@ import base64
 import os
 import requests
 
-api_base_url = 'http://127.0.0.1:5000/api'
+api_base_url = 'http://127.0.0.1:5100/api/'
 default_queue_id = '0000-0000-0000-0000'
 api_key = 'MY_API_KEY'
 
@@ -13,15 +13,16 @@ auth_headers = {
 def online(api_ulr) -> bool:
     import requests
     r = requests.head(api_ulr)
-    return r.status_code == 200
+    # The 308 (Permanent Redirect)
+    return r.status_code == 200 or r.status_code == 308
 
 def process_extract(queue_id: str, file_location: str) -> str:
     if not os.path.exists(file_location):
         raise Exception(f'File not found : {file_location}')
     upload_url = f'{api_base_url}/extract/{queue_id}'
 
-    # if not online(api_base_url):
-    #     raise Exception(f"API server is not online : {api_base_url}")
+    if not online(api_base_url):
+        raise Exception(f"API server is not online : {api_base_url}")
 
     # Prepare file for upload
     with open(file_location, 'rb') as file:
@@ -35,7 +36,7 @@ def process_extract(queue_id: str, file_location: str) -> str:
 
         print(json_payload)
         # Upload file to api
-        print(f'Uploading to marie-icr for processing : {file}')
+        print(f'Uploading to marie-ai for processing : {file}')
         json_result = requests.post(
             upload_url,
             headers=auth_headers,

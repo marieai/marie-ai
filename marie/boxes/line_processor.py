@@ -7,7 +7,7 @@ from typing import List, Any
 import cv2
 import numpy as np
 
-from utils.overlap import find_overlap
+from marie.utils.overlap import find_overlap
 
 
 def find_line_index(lines, box):

@@ -9,5 +9,8 @@ from __future__ import absolute_import
 import os
 import sys
 
+from .craft_box_processor import BoxProcessorCraft
+from .textfusenet_box_processor import BoxProcessorTextFuseNet
+from .box_processor import PSMode
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
