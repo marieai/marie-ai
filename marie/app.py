@@ -45,7 +45,7 @@ def create_app():
 
     with app.app_context():
         # app.register_blueprint(IcrAPIRoutes.blueprint)
-        # app.register_blueprint(WorkflowRoutes.blueprint)
+        app.register_blueprint(WorkflowRoutes.blueprint)
         RouteHandler.register_route(SampleRouter(app))
 
     return app
@@ -74,4 +74,4 @@ if __name__ == "__main__":
     logger.info("Starting 🦊-marie ")
 
     service = create_app()
-    service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    # service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
