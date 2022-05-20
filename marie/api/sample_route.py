@@ -1,5 +1,8 @@
-class SampleRouter:
-    def __init__(self, app):
+from marie import Executor, requests
+
+
+class SampleRouter(Executor):
+    def __init__(self, app, **kwargs):
         if app is None:
             raise RuntimeError("Expected app arguments is null")
         app.add_url_rule(rule="/info", endpoint="info", view_func=self.info, methods=["GET"])
