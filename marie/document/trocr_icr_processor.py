@@ -122,6 +122,8 @@ def get_text(cfg, task, generator, model, samples, bpe) -> [str]:
 class TrOcrIcrProcessor(IcrProcessor):
     def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/trocr", cuda: bool = True) -> None:
         super().__init__(work_dir, cuda)
+        pass
+
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
 

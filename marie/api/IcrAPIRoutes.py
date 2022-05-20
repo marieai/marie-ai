@@ -10,13 +10,13 @@ from distutils.util import strtobool as strtobool
 import numpy as np
 
 import cv2
+
 import marie.conf
 import marie.processors
 
 from flask import Blueprint, jsonify
 from flask_restful import Resource, reqparse, request
-from numpyencoder import NumpyEncoder
-
+from marie.numpyencoder import NumpyEncoder
 from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
 from marie.boxes.box_processor import PSMode
 from marie.logger import setup_logger
@@ -34,6 +34,8 @@ def load_image(fname, image_type):
     Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
     array with image as first element
     """
+    import skimage.io as skio
+
     if fname is None:
         return False, None
 
@@ -50,7 +52,7 @@ def load_image(fname, image_type):
 
         return loaded, converted
 
-    img = io.imread(fname)  # RGB order
+    img = skio.imread(fname)  # RGB order
     if img.shape[0] == 2:
         img = img[0]
     if len(img.shape) == 2:
@@ -66,9 +68,6 @@ def load_image(fname, image_type):
 blueprint = Blueprint(name="icr_bp", import_name=__name__, url_prefix=marie.conf.API_PREFIX)
 
 logging.info("IcrAPIRoutes inited")
-
-# box_processor = processors.box_processor
-# icr_processor = processors.icr_processor
 show_error = True  # show prediction errors
 
 
@@ -187,7 +186,7 @@ def process_extract_fullpage(frames, queue_id, checksum, pms_mode, args, **kwarg
     return result
 
 
-def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args, **kwargs):
+def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args):
     """Process region based extract"""
     filter_snippets = bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
     output = []

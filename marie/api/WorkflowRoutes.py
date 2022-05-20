@@ -22,7 +22,7 @@ from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.common.file_io import PathManager
 from marie.document.craft_icr_processor import CraftIcrProcessor
-from numpyencoder import NumpyEncoder
+from marie.numpyencoder import NumpyEncoder
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 from marie.overlay.overlay import OverlayProcessor
 from marie.renderer.adlib_renderer import AdlibRenderer
