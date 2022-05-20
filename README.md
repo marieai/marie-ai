@@ -154,7 +154,7 @@ docker exe -it marie_redis sh
 ## Codestyle / Formatting
 
 ```sh
-black  ./utils/ --line-length 119
+
 ```
 ## Issues
 

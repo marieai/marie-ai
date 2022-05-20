@@ -1,0 +1,14 @@
+class SampleRouter:
+    def __init__(self, app):
+        if app is None:
+            raise RuntimeError("Expected app arguments is null")
+        app.add_url_rule(rule="/info", endpoint="info", view_func=self.info, methods=["GET"])
+        app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
+
+    def status(self, queue_id):
+        print(f"Self : {self}")
+        return {"routed": f"reply={queue_id}"}
+
+    def info(self):
+        print(f"Self : {self}")
+        return {"index": "complete"}

@@ -11,6 +11,7 @@ import torch
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from marie.logger import setup_logger
+from marie.registry_base import RegistryHolder
 
 logger = setup_logger(__name__)
 
@@ -24,11 +25,12 @@ if os.environ.get("MARIE_IPEX_ENABLE", "false") == "true":
         logger.warning("IPEX is enabled but intel-extension-for-pytorch is not installed. Proceeding without IPEX.")
 
 
-class BaseHandler(abc.ABC):
+class BaseHandler(metaclass=RegistryHolder):
     """
     Base default handler to load torchscript or eager mode [state_dict] models
     Also, provides handle method per torch serve custom model specification
     """
+    pass
 
     def __init__(self):
         self.model = None

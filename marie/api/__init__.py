@@ -5,7 +5,7 @@ from marie.api.QueueAPI import QueueAPI, QueueListAPI
 from marie.api.SegmenterAPI import SegmenterAPI, SegmenterListAPI
 from flask_restful import Api
 
-api = Api(prefix=marie.conf.API_PREFIX) # AttributeError: module 'config' has no attribute 'API_PREFIX
+api = Api(prefix=marie.conf.API_PREFIX)  # AttributeError: module 'config' has no attribute 'API_PREFIX
 
 # # Queues
 # api.add_resource(QueueListAPI, '/queues', endpoint='queues')

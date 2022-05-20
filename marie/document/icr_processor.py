@@ -8,6 +8,7 @@ import cv2
 import base64
 import json
 
+from marie.base_handler import BaseHandler
 from marie.timer import Timer
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
@@ -23,8 +24,9 @@ def encodeimg2b64(img: np.ndarray) -> str:
     return png_as_text
 
 
-class IcrProcessor(ABC):
+class IcrProcessor(BaseHandler):
     def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
+        super().__init__()
         print("Base ICR processor [cuda={}]".format(cuda))
         self.cuda = cuda
         self.work_dir = work_dir

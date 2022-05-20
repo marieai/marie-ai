@@ -14,6 +14,8 @@ from arg_parser import ArgParser
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
 import marie.api.WorkflowRoutes as WorkflowRoutes
+from marie.api.route_handler import RouteHandler
+from marie.api.sample_route import SampleRouter
 
 from marie.common.volume_handler import VolumeHandler
 from marie.version import __version__
@@ -42,10 +44,9 @@ def create_app():
         return {"version": __version__}
 
     with app.app_context():
-        # Import parts of our application
-        # Register Blueprints
-        app.register_blueprint(IcrAPIRoutes.blueprint)
-        app.register_blueprint(WorkflowRoutes.blueprint)
+        # app.register_blueprint(IcrAPIRoutes.blueprint)
+        # app.register_blueprint(WorkflowRoutes.blueprint)
+        RouteHandler.register_route(SampleRouter(app))
 
     return app
 
@@ -73,4 +74,4 @@ if __name__ == "__main__":
     logger.info("Starting 🦊-marie ")
 
     service = create_app()
-    service.run(host="0.0.0.0", port=5100, debug=False, use_reloader=False)
+    service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

@@ -7,6 +7,7 @@ import cv2
 
 def read_image(image):
     """Read image and convert to OpenCV compatible format"""
+    img = None
     if type(image) == str:
         img = cv2.imread(image)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -19,9 +20,9 @@ def read_image(image):
     elif type(image) == np.ndarray:
         if len(image.shape) == 2:  # grayscale
             img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        elif len(image.shape) == 3 and image.shape[2] == 3:  # BGRscale
+        elif len(image.shape) == 3 and image.shape[2] == 3:  # BGR
             img = image
-        elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBAscale
+        elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBA
             img = image[:, :, :3]
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     elif type(image) == PIL.Image.Image: # convert pil to OpenCV
