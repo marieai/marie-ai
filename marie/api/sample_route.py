@@ -8,6 +8,7 @@ class SampleRouter(Executor):
         app.add_url_rule(rule="/info", endpoint="info", view_func=self.info, methods=["GET"])
         app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
 
+    # @requests('xx')
     def status(self, queue_id):
         print(f"Self : {self}")
         return {"routed": f"reply={queue_id}"}
