@@ -2,8 +2,8 @@ from math import ceil
 
 import numpy as np
 
-from renderer.renderer import ResultRenderer
-from utils.types import strtobool
+from marie.renderer.renderer import ResultRenderer
+from marie.utils.types import strtobool
 
 
 class TextRenderer(ResultRenderer):

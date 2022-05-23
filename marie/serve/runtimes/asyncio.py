@@ -6,11 +6,13 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional, Union
 
 from marie import __windows__
+
 # from jina.importer import ImportExtensions
 # from jina.serve.networking import GrpcConnectionPool
 # from jina.serve.runtimes.base import BaseRuntime
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.monitoring import MonitoringMixin
+
 # from jina.types.request.control import ControlRequest
 # from jina.types.request.data import DataRequest
 
@@ -24,8 +26,10 @@ if TYPE_CHECKING:
 class ControlRequest:
     pass
 
+
 class DataRequest:
     pass
+
 
 class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
     """
@@ -34,10 +38,8 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
 
     def __init__(
         self,
-        args: 'argparse.Namespace',
-        cancel_event: Optional[
-            Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
-        ] = None,
+        args: "argparse.Namespace",
+        cancel_event: Optional[Union["asyncio.Event", "multiprocessing.Event", "threading.Event"]] = None,
         **kwargs,
     ):
         super().__init__(args, **kwargs)
@@ -47,28 +49,26 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         if not __windows__:
             # TODO: windows event loops don't support signal handlers
             try:
-                for signame in {'SIGINT', 'SIGTERM'}:
+                for signame in {"SIGINT", "SIGTERM"}:
                     self._loop.add_signal_handler(
                         getattr(signal, signame),
                         lambda *args, **kwargs: self.is_cancel.set(),
                     )
             except (ValueError, RuntimeError) as exc:
                 self.logger.warning(
-                    f' The runtime {self.__class__.__name__} will not be able to handle termination signals. '
-                    f' {repr(exc)}'
+                    f" The runtime {self.__class__.__name__} will not be able to handle termination signals. "
+                    f" {repr(exc)}"
                 )
         else:
             with ImportExtensions(
                 required=True,
                 logger=self.logger,
-                help_text='''If you see a 'DLL load failed' error, please reinstall `pywin32`.
-                If you're using conda, please use the command `conda install -c anaconda pywin32`''',
+                help_text="""If you see a 'DLL load failed' error, please reinstall `pywin32`.
+                If you're using conda, please use the command `conda install -c anaconda pywin32`""",
             ):
                 import win32api
 
-            win32api.SetConsoleCtrlHandler(
-                lambda *args, **kwargs: self.is_cancel.set(), True
-            )
+            win32api.SetConsoleCtrlHandler(lambda *args, **kwargs: self.is_cancel.set(), True)
 
         self._setup_monitoring()
         self._loop.run_until_complete(self.async_setup())
@@ -104,7 +104,7 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         try:
             await asyncio.gather(self.async_run_forever(), self._wait_for_cancel())
         except asyncio.CancelledError:
-            self.logger.warning('received terminate ctrl message from main process')
+            self.logger.warning("received terminate ctrl message from main process")
 
     def _cancel(self):
         """
@@ -161,7 +161,7 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
     @staticmethod
     def wait_for_ready_or_shutdown(
         timeout: Optional[float],
-        ready_or_shutdown_event: Union['multiprocessing.Event', 'threading.Event'],
+        ready_or_shutdown_event: Union["multiprocessing.Event", "threading.Event"],
         ctrl_address: str,
         **kwargs,
     ):
@@ -177,9 +177,7 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         timeout_ns = 1000000000 * timeout if timeout else None
         now = time.time_ns()
         while timeout_ns is None or time.time_ns() - now < timeout_ns:
-            if ready_or_shutdown_event.is_set() or AsyncNewLoopRuntime.is_ready(
-                ctrl_address
-            ):
+            if ready_or_shutdown_event.is_set() or AsyncNewLoopRuntime.is_ready(ctrl_address):
                 return True
             time.sleep(0.1)
         return False
@@ -191,11 +189,7 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
             self._log_control_request(request)
 
     def _log_control_request(self, request: ControlRequest):
-        self.logger.debug(
-            f'recv ControlRequest {request.command} with id: {request.header.request_id}'
-        )
+        self.logger.debug(f"recv ControlRequest {request.command} with id: {request.header.request_id}")
 
     def _log_data_request(self, request: DataRequest):
-        self.logger.debug(
-            f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
-        )
+        self.logger.debug(f"recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}")
