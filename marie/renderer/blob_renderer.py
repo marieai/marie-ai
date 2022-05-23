@@ -1,10 +1,3 @@
-import io
-
-import cv2
-from PIL import Image
-from PyPDF4 import PdfFileWriter, PdfFileReader
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
 from xml.sax.saxutils import escape, quoteattr
 from marie.renderer.renderer import ResultRenderer
 
