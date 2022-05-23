@@ -1,5 +1,6 @@
 import threading
-from typing import Dict
+from typing import Dict, TYPE_CHECKING, Optional, Tuple
+
 
 # based on jina
 
@@ -80,3 +81,33 @@ def convert_tuple_to_list(d: Dict):
             d[k] = list(v)
         elif isinstance(v, dict):
             convert_tuple_to_list(v)
+
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
+    """Extend Marie built-in FastAPI instance with customized APIs, routing, etc.
+
+    :param app: the built-in FastAPI instance given by Marie
+    :return: the extended FastAPI instance
+
+    .. highlight:: python
+    .. code-block:: python
+
+        def extend_rest_interface(app: 'FastAPI'):
+            @app.get('/extension1')
+            async def root():
+                return {"message": "Hello World"}
+
+            return app
+    """
+    return app
+
+
+def get_full_version() -> Optional[Tuple[Dict, Dict]]:
+    info = {
+        'marie': "-1.-1.-1"
+    }
+    return info
