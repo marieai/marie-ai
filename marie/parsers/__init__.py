@@ -1,5 +1,6 @@
 from marie.parsers.helper import _SHOW_ALL_ARGS
 
+
 def set_pod_parser(parser=None):
     """Set the parser for the Pod
 
@@ -86,8 +87,8 @@ def set_gateway_parser(parser=None):
     from marie.enums import DeploymentRoleType
 
     parser.set_defaults(
-        name='gateway',
-        runtime_cls='GRPCGatewayRuntime',
+        name="gateway",
+        runtime_cls="GRPCGatewayRuntime",
         deployment_role=DeploymentRoleType.GATEWAY,
     )
 
@@ -107,9 +108,9 @@ def set_help_parser(parser=None):
         parser = set_base_parser()
 
     parser.add_argument(
-        'query',
+        "query",
         type=str,
-        help='Lookup the usage & mention of the argument name in Marie API. The name can be fuzzy',
+        help="Lookup the usage & mention of the argument name in Marie API. The name can be fuzzy",
     )
     return parser
 
@@ -128,51 +129,51 @@ def get_main_parser():
     parser = set_base_parser()
 
     sp = parser.add_subparsers(
-        dest='cli',
+        dest="cli",
         required=True,
     )
 
     set_pod_parser(
         sp.add_parser(
-            'executor',
-            help='Start an Executor',
-            description='Start an Executor. Executor is how Marie processes Document.',
+            "executor",
+            help="Start an Executor",
+            description="Start an Executor. Executor is how Marie processes Document.",
             formatter_class=_chf,
         )
     )
 
     set_flow_parser(
         sp.add_parser(
-            'flow',
-            description='Start a Flow. Flow is how Marie streamlines and distributes Executors.',
-            help='Start a Flow',
+            "flow",
+            description="Start a Flow. Flow is how Marie streamlines and distributes Executors.",
+            help="Start a Flow",
             formatter_class=_chf,
         )
     )
 
     set_ping_parser(
         sp.add_parser(
-            'ping',
-            help='Ping an Executor',
-            description='Ping a Deployment and check its network connectivity.',
+            "ping",
+            help="Ping an Executor",
+            description="Ping a Deployment and check its network connectivity.",
             formatter_class=_chf,
         )
     )
 
     set_gateway_parser(
         sp.add_parser(
-            'gateway',
-            description='Start a Gateway that receives client Requests via gRPC/REST interface',
-            **(dict(help='Start a Gateway')) if _SHOW_ALL_ARGS else {},
+            "gateway",
+            description="Start a Gateway that receives client Requests via gRPC/REST interface",
+            **(dict(help="Start a Gateway")) if _SHOW_ALL_ARGS else {},
             formatter_class=_chf,
         )
     )
 
     set_help_parser(
         sp.add_parser(
-            'help',
-            help='Show help text of a CLI argument',
-            description='Show help text of a CLI argument',
+            "help",
+            help="Show help text of a CLI argument",
+            description="Show help text of a CLI argument",
             formatter_class=_chf,
         )
     )
@@ -180,23 +181,23 @@ def get_main_parser():
 
     set_pod_parser(
         sp.add_parser(
-            'pod',
-            description='Start a Pod. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            "pod",
+            description="Start a Pod. "
+            "You should rarely use this directly unless you "
+            "are doing low-level orchestration",
             formatter_class=_chf,
-            **(dict(help='Start a Pod')) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Start a Pod")) if _SHOW_ALL_ARGS else {},
         )
     )
 
     set_deployment_parser(
         sp.add_parser(
-            'deployment',
-            description='Start a Deployment. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            "deployment",
+            description="Start a Deployment. "
+            "You should rarely use this directly unless you "
+            "are doing low-level orchestration",
             formatter_class=_chf,
-            **(dict(help='Start a Deployment')) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Start a Deployment")) if _SHOW_ALL_ARGS else {},
         )
     )
 

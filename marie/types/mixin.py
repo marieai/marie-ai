@@ -1,5 +1,7 @@
 from typing import Dict
 
+from marie.helper import typename
+
 
 class ProtoTypeMixin:
     """The base mixin class of all Marie types."""
@@ -28,11 +30,11 @@ class ProtoTypeMixin:
         raise NotImplemented
 
     def __getstate__(self):
-        raise NotImplemented
+        return self._pb_body.__getstate__()
 
     def __setstate__(self, state):
         self.__init__()
-        raise NotImplemented
+        self._pb_body.__setstate__(state)
 
     @property
     def nbytes(self) -> int:
@@ -43,10 +45,13 @@ class ProtoTypeMixin:
         return len(bytes(self))
 
     def __getattr__(self, name: str):
-        raise NotImplemented
+        return getattr(self._pb_body, name)
 
     def __repr__(self):
-        raise NotImplemented
+        # content = str(tuple(field[0].name for field in self.proto.__getstate__))
+        content = ""
+        content += f' at {id(self)}'
+        return f'<{typename(self)} {content.strip()}>'
 
     def clear(self) -> None:
         """Remove all values from all fields of this Document."""

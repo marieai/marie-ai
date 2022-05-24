@@ -20,3 +20,7 @@ class PortAlreadyUsed(RuntimeError, BaseMarieException):
 
 class InternalNetworkError(BaseMarieException):
     """Internal network exception."""
+
+
+class BadRequestType(TypeError, BaseMarieException):
+    """Exception when can not construct a request object from given data."""
