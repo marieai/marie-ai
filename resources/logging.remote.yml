@@ -1,0 +1,18 @@
+handlers:
+  - StreamHandler
+  - SysLogHandler
+level: INFO
+configs:
+  FileHandler:
+    format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    output: 'marie-%(uptime)s.log'
+    formatter: JsonFormatter
+  StreamHandler:
+    format: '🌏 %(message)s'
+    formatter: PlainFormatter
+  SysLogHandler:
+    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    host: # when not given then record it locally
+    port: # when not given then record it locally
+    formatter: PlainFormatter
+

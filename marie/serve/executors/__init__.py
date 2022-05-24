@@ -1,8 +1,12 @@
+import contextlib
 import inspect
+import os
+import warnings
 from types import SimpleNamespace
 from typing import Optional, Dict
 
-from marie.helper import typename
+from marie import env_var_regex, __default_endpoint__
+from marie.helper import typename, iscoroutinefunction
 from marie.importer import ImportExtensions
 from marie.serve.executors.decorators import wrap_func, store_init_kwargs
 
@@ -114,7 +118,34 @@ class BaseExecutor(metaclass=ExecutorType):
                     )
 
     def _add_metas(self, _metas: Optional[Dict]):
-        pass
+        from marie.serve.executors.metas import get_default_metas
+
+        tmp = get_default_metas()
+
+        if _metas:
+            tmp.update(_metas)
+
+        unresolved_attr = False
+        target = SimpleNamespace()
+        # set self values filtered by those non-exist, and non-expandable
+        for k, v in tmp.items():
+            if not hasattr(target, k):
+                if isinstance(v, str):
+                    if not env_var_regex.findall(v):
+                        setattr(target, k, v)
+                    else:
+                        unresolved_attr = True
+                else:
+                    setattr(target, k, v)
+            elif type(getattr(target, k)) == type(v):
+                setattr(target, k, v)
+
+        # `name` is important as it serves as an identifier of the executor
+        # if not given, then set a name by the rule
+        if not getattr(target, "name", None):
+            setattr(target, "name", self.__class__.__name__)
+
+        self.metas = target
 
     def close(self) -> None:
         """
@@ -123,6 +154,70 @@ class BaseExecutor(metaclass=ExecutorType):
         You can write destructor & saving logic here.
         """
         pass
+
+    def __call__(self, req_endpoint: str, **kwargs):
+        """
+        # noqa: DAR101
+        # noqa: DAR102
+        # noqa: DAR201
+        """
+        if req_endpoint in self.requests:
+            return self.requests[req_endpoint](self, **kwargs)  # unbound method, self is required
+        elif __default_endpoint__ in self.requests:
+            return self.requests[__default_endpoint__](self, **kwargs)  # unbound method, self is required
+
+    async def __acall__(self, req_endpoint: str, **kwargs):
+        """
+        # noqa: DAR101
+        # noqa: DAR102
+        # noqa: DAR201
+        """
+        if req_endpoint in self.requests:
+            return await self.__acall_endpoint__(req_endpoint, **kwargs)
+        elif __default_endpoint__ in self.requests:
+            return await self.__acall_endpoint__(__default_endpoint__, **kwargs)
+
+    async def __acall_endpoint__(self, req_endpoint, **kwargs):
+        func = self.requests[req_endpoint]
+
+        runtime_name = self.runtime_args.name if hasattr(self.runtime_args, "name") else None
+
+        _summary = (
+            self._summary_method.labels(self.__class__.__name__, req_endpoint, runtime_name).time()
+            if self._summary_method
+            else contextlib.nullcontext()
+        )
+
+        with _summary:
+            if iscoroutinefunction(func):
+                return await func(self, **kwargs)
+            else:
+                return func(self, **kwargs)
+
+    @property
+    def workspace(self) -> Optional[str]:
+        """
+        Get the workspace directory of the Executor.
+
+        :return: returns the workspace of the current shard of this Executor.
+        """
+        workspace = (
+            getattr(self.runtime_args, "workspace", None)
+            or getattr(self.metas, "workspace")
+            or os.environ.get("JINA_DEFAULT_WORKSPACE_BASE")
+        )
+        if workspace:
+            complete_workspace = os.path.join(workspace, self.metas.name)
+            shard_id = getattr(
+                self.runtime_args,
+                "shard_id",
+                None,
+            )
+            if shard_id is not None and shard_id != -1:
+                complete_workspace = os.path.join(complete_workspace, str(shard_id))
+            if not os.path.exists(complete_workspace):
+                os.makedirs(complete_workspace)
+            return os.path.abspath(complete_workspace)
 
     def __enter__(self):
         return self

@@ -1,6 +1,6 @@
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, overload
 
-# from docarray import DocumentArray
+from docarray import DocumentArray
 
 from marie import __default_endpoint__
 from marie.excepts import BadConfigSource
@@ -10,13 +10,8 @@ from marie.types.request.data import DataRequest
 
 if TYPE_CHECKING:
     import argparse
-
     from prometheus_client import CollectorRegistry
-
     from marie.logging.logger import MarieLogger
-
-class DocumentArray:
-    pass
 
 
 class DataRequestHandler:
@@ -24,9 +19,10 @@ class DataRequestHandler:
 
     def __init__(
         self,
-        args: 'argparse.Namespace',
-        logger: 'MarieLogger',
-        metrics_registry: Optional['CollectorRegistry'] = None,
+        args: "argparse.Namespace",
+        logger: "MarieLogger",
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        executor: Optional["BaseExecutor"] = None,
         **kwargs,
     ):
         """Initialize private parameters and execute private loading functions.
@@ -38,33 +34,36 @@ class DataRequestHandler:
         """
         super().__init__()
         self.args = args
-        self.args.parallel = self.args.shards
+        # self.args.parallel = self.args.shards
         self.logger = logger
         self._is_closed = False
-        self._load_executor(metrics_registry)
+        if executor:
+            self._executor = executor
+        else:
+            self._load_executor(metrics_registry)
         self._init_monitoring(metrics_registry)
 
-    def _init_monitoring(self, metrics_registry: Optional['CollectorRegistry'] = None):
+    def _init_monitoring(self, metrics_registry: Optional["CollectorRegistry"] = None):
 
         if metrics_registry:
 
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the monitoring functionality of marie',
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Counter
 
                 self._counter = Counter(
-                    'document_processed',
-                    'Number of Documents that have been processed by the executor',
-                    namespace='marie',
-                    labelnames=('executor_endpoint', 'executor', 'runtime_name'),
+                    "document_processed",
+                    "Number of Documents that have been processed by the executor",
+                    namespace="marie",
+                    labelnames=("executor_endpoint", "executor", "runtime_name"),
                     registry=metrics_registry,
                 )
         else:
             self._counter = None
 
-    def _load_executor(self, metrics_registry: Optional['CollectorRegistry'] = None):
+    def _load_executor(self, metrics_registry: Optional["CollectorRegistry"] = None):
         """
         Load the executor to this runtime, specified by ``uses`` CLI argument.
         :param metrics_registry: Optional prometheus metrics registry that will be passed to the executor so that it can expose metrics
@@ -76,12 +75,12 @@ class DataRequestHandler:
                 uses_metas=self.args.uses_metas,
                 uses_requests=self.args.uses_requests,
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
-                    'workspace': self.args.workspace,
-                    'shard_id': self.args.shard_id,
-                    'shards': self.args.shards,
-                    'replicas': self.args.replicas,
-                    'name': self.args.name,
-                    'metrics_registry': metrics_registry,
+                    "workspace": self.args.workspace,
+                    "shard_id": self.args.shard_id,
+                    "shards": self.args.shards,
+                    "replicas": self.args.replicas,
+                    "name": self.args.name,
+                    "metrics_registry": metrics_registry,
                 },
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
@@ -89,15 +88,15 @@ class DataRequestHandler:
 
         except BadConfigSource:
             self.logger.error(
-                f'fail to load config from {self.args.uses}, if you are using docker image for --uses, '
+                f"fail to load config from {self.args.uses}, if you are using docker image for --uses, "
                 f'please use "docker://YOUR_IMAGE_NAME"'
             )
             raise
         except FileNotFoundError:
-            self.logger.error(f'fail to load file dependency')
+            self.logger.error(f"fail to load file dependency")
             raise
         except Exception:
-            self.logger.critical(f'can not load the executor from {self.args.uses}')
+            self.logger.critical(f"can not load the executor from {self.args.uses}")
             raise
 
     @staticmethod
@@ -108,7 +107,7 @@ class DataRequestHandler:
             parsed_params.update(**specific_parameters)
         return parsed_params
 
-    async def handle(self, requests: List['DataRequest']) -> DataRequest:
+    async def handle(self, requests: List["DataRequest"]) -> DataRequest:
         """Initialize private parameters and execute private loading functions.
 
         :param requests: The messages to handle containing a DataRequest
@@ -120,14 +119,14 @@ class DataRequestHandler:
             and __default_endpoint__ not in self._executor.requests
         ):
             self.logger.debug(
-                f'skip executor: mismatch request, exec_endpoint: {requests[0].header.exec_endpoint}, requests: {self._executor.requests}'
+                f"skip executor: mismatch request, exec_endpoint: {requests[0].header.exec_endpoint}, requests: {self._executor.requests}"
             )
             return requests[0]
 
         params = self._parse_params(requests[0].parameters, self._executor.metas.name)
         docs = DataRequestHandler.get_docs_from_request(
             requests,
-            field='docs',
+            field="docs",
         )
 
         # executor logic
@@ -137,7 +136,7 @@ class DataRequestHandler:
             parameters=params,
             docs_matrix=DataRequestHandler.get_docs_matrix_from_request(
                 requests,
-                field='docs',
+                field="docs",
             ),
         )
         # assigning result back to request
@@ -146,7 +145,7 @@ class DataRequestHandler:
                 docs = return_data
             elif isinstance(return_data, dict):
                 params = requests[0].parameters
-                results_key = '__results__'
+                results_key = "__results__"
 
                 if not results_key in params.keys():
                     params[results_key] = dict()
@@ -156,8 +155,7 @@ class DataRequestHandler:
 
             else:
                 raise TypeError(
-                    f'The return type must be DocumentArray / Dict / `None`, '
-                    f'but getting {return_data!r}'
+                    f"The return type must be DocumentArray / Dict / `None`, " f"but getting {return_data!r}"
                 )
 
         if self._counter:
@@ -167,9 +165,30 @@ class DataRequestHandler:
                 self.args.name,
             ).inc(len(docs))
 
-        DataRequestHandler.replace_docs(requests[0], docs, self.args.output_array_type)
+        # DataRequestHandler.replace_docs(requests[0], docs, self.args.output_array_type)
+        DataRequestHandler.replace_docs(requests[0], docs)
 
         return requests[0]
+
+    @staticmethod
+    def replace_docs(request: List["DataRequest"], docs: "DocumentArray", ndarrray_type: str = None) -> None:
+        """Replaces the docs in a message with new Documents.
+
+        :param request: The request object
+        :param docs: the new docs to be used
+        :param ndarrray_type: type tensor and embedding will be converted to
+        """
+        request.data.set_docs_convert_arrays(docs, ndarray_type=ndarrray_type)
+
+    @staticmethod
+    def replace_parameters(request: List['DataRequest'], parameters: Dict) -> None:
+        """Replaces the parameters in a message with new Documents.
+
+        :param request: The request object
+        :param parameters: the new parameters to be used
+        """
+        request.parameters = parameters
+
 
     def close(self):
         """Close the data request handler, by closing the executor"""
@@ -179,9 +198,9 @@ class DataRequestHandler:
 
     @staticmethod
     def get_docs_matrix_from_request(
-        requests: List['DataRequest'],
+        requests: List["DataRequest"],
         field: str,
-    ) -> List['DocumentArray']:
+    ) -> List["DocumentArray"]:
         """
         Returns a docs matrix from a list of DataRequest objects.
         :param requests: List of DataRequest objects
@@ -201,14 +220,14 @@ class DataRequestHandler:
 
     @staticmethod
     def get_parameters_dict_from_request(
-        requests: List['DataRequest'],
-    ) -> 'Dict':
+        requests: List["DataRequest"],
+    ) -> "Dict":
         """
         Returns a parameters dict from a list of DataRequest objects.
         :param requests: List of DataRequest objects
         :return: parameters matrix: list of parameters (Dict) objects
         """
-        key_result = '__results__'
+        key_result = "__results__"
         parameters = requests[0].parameters
         if key_result not in parameters.keys():
             parameters[key_result] = dict()
@@ -221,9 +240,9 @@ class DataRequestHandler:
 
     @staticmethod
     def get_docs_from_request(
-        requests: List['DataRequest'],
+        requests: List["DataRequest"],
         field: str,
-    ) -> 'DocumentArray':
+    ) -> "DocumentArray":
         """
         Gets a field from the message
 
@@ -233,16 +252,8 @@ class DataRequestHandler:
         :returns: DocumentArray extraced from the field from all messages
         """
         if len(requests) > 1:
-            result = DocumentArray(
-                [
-                    d
-                    for r in reversed([request for request in requests])
-                    for d in getattr(r, field)
-                ]
-            )
+            result = DocumentArray([d for r in reversed([request for request in requests]) for d in getattr(r, field)])
         else:
             result = getattr(requests[0], field)
 
         return result
-
-

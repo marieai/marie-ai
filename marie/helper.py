@@ -203,8 +203,50 @@ def extend_rest_interface(app: "FastAPI") -> "FastAPI":
 
 
 def get_full_version() -> Optional[Tuple[Dict, Dict]]:
-    info = {"marie": "-1.-1.-1"}
-    return info
+    """
+    Get the version of libraries used in Marie and environment variables.
+
+    :return: Version information and environment variables
+    """
+    import os
+    import platform
+    from uuid import getnode
+
+    import yaml
+
+    from marie.version import __version__
+    from marie import (
+        __docarray_version__,
+        __marie_env__,
+        __unset_msg__,
+        __uptime__,
+    )
+    from marie.logging.predefined import default_logger
+
+    try:
+
+        info = {
+            "marie": __version__,
+            "docarray": __docarray_version__,
+            "pyyaml": yaml.__version__,
+            "python": platform.python_version(),
+            "platform": platform.system(),
+            "platform-release": platform.release(),
+            "platform-version": platform.version(),
+            "architecture": platform.machine(),
+            "processor": platform.processor(),
+            "uid": getnode(),
+            "session-id": str(random_uuid(use_uuid1=True)),
+            "uptime": __uptime__,
+        }
+
+        env_info = {k: os.getenv(k, __unset_msg__) for k in __marie_env__}
+        full_version = info, env_info
+    except Exception as e:
+        default_logger.error(str(e))
+        full_version = None
+
+    return full_version
 
 
 def format_full_version_info(info: Dict, env_info: Dict) -> str:
@@ -215,9 +257,9 @@ def format_full_version_info(info: Dict, env_info: Dict) -> str:
     :param env_info: The Marie environment variables.
     :return: Formatted version information.
     """
-    version_info = '\n'.join(f'- {k:30s}{v}' for k, v in info.items())
-    env_info = '\n'.join(f'* {k:30s}{v}' for k, v in env_info.items())
-    return version_info + '\n' + env_info
+    version_info = "\n".join(f"- {k:30s}{v}" for k, v in info.items())
+    env_info = "\n".join(f"* {k:30s}{v}" for k, v in env_info.items())
+    return version_info + "\n" + env_info
 
 
 def _update_policy():
@@ -532,6 +574,7 @@ def get_readable_size(num_bytes: Union[int, float]) -> str:
     else:
         return f"{num_bytes / (1024 ** 3):.1f} GB"
 
+
 def batch_iterator(
     data: Iterable[Any],
     batch_size: int,
@@ -584,7 +627,7 @@ def batch_iterator(
                 return
             yield chunk
     else:
-        raise TypeError(f'unsupported type: {type(data)}')
+        raise TypeError(f"unsupported type: {type(data)}")
 
 
 def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
@@ -598,9 +641,9 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
     if m:
         return m.group(1)
 
-    if v.startswith('[') and v.endswith(']'):
+    if v.startswith("[") and v.endswith("]"):
         # function args must be immutable tuples not list
-        tmp = v.replace('[', '').replace(']', '').strip().split(',')
+        tmp = v.replace("[", "").replace("]", "").strip().split(",")
         if len(tmp) > 0:
             return [parse_arg(vv.strip()) for vv in tmp]
         else:
@@ -614,9 +657,9 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
             if len(v) == 0:
                 # ignore it when the parameter is empty
                 v = None
-            elif v.lower() == 'true':  # parse boolean parameter
+            elif v.lower() == "true":  # parse boolean parameter
                 v = True
-            elif v.lower() == 'false':
+            elif v.lower() == "false":
                 v = False
     return v
 
@@ -631,12 +674,10 @@ def reset_ports():
     def _get_unassigned_ports():
         # if we are running out of ports, lower default minimum port
         if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
-            min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '16384'))
+            min_port = int(os.environ.get("JINA_RANDOM_PORT_MIN", "16384"))
         else:
-            min_port = int(
-                os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT))
-            )
-        max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', str(MAX_PORT)))
+            min_port = int(os.environ.get("JINA_RANDOM_PORT_MIN", str(DEFAULT_MIN_PORT)))
+        max_port = int(os.environ.get("JINA_RANDOM_PORT_MAX", str(MAX_PORT)))
         return set(range(min_port, max_port + 1)) - set(assigned_ports)
 
     unassigned_ports.clear()
@@ -658,7 +699,7 @@ def random_port() -> Optional[int]:
         def _check_bind(port):
             with socket.socket() as s:
                 try:
-                    s.bind(('', port))
+                    s.bind(("", port))
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     return port
                 except OSError:
@@ -672,7 +713,7 @@ def random_port() -> Optional[int]:
                 break
         else:
             raise OSError(
-                f'can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports'
+                f"can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports"
             )
         int_port = int(_port)
         unassigned_ports.pop(idx)
