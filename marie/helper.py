@@ -1,9 +1,14 @@
 import asyncio
 import inspect
+import math
 import os
+import random
+import re
 import threading
+import uuid
 import warnings
-from typing import Dict, TYPE_CHECKING, Optional, Tuple, Union, Callable
+from itertools import islice
+from typing import Dict, TYPE_CHECKING, Optional, Tuple, Union, Callable, Sequence, Iterable, List, Any, Iterator
 
 from rich.console import Console
 
@@ -202,6 +207,19 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     return info
 
 
+def format_full_version_info(info: Dict, env_info: Dict) -> str:
+    """
+    Format the version information.
+
+    :param info: Version information of Marie libraries.
+    :param env_info: The Marie environment variables.
+    :return: Formatted version information.
+    """
+    version_info = '\n'.join(f'- {k:30s}{v}' for k, v in info.items())
+    env_info = '\n'.join(f'* {k:30s}{v}' for k, v in env_info.items())
+    return version_info + '\n' + env_info
+
+
 def _update_policy():
     if __windows__:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -286,6 +304,34 @@ class CatchAllCleanupContextManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
             self.sub_context.__exit__(exc_type, exc_val, exc_tb)
+
+
+def random_identity(use_uuid1: bool = False) -> str:
+    """
+    Generate random UUID.
+
+    ..note::
+        A MAC address or time-based ordering (UUID1) can afford increased database performance, since it's less work
+        to sort numbers closer-together than those distributed randomly (UUID4) (see here).
+
+        A second related issue, is that using UUID1 can be useful in debugging, even if origin data is lost or not
+        explicitly stored.
+
+    :param use_uuid1: use UUID1 instead of UUID4. This is the default Document ID generator.
+    :return: A random UUID.
+
+    """
+    return random_uuid(use_uuid1).hex
+
+
+def random_uuid(use_uuid1: bool = False) -> uuid.UUID:
+    """
+    Get a random UUID.
+
+    :param use_uuid1: Use UUID1 if True, else use UUID4.
+    :return: A random UUID.
+    """
+    return uuid.uuid1() if use_uuid1 else uuid.uuid4()
 
 
 _ATTRIBUTES = {
@@ -421,6 +467,14 @@ def _wrap_text_in_rich_bracket(text: str, wrapper: str):
     return f"[{wrapper}]{text}[/{wrapper}]"
 
 
+def warn_unknown_args(unknown_args: List[str]):
+    """Creates warnings for all given arguments.
+
+    :param unknown_args: arguments that are possibly unknown to Marie
+    """
+    pass
+
+
 def get_rich_console():
     """
     Function to get jina rich default console.
@@ -477,3 +531,157 @@ def get_readable_size(num_bytes: Union[int, float]) -> str:
         return f"{num_bytes / (1024 ** 2):.1f} MB"
     else:
         return f"{num_bytes / (1024 ** 3):.1f} GB"
+
+def batch_iterator(
+    data: Iterable[Any],
+    batch_size: int,
+    axis: int = 0,
+) -> Iterator[Any]:
+    """
+    Get an iterator of batches of data.
+
+    For example:
+    .. highlight:: python
+    .. code-block:: python
+
+            for req in batch_iterator(data, batch_size, split_over_axis):
+                pass  # Do something with batch
+
+    :param data: Data source.
+    :param batch_size: Size of one batch.
+    :param axis: Determine which axis to iterate for np.ndarray data.
+    :yield: data
+    :return: An Iterator of batch data.
+    """
+    import numpy as np
+
+    if not batch_size or batch_size <= 0:
+        yield data
+        return
+    if isinstance(data, np.ndarray):
+        _l = data.shape[axis]
+        _d = data.ndim
+        sl = [slice(None)] * _d
+        if batch_size >= _l:
+            yield data
+            return
+        for start in range(0, _l, batch_size):
+            end = min(_l, start + batch_size)
+            sl[axis] = slice(start, end)
+            yield data[tuple(sl)]
+    elif isinstance(data, Sequence):
+        if batch_size >= len(data):
+            yield data
+            return
+        for _ in range(0, len(data), batch_size):
+            yield data[_ : _ + batch_size]
+    elif isinstance(data, Iterable):
+        # as iterator, there is no way to know the length of it
+        iterator = iter(data)
+        while True:
+            chunk = tuple(islice(iterator, batch_size))
+            if not chunk:
+                return
+            yield chunk
+    else:
+        raise TypeError(f'unsupported type: {type(data)}')
+
+
+def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
+    """
+    Parse the arguments from string to `Union[bool, int, str, list, float]`.
+
+    :param v: The string of arguments
+    :return: The parsed arguments list.
+    """
+    m = re.match(r'^[\'"](.*)[\'"]$', v)
+    if m:
+        return m.group(1)
+
+    if v.startswith('[') and v.endswith(']'):
+        # function args must be immutable tuples not list
+        tmp = v.replace('[', '').replace(']', '').strip().split(',')
+        if len(tmp) > 0:
+            return [parse_arg(vv.strip()) for vv in tmp]
+        else:
+            return []
+    try:
+        v = int(v)  # parse int parameter
+    except ValueError:
+        try:
+            v = float(v)  # parse float parameter
+        except ValueError:
+            if len(v) == 0:
+                # ignore it when the parameter is empty
+                v = None
+            elif v.lower() == 'true':  # parse boolean parameter
+                v = True
+            elif v.lower() == 'false':
+                v = False
+    return v
+
+
+assigned_ports = set()
+unassigned_ports = []
+DEFAULT_MIN_PORT = 49153
+MAX_PORT = 65535
+
+
+def reset_ports():
+    def _get_unassigned_ports():
+        # if we are running out of ports, lower default minimum port
+        if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
+            min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '16384'))
+        else:
+            min_port = int(
+                os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT))
+            )
+        max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', str(MAX_PORT)))
+        return set(range(min_port, max_port + 1)) - set(assigned_ports)
+
+    unassigned_ports.clear()
+    assigned_ports.clear()
+    unassigned_ports.extend(_get_unassigned_ports())
+    random.shuffle(unassigned_ports)
+
+
+def random_port() -> Optional[int]:
+    """
+    Get a random available port number.
+
+    :return: A random port.
+    """
+
+    def _random_port():
+        import socket
+
+        def _check_bind(port):
+            with socket.socket() as s:
+                try:
+                    s.bind(('', port))
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    return port
+                except OSError:
+                    return None
+
+        _port = None
+        if len(unassigned_ports) == 0:
+            reset_ports()
+        for idx, _port in enumerate(unassigned_ports):
+            if _check_bind(_port) is not None:
+                break
+        else:
+            raise OSError(
+                f'can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports'
+            )
+        int_port = int(_port)
+        unassigned_ports.pop(idx)
+        assigned_ports.add(int_port)
+        return int_port
+
+    try:
+        return _random_port()
+    except OSError:
+        assigned_ports.clear()
+        unassigned_ports.clear()
+        return _random_port()

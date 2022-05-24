@@ -15,6 +15,8 @@ __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
 __resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
 
 __default_host__ = _os.environ.get("MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0")
+__default_port_monitoring__ = 9090
+__default_executor__ = 'BaseExecutor'
 __default_endpoint__ = "/default"
 __args_executor_func__ = {
     "docs",

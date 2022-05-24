@@ -233,3 +233,9 @@ ImageMagic 6 policy
 https://github.com/ibm-aur-nlp/PubLayNet
 
 DocFormer: End-to-End Transformer for Document Understanding
+
+
+## Credits
+
+This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
+We acknowledge and are grateful to these developers for their contributions to open source.
