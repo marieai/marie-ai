@@ -24,3 +24,27 @@ class InternalNetworkError(BaseMarieException):
 
 class BadRequestType(TypeError, BaseMarieException):
     """Exception when can not construct a request object from given data."""
+
+
+class BadYAMLVersion(Exception, BaseMarieException):
+    """Exception when YAML config specifies a wrong version number."""
+
+
+class NotSupportedError(Exception, BaseMarieException):
+    """Exception when user accidentally using a retired argument."""
+
+
+class RuntimeRunForeverEarlyError(Exception, BaseMarieException):
+    """Raised when an error occurs when starting the run_forever of Runtime"""
+
+
+class DockerVersionError(SystemError, BaseMarieException):
+    """Raised when the docker version is incompatible"""
+
+
+class NoContainerizedError(Exception, BaseMarieException):
+    """Raised when trying to use non-containerized Executor in K8s or Docker Compose"""
+
+
+class PortAlreadyUsed(RuntimeError, BaseMarieException):
+    """Raised when to use a port which is already used"""

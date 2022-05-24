@@ -1,3 +1,4 @@
+from marie.parsers.export_api import set_export_api_parser
 from marie.parsers.helper import _SHOW_ALL_ARGS
 
 
@@ -91,6 +92,30 @@ def set_gateway_parser(parser=None):
         runtime_cls="GRPCGatewayRuntime",
         deployment_role=DeploymentRoleType.GATEWAY,
     )
+
+    return parser
+
+
+def set_client_cli_parser(parser=None):
+    """Set the parser for the cli client
+
+    :param parser: an optional existing parser to build upon
+    :return: the parser
+    """
+    if not parser:
+        from marie.parsers.base import set_base_parser
+
+        parser = set_base_parser()
+
+    from marie.parsers.client import (
+        mixin_client_features_parser,
+        mixin_comm_protocol_parser,
+    )
+    from marie.parsers.orchestrate.runtimes.remote import mixin_client_gateway_parser
+
+    mixin_client_gateway_parser(parser)
+    mixin_client_features_parser(parser)
+    mixin_comm_protocol_parser(parser)
 
     return parser
 
@@ -198,6 +223,24 @@ def get_main_parser():
             "are doing low-level orchestration",
             formatter_class=_chf,
             **(dict(help="Start a Deployment")) if _SHOW_ALL_ARGS else {},
+        )
+    )
+
+    set_client_cli_parser(
+        sp.add_parser(
+            "client",
+            description="Start a Python client that connects to a remote Jina gateway",
+            formatter_class=_chf,
+            **(dict(help="Start a Client")) if _SHOW_ALL_ARGS else {},
+        )
+    )
+
+    set_export_api_parser(
+        sp.add_parser(
+            "export-api",
+            description="Export Jina API to JSON/YAML file for 3rd party applications",
+            formatter_class=_chf,
+            **(dict(help="Export Jina API to file")) if _SHOW_ALL_ARGS else {},
         )
     )
 
