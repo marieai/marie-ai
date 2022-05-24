@@ -204,7 +204,7 @@ class BaseExecutor(metaclass=ExecutorType):
         workspace = (
             getattr(self.runtime_args, "workspace", None)
             or getattr(self.metas, "workspace")
-            or os.environ.get("JINA_DEFAULT_WORKSPACE_BASE")
+            or os.environ.get("MARIE_DEFAULT_WORKSPACE_BASE")
         )
         if workspace:
             complete_workspace = os.path.join(workspace, self.metas.name)

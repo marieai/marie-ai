@@ -69,5 +69,5 @@ env_var_regex = re.compile(env_var_regex_str)  # matches either of the above
 from marie.serve.executors import BaseExecutor as Executor
 from marie.serve.executors.decorators import monitor, requests
 
-# from marie.docarray.document_array import DocumentArray as DocumentArray
-# from marie.docarray.document import Document as Document
+from docarray import DocumentArray as DocumentArray
+from docarray.document import Document as Document
