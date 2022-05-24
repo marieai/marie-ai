@@ -121,7 +121,7 @@ def set_client_cli_parser(parser=None):
 
 
 def set_help_parser(parser=None):
-    """Set the parser for the jina help lookup
+    """Set the parser for the marie help lookup
 
     :param parser: an optional existing parser to build upon
     :return: the parser
@@ -229,7 +229,7 @@ def get_main_parser():
     set_client_cli_parser(
         sp.add_parser(
             "client",
-            description="Start a Python client that connects to a remote Jina gateway",
+            description="Start a Python client that connects to a remote Marie gateway",
             formatter_class=_chf,
             **(dict(help="Start a Client")) if _SHOW_ALL_ARGS else {},
         )
@@ -238,9 +238,9 @@ def get_main_parser():
     set_export_api_parser(
         sp.add_parser(
             "export-api",
-            description="Export Jina API to JSON/YAML file for 3rd party applications",
+            description="Export API to JSON/YAML file for 3rd party applications",
             formatter_class=_chf,
-            **(dict(help="Export Jina API to file")) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Export API to file")) if _SHOW_ALL_ARGS else {},
         )
     )
 
