@@ -54,18 +54,82 @@ def logger():
 async def test_data_request_handler_new_docs(logger):
     args = set_pod_parser().parse_args(["--uses", "NewDocsExecutor"])
     handler = DataRequestHandler(args, logger, executor=NewDocsExecutor())
-    # docs = DocumentArray([Document(text='input document') for _ in range(10)])
-    #
-    # print(docs)
-    # print(len(docs))
-
     req = list(request_generator("/", DocumentArray([Document(text="input document") for _ in range(10)])))[0]
 
-    print(req)
-    print(type(req))
-    print(req.docs)
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
-    #
-    # assert len(response.docs) == 1
-    # assert response.docs[0].text == 'new document'
+
+    assert len(response.docs) == 1
+    assert response.docs[0].text == 'new document'
+
+
+@pytest.mark.asyncio
+async def test_aync_data_request_handler_new_docs(logger):
+    args = set_pod_parser().parse_args(['--uses', 'AsyncNewDocsExecutor'])
+    handler = DataRequestHandler(args, logger, executor=AsyncNewDocsExecutor())
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
+    assert len(req.docs) == 10
+    response = await handler.handle(requests=[req])
+
+    assert len(response.docs) == 1
+    assert response.docs[0].text == 'new document'
+
+
+@pytest.mark.asyncio
+async def test_data_request_handler_change_docs(logger):
+    args = set_pod_parser().parse_args(['--uses', 'ChangeDocsExecutor'])
+    handler = DataRequestHandler(args, logger, executor=ChangeDocsExecutor())
+
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
+    assert len(req.docs) == 10
+    response = await handler.handle(requests=[req])
+
+    assert len(response.docs) == 10
+    for doc in response.docs:
+        assert doc.text == 'changed document'
+
+
+@pytest.mark.asyncio
+async def test_data_request_handler_change_docs_from_partial_requests(logger):
+    NUM_PARTIAL_REQUESTS = 5
+    args = set_pod_parser().parse_args(['--uses', 'MergeChangeDocsExecutor'])
+    handler = DataRequestHandler(args, logger, executor=MergeChangeDocsExecutor())
+
+    partial_reqs = [
+        list(
+            request_generator(
+                '/', DocumentArray([Document(text='input document') for _ in range(10)])
+            )
+        )[0]
+    ] * NUM_PARTIAL_REQUESTS
+    assert len(partial_reqs) == 5
+    assert len(partial_reqs[0].docs) == 10
+    response = await handler.handle(requests=partial_reqs)
+
+    assert len(response.docs) == 10 * NUM_PARTIAL_REQUESTS
+    for doc in response.docs:
+        assert doc.text == 'changed document'
+
+
+@pytest.mark.asyncio
+async def test_data_request_handler_clear_docs(logger):
+    args = set_pod_parser().parse_args(['--uses', 'ClearDocsExecutor'])
+    handler = DataRequestHandler(args, logger, executor=ClearDocsExecutor())
+
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
+    assert len(req.docs) == 10
+    response = await handler.handle(requests=[req])
+
+    assert len(response.docs) == 0
