@@ -5,7 +5,7 @@ from marie import Executor, requests
 from marie import DocumentArray, Document
 from marie.logging.logger import MarieLogger
 
-# from marie.parsers import set_pod_parser
+from marie.parsers import set_pod_parser
 from marie.serve.runtimes.request_handlers.data_request_handler import (
     DataRequestHandler,
 )
