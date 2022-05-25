@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 class AioHttpClientlet(ABC):
     """aiohttp session manager"""
 
-    def __init__(self, url: str, logger: 'JinaLogger') -> None:
+    def __init__(self, url: str, logger: 'MarieLogger') -> None:
         """HTTP Client to be used with the streamer
 
         :param url: url to send http/websocket request to

@@ -1,9 +1,10 @@
 import argparse
 
 from marie.excepts import RuntimeTerminated
-from marie.logger import setup_logger
 
 # Based on : Jina
+from marie.logging.logger import MarieLogger
+
 
 class BaseRuntime:
     """A Runtime is a procedure that blocks the main process once running (i.e. :meth:`run_forever`),
@@ -60,8 +61,7 @@ class BaseRuntime:
             self.name = f'{args.name}/{self.__class__.__name__}'
         else:
             self.name = self.__class__.__name__
-        self.logger = setup_logger(self.name)
-        # self.logger = JinaLogger(self.name, **vars(self.args))
+        self.logger = MarieLogger(self.name, **vars(self.args))
 
     def run_forever(self):
         """Running the blocking procedure inside ``S``. Note, once this method is called,

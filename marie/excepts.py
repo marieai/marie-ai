@@ -26,6 +26,13 @@ class BadRequestType(TypeError, BaseMarieException):
     """Exception when can not construct a request object from given data."""
 
 
+5
+
+
+class BadImageNameError(Exception, BaseMarieException):
+    """Exception when an image name can not be found either local & remote"""
+
+
 class BadYAMLVersion(Exception, BaseMarieException):
     """Exception when YAML config specifies a wrong version number."""
 
@@ -53,8 +60,14 @@ class PortAlreadyUsed(RuntimeError, BaseMarieException):
 class FlowMissingDeploymentError(Exception, BaseMarieException):
     """Flow exception when a deployment can not be found in the flow."""
 
+
+class FlowBuildLevelError(Exception, BaseMarieException):
+    """Flow exception when required build level is higher than the current build level."""
+
+
 class FlowTopologyError(Exception, BaseMarieException):
     """Flow exception when the topology is ambiguous."""
+
 
 class RuntimeFailToStart(SystemError, BaseMarieException):
     """When pod/deployment is failed to started."""
@@ -62,6 +75,7 @@ class RuntimeFailToStart(SystemError, BaseMarieException):
 
 class BadClient(Exception, BaseMarieException):
     """A wrongly defined client, can not communicate with jina server correctly."""
+
 
 class BadClientCallback(BadClient, BaseMarieException):
     """Error in the callback function on the client side."""

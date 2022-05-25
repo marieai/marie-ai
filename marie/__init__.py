@@ -22,6 +22,8 @@ __default_port_monitoring__ = 9090
 __docker_host__ = 'host.docker.internal'
 __default_executor__ = "BaseExecutor"
 __default_endpoint__ = "/default"
+__ready_msg__ = 'ready and listening'
+__stop_msg__ = 'terminated'
 __unset_msg__ = "(unset)"
 
 __args_executor_func__ = {
