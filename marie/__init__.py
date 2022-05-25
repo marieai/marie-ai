@@ -68,9 +68,17 @@ env_var_regex = re.compile(env_var_regex_str)  # matches either of the above
 
 # ONLY FIRST CLASS CITIZENS ARE ALLOWED HERE, namely Document, Executor Flow
 
+# Document
+from docarray import Document, DocumentArray
+
 # Executor
 from marie.serve.executors import BaseExecutor as Executor
 from marie.serve.executors.decorators import monitor, requests
 
-from docarray import DocumentArray as DocumentArray
-from docarray.document import Document as Document
+# Client
+from marie.clients import Client
+from marie.orchestrate.flow.asyncio import AsyncFlow
+
+# Flow
+from marie.orchestrate.flow.base import Flow
+

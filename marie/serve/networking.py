@@ -2,6 +2,10 @@ import asyncio
 import contextlib
 import ipaddress
 import os
+from typing import Optional
+
+from marie.serve.runtimes.asyncio import DataRequest
+from marie.types.request import Request
 
 
 def in_docker():
@@ -44,4 +48,29 @@ class GrpcConnectionPool:
     :param compression: The compression algorithm to be used by this GRPCConnectionPool when sending data to GRPC
     """
 
-    pass
+    @staticmethod
+    async def send_request_async(
+        request: Request,
+        target: str,
+        timeout: float = 1.0,
+        tls: bool = False,
+        root_certificates: Optional[str] = None,
+    ) -> Request:
+        """
+        Sends a request asynchronously to the target via grpc
+
+        :param request: the request to send
+        :param target: where to send the request to, like 127.0.0.1:8080
+        :param timeout: timeout for the send
+        :param tls: if True, use tls for the grpc channel
+        :param root_certificates: the path to the root certificates for tls, only used if tls is True
+
+        :returns: the response request
+        """
+
+        if type(request) == DataRequest:
+            stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
+            return await stub.process_single_data(request, timeout=timeout)
+        elif type(request) == ControlRequest:
+            stub = jina_pb2_grpc.JinaControlRequestRPCStub(channel)
+            return await stub.process_control(request, timeout=timeout)
