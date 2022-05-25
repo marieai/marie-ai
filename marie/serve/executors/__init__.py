@@ -1,15 +1,21 @@
 import contextlib
 import inspect
+import multiprocessing
 import os
+import threading
 import warnings
 from types import SimpleNamespace
-from typing import Optional, Dict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 from marie import env_var_regex, __default_endpoint__
-from marie.helper import typename, iscoroutinefunction
+from marie.enums import BetterEnum
+from marie.helper import typename, iscoroutinefunction, T
 from marie.importer import ImportExtensions
 from marie.jaml import JAMLCompatible
 from marie.serve.executors.decorators import wrap_func, store_init_kwargs
+
+if TYPE_CHECKING:
+    from prometheus_client import Summary
 
 
 class ExecutorType(type(JAMLCompatible), type):
@@ -225,6 +231,57 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    @classmethod
+    def from_hub(
+        cls: Type[T],
+        uri: str,
+        context: Optional[Dict[str, Any]] = None,
+        uses_with: Optional[Dict] = None,
+        uses_metas: Optional[Dict] = None,
+        uses_requests: Optional[Dict] = None,
+        **kwargs,
+    ) -> T:
+
+        raise NotImplemented
+
+    @classmethod
+    def serve(
+        cls,
+        uses_with: Optional[Dict] = None,
+        uses_metas: Optional[Dict] = None,
+        uses_requests: Optional[Dict] = None,
+        stop_event: Optional[Union[threading.Event, multiprocessing.Event]] = None,
+        **kwargs,
+    ):
+        """Serve this Executor in a temporary Flow. Useful in testing an Executor in remote settings.
+
+        :param uses_with: dictionary of parameters to overwrite from the default config's with field
+        :param uses_metas: dictionary of parameters to overwrite from the default config's metas field
+        :param uses_requests: dictionary of parameters to overwrite from the default config's requests field
+        :param stop_event: a threading event or a multiprocessing event that once set will resume the control Flow
+            to main thread.
+        :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
+
+        """
+        from marie import Flow
+
+        f = Flow(**kwargs).add(
+            uses=cls,
+            uses_with=uses_with,
+            uses_metas=uses_metas,
+            uses_requests=uses_requests,
+        )
+        with f:
+            f.block(stop_event)
+
+    class StandaloneExecutorType(BetterEnum):
+        """
+        Type of standalone Executors
+        """
+
+        EXTERNAL = 0  # served by a gateway
+        SHARED = 1  # not served by a gateway, served by head/worker
 
     def get_metrics(self, name: Optional[str] = None, documentation: Optional[str] = None) -> Optional["Summary"]:
         """

@@ -42,7 +42,7 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
                     "receiving_request_seconds",
                     "Time spent processing request",
                     registry=self.metrics_registry,
-                    namespace="jina",
+                    namespace="marie",
                     labelnames=("runtime_name",),
                 )
                 .labels(self.args.name)
