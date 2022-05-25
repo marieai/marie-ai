@@ -62,7 +62,7 @@ def Client(
     'HTTPClient',
     'AsyncHTTPClient',
 ]:
-    """Jina Python client.
+    """Marie Python client.
 
     :param args: Namespace args.
     :param kwargs: Additional arguments.
