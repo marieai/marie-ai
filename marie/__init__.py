@@ -19,6 +19,7 @@ __resources_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, 
 
 __default_host__ = _os.environ.get("MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0")
 __default_port_monitoring__ = 9090
+__docker_host__ = 'host.docker.internal'
 __default_executor__ = "BaseExecutor"
 __default_endpoint__ = "/default"
 __unset_msg__ = "(unset)"

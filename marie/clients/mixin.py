@@ -29,6 +29,64 @@ def _include_results_field_in_param(parameters: Optional['Dict']) -> 'Dict':
     return parameters
 
 
+class MutateMixin:
+    """The GraphQL Mutation Mixin for Client and Flow"""
+
+    def mutate(
+        self,
+        mutation: str,
+        variables: Optional[dict] = None,
+        timeout: Optional[float] = None,
+        headers: Optional[dict] = None,
+    ):
+        """Perform a GraphQL mutation
+
+        :param mutation: the GraphQL mutation as a single string.
+        :param variables: variables to be substituted in the mutation. Not needed if no variables are present in the mutation string.
+        :param timeout: HTTP request timeout
+        :param headers: HTTP headers
+        :return: dict containing the optional keys ``data`` and ``errors``, for response data and errors.
+        """
+        with ImportExtensions(required=True):
+            from sgqlc.endpoint.http import HTTPEndpoint as SgqlcHTTPEndpoint
+
+            proto = 'https' if self.args.tls else 'http'
+            graphql_url = f'{proto}://{self.args.host}:{self.args.port}/graphql'
+            endpoint = SgqlcHTTPEndpoint(graphql_url)
+            res = endpoint(
+                mutation, variables=variables, timeout=timeout, extra_headers=headers
+            )
+            if 'errors' in res and res['errors']:
+                msg = 'GraphQL mutation returned the following errors: '
+                for err in res['errors']:
+                    msg += err['message'] + '. '
+                raise ConnectionError(msg)
+            return res
+
+
+class AsyncMutateMixin(MutateMixin):
+    """The async GraphQL Mutation Mixin for Client and Flow"""
+
+    async def mutate(
+        self,
+        mutation: str,
+        variables: Optional[dict] = None,
+        timeout: Optional[float] = None,
+        headers: Optional[dict] = None,
+    ):
+        """Perform a GraphQL mutation, asynchronously
+
+        :param mutation: the GraphQL mutation as a single string.
+        :param variables: variables to be substituted in the mutation. Not needed if no variables are present in the mutation string.
+        :param timeout: HTTP request timeout
+        :param headers: HTTP headers
+        :return: dict containing the optional keys ``data`` and ``errors``, for response data and errors.
+        """
+        return await get_or_reuse_loop().run_in_executor(
+            None, super().mutate, mutation, variables, timeout, headers
+        )
+
+
 class PostMixin:
     """The Post Mixin class for Client and Flow"""
 
