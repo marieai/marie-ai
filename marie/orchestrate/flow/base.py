@@ -334,15 +334,15 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         self._update_args(args, **kwargs)
 
         if isinstance(self.args, argparse.Namespace):
-            self.logger = JinaLogger(
+            self.logger = MarieLogger(
                 self.__class__.__name__, **vars(self.args), **self._common_kwargs
             )
         else:
-            self.logger = JinaLogger(self.__class__.__name__, **self._common_kwargs)
+            self.logger = MarieLogger(self.__class__.__name__, **self._common_kwargs)
 
     def _update_args(self, args, **kwargs):
-        from jina.helper import ArgNamespace
-        from jina.parsers.flow import set_flow_parser
+        from marie.helper import ArgNamespace
+        from marie.parsers.flow import set_flow_parser
 
         _flow_parser = set_flow_parser()
         if args is None:
@@ -361,7 +361,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         if self._common_kwargs.get('asyncio', False) and not isinstance(
             self, AsyncPostMixin
         ):
-            from jina.orchestrate.flow.asyncio import AsyncFlow
+            from marie.orchestrate.flow.asyncio import AsyncFlow
 
             self.__class__ = AsyncFlow
 
@@ -482,8 +482,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         self, k8s_namespace: str
     ) -> Dict[str, List[str]]:
         graph_dict = {}
-        from jina.orchestrate.deployments.config.helper import to_compatible_name
-        from jina.serve.networking import GrpcConnectionPool
+        from marie.orchestrate.deployments.config.helper import to_compatible_name
+        from marie.serve.networking import GrpcConnectionPool
 
         for node, v in self._deployment_nodes.items():
             if node == 'gateway':
@@ -509,8 +509,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
     def _get_docker_compose_deployments_addresses(self) -> Dict[str, List[str]]:
         graph_dict = {}
-        from jina.orchestrate.deployments.config.docker_compose import port
-        from jina.orchestrate.deployments.config.helper import to_compatible_name
+        from marie.orchestrate.deployments.config.docker_compose import port
+        from marie.orchestrate.deployments.config.helper import to_compatible_name
 
         for node, v in self._deployment_nodes.items():
             if node == 'gateway':

@@ -48,3 +48,24 @@ class NoContainerizedError(Exception, BaseMarieException):
 
 class PortAlreadyUsed(RuntimeError, BaseMarieException):
     """Raised when to use a port which is already used"""
+
+
+class FlowMissingDeploymentError(Exception, BaseMarieException):
+    """Flow exception when a deployment can not be found in the flow."""
+
+class FlowTopologyError(Exception, BaseMarieException):
+    """Flow exception when the topology is ambiguous."""
+
+class RuntimeFailToStart(SystemError, BaseMarieException):
+    """When pod/deployment is failed to started."""
+
+
+class BadClient(Exception, BaseMarieException):
+    """A wrongly defined client, can not communicate with jina server correctly."""
+
+class BadClientCallback(BadClient, BaseMarieException):
+    """Error in the callback function on the client side."""
+
+
+class BadClientInput(BadClient, BaseMarieException):
+    """Error in the request generator function on the client side."""

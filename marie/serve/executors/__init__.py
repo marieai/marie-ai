@@ -8,10 +8,11 @@ from typing import Optional, Dict
 from marie import env_var_regex, __default_endpoint__
 from marie.helper import typename, iscoroutinefunction
 from marie.importer import ImportExtensions
+from marie.jaml import JAMLCompatible
 from marie.serve.executors.decorators import wrap_func, store_init_kwargs
 
 
-class ExecutorType(type):
+class ExecutorType(type(JAMLCompatible), type):
     def __new__(cls, *args, **kwargs):
         _cls = super().__new__(cls, *args, **kwargs)
         return cls.register_class(_cls)
@@ -35,7 +36,7 @@ class ExecutorType(type):
         return cls
 
 
-class BaseExecutor(metaclass=ExecutorType):
+class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
     """
     The base class of the executor, can be used to build encoder, indexer, etc.
 

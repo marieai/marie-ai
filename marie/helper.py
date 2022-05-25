@@ -10,7 +10,9 @@ import uuid
 import warnings
 from argparse import Namespace, ArgumentParser
 from itertools import islice
-from typing import Dict, TYPE_CHECKING, Optional, Tuple, Union, Callable, Sequence, Iterable, List, Any, Iterator, Set
+from socket import AF_INET, SOCK_STREAM, socket
+from typing import Dict, TYPE_CHECKING, Optional, Tuple, Union, Callable, Sequence, Iterable, List, Any, Iterator, Set, \
+    TypeVar
 
 from rich.console import Console
 
@@ -19,6 +21,7 @@ from marie import __windows__
 
 # based on jina
 
+T = TypeVar('T')
 
 def get_internal_ip():
     """
@@ -204,6 +207,62 @@ def is_yaml_filepath(val) -> bool:
     else:
         r = r"^[/\w\-\_\.]+.ya?ml$"
     return re.match(r, val.strip()) is not None
+
+
+def download_mermaid_url(mermaid_url, output) -> None:
+    """
+    Download the jpg image from mermaid_url.
+
+    :param mermaid_url: The URL of the image.
+    :param output: A filename specifying the name of the image to be created, the suffix svg/jpg determines the file type of the output image.
+    """
+    from urllib.request import Request, urlopen
+
+    try:
+        req = Request(mermaid_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with open(output, 'wb') as fp:
+            fp.write(urlopen(req).read())
+    except:
+        from marie.logging.predefined import default_logger
+
+        default_logger.error(
+            'can not download image, please check your graph and the network connections'
+        )
+
+
+def find_request_binding(target):
+    """Find `@request` decorated methods in a class.
+
+    :param target: the target class to check
+    :return: a dictionary with key as request type and value as method name
+    """
+    import ast
+    import inspect
+
+    from marie import __default_endpoint__
+
+    res = {}
+
+    def visit_function_def(node):
+
+        for e in node.decorator_list:
+            req_name = ''
+            if isinstance(e, ast.Call) and e.func.id == 'requests':
+                req_name = e.keywords[0].value.s
+            elif isinstance(e, ast.Name) and e.id == 'requests':
+                req_name = __default_endpoint__
+            if req_name:
+                if req_name in res:
+                    raise ValueError(
+                        f'you already bind `{res[req_name]}` with `{req_name}` request'
+                    )
+                else:
+                    res[req_name] = node.name
+
+    V = ast.NodeVisitor()
+    V.visit_FunctionDef = visit_function_def
+    V.visit(compile(inspect.getsource(target), '?', 'exec', ast.PyCF_ONLY_AST))
+    return res
 
 
 if TYPE_CHECKING:
@@ -676,6 +735,85 @@ def get_rich_console():
         force_terminal=True if "PYCHARM_HOSTED" in os.environ else None,
         color_system=None if "MARIE_LOG_NO_COLOR" in os.environ else "auto",
     )
+
+from marie.parsers import set_client_cli_parser
+
+
+def parse_client(kwargs):
+    kwargs = _parse_kwargs(kwargs)
+    return ArgNamespace.kwargs2namespace(
+        kwargs, set_client_cli_parser(), warn_unknown=True
+    )
+
+def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if 'host' in kwargs.keys():
+        return_scheme = dict()
+        (
+            kwargs['host'],
+            return_scheme['port'],
+            return_scheme['protocol'],
+            return_scheme['tls'],
+        ) = _parse_host_scheme(kwargs['host'])
+
+        for key, value in return_scheme.items():
+            if value:
+                if key in kwargs:
+                    raise ValueError(
+                        f"You can't have two definitions of {key}: you have one in the host scheme and one in the keyword argument"
+                    )
+                elif value:
+                    kwargs[key] = value
+
+    kwargs = _add_default_port_tls(kwargs)
+    kwargs = _delete_host_slash(kwargs)
+
+    return kwargs
+
+def _add_default_port_tls(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if ('tls' in kwargs) and ('port' not in kwargs):
+        kwargs['port'] = 443
+    return kwargs
+
+def _delete_host_slash(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if 'host' in kwargs:
+        if kwargs['host'][-1] == '/':
+            kwargs['host'] = kwargs['host'][:-1]
+    return kwargs
+
+def _parse_host_scheme(host: str) -> Tuple[str, str, str, bool]:
+    scheme, _hostname, port = _parse_url(host)
+
+    tls = None
+    if scheme in ('grpcs', 'https', 'wss'):
+        scheme = scheme[:-1]
+        tls = True
+
+    if scheme == 'ws':
+        scheme = 'websocket'
+
+    return _hostname, port, scheme, tls
+
+
+def _parse_url(host):
+    if '://' in host:
+        scheme, host = host.split('://')
+    else:
+        scheme = None
+
+    if ':' in host:
+        host, port = host.split(':')
+    else:
+        port = None
+
+    return scheme, host, port
+
+
+def is_port_free(host, port):
+    with socket(AF_INET, SOCK_STREAM) as session:
+        if session.connect_ex((host, port)) == 0:
+            return False
+        else:
+            return True
 
 
 def get_readable_time(*args, **kwargs):
