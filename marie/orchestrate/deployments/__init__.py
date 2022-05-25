@@ -8,14 +8,13 @@ from contextlib import ExitStack
 from itertools import cycle
 from typing import Dict, List, Optional, Set, Union
 
-from jina import __default_executor__, __default_host__, __docker_host__, helper
-from jina.enums import DeploymentRoleType, PodRoleType, PollingType
-from jina.helper import CatchAllCleanupContextManager
-from jina.hubble.hubio import HubIO
-from jina.jaml.helper import complete_path
-from jina.orchestrate.pods.container import ContainerPod
-from jina.orchestrate.pods.factory import PodFactory
-from jina.serve.networking import GrpcConnectionPool, host_is_local, in_docker
+from marie import __default_executor__, __default_host__, __docker_host__, helper
+from marie.enums import DeploymentRoleType, PodRoleType, PollingType
+from marie.helper import CatchAllCleanupContextManager
+from marie.jaml.helper import complete_path
+from marie.orchestrate.pods.container import ContainerPod
+from marie.orchestrate.pods.factory import PodFactory
+from marie.serve.networking import GrpcConnectionPool, host_is_local, in_docker
 
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
 
@@ -261,12 +260,7 @@ class Deployment(BaseDeployment):
             self.pod_args = self._parse_args(self.args)
 
         if self.is_sandbox:
-            host, port = HubIO.deploy_public_sandbox(self.args)
-            self.first_pod_args.host = host
-            self.first_pod_args.port = port
-            if self.head_args:
-                self.pod_args['head'].host = host
-                self.pod_args['head'].port = port
+            raise NotImplemented()
 
     def update_worker_pod_args(self):
         """Update args of all its worker pods based on Deployment args. Does not touch head and tail"""

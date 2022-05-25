@@ -5,7 +5,9 @@ import math
 import os
 import random
 import re
+import sys
 import threading
+import time
 import uuid
 import warnings
 from argparse import Namespace, ArgumentParser
@@ -950,6 +952,151 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
             elif v.lower() == "false":
                 v = False
     return v
+
+def countdown(t: int, reason: str = 'I am blocking this thread') -> None:
+    """
+    Display the countdown in console.
+
+    For example:
+        .. highlight:: python
+        .. code-block:: python
+            countdown(
+                10, reason=colored('re-fetch access token', 'cyan', attrs=['bold', 'reverse'])
+            )
+
+    :param t: Countdown time.
+    :param reason: A string message of reason for this Countdown.
+    """
+    try:
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+        while t > 0:
+            t -= 1
+            msg = f'⏳ {colored("%3d" % t, "yellow")}s left: {reason}'
+            sys.stdout.write(f'\r{msg}')
+            sys.stdout.flush()
+            time.sleep(1)
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+    except KeyboardInterrupt:
+        sys.stdout.write('no more patience? good bye!')
+
+
+_random_names = (
+    (
+        'first',
+        'great',
+        'local',
+        'small',
+        'right',
+        'large',
+        'young',
+        'early',
+        'major',
+        'clear',
+        'black',
+        'whole',
+        'third',
+        'white',
+        'short',
+        'human',
+        'royal',
+        'wrong',
+        'legal',
+        'final',
+        'close',
+        'total',
+        'prime',
+        'happy',
+        'sorry',
+        'basic',
+        'aware',
+        'ready',
+        'green',
+        'heavy',
+        'extra',
+        'civil',
+        'chief',
+        'usual',
+        'front',
+        'fresh',
+        'joint',
+        'alone',
+        'rural',
+        'light',
+        'equal',
+        'quiet',
+        'quick',
+        'daily',
+        'urban',
+        'upper',
+        'moral',
+        'vital',
+        'empty',
+        'brief',
+    ),
+    (
+        'world',
+        'house',
+        'place',
+        'group',
+        'party',
+        'money',
+        'point',
+        'state',
+        'night',
+        'water',
+        'thing',
+        'order',
+        'power',
+        'court',
+        'level',
+        'child',
+        'south',
+        'staff',
+        'woman',
+        'north',
+        'sense',
+        'death',
+        'range',
+        'table',
+        'trade',
+        'study',
+        'other',
+        'price',
+        'class',
+        'union',
+        'value',
+        'paper',
+        'right',
+        'voice',
+        'stage',
+        'light',
+        'march',
+        'board',
+        'month',
+        'music',
+        'field',
+        'award',
+        'issue',
+        'basis',
+        'front',
+        'heart',
+        'force',
+        'model',
+        'space',
+        'peter',
+    ),
+)
+
+
+def random_name() -> str:
+    """
+    Generate a random name from list.
+
+    :return: A Random name.
+    """
+    return '_'.join(random.choice(_random_names[j]) for j in range(2))
 
 
 assigned_ports = set()

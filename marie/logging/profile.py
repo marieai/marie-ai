@@ -233,7 +233,7 @@ class TimeContext:
 
     time_attrs = ['years', 'months', 'days', 'hours', 'minutes', 'seconds']
 
-    def __init__(self, task_name: str, logger: 'JinaLogger' = None):
+    def __init__(self, task_name: str, logger: 'MarieLogger' = None):
         """
         Create the context manager to timing a code snippet.
 
