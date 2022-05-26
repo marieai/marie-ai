@@ -7,7 +7,8 @@ configs:
     output: 'marie-{uptime}.log'
     formatter: JsonFormatter
   StreamHandler:
-    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+#    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    format: '%(asctime)s, %(levelname)-8s [%(filename)s:%(module)s:%(funcName)s:%(lineno)d] %(message)s'
     formatter: PlainFormatter
   SysLogHandler:
     ident: # this will be prepend to all messages
@@ -17,7 +18,8 @@ configs:
     formatter: PlainFormatter
   RichHandler:
     format: '[dim]{name}@%(process)2d[/dim] %(message)s'
+#    format: '%(levelname)s %(asctime)s [%(filename)s:%(funcName)s:%(lineno)d] %(message)s'
     markup: true
     rich_tracebacks: true
-    show_path: false
+    show_path: true
     log_time_format: '[%x %X]'

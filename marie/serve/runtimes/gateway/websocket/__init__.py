@@ -4,13 +4,13 @@ import os
 from marie import __default_host__
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.gateway import GatewayRuntime
-from marie.serve.runtimes.gateway.http.app import get_fastapi_app
+from marie.serve.runtimes.gateway.websocket.app import get_fastapi_app
 
-__all__ = ['HTTPGatewayRuntime']
+__all__ = ['WebSocketGatewayRuntime']
 
 
-class HTTPGatewayRuntime(GatewayRuntime):
-    """Runtime for HTTP interface."""
+class WebSocketGatewayRuntime(GatewayRuntime):
+    """Runtime for Websocket interface."""
 
     async def async_setup(self):
         """
@@ -50,7 +50,6 @@ class HTTPGatewayRuntime(GatewayRuntime):
         from marie.helper import extend_rest_interface
 
         uvicorn_kwargs = self.args.uvicorn_kwargs or {}
-
         for ssl_file in ['ssl_keyfile', 'ssl_certfile']:
             if getattr(self.args, ssl_file):
                 if ssl_file not in uvicorn_kwargs.keys():
@@ -71,7 +70,8 @@ class HTTPGatewayRuntime(GatewayRuntime):
                 ),
                 host=__default_host__,
                 port=self.args.port,
-                log_level=os.getenv('MARIE_LOG_LEVEL', 'error').lower(),
+                ws_max_size=1024 * 1024 * 1024,
+                log_level=os.getenv('JINA_LOG_LEVEL', 'error').lower(),
                 **uvicorn_kwargs
             )
         )

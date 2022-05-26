@@ -57,24 +57,6 @@ def served_exec():
     t.join()
 
 
-def test_executor_load_from_hub():
-    exec = Executor.from_hub(
-        'jinahub://DummyHubExecutor', uses_metas={'name': 'hello123'}
-    )
-    da = DocumentArray([Document()])
-    exec.foo(da)
-    assert da.texts == ['hello']
-    assert exec.metas.name == 'hello123'
-
-
-def test_executor_import_with_external_dependencies(capsys):
-    ex = Executor.load_config('../../hubble-executor/config.yml')
-    assert ex.bar == 123
-    ex.foo()
-    out, err = capsys.readouterr()
-    assert 'hello' in out
-
-
 @property
 def workspace(self) -> str:
     """
@@ -336,7 +318,7 @@ def test_serve(served_exec):
 def test_set_workspace(tmpdir):
     complete_workspace = os.path.abspath(os.path.join(tmpdir, 'WorkspaceExec', '0'))
     with Flow().add(uses=WorkspaceExec, workspace=str(tmpdir)) as f:
-        resp = f.post(on='/foo', inputs=Document())
+        resp = f.post(on='/foo', inputs=Document(text="abs"))
     assert resp[0].text == complete_workspace
     # with Flow().add(uses=WorkspaceExec, uses_metas={'workspace': str(tmpdir)}) as f:
     #     resp = f.post(on='/foo', inputs=Document())

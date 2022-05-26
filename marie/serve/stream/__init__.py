@@ -17,7 +17,6 @@ from marie.serve.stream.helper import AsyncRequestsIterator
 
 __all__ = ["RequestStreamer"]
 
-from marie.types.response import Response
 from marie.types.request import Request
 
 

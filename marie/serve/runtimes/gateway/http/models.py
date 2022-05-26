@@ -24,13 +24,13 @@ def _to_camel_case(snake_str: str) -> str:
 
 
 class JinaHealthModel(BaseModel):
-    """Pydantic BaseModel for Jina health check, used as the response model in REST app."""
+    """Pydantic BaseModel for 🦊-Marie health check, used as the response model in REST app."""
 
     ...
 
 
 class JinaStatusModel(BaseModel):
-    """Pydantic BaseModel for Jina status, used as the response model in REST app."""
+    """Pydantic BaseModel for 🦊-Marie status, used as the response model in REST app."""
 
     jina: Dict
     envs: Dict
@@ -77,9 +77,11 @@ class JinaResponseModel(BaseModel):
     Jina HTTP Response model. Only `request_id` and `data` are preserved.
     """
 
-    header: PROTO_TO_PYDANTIC_MODELS.HeaderProto = None
+    # header: PROTO_TO_PYDANTIC_MODELS.HeaderProto = None
+    header: Dict = None
     parameters: Dict = None
-    routes: List[PROTO_TO_PYDANTIC_MODELS.RouteProto] = None
+    # routes: List[PROTO_TO_PYDANTIC_MODELS.RouteProto] = None
+    routes: List[Any] = None
     data: Optional[Any] = None
     # data: Optional[PydanticDocumentArray] = None
 

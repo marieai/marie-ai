@@ -11,6 +11,7 @@ from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.logging.profile import used_memory_readable
+from marie.serve.networking import GrpcConnectionPool
 
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
@@ -20,10 +21,11 @@ if TYPE_CHECKING:
 
 
 def get_fastapi_app(
-    args: "argparse.Namespace",
-    connection_pool: GrpcConnectionPool,
-    logger: "Logger",
-    metrics_registry: Optional["CollectorRegistry"] = None,
+    args: 'argparse.Namespace',
+    topology_graph: 'TopologyGraph',
+    connection_pool: 'GrpcConnectionPool',
+    logger: 'JinaLogger',
+    metrics_registry: Optional['CollectorRegistry'] = None,
 ):
     """
     Get the app from FastAPI as the REST interface.
@@ -50,9 +52,9 @@ def get_fastapi_app(
 
     docs_url = "/docs"
     app = FastAPI(
-        title=args.title or "My Marie Service",
+        title=args.title or "Marie Service",
         description=args.description
-        or "This is my awesome service. You can set `title` and `description` in your `Flow` or `Gateway` "
+        or "You can set `title` and `description` in your `Flow` or `Gateway` "
         "to customize this text.",
         version=__version__,
         docs_url=docs_url if args.default_swagger_ui else None,
@@ -103,7 +105,7 @@ def get_fastapi_app(
         )
         async def _health():
             """
-            Get the health of this Jina service.
+            Get the health of this Marie service.
             .. # noqa: DAR201
 
             """
@@ -111,13 +113,13 @@ def get_fastapi_app(
 
         @app.get(
             path="/status",
-            summary="Get the status of Jina service",
+            summary="Get the status of Marie service",
             response_model=JinaStatusModel,
             tags=["Debug"],
         )
         async def _status():
             """
-            Get the status of this Jina service.
+            Get the status of this Marie service.
 
             This is equivalent to running `marie -vf` from command line.
 

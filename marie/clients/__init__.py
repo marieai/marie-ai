@@ -73,8 +73,11 @@ def Client(
     ):  # we need to parse the kwargs as soon as possible otherwise to get the gateway type
         args = parse_client(kwargs)
 
+    # GB : Need to fix this
+    args.protocol = 'HTTP'
     protocol = (
-        args.protocol if args else kwargs.get('protocol', GatewayProtocolType.GRPC)
+        # args.protocol if args else kwargs.get('protocol', GatewayProtocolType.GRPC) # GB
+        args.protocol if args else kwargs.get('protocol', GatewayProtocolType.HTTP)
     )
     if isinstance(protocol, str):
         protocol = GatewayProtocolType.from_string(protocol)
@@ -82,14 +85,15 @@ def Client(
     is_async = (args and args.asyncio) or kwargs.get('asyncio', False)
 
     if protocol == GatewayProtocolType.GRPC:
-        if is_async:
-            from marie.clients.grpc import AsyncGRPCClient
-
-            return AsyncGRPCClient(args, **kwargs)
-        else:
-            from marie.clients.grpc import GRPCClient
-
-            return GRPCClient(args, **kwargs)
+        raise NotImplemented
+        # if is_async:
+        #     from marie.clients.grpc import AsyncGRPCClient
+        #
+        #     return AsyncGRPCClient(args, **kwargs)
+        # else:
+        #     from marie.clients.grpc import GRPCClient
+        #
+        #     return GRPCClient(args, **kwargs)
     elif protocol == GatewayProtocolType.WEBSOCKET:
         if is_async:
             from marie.clients.websocket import AsyncWebSocketClient
