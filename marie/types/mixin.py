@@ -1,5 +1,7 @@
 from typing import Dict
 
+import jsons
+
 from marie.helper import typename
 
 
@@ -18,7 +20,11 @@ class ProtoTypeMixin:
 
         :return: dict representation of the object
         """
-        raise NotImplemented
+
+        _dict = jsons.dump(self._pb_body)
+        print(self._pb_body)
+        print(_dict)
+        return _dict
 
     def to_bytes(self) -> bytes:
         """Return the serialized the message to a string.

@@ -4,6 +4,7 @@ import ipaddress
 import os
 from typing import Optional
 
+from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.asyncio import DataRequest, ControlRequest
 from marie.types.request import Request
 
@@ -41,6 +42,14 @@ def host_is_local(hostname):
 
 
 class GrpcConnectionPool:
+    def __init__(
+        self,
+        logger: Optional[MarieLogger] = None,
+        compression: str = 'NoCompression',
+        metrics_registry: Optional['CollectorRegistry'] = None,
+    ):
+        self._logger = logger or MarieLogger(self.__class__.__name__)
+
     """
     Manages a list of grpc connections.
 
@@ -74,5 +83,36 @@ class GrpcConnectionPool:
 
             return await stub.process_single_data(request, timeout=timeout)
         elif type(request) == ControlRequest:
-            raise NotImplemented()
+            raise NotImplemented
 
+    async def close(self):
+        pass
+
+    def start(self):
+        print("Starting gateway")
+
+
+    def add_connection(
+        self,
+        deployment: str,
+        address: str,
+        head: bool = False,
+        shard_id: Optional[int] = None,
+    ):
+        """
+        Adds a connection for a deployment to this connection pool
+
+        :param deployment: The deployment the connection belongs to, like 'encoder'
+        :param head: True if the connection is for a head
+        :param address: Address used for the grpc connection, format is <host>:<port>
+        :param shard_id: Optional parameter to indicate this connection belongs to a shard, ignored for heads
+        """
+        ...
+        #
+        # if head:
+        #     self._connections.add_head(deployment, address, 0)
+        # else:
+        #     if shard_id is None:
+        #         shard_id = 0
+        #     self._connections.add_replica(deployment, shard_id, address)
+        # self._deployment_address_map[deployment] = address

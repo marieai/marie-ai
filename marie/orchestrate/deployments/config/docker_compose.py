@@ -57,8 +57,8 @@ class DockerComposeConfig:
             )
             cargs = copy.copy(self.service_args)
             cargs.deployments_addresses = self.deployments_addresses
-            from jina.helper import ArgNamespace
-            from jina.parsers import set_gateway_parser
+            from marie.helper import ArgNamespace
+            from marie.parsers import set_gateway_parser
 
             taboo = {
                 'uses_with',

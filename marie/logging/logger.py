@@ -197,7 +197,7 @@ class MarieLogger:
                 config_path = old_config_path
 
         with open(config_path) as fp:
-            config = yaml.load(fp)
+            config = yaml.safe_load(fp)
 
         for h in config["handlers"]:
             cfg = config["configs"].get(h, None)

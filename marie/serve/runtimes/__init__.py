@@ -6,12 +6,12 @@ def get_runtime(name: str):
     # noqa: DAR201
     """
     from marie.serve.runtimes.base import BaseRuntime
-    # from jina.serve.runtimes.gateway.grpc import GRPCGatewayRuntime
-    # from jina.serve.runtimes.gateway.http import HTTPGatewayRuntime
+    # from marie.serve.runtimes.gateway.grpc import GRPCGatewayRuntime
+    from marie.serve.runtimes.gateway.http import HTTPGatewayRuntime
     # from jina.serve.runtimes.gateway.websocket import WebSocketGatewayRuntime
-    # from jina.serve.runtimes.worker import WorkerRuntime
+    from marie.serve.runtimes.worker import WorkerRuntime
     # from jina.serve.runtimes.head import HeadRuntime
-
+    __locals = locals()
     s = locals()[name]
     if isinstance(s, type) and issubclass(s, BaseRuntime):
         return s

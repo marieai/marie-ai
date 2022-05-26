@@ -6,7 +6,7 @@ from typing import Callable, Optional
 from marie.excepts import BadClientCallback
 from marie.helper import get_rich_console
 from marie.logging.logger import MarieLogger
-from marie.proto import jina_pb2
+from marie.proto.status_proto import StatusProto
 from marie.types.request.data import Response
 
 
@@ -27,9 +27,9 @@ def pprint_routes(resp: 'Response', stack_limit: int = 3):
 
     for route in routes:
         status_icon = '🟢'
-        if route.status.code == jina_pb2.StatusProto.ERROR:
+        if route.status.code == StatusProto.ERROR:
             status_icon = '🔴'
-        elif route.status.code == jina_pb2.StatusProto.ERROR_CHAINED:
+        elif route.status.code == StatusProto.ERROR_CHAINED:
             status_icon = '⚪'
 
         table.add_row(

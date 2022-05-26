@@ -1,12 +1,9 @@
 import traceback
 from typing import Optional
 
+from marie.proto.status_proto import StatusProto
 from marie.serve.executors import BaseExecutor
 from marie.types.mixin import ProtoTypeMixin
-
-
-class StatusProto:
-    ERROR = 500
 
 
 class Request(ProtoTypeMixin):

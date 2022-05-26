@@ -2,9 +2,9 @@ import argparse
 from abc import ABC
 from typing import TYPE_CHECKING, Optional, Union
 
-# from jina.serve.networking import GrpcConnectionPool
+from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-# from jina.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
+from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 
 if TYPE_CHECKING:
     import asyncio
@@ -32,7 +32,31 @@ class GatewayRuntime(AsyncNewLoopRuntime, ABC):
         super().__init__(args, cancel_event, **kwargs)
 
     def _set_topology_graph(self):
-        pass
+        # check if it should be in K8s, maybe ConnectionPoolFactory to be created
+        import json
+
+        graph_description = json.loads(self.args.graph_description)
+        graph_conditions = json.loads(self.args.graph_conditions)
+        deployments_disable_reduce = json.loads(self.args.deployments_disable_reduce)
+        self._topology_graph = TopologyGraph(
+            graph_description,
+            graph_conditions,
+            deployments_disable_reduce,
+            timeout_send=self.timeout_send,
+        )
 
     def _set_connection_pool(self):
-        pass
+        import json
+
+        deployments_addresses = json.loads(self.args.deployments_addresses)
+        # add the connections needed
+        self._connection_pool = GrpcConnectionPool(
+            logger=self.logger,
+            compression=self.args.compression,
+            metrics_registry=self.metrics_registry,
+        )
+        for deployment_name, addresses in deployments_addresses.items():
+            for address in addresses:
+                self._connection_pool.add_connection(
+                    deployment=deployment_name, address=address, head=True
+                )

@@ -63,13 +63,13 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
 
     async def async_run_forever(self):
         """Block until the server is terminated"""
-        raise NotImplemented()
+        raise NotImplemented
 
     async def async_cancel(self):
         """Stop the server"""
         self.logger.debug("cancel WorkerRuntime")
 
-        raise NotImplemented()
+        raise NotImplemented
 
     async def async_teardown(self):
         """Close the data request handler"""
@@ -131,4 +131,4 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
         :param args: additional arguments in the grpc call, ignored
         :returns: the input request
         """
-        raise NotImplemented()
+        raise NotImplemented
