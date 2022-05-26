@@ -1,5 +1,6 @@
 from marie.parsers.export_api import set_export_api_parser
 from marie.parsers.helper import _SHOW_ALL_ARGS
+from marie.parsers.orchestrate.runtimes.head import mixin_head_parser
 
 
 def set_pod_parser(parser=None):
@@ -31,6 +32,7 @@ def set_pod_parser(parser=None):
     mixin_distributed_feature_parser(parser)
     mixin_pod_parser(parser)
     # mixin_hub_pull_options_parser(parser)
+    mixin_head_parser(parser)
 
     return parser
 

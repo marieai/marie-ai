@@ -34,7 +34,7 @@ class DataRequestHandler:
         """
         super().__init__()
         self.args = args
-        # self.args.parallel = self.args.shards
+        self.args.parallel = self.args.shards
         self.logger = logger
         self._is_closed = False
         if executor:
@@ -77,7 +77,7 @@ class DataRequestHandler:
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
                     "workspace": self.args.workspace,
                     "shard_id": self.args.shard_id,
-                    # "shards": self.args.shards, # GB: Need to remove this
+                    "shards": self.args.shards, # GB: Need to remove this
                     "replicas": self.args.replicas,
                     "name": self.args.name,
                     "metrics_registry": metrics_registry,
