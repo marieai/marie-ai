@@ -4,7 +4,7 @@ import ipaddress
 import os
 from typing import Optional
 
-from marie.serve.runtimes.asyncio import DataRequest
+from marie.serve.runtimes.asyncio import DataRequest, ControlRequest
 from marie.types.request import Request
 
 
@@ -67,10 +67,12 @@ class GrpcConnectionPool:
 
         :returns: the response request
         """
-
+        print('Request **')
+        print(type(request))
         if type(request) == DataRequest:
             stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
+
             return await stub.process_single_data(request, timeout=timeout)
         elif type(request) == ControlRequest:
-            stub = jina_pb2_grpc.JinaControlRequestRPCStub(channel)
-            return await stub.process_control(request, timeout=timeout)
+            raise NotImplemented()
+

@@ -2,6 +2,7 @@
 from marie.parsers.base import set_base_parser
 from marie.parsers.helper import KVAppendAction, add_arg_group
 # from marie.parsers.orchestrate.base import mixin_essential_parser
+from marie.parsers.orchestrate.base import mixin_essential_parser
 
 
 def mixin_flow_features_parser(parser):
@@ -45,7 +46,7 @@ def set_flow_parser(parser=None):
     if not parser:
         parser = set_base_parser()
 
-    # mixin_essential_parser(parser)
+    mixin_essential_parser(parser)
     mixin_flow_features_parser(parser)
 
     return parser
