@@ -50,8 +50,7 @@ RUN python3 -m pip install Wand
 RUN git clone https://github.com/pytorch/fairseq.git && \
     cd fairseq  && \
     python setup.py build install
-
-#FROM ubuntu:20.04
+    
 FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
 
 ARG http_proxy

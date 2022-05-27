@@ -22,9 +22,13 @@ imutils
 PyPDF4
 reportlab
 # fairseq  # installed from source
+pycocotools
 onnx
 onnxruntime
 nltk
 timm
 segmentation-models-pytorch
 Wand
+docarray
+jsons
+grpcio

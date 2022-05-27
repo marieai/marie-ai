@@ -28,7 +28,7 @@ cd TextFuseNet-master
 # rebuild fvcore, we rebuild it for training more conveniently.
 pip install fvcore-master.zip
 
-# build TextFuseNet-detectron2, which needs cuda-10.1 and gcc-4.9.
+# build   -detectron2, which needs cuda-10.1 and gcc-4.9.
 python setup.py build develop
 
 # If you have other problems about installation, please let us know on issue.
