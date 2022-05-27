@@ -24,6 +24,7 @@ import torchvision.transforms as transforms
 
 from marie.timer import Timer
 from marie.utils.utils import batchify
+from marie import __model_path__
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cpu"
@@ -60,7 +61,12 @@ def init(model_path, beam=5) -> Tuple[Any, Any, Any, Any, Any, Compose, str]:
     )
 
     generator = inference_task.build_generator(
-        model, cfg.generation, extra_gen_cls_kwargs={"lm_model": None, "lm_weight": None, }
+        model,
+        cfg.generation,
+        extra_gen_cls_kwargs={
+            "lm_model": None,
+            "lm_weight": None,
+        },
     )
 
     bpe = inference_task.build_bpe(cfg.bpe)
@@ -95,13 +101,16 @@ def preprocess_samples(src_images, img_transform):
 
 
 @Timer(text="Text in {:.4f} seconds")
-def get_text(cfg, task, generator, model, samples, bpe) -> [str]:
+def get_text(cfg, task, generator, model, samples, bpe) :
     results = task.inference_step(generator, model, samples, prefix_tokens=None, constraints=None)
     predictions = []
+    scores = []
 
     for i in range(len(results)):
         decoder_output = results[i][0]  # top1
+        # TODO: how to interpret this ??
         score = decoder_output["score"]
+        # print(f"score : {score}")
 
         hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
             hypo_tokens=decoder_output["tokens"].int().cpu(),
@@ -115,12 +124,15 @@ def get_text(cfg, task, generator, model, samples, bpe) -> [str]:
 
         detok_hypo_str = bpe.decode(hypo_str)
         predictions.append(detok_hypo_str)
+        scores.append(.9999)
 
-    return predictions
+    return predictions, scores
 
 
 class TrOcrIcrProcessor(IcrProcessor):
-    def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/trocr", cuda: bool = True) -> None:
+    def __init__(
+        self, work_dir: str = "/tmp/icr", models_dir: str = os.path.join(__model_path__, "trocr"), cuda: bool = True
+    ) -> None:
         super().__init__(work_dir, cuda)
         pass
 
@@ -153,7 +165,6 @@ class TrOcrIcrProcessor(IcrProcessor):
         batch_size = 16
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
-        logger.info(f"Batches : {total_batches}")
 
         try:
             opt = self.opt
@@ -170,13 +181,14 @@ class TrOcrIcrProcessor(IcrProcessor):
 
                 images = [img for img, img_name in eval_data]
                 samples = preprocess_samples(images, self.img_transform)
-                predictions = get_text(self.cfg, self.task, self.generator, self.model, samples, self.bpe)
+                predictions, scores = get_text(self.cfg, self.task, self.generator, self.model, samples, self.bpe)
 
                 for k in range(len(predictions)):
                     pred = predictions[k]
+                    score = scores[k]
                     _, img_name = eval_data[k]
                     text = pred
-                    confidence = 0
+                    confidence = score
                     results.append({"confidence": confidence, "text": text, "id": img_name})
                 logger.info("Batch time : %s" % (time.time() - batch_start))
 

@@ -29,7 +29,7 @@ class FileSystem:
     def __get_base_dir():
         """At most all application packages are just one level deep"""
         current_path = os.path.abspath(os.path.dirname(__file__))
-        return os.path.join(current_path, "..")
+        return os.path.abspath(os.path.join(current_path, "../.."))
 
     @staticmethod
     def __get_config_directory() -> str:
@@ -43,6 +43,10 @@ class FileSystem:
 
     @staticmethod
     def get_share_directory() -> str:
+        base_dir = os.environ.get("MARIE_DEFAULT_SHARE_PATH")
+        if base_dir:
+            return base_dir
+
         base_dir = FileSystem.__get_base_dir()
         return os.path.abspath(os.path.join(base_dir, "share"))
 

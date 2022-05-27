@@ -14,6 +14,7 @@ from arg_parser import ArgParser
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
 import marie.api.WorkflowRoutes as WorkflowRoutes
+from marie.api.icr_router import ICRRouter
 from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
 
@@ -32,11 +33,14 @@ def create_app():
     ensure_exists(f"/tmp/marie")
     # Register VFS handlers
     base_dir = FileSystem.get_share_directory()
-    PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
+    PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/shares/medrxprovdata/"))
 
     app = Flask(__name__)
     app.config.from_object(conf)
+    app.config["APPLICATION_ROOT"] = "/api"
+
     api.init_app(app)
 
     @app.route("/")
@@ -46,17 +50,25 @@ def create_app():
     with app.app_context():
         # app.register_blueprint(IcrAPIRoutes.blueprint)
         # app.register_blueprint(WorkflowRoutes.blueprint)
-        RouteHandler.register_route(SampleRouter(app))
+        # RouteHandler.register_route(SampleRouter(app))
+        RouteHandler.register_route(ICRRouter(app))
 
     return app
 
 
 if __name__ == "__main__":
+    # import sys
+    # for p in sys.path:
+    #     print(p)
+
+    # export PYTHONPATH = "$PWD"
+    pypath = os.environ['PYTHONPATH']
+    print(f'pypath = {pypath}')
 
     args = ArgParser.server_parser()
     print(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Initializing Marie-AI : %s", __version__)
+    logger.info("Initializing 🦊-Marie : %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
     logger.info("Python runtime: %s", sys.version.replace("\n", ""))
     logger.info("Environment : %s", conf.APP_ENV)
@@ -71,7 +83,8 @@ if __name__ == "__main__":
     # Setting use_reloader to false prevents application from initializing twice
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"
-    logger.info("Starting 🦊-marie ")
 
-    # service = create_app()
-    # service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
+
+    service = create_app()
+    service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)

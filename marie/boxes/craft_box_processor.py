@@ -28,6 +28,7 @@ import marie.models.craft.imgproc
 from PIL import Image
 from marie.boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict
 from marie.utils.utils import ensure_exists
+from marie import __model_path__
 
 # FIXME : Rework package import
 # sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -149,7 +150,7 @@ class BoxProcessorCraft(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = "./model_zoo/craft",
+        models_dir: str = os.path.join(__model_path__, "craft"),
         cuda: bool = True,
     ):
         super().__init__(work_dir, models_dir, cuda)

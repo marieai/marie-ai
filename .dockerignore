@@ -1,5 +1,5 @@
 /.git
-/model_zoo
+# /model_zoo
 /.env
 /.vscode
 /keys

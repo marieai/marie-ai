@@ -15,8 +15,9 @@ if [[ "${CONTAINER_ID}" ]]; then
 fi
 
 # container not found.
+# -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION} 
 
-docker run -u 0 --user root -it --rm  --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
+docker run -u 0 --user root -it --rm  --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
 --name ${CONTAINER_NAME} \
 -v `pwd`/../config:/etc/marie:rw \
 -v `pwd`/../model_zoo:/opt/marie-icr/model_zoo:rw \
@@ -24,4 +25,4 @@ docker run -u 0 --user root -it --rm  --gpus all --shm-size=1g --ulimit memlock=
 -v /opt/shares/medrxprovdata:/opt/marie-icr/share:rw  \
 --env-file ./service.env  \
 --network=host  \
--p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION} 
+-p 5100:5100  ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} 

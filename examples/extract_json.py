@@ -5,7 +5,6 @@ import requests
 api_base_url = "http://127.0.0.1:5000/api"
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
-
 auth_headers = {"Authorization": f"Bearer {api_key}"}
 
 
@@ -17,7 +16,7 @@ def online(api_ulr) -> bool:
     return r.status_code == 200 or r.status_code == 308
 
 
-def process_extract(queue_id: str, file_location: str) -> str:
+def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
@@ -31,7 +30,8 @@ def process_extract(queue_id: str, file_location: str) -> str:
         base64_str = encoded_bytes.decode("utf-8")
 
         # modes can be [word, line, sparse]
-        json_payload = {"data": base64_str, "mode": "word"}
+        # "word" -> will not perform BoundingBox detection and use the size of the image as bbox
+        json_payload = {"data": base64_str, "mode": mode}
 
         print(json_payload)
         # Upload file to api
@@ -46,4 +46,4 @@ if __name__ == "__main__":
     # Specify the path to the file you would like to process
     src = "./set-001/test/fragment-003.png"
     # src = "/home/gbugaj/dev/sk-snippet-dump/hashed/AARON_JANES/38585416cc1f22103336f3419390c9ce.tif"
-    process_extract(queue_id=default_queue_id, file_location=src)
+    process_extract(queue_id=default_queue_id, mode="sparse", file_location=src)
