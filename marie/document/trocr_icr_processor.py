@@ -122,6 +122,7 @@ def get_text(cfg, task, generator, model, samples, bpe) :
             extra_symbols_to_ignore=generate.get_symbols_to_strip_from_output(generator),
         )
 
+        # TODO : fix the text scores
         detok_hypo_str = bpe.decode(hypo_str)
         predictions.append(detok_hypo_str)
         scores.append(.9999)
@@ -162,7 +163,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         """
 
         logger.info("ICR processing : recognize_from_boxes via boxes")
-        batch_size = 16
+        batch_size = 32
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
 
@@ -172,7 +173,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
-                logger.info(f"Processing batch : {i}, {len(batch)}")
+                logger.info(f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}")
                 images = batch
 
                 eval_data = MemoryDataset(images=images, opt=opt)

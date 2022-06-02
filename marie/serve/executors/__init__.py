@@ -83,7 +83,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         if hasattr(self.runtime_args, "metrics_registry") and self.runtime_args.metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of Marie",
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of Marie",
             ):
                 from prometheus_client import Summary
 

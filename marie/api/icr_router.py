@@ -1,3 +1,4 @@
+import torch
 from torch.backends import cudnn
 
 from marie import Executor, requests
@@ -21,11 +22,12 @@ import marie.processors
 
 from flask import Blueprint, jsonify
 from flask_restful import Resource, reqparse, request
+
+from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
 from marie.serve.runtimes import monitoring
 from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
 from marie.boxes.box_processor import PSMode
-from marie.logger import setup_logger
 from marie.utils.base64 import base64StringToBytes, encodeToBase64
 from marie.utils.network import find_open_port, get_ip_address
 
@@ -36,8 +38,7 @@ from marie.document.craft_icr_processor import CraftIcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 
-
-logger = setup_logger(__name__)
+logger = MarieLogger('')
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
@@ -105,10 +106,11 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
 
 def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     """Extract data from payload"""
-    print("Payload info")
     # determine how to extract payload based on the type of the key supplied
     # Possible keys
     # data, srcData, srcFile, srcUrl
+
+    # This indicates that the contents are a file contentstens and need to stored as they appear
 
     store_raw = False
     if "data" in payload:
@@ -117,15 +119,19 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     elif "srcData" in payload:
         raw_data = payload["srcData"]
         data = base64StringToBytes(raw_data)
+    elif "srcBase64" in payload:
+        raw_data = payload["srcBase64"]
+        data = base64StringToBytes(raw_data)
+        store_raw = True
     elif "srcFile" in payload:
         img_path = payload["srcFile"]
         # FIXME: relative path resolution is not working as expected
         # FIXME : Use PathManager
         base_dir = FileSystem.get_share_directory()
         path = os.path.abspath(os.path.join(base_dir, img_path))
-        print(f"base_dir = {base_dir}")
-        print(f"raw_data = {img_path}")
-        print(f"resolved path = {path}")
+        logger.info(f"base_dir = {base_dir}")
+        logger.info(f"raw_data = {img_path}")
+        logger.info(f"resolved path = {path}")
         if not os.path.exists(path):
             raise Exception(f"File not found : {img_path}")
         with open(path, "rb") as file:
@@ -141,14 +147,14 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
         raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
 
     tmp_file, checksum = store_temp_file(data, queue_id, file_type, store_raw)
-    print(f"Filetype : {file_type}")
-    print(f"tmp_file : {tmp_file}")
+    logger.info(f"File info: {file_type}, {tmp_file}")
 
     return tmp_file, checksum, file_type
 
 
 class ICRRouter(Executor):
     def __init__(self, app, **kwargs):
+        super().__init__(**kwargs)
         if app is None:
             raise RuntimeError("Expected app arguments is null")
 
@@ -156,6 +162,7 @@ class ICRRouter(Executor):
         app.add_url_rule(rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"])
         # app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
         app.add_url_rule(rule=f"/{prefix}/status", endpoint="status", view_func=self.status, methods=["GET"])
+        app.add_url_rule(rule=f"/{prefix}", endpoint="api_index", view_func=self.status, methods=["GET"])
         app.add_url_rule(
             rule=f"{prefix}/extract/<queue_id>", endpoint="extract", view_func=self.extract, methods=["POST"]
         )
@@ -165,12 +172,17 @@ class ICRRouter(Executor):
         work_dir_boxes = ensure_exists("/tmp/boxes")
         work_dir_icr = ensure_exists("/tmp/icr")
 
-        if True:
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        has_cuda = torch.cuda.is_available()
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            has_cuda = False
+
+        if has_cuda:
             cudnn.benchmark = False
             cudnn.deterministic = False
 
-        self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=False)
-        self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+        self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=has_cuda)
+        self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
 
     def status(self):
         """Get application status"""
@@ -198,8 +210,9 @@ class ICRRouter(Executor):
         )
 
     def info(self):
-        print(f"Self : {self}")
+        logger.info(f"Self : {self}")
         return {"index": "complete"}
+
 
     def process_extract_fullpage(self, frames, queue_id, checksum, pms_mode, args, **kwargs):
         """Process full page extraction"""
@@ -219,7 +232,7 @@ class ICRRouter(Executor):
         )
         result, overlay_image = self.icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
 
-        # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}.png", overlay_image)
+        cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}.png", overlay_image)
         result["overlay_b64"] = encodeToBase64(overlay_image)
 
         return result
@@ -251,10 +264,13 @@ class ICRRouter(Executor):
                 overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 overlay[padding : h + padding, padding : w + padding] = img
 
+                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+
                 logger.info(f"pms_mode = {pms_mode}")
                 boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
                     queue_id, checksum, overlay, pms_mode
                 )
+
                 result, overlay_image = self.icr_processor.recognize(
                     queue_id, checksum, overlay, boxes, img_fragments, lines
                 )
@@ -272,6 +288,7 @@ class ICRRouter(Executor):
                 # 2 - Full
                 # 3 - HOCR
 
+                print(result)
                 rendering_mode = "simple"
                 region_result = {}
                 if rendering_mode == "simple":
@@ -284,6 +301,7 @@ class ICRRouter(Executor):
                         output.append(region_result)
             except Exception as ex:
                 print(ex)
+                logger.error(ex)
 
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
         # This is useful when we like to display or process image in the output but has significant payload overhead
@@ -320,7 +338,6 @@ class ICRRouter(Executor):
 
         logger.info("Starting ICR processing request", extra={"session": queue_id})
         try:
-            print(request)
             payload = request.json
             if payload is None:
                 return {"error": "empty payload"}, 200
@@ -334,17 +351,16 @@ class ICRRouter(Executor):
                 args = payload["args"]
                 pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
 
+            # TODO :FIXE
+            # pms_mode = PSMode.LINE
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
             loaded, frames = load_image(tmp_file, file_type)
 
-            print(f"Frame size : {len(frames)}")
             if not loaded:
-                print(f"Unable to read image : {tmp_file}")
                 raise Exception(f"Unable to read image : {tmp_file}")
 
             frame_len = len(frames)
-            print(f"frame_len : {frame_len}")
-            print(f"regions_len : {len(regions)}")
+            logger.info(f"frame size, regions size : {frame_len}, {len(regions)}")
 
             if len(regions) == 0:
                 result = self.process_extract_fullpage(frames, queue_id, checksum, pms_mode, args)

@@ -1,8 +1,11 @@
 import base64
 import os
+import time
+
 import requests
 
-api_base_url = "http://127.0.0.1:5000/api"
+api_base_url = "http://127.0.0.1:5100/api"
+api_base_url = "http://65.49.54.125:5100/api"
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
 auth_headers = {"Authorization": f"Bearer {api_key}"}
@@ -36,9 +39,14 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         print(json_payload)
         # Upload file to api
         print(f"Uploading to marie-ai for processing : {file}")
-        json_result = requests.post(upload_url, headers=auth_headers, json=json_payload).json()
 
-        print(json_result)
+        for k in range(1):
+            start = time.time()
+            json_result = requests.post(upload_url, headers=auth_headers, json=json_payload).json()
+            delta = (time.time() - start)
+            print(f'Request time : {delta}')
+            # print(json_result)
+
         return json_result
 
 
