@@ -33,9 +33,9 @@ def create_app():
     ensure_exists(f"/tmp/marie")
     # Register VFS handlers
     base_dir = FileSystem.get_share_directory()
-    # PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
+    PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
-    PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/shares/medrxprovdata/"))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/shares/medrxprovdata/"))
 
     app = Flask(__name__)
     app.config.from_object(conf)
@@ -63,7 +63,6 @@ if __name__ == "__main__":
 
     # export PYTHONPATH = "$PWD"
     pypath = os.environ['PYTHONPATH']
-    print(f'pypath = {pypath}')
 
     args = ArgParser.server_parser()
     print(args)
@@ -84,7 +83,6 @@ if __name__ == "__main__":
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"
 
-    os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
 
     service = create_app()
-    service.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    service.run(host="0.0.0.0", port=5100, debug=False, use_reloader=False)

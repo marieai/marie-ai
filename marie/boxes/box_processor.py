@@ -124,9 +124,14 @@ def estimate_character_width(src_img, bounding_boxes):
 class PSMode(Enum):
     """ "Page Segmentation Modes"""
 
+    # Treat the image as a single word.
     WORD = "word"
+    # Sparse text. Find as much text as possible in no particular order.
     SPARSE = "sparse"
+    # Treat the image as a single text line.
     LINE = "line"
+    # Raw line. Treat the image as a single text line, no bounding box detection performed.
+    RAW_LINE = "raw_line"
 
     @staticmethod
     def from_value(value: str):
