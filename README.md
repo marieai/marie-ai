@@ -38,8 +38,9 @@ docker push gregbugaj/marie-icr:2.2-cuda
 Starting in Development mode
 
 ```sh
-python ./app.py
-```
+
+ PYTHONPATH="$PWD" python ./marie/app.py
+``
 
 Enable encryption 
 

@@ -4,7 +4,7 @@ from functools import wraps
 from typing import Optional, Union, Callable
 
 if typing.TYPE_CHECKING:
-    from marie.logging.logger import MarieLogger
+    from marie.logging.logger import MARIE_DEFAULT_WORKSPACE_BASEger
 
 
 from marie import __windows__

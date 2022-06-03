@@ -8,6 +8,7 @@ from torchvision.transforms import Compose, InterpolationMode
 
 from marie.lang import Object
 from marie.logger import setup_logger
+from marie.logging.predefined import default_logger
 from marie.models.unilm.trocr.task import SROIETextRecognitionTask
 
 import numpy as np
@@ -29,7 +30,7 @@ from marie import __model_path__
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cpu"
 
-logger = setup_logger(__name__)
+logger = default_logger
 
 
 @Timer(text="init in {:.4f} seconds")
@@ -101,7 +102,7 @@ def preprocess_samples(src_images, img_transform):
 
 
 @Timer(text="Text in {:.4f} seconds")
-def get_text(cfg, task, generator, model, samples, bpe) :
+def get_text(cfg, task, generator, model, samples, bpe):
     results = task.inference_step(generator, model, samples, prefix_tokens=None, constraints=None)
     predictions = []
     scores = []
@@ -125,7 +126,7 @@ def get_text(cfg, task, generator, model, samples, bpe) :
         # TODO : fix the text scores
         detok_hypo_str = bpe.decode(hypo_str)
         predictions.append(detok_hypo_str)
-        scores.append(.9999)
+        scores.append(0.9999)
 
     return predictions, scores
 
@@ -173,12 +174,11 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
-                logger.info(f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}")
+                logger.debug(f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}")
                 images = batch
 
                 eval_data = MemoryDataset(images=images, opt=opt)
                 batch_start = time.time()
-                logger.info(f"Dataset size : {len(eval_data)}")
 
                 images = [img for img, img_name in eval_data]
                 samples = preprocess_samples(images, self.img_transform)

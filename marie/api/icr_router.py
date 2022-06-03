@@ -38,7 +38,7 @@ from marie.document.craft_icr_processor import CraftIcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 
-logger = MarieLogger('')
+logger = MarieLogger("")
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
@@ -213,7 +213,6 @@ class ICRRouter(Executor):
         logger.info(f"Self : {self}")
         return {"index": "complete"}
 
-
     def process_extract_fullpage(self, frames, queue_id, checksum, pms_mode, args, **kwargs):
         """Process full page extraction"""
         # TODO : Implement multipage tiff processing
@@ -288,7 +287,7 @@ class ICRRouter(Executor):
                 # 2 - Full
                 # 3 - HOCR
 
-                print(result)
+                logger.info(result)
                 rendering_mode = "simple"
                 region_result = {}
                 if rendering_mode == "simple":
@@ -300,7 +299,6 @@ class ICRRouter(Executor):
                         region_result["confidence"] = line["confidence"]
                         output.append(region_result)
             except Exception as ex:
-                print(ex)
                 logger.error(ex)
 
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
