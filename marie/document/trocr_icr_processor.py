@@ -101,7 +101,7 @@ def preprocess_samples(src_images, img_transform):
     return sample
 
 
-@Timer(text="Text in {:.4f} seconds")
+# @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, samples, bpe):
     results = task.inference_step(generator, model, samples, prefix_tokens=None, constraints=None)
     predictions = []
