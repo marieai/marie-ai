@@ -1,6 +1,6 @@
 
 model_zoo/
-
+.cache/
 # Environments
 .env
 .venv

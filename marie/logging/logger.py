@@ -14,6 +14,9 @@ from marie import __resources_path__, __uptime__, __windows__
 from marie.enums import LogVerbosity
 from marie.logging import formatter
 
+# TODO : Implement MDC like context for logging
+# https://stackoverflow.com/questions/6618513/python-logging-with-context
+
 
 class _MyLogRender(_LogRender):
     """Override the original rich log record for more compact layout."""

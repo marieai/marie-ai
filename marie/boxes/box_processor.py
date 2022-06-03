@@ -69,9 +69,9 @@ def estimate_character_width(src_img, bounding_boxes):
     Estimate Character Width based on the score map.
     """
     src = src_img.copy()
-    print(f"Estimated stroke width detection : {src.shape}")
+    # print(f"Estimated stroke width detection : {src.shape}")
     # conversion required, or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
-    cv2.imwrite("/tmp/fragments/esw_src.png", src)
+    # cv2.imwrite("/tmp/fragments/esw_src.png", src)
     # Transform source image to gray if it is not already
     if len(src.shape) != 2:
         gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
@@ -80,10 +80,10 @@ def estimate_character_width(src_img, bounding_boxes):
 
     gray = gray * 255
     gray = gray.astype("uint8")
-    cv2.imwrite("/tmp/fragments/gray.png", gray)
+    # cv2.imwrite("/tmp/fragments/gray.png", gray)
     # Picked values based on experiments
     thresh = cv2.threshold(gray, 110, 255, cv2.THRESH_BINARY)[1]
-    cv2.imwrite("/tmp/fragments/thresh.png", thresh)
+    # cv2.imwrite("/tmp/fragments/thresh.png", thresh)
     # thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
     # cv2.imwrite('/tmp/fragments/thresh_th2.png', thresh)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -117,7 +117,7 @@ def estimate_character_width(src_img, bounding_boxes):
     else:
         char_width = total_width // total_chars
 
-    print(f"total_chars, char_width : {total_chars}, {char_width}")
+    # print(f"total_chars, char_width : {total_chars}, {char_width}")
     return char_width
 
 
@@ -138,7 +138,7 @@ class PSMode(Enum):
         if value is None:
             return PSMode.SPARSE
         for data in PSMode:
-            print("{:15} = {}".format(data.name, data.value))
+            # print("{:15} = {}".format(data.name, data.value))
             if data.value == value.lower():
                 return data
         return PSMode.SPARSE

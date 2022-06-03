@@ -19,13 +19,17 @@ from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
 
 from marie.common.volume_handler import VolumeHandler
+from marie.logging.logger import MarieLogger
+from marie.logging.predefined import default_logger
 from marie.version import __version__
 from marie.common.file_io import PathManager
-from marie.logger import setup_logger
+from marie import __cache_dir__
+
+# from marie.logger import setup_logger
 from marie.utils.utils import ensure_exists, FileSystem
 
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
-logger = setup_logger(__file__)
+logger = default_logger
 
 
 def create_app():
@@ -62,10 +66,9 @@ if __name__ == "__main__":
     #     print(p)
 
     # export PYTHONPATH = "$PWD"
-    pypath = os.environ['PYTHONPATH']
+    pypath = os.environ["PYTHONPATH"]
 
     args = ArgParser.server_parser()
-    print(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Initializing 🦊-Marie : %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
@@ -83,6 +86,8 @@ if __name__ == "__main__":
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"
 
+    # by default cache is located in '~/.cache' here we will map it under the runtime cache directory
+    os.environ['TORCH_HOME'] = str(__cache_dir__)
 
     service = create_app()
     service.run(host="0.0.0.0", port=5100, debug=False, use_reloader=False)

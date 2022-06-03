@@ -17,6 +17,7 @@ __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
 # __resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
 __resources_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "resources")
 __model_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo")
+__cache_dir__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), ".cache")
 
 __default_host__ = _os.environ.get("MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0")
 __default_port_monitoring__ = 9090
