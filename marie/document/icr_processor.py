@@ -67,7 +67,7 @@ class IcrProcessor(BaseHandler):
         """
         raise Exception("Not Implemented")
 
-    @Timer(text="ICR in {:.2f} seconds")
+    # @Timer(text="ICR in {:.2f} seconds")
     def recognize(self, _id, key, img, boxes, image_fragments, lines):
         """Recognize text from multiple images.
         Args:

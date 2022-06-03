@@ -34,6 +34,7 @@ DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda
 docker push gregbugaj/marie-icr:2.2-cuda
 ```
 
+-v `pwd`/../cache:/opt/marie-icr/.cache:rw \
 
 Starting in Development mode
 

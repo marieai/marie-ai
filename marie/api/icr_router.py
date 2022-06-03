@@ -87,7 +87,12 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
 
     upload_dir = ensure_exists(f"/tmp/marie/{queue_id}")
     ext = TYPES_TO_EXT[file_type]
-    tmp_file = f"{upload_dir}/{checksum}.{ext}"
+
+    from datetime import datetime
+
+    current_datetime = datetime.now()
+    str_current_datetime = str(current_datetime)
+    tmp_file = f"{upload_dir}/{checksum}_{str_current_datetime}.{ext}"
 
     if store_raw:
         # message read directly from a file
@@ -300,6 +305,7 @@ class ICRRouter(Executor):
                         output.append(region_result)
             except Exception as ex:
                 logger.error(ex)
+                raise ex
 
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
         # This is useful when we like to display or process image in the output but has significant payload overhead
