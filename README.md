@@ -230,7 +230,7 @@ python3 -m pip install setuptools==59.5.0
 
 [//]: # (https://mmocr.readthedocs.io/en/latest/)
 [//]: # (https://github.com/anibali/docker-pytorch)
-
+[//]: # (https://github.com/AleksK1NG/Go-Kafka-gRPC-MongoDB-microservice/blob/master/docker-compose.yml)
 
 
 ImageMagic 6 policy
