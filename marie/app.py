@@ -26,7 +26,7 @@ from marie.common.file_io import PathManager
 from marie import __cache_dir__
 
 # from marie.logger import setup_logger
-from marie.utils.utils import ensure_exists, FileSystem
+from marie.utils import ensure_exists, FileSystem
 
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
 logger = default_logger
