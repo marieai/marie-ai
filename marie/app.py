@@ -40,6 +40,7 @@ def create_app():
     PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/shares/medrxprovdata/"))
+    # PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/prodshare/"))
 
     app = Flask(__name__)
     app.config.from_object(conf)
@@ -67,6 +68,8 @@ if __name__ == "__main__":
 
     # export PYTHONPATH = "$PWD"
     pypath = os.environ["PYTHONPATH"]
+    # os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
+
 
     args = ArgParser.server_parser()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

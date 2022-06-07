@@ -276,7 +276,7 @@ class BoxProcessorCraft(BoxProcessor):
         bboxes, polys, score_text = get_prediction(
             image=image,
             craft_net=self.craft_net,
-            refine_net= self.refine_net,
+            refine_net=self.refine_net,
             text_threshold=0.4,
             link_threshold=0.2,
             low_text=0.5,
@@ -309,7 +309,6 @@ class BoxProcessorCraft(BoxProcessor):
             # Make this a configuration
             image_norm = image
             # image_norm = 255 - image
-            # TODO : Externalize as config
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
@@ -319,7 +318,22 @@ class BoxProcessorCraft(BoxProcessor):
             elif psm == PSMode.LINE:
                 bboxes, polys, score_text = self.psm_line(image_norm)
             elif psm == PSMode.RAW_LINE:
-                bboxes, polys, score_text = self.psm_raw_line(image_norm)
+                # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
+                # as we treat the whole line as BBOX
+                # bboxes, polys, score_text = self.psm_raw_line(image_norm)
+                rect_from_poly = []
+                fragments = []
+                rect_line_numbers = []
+                prediction_result = dict()
+
+                # x, y, w, h = box
+                w = image_norm.shape[1]
+                h = image_norm.shape[0]
+                rect_from_poly.append([0, 0, w, h])
+                fragments.append(image_norm)
+                rect_line_numbers.append(0)
+
+                return rect_from_poly, fragments, rect_line_numbers, prediction_result
             else:
                 raise Exception(f"PSM mode not supported : {psm}")
 
@@ -329,13 +343,9 @@ class BoxProcessorCraft(BoxProcessor):
             prediction_result["heatmap"] = score_text
             regions = bboxes
 
-            result_folder = "./result/"
-            if not os.path.isdir(result_folder):
-                os.mkdir(result_folder)
-
             # save score text
             filename = _id
-            mask_file = result_folder + "/res_" + filename + "_mask.jpg"
+            mask_file = os.path.join(debug_dir, "res_" + filename + "_mask.jpg")
             cv2.imwrite(mask_file, score_text)
 
             # deepcopy image so that original is not altered
@@ -361,7 +371,6 @@ class BoxProcessorCraft(BoxProcessor):
                     hexp = 4
                     vexp = 4
                     box = [
-
                         max(0, box[0] - hexp // 2),
                         max(0, box[1] - vexp // 2),
                         min(max_w, box[2] + hexp),
