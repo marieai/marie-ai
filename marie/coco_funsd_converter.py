@@ -14,12 +14,12 @@ from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
-from boxes.box_processor import PSMode
-from boxes.craft_box_processor import BoxProcessorCraft
-from document.trocr_icr_processor import TrOcrIcrProcessor
-from numpyencoder import NumpyEncoder
-from timer import Timer
-from utils.utils import ensure_exists
+from marie.boxes.box_processor import PSMode
+from marie.boxes.craft_box_processor import BoxProcessorCraft
+from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.numpyencoder import NumpyEncoder
+from marie.timer import Timer
+from marie.utils.utils import ensure_exists
 
 from faker.providers import BaseProvider
 from faker import Faker
@@ -27,6 +27,11 @@ import rstr
 
 import multiprocessing as mp
 from concurrent.futures.thread import ThreadPoolExecutor
+
+import concurrent.futures
+import time
+from multiprocessing import Pool
+
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
@@ -550,7 +555,7 @@ def generate_text(label, width, height, fontPath):
     return font_size, label_text, segments
 
 
-@Timer(text="Aug in {:.4f} seconds")
+# @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
 
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
@@ -660,27 +665,34 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
         del draw
 
 
-def augment_decorated_anotation(count: int, src_dir: str, dest_dir: str):
+def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
+
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if True:
+    if False:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
 
+    # slower comparing to  pool.starmap
     if False:
-        with ThreadPoolExecutor(max_workers=mp.cpu_count() // 2) as executor:
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
-                executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
+                feature = executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
+                futures.append(feature)
+
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                print(future.result())
+            except Exception as e:
+                print(e)
 
             print("All tasks has been finished")
 
-    if False:
-        import time
-        from multiprocessing import Pool
-
+    if True:
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
@@ -776,17 +788,15 @@ def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
     return [x, y, xmax, min(ymax, clip_to_y)]
 
 
-def rescale_annotation_frame(src_json_path, src_image_path):
-    print(f"Recalling annotation json: {src_json_path}")
-    print(f"Recalling annotation frame: {src_image_path}")
+def rescale_annotation_frame(src_json_path:str, src_image_path:str):
+    print(f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}")
 
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
     resized, target_size = __scale_height(image, 1000)
     # resized.save(f"/tmp/snippet/resized_{filename}.png")
 
-    print(f"orig_size   = {orig_size}")
-    print(f"target_size = {target_size}")
+    # print(f"orig_size, target_size   = {orig_size} : {target_size}")
     orig_w, orig_h = orig_size
     target_w, target_h = target_size
     data = from_json_file(src_json_path)
@@ -801,6 +811,40 @@ def rescale_annotation_frame(src_json_path, src_image_path):
     return data, resized
 
 
+def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path):
+    if False and filename != "152618378_2":
+        return
+
+    # 152630220_3  152618378_2 152618400  152624795_3
+    print(f"filename : {filename}")
+    # print(f"json_path : {json_path}")
+    # print(f"image_path : {image_path}")
+
+    data, image = rescale_annotation_frame(json_path, image_path)
+
+    # Figure out how to handle this
+    # if the width > 1000 SKIP for now
+    if max(image.size) > 1000:
+        print(f"Skipping image due to size[{image.size}] : {filename}")
+        return
+
+    json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
+    image_path_dest = os.path.join(img_dir_dest, f"{filename}.png")
+    # save image and json data
+    image.save(image_path_dest)
+
+    with open(json_path_dest, "w") as json_file:
+        json.dump(
+            data,
+            json_file,
+            sort_keys=True,
+            separators=(",", ": "),
+            ensure_ascii=False,
+            indent=4,
+            cls=NumpyEncoder,
+        )
+
+
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
     ann_dir = os.path.join(src_dir, "annotations")
@@ -809,46 +853,44 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
     ann_dir_dest = ensure_exists(os.path.join(dest_dir, "annotations"))
     img_dir_dest = ensure_exists(os.path.join(dest_dir, "images"))
 
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
-        json_path = os.path.join(ann_dir, file)
-        filename = file.split("/")[-1].split(".")[0]
-        image_path = os.path.join(img_dir, file)
-        image_path = image_path.replace("json", "png")
+    if False:
+        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+            json_path = os.path.join(ann_dir, file)
+            filename = file.split("/")[-1].split(".")[0]
+            image_path = os.path.join(img_dir, file).replace("json", "png")
+            __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path)
 
-        if False and filename != "152618378_2":
-            continue
-        # 152630220_3  152618378_2 152618400  152624795_3
-        print(f"filename : {filename}")
-        print(f"json_path : {json_path}")
-        print(f"image_path : {image_path}")
+    if True:
+        args = []
 
-        data, image = rescale_annotation_frame(json_path, image_path)
+        for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+            json_path = os.path.join(ann_dir, file)
+            filename = file.split("/")[-1].split(".")[0]
+            image_path = os.path.join(img_dir, file).replace("json", "png")
+            __args = (ann_dir_dest, img_dir_dest, filename, json_path, image_path)
+            args.append(__args)
 
-        # Figure out how to handle this
-        # if the width > 1000 SKIP for now
-        if max(image.size) > 1000:
-            print(f"Skipping image due to size[{image.size}] : {filename}")
-            continue
 
-        json_path_dest = os.path.join(ann_dir_dest, f"{filename}.json")
-        image_path_dest = os.path.join(img_dir_dest, f"{filename}.png")
-        # save image and json data
-        image.save(image_path_dest)
+        results = []
+        start = time.time()
+        print("\nPool Executor:")
+        print("Time elapsed: %s" % (time.time() - start))
 
-        with open(json_path_dest, "w") as json_file:
-            json.dump(
-                data,
-                json_file,
-                sort_keys=True,
-                separators=(",", ": "),
-                ensure_ascii=False,
-                indent=4,
-                cls=NumpyEncoder,
-            )
+        pool = Pool(processes=mp.cpu_count())
+        pool_results = pool.starmap(__rescale_annotate_frames, args)
+
+        pool.close()
+        pool.join()
+
+        print("Time elapsed[submitted]: %s" % (time.time() - start))
+        for r in pool_results:
+            print("Time elapsed[result]: %s  , %s" % (time.time() - start, r))
+        print("Time elapsed[all]: %s" % (time.time() - start))
 
 
 if __name__ == "__main__":
-    name = "train"
+    name = "test"
+
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
     root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
@@ -868,11 +910,12 @@ if __name__ == "__main__":
     # convert_coco_to_funsd(src_dir, dst_path)
     # decorate_funsd(dst_path)
     
-    # STEP 2
-    augment_decorated_anotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+    # # STEP 2
+    augment_decorated_annotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-    visualize_funsd(aug_aligned_dst_path)
+    # visualize_funsd(aug_aligned_dst_path)
 
+    # /home/gbugaj/dataset/private/corr-indexer/dataset-aug/testing_data/images/152658536_0_2_9.png
     # # STEP 2 : No Augmentation
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
