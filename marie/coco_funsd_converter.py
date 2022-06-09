@@ -88,7 +88,6 @@ def from_json_file(filename):
 def __scale_height(img, target_size, method=Image.LANCZOS):
     ow, oh = img.size
     scale = oh / target_size
-    print(scale)
     w = ow / scale
     h = target_size  # int(max(oh / scale, crop_size))
     resized = img.resize((int(w), int(h)), method)
@@ -353,6 +352,7 @@ def decorate_funsd(src_dir: str):
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
+
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
@@ -362,9 +362,11 @@ def decorate_funsd(src_dir: str):
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
             snippet = image[y0:y1, x0:x1, :]
+
             # export cropped region
-            file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
-            cv2.imwrite(file_path, snippet)
+            if False:
+                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
+                cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr(snippet, boxp, icrp)
 
@@ -375,8 +377,9 @@ def decorate_funsd(src_dir: str):
                 print(f"No results for : {guid}-{i}")
                 continue
 
-            file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
-            cv2.imwrite(file_path, snippet)
+            if False:
+                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
+                cv2.imwrite(file_path, snippet)
 
             words = []
             text = ""
@@ -412,8 +415,9 @@ def decorate_funsd(src_dir: str):
             cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
             index = i + 1
 
-        file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
-        cv2.imwrite(file_path, image_masked)
+        if False:
+            file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
+            cv2.imwrite(file_path, image_masked)
 
         boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
 
@@ -443,12 +447,9 @@ def decorate_funsd(src_dir: str):
                 sort_keys=True,
                 separators=(",", ": "),
                 ensure_ascii=False,
-                indent=4,
+                indent=2,
                 cls=NumpyEncoder,
             )
-
-        # break
-
 
 def generate_pan(num_char):
     import string
@@ -462,8 +463,7 @@ def generate_pan(num_char):
     return prefix
 
 
-# @lru_cache(maxsize=20)
-@lru_cache()
+@lru_cache(maxsize=20)
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMono.ttf", font_size, layout_engine=ImageFont.Layout.BASIC)
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMonoBold.ttf", font_size)
@@ -566,7 +566,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
 
     # file_path = os.path.join(ann_dir, file)
     file = file_path.split("/")[-1]
-    print(f"File: {file_path}")
+    # print(f"File: {file_path}")
 
     with open(file_path, "r", encoding="utf8") as f:
         data = json.load(f)
@@ -574,18 +574,17 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
     image_path = os.path.join(img_dir, file)
     image_path = image_path.replace("json", "png")
     filename = image_path.split("/")[-1].split(".")[0]
-    print(filename)
 
     image_masked, size = load_image_pil(image_path)
 
     for k in range(0, count):
-        print(f"Iter : {k} of {count} ; {filename} ")
+        print(f"Iter : {guid} , {k} of {count} ; {filename} ")
         font_face = np.random.choice([ "FreeSansOblique.ttf", "FreeSansBold.ttf", "FreeSansBold.ttf", "FreeSans.ttf"])
         font_path = os.path.join("./assets/fonts", font_face)
         draw = ImageDraw.Draw(image_masked)
         form = copy.deepcopy(data["form"])
 
-        for i, item in enumerate(form):
+        for i, item in enumerate(data["form"]):
             label = item["label"]
             if label == "other" or not label.endswith("_answer"):
                 continue
@@ -624,18 +623,17 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
                 adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
                 word = {"text": seg_text, "box": adj_box}
                 words.append(word)
-
                 # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
 
             dup_item["words"] = words
             draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#000000", font=font, stroke_fill=1)
             # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
-
             index = i + 1
             # print("-" * 20)
             # print(item)
             # print(dup_item)
-            data["form"].append(dup_item)
+            form.append(dup_item)
+            # data["form"].append(dup_item)
 
         # Save items
         out_name_prefix = f"{filename}_{guid}_{k}"
@@ -643,9 +641,10 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
         json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
 
+        # print(f'Writing : {json_path}')
         with open(json_path, "w") as json_file:
             json.dump(
-                data,
+                form,
                 json_file,
                 # sort_keys=True,
                 separators=(",", ": "),
@@ -678,7 +677,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     # slower comparing to  pool.starmap
     if False:
         futures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(mp.cpu_count() *.75)) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
                 feature = executor.submit(__augment_decorated_process, guid, count, file_path, src_dir, dest_dir)
@@ -696,6 +695,10 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
+            if False and file != '152611418_2.json':
+                continue
+
+            print(file)
             __args = (guid, count, file_path, src_dir, dest_dir)
             args.append(__args)
 
@@ -704,7 +707,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
         print("\nPool Executor:")
         print("Time elapsed: %s" % (time.time() - start))
 
-        pool = Pool(processes=mp.cpu_count())
+        pool = Pool(processes=int(mp.cpu_count() *.75))
         pool_results = pool.starmap(__augment_decorated_process, args)
 
         pool.close()
@@ -801,12 +804,17 @@ def rescale_annotation_frame(src_json_path:str, src_image_path:str):
     target_w, target_h = target_size
     data = from_json_file(src_json_path)
 
-    for i, item in enumerate(data["form"]):
-        bbox = tuple(item["box"])  # np.array(item["box"]).astype(np.int32)
-        item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
-        for word in item["words"]:
-            bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
-            word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+    try:
+        for i, item in enumerate(data["form"]):
+            bbox = tuple(item["box"])  # np.array(item["box"]).astype(np.int32)
+            item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+            for word in item["words"]:
+                bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
+                word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+    except Exception as ex:
+        print(src_json_path)
+        print(ex)
+        raise ex
 
     return data, resized
 
@@ -817,8 +825,8 @@ def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, i
 
     # 152630220_3  152618378_2 152618400  152624795_3
     print(f"filename : {filename}")
-    # print(f"json_path : {json_path}")
-    # print(f"image_path : {image_path}")
+    print(f"json_path : {json_path}")
+    print(f"image_path : {image_path}")
 
     data, image = rescale_annotation_frame(json_path, image_path)
 
@@ -840,7 +848,7 @@ def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, i
             sort_keys=True,
             separators=(",", ": "),
             ensure_ascii=False,
-            indent=4,
+            indent=2,
             cls=NumpyEncoder,
         )
 
@@ -898,7 +906,7 @@ if __name__ == "__main__":
     root_dir = "/home/gbugaj/dataset/private/corr-indexer"
     root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
     root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
-
+    
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
     aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
@@ -906,12 +914,20 @@ if __name__ == "__main__":
     aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{name}ing_data")
     aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{name}ing_data")
 
-    # STEP 1
+    # cat 152611418_2_2_8.json
+
+    # TRAIN -> 1, 2, 3
+    # TEST  -> 1, 2, 3
+
+    # STEP 1train
     # convert_coco_to_funsd(src_dir, dst_path)
+
+    # STEP 2
     # decorate_funsd(dst_path)
     
-    # # STEP 2
-    augment_decorated_annotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+    # STEP 3
+    # augment_decorated_annotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
     # visualize_funsd(aug_aligned_dst_path)
 
