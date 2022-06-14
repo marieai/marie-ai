@@ -19,7 +19,7 @@ def find_line_index(lines, box):
         line_number = line_indexes[0] + 1
 
     if line_number == -1:
-        return 1
+        # return 1
         raise Exception(f"Invalid line number : -1, this looks like a bug : {line_indexes}, {box}")
 
     return line_number
@@ -31,14 +31,10 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
     img_w = image.shape[1]
     all_box_lines = []
 
-    for idx, region in enumerate(bboxes):
-        region = np.array(region).astype(np.int32).reshape((-1))
-        region = region.reshape(-1, 2)
-        poly = region.reshape((-1, 1, 2))
-        box = cv2.boundingRect(poly)
-        box = np.array(box).astype(np.int32)
+    for idx, box in enumerate(bboxes):
         x, y, w, h = box
         box_line = [0, y, img_w, h]
+        # box_line = [x, y, w, h]
         box_line = np.array(box_line).astype(np.int32)
         all_box_lines.append(box_line)
         # print(f' >  {idx} : {box} : {box_line}')
@@ -49,12 +45,11 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
         return []
 
     y1 = all_box_lines[:, 1]
-
     # sort boxes by the  y-coordinate of the bounding box
     idxs = np.argsort(y1)
     lines = []
-    size = len(idxs)
     iter_idx = 0
+    size = len(idxs)
 
     while len(idxs) > 0:
         last = len(idxs) - 1
@@ -62,6 +57,10 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
         box_line = all_box_lines[idx]
         overlaps, indexes = find_overlap(box_line, all_box_lines)
         overlaps = np.array(overlaps)
+        avg_h = int(np.average(overlaps[:, 3]))
+        avg_y = int(np.average(overlaps[:, 1]))
+
+        # print(overlaps)
 
         min_x = overlaps[:, 0].min()
         min_y = overlaps[:, 1].min()
@@ -69,6 +68,7 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
         max_h = overlaps[:, 3].max()
         max_y = 0
 
+        print(f" {max_h} :: {avg_h}")
         for overlap in overlaps:
             x, y, w, h = overlap
             dh = y + h
@@ -76,6 +76,9 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
                 max_y = dh
 
         max_h = max_y - min_y
+        max_h = avg_h
+        min_y = avg_y
+
         box = [min_x, min_y, max_w, max_h]
         lines.append(box)
 
@@ -94,18 +97,35 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
     # reverse to get the right order
     lines = np.array(lines)[::-1]
 
-    if False:
+    if True:
+        from PIL import Image, ImageDraw
+
         img_line = copy.deepcopy(image)
+        viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
+        viz_img = Image.fromarray(viz_img)
+        draw = ImageDraw.Draw(viz_img, "RGBA")
 
         for line in lines:
             x, y, w, h = line
             color = list(np.random.random(size=3) * 256)
-            cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 1)
+            cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 2)
+            draw.rectangle(
+                [x, y, x + w, y + h],
+                outline="#993300",
+                fill=(
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    125,
+                ),
+                width=1,
+            )
 
-        cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % _id), img_line)
+        cv2.imwrite(os.path.join(lines_dir, "%s-lineXX.png" % _id), img_line)
+        viz_img.save(os.path.join(lines_dir, "%s-linePIL.png" % _id), format="PNG", subsampling=0, quality=100)
 
     # refine lines as there could be lines that overlap
-    # print(f"***** Line candidates size {len(lines)}")
+    print(f"***** Line candidates size {len(lines)}")
 
     # sort boxes by the y-coordinate of the bounding box
     y1 = lines[:, 1]
@@ -138,7 +158,7 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
     print(f"Final line size : {len(refine_lines)}")
     lines = np.array(refine_lines)[::-1]  # Reverse
 
-    if False:
+    if True:
         img_line = copy.deepcopy(image)
 
         for line in lines:
@@ -146,7 +166,11 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
             color = list(np.random.random(size=3) * 256)
             cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 1)
 
-        cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % (_id)), img_line)
+        for idx, box in enumerate(bboxes):
+            color = (255, 0, 0)
+            cv2.rectangle(img_line, (box[0], box[1]), (box[0] + box[2], box[1] + box[3]), color, 1)
+
+        cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % _id), img_line)
 
     line_size = len(lines)
     print(f"Estimated line count : {line_size}")

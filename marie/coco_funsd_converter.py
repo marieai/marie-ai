@@ -903,9 +903,9 @@ if __name__ == "__main__":
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
     root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
-    root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-    root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
-    root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
+    root_dir = "/data/dataset/private/corr-indexer"
+    root_dir_converted = "/data/dataset/private/corr-indexer-converted"
+    root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
     
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
