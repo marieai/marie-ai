@@ -20,7 +20,7 @@ fi
 docker run -u 0 --user root -it --rm  --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864  \
 --name ${CONTAINER_NAME} \
 -v `pwd`/../config:/etc/marie:rw \
--v `pwd`/../model_zoo:/opt/marie-icr/model_zoo:rw \
+-v /mnt/data/marie-ai/model_zoo:/opt/marie-icr/model_zoo:ro \
 -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw \
 -v /opt/shares/medrxprovdata:/opt/marie-icr/share:rw  \
 --env-file ./service.env  \
