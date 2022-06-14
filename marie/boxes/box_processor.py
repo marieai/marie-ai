@@ -130,8 +130,10 @@ class PSMode(Enum):
     SPARSE = "sparse"
     # Treat the image as a single text line.
     LINE = "line"
-    # Raw line. Treat the image as a single text line, no bounding box detection performed.
+    # Raw line. Treat the image as a single text line, NO bounding box detection performed.
     RAW_LINE = "raw_line"
+    # Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
+    MULTI_LINE = "multiline"
 
     @staticmethod
     def from_value(value: str):

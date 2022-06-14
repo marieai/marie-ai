@@ -71,6 +71,11 @@ if __name__ == "__main__":
     # )
     # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
     # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
+    img_path = "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
@@ -86,14 +91,14 @@ if __name__ == "__main__":
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+        # icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
         # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
-        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
-        result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
+        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.MULTI_LINE)
+        # result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
 
         output_filename = "/tmp/result-2048-craf-lines.pdf"
         print("Testing pdf render")
 
-        renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(image, result, output_filename)
+        # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+        # renderer.render(image, result, output_filename)

@@ -133,16 +133,16 @@ def get_prediction(
 
     # render results (optional)
     render_img = score_text.copy()
-    # render_img = np.hstack((render_img, score_link))
+    render_img = np.hstack((render_img, score_link))
     # render_img = score_link
     ret_score_text = craft.imgproc.cvt2HeatmapImg(render_img)
     if show_time:
         print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    # cv2.imwrite("/tmp/fragments/render_img.png", render_img)
-    # cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
+    cv2.imwrite("/tmp/fragments/render_img.png", render_img)
+    cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
 
-    estimate_character_width(render_img, boxes)
+    # estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text
 
 
@@ -213,7 +213,7 @@ class BoxProcessorCraft(BoxProcessor):
             craft_net=self.craft_net,
             refine_net=self.refine_net,
             text_threshold=0.6,
-            link_threshold=0.4,
+            link_threshold=0.8,
             low_text=0.3,
             cuda=self.cuda,
             poly=False,
@@ -289,6 +289,28 @@ class BoxProcessorCraft(BoxProcessor):
 
         return bboxes, polys, score_text
 
+    def psm_multiline(self, image):
+        """
+        Treat the image as a single word.
+        """
+        w = image.shape[1]
+        bboxes, polys, score_text = get_prediction(
+            image=image,
+            craft_net=self.craft_net,
+            refine_net=self.refine_net,
+            text_threshold=0.6,
+            link_threshold=0.2,
+            low_text=0.3,
+            cuda=self.cuda,
+            poly=False,
+            # canvas_size=1280,#w + w // 2,
+            canvas_size=w,
+            # canvas_size=w + w // 2,
+            mag_ratio=1,
+        )
+
+        return bboxes, polys, score_text
+
     # @Timer(text="BoundingBoxes in {:.2f} seconds")
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
         print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
@@ -317,6 +339,8 @@ class BoxProcessorCraft(BoxProcessor):
                 bboxes, polys, score_text = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
                 bboxes, polys, score_text = self.psm_line(image_norm)
+            elif psm == PSMode.MULTI_LINE:
+                bboxes, polys, score_text = self.psm_multiline(image_norm)
             elif psm == PSMode.RAW_LINE:
                 # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
                 # as we treat the whole line as BBOX
@@ -341,7 +365,6 @@ class BoxProcessorCraft(BoxProcessor):
             prediction_result["bboxes"] = bboxes
             prediction_result["polys"] = polys
             prediction_result["heatmap"] = score_text
-            regions = bboxes
 
             # save score text
             filename = _id
@@ -360,7 +383,19 @@ class BoxProcessorCraft(BoxProcessor):
             max_h = image.shape[0]
             max_w = image.shape[1]
 
-            for idx, region in enumerate(regions):
+            # FIXME  : This is really slow
+            boxes = []
+            for idx, region in enumerate(bboxes):
+                region = np.array(region).astype(np.int32).reshape((-1))
+                region = region.reshape(-1, 2)
+                poly = region.reshape((-1, 1, 2))
+                box = cv2.boundingRect(poly)
+                box = np.array(box).astype(np.int32)
+                boxes.append(box)
+
+            lines = line_refiner(image, boxes, _id, lines_dir)
+
+            for idx, region in enumerate(bboxes):
                 region = np.array(region).astype(np.int32).reshape((-1))
                 region = region.reshape(-1, 2)
                 poly = region.reshape((-1, 1, 2))
@@ -387,37 +422,8 @@ class BoxProcessorCraft(BoxProcessor):
                 x, y, w, h = box
                 snippet = crop_poly_low(image, poly)
 
-                # apply connected component analysis to determine if the image is touching the borders and if so expand them
-                if False:
-                    gray = cv2.cvtColor(snippet, cv2.COLOR_BGR2GRAY)
-                    (
-                        nLabels,
-                        labels,
-                        stats,
-                        centroids,
-                    ) = cv2.connectedComponentsWithStats(gray.astype(np.uint8), connectivity=4)
-                    # initialize an output mask to store all characters
-                    mask = np.zeros(gray.shape, dtype="uint8")
-                    print(f"nLabels : {nLabels}")
-                    for i in range(1, nLabels):
-                        # extract the connected component statistics for the current label
-                        x = stats[i, cv2.CC_STAT_LEFT]
-                        y = stats[i, cv2.CC_STAT_TOP]
-                        w = stats[i, cv2.CC_STAT_WIDTH]
-                        h = stats[i, cv2.CC_STAT_HEIGHT]
-                        area = stats[i, cv2.CC_STAT_AREA]
-                        componentMask = (labels == i).astype("uint8") * 255
-                        mask = cv2.bitwise_or(mask, componentMask)
-                        print(f"component x/y : {x}, {y}, {w}, {h}")
-
-                    # export cropped region
-                    file_path = os.path.join(mask_dir, "%s_%s.jpg" % (ms, idx))
-                    cv2.imwrite(file_path, mask)
-
-                # FIXME  : This is really slow
-                # lines = line_refiner(image, bboxes, _id, lines_dir)
-                # line_number = find_line_index(lines, box)
-                line_number = 0
+                line_number = find_line_index(lines, box)
+                # line_number = 0
 
                 fragments.append(snippet)
                 rect_from_poly.append(box)
