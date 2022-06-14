@@ -254,6 +254,7 @@ class ICRRouter(Executor):
 
         for region in regions:
             try:
+                logger.info(f"Extracting box : {region}")
                 rid = region["id"]
                 page_index = region["pageIndex"]
                 x = region["x"]
@@ -267,8 +268,7 @@ class ICRRouter(Executor):
                 padding = 4
                 overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 overlay[padding : h + padding, padding : w + padding] = img
-
-                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
 
                 logger.info(f"pms_mode = {pms_mode}")
                 boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
@@ -355,8 +355,6 @@ class ICRRouter(Executor):
                 args = payload["args"]
                 pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
 
-            # TODO :FIXE
-            # pms_mode = PSMode.LINE
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
             loaded, frames = load_image(tmp_file, file_type)
 
@@ -377,8 +375,6 @@ class ICRRouter(Executor):
 
             return serialized, 200
         except BaseException as error:
-            # raise error
-            # print(str(error))
             logger.error("Extract error", error)
             if self.show_error:
                 return {"error": str(error)}, 500

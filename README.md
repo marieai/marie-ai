@@ -29,8 +29,8 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.3
 ```
 
 ```sh
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.2
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.2 && docker push gregbugaj/marie-icr:2.2
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda && docker push gregbugaj/marie-icr:2.2-cuda
 docker push gregbugaj/marie-icr:2.2-cuda
 ```
 
@@ -39,7 +39,6 @@ docker push gregbugaj/marie-icr:2.2-cuda
 Starting in Development mode
 
 ```sh
-
  PYTHONPATH="$PWD" python ./marie/app.py
 ``
 

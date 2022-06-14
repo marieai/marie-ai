@@ -23,10 +23,10 @@ from transformers import LayoutLMv2Processor, LayoutLMv2FeatureExtractor, Layout
 # https://github.com/huggingface/transformers/blob/d3ae2bd3cf9fc1c3c9c9279a8bae740d1fd74f34/tests/layoutlmv2/test_processor_layoutlmv2.py
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-from boxes.box_processor import PSMode
-from numpyencoder import NumpyEncoder
-from utils.image_utils import viewImage, read_image
-from utils.utils import ensure_exists
+from marie.boxes.box_processor import PSMode
+from marie.numpyencoder import NumpyEncoder
+from marie.utils.image_utils import viewImage, read_image
+from marie.utils.utils import ensure_exists
 
 check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
@@ -135,26 +135,26 @@ def main_image(src_image):
     filename = src_image.split("/")[-1]
     json_path = os.path.join(home, '.marie', f'{filename}.json')
 
-    if not os.path.exists(json_path):
-        raise Exception(f"OCR File not found : {json_path}")
+    # if not os.path.exists(json_path):
+    #     raise Exception(f"OCR File not found : {json_path}")
 
     # results = from_json_file("/tmp/ocr-results.json")
-    results = from_json_file(json_path)
-    # results = obtain_words(image)
-    # visualize_icr(image, results)
+    # results = from_json_file(json_path)
+    results = obtain_words(image)
+    visualize_icr(image, results)
 
     words = []
     boxes = []
 
     for i, word in enumerate(results["words"]):
-        words.append(word["text"].lower())
-        # words.append(word["text"])
+        # words.append(word["text"].lower())
+        words.append(word["text"])
         box_norm = normalize_bbox(word["box"], (width, height))
         boxes.append(box_norm)
 
         # This is to prevent following error
         # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
-        print(len(boxes))
+        # print(len(boxes))
         if len(boxes) == 512:
             print('Clipping MAX boxes at 512')
             break
@@ -165,7 +165,7 @@ def main_image(src_image):
     print(boxes)
     print(len(words))
 
-    encoded_inputs = processor(image, words, boxes=boxes, return_tensors="pt")
+    encoded_inputs = processor(image, words, boxes=boxes, padding="max_length", truncation=True, return_tensors="pt")
     expected_keys = ["attention_mask", "bbox", "image", "input_ids", "token_type_ids"]
     actual_keys = sorted(list(encoded_inputs.keys()))
 
@@ -182,7 +182,7 @@ def main_image(src_image):
     from pathlib import Path
     home = str(Path.home())
     model_dir = os.path.join(home, './tmp/models/layoutlmv2-finetuned-gb', "checkpoint-6500")
-    # model_dir = "/tmp/models/layoutlmv2-finetuned-cord/checkpoint-12000"
+    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints"
     print(f"output dir : {model_dir}")
 
     # load the fine-tuned model from the hub
@@ -265,9 +265,10 @@ def visualize_icr(image, icr_data):
         box = item["box"]
         text = item["text"]
         draw.rectangle(box, outline="red", width=1)
-        # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=1)
+        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=1)
 
-    viz_img.show()
+    viz_img.save(f"/tmp/tensors/visualize_icr.png")
+    # viz_img.show()
 
 
 def hash_file(filename):
@@ -347,11 +348,12 @@ if __name__ == "__main__":
     fname = "152658671_2.png"  # P
     fname = "152658679_0.png"  # F
 
-    fname = "152658538_2.png"
+    fname = "152658540_0.png"
     
     # image_path = f"/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/{fname}"
     # image_path = f"/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/{fname}"
     image_path = f"/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/{fname}"
+
 
     from pathlib import Path
     home = str(Path.home())
@@ -362,14 +364,15 @@ if __name__ == "__main__":
     print(f'image_path : {image_path}')
 
     # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test", fname)
-    # main_image(image_path)
+    main_image(image_path)
+
 
     # message = hash_file(image_path)
     # print(message)
-    # ocr_dir("/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images")
+    # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/images", filename_filter="152658538_2.png")
     # 
 
-    if True:
+    if False:
         from pathlib import Path
         home = str(Path.home())
         marie_home = os.path.join(home, '.marie')
@@ -383,6 +386,7 @@ if __name__ == "__main__":
                 main_image(image_path)
             except Exception as e:
                 print(e)
+                raise e
 
         
     if False:
@@ -397,10 +401,11 @@ if __name__ == "__main__":
         x0 = 0
         y0 = 0
         
+        # convert coordinates from x,y,w,h -> x0,y0,x1,y1
         for word in results["words"]:
             x, y, w, h = word["box"]
             w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-            word["box"] = w_box
+            # word["box"] = w_box
         print(results)
 
         json_path = os.path.join("/tmp/ocr-results.json")
