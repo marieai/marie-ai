@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def find_overlap(box, data):
+def find_overlap(box, data, overlap_ratio=0.75):
     """Find overlap between a box and a data set"""
     overlaps = []
     indexes = []
@@ -15,7 +15,7 @@ def find_overlap(box, data):
     y1min = y
     y1max = y + h
     # TODO, this needs to be configurable
-    dyr = h * 0.50
+    dyr = h * overlap_ratio
 
     # print(f'dyr = {dyr}')
     for i, bb in enumerate(data):
