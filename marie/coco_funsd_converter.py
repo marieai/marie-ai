@@ -566,10 +566,14 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
 
     # file_path = os.path.join(ann_dir, file)
     file = file_path.split("/")[-1]
-    # print(f"File: {file_path}")
+    print(f"File: {file_path}")
 
-    with open(file_path, "r", encoding="utf8") as f:
-        data = json.load(f)
+    try:
+        with open(file_path, "r", encoding="utf8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise e
+        
 
     image_path = os.path.join(img_dir, file)
     image_path = image_path.replace("json", "png")
@@ -582,11 +586,13 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
         font_face = np.random.choice([ "FreeSansOblique.ttf", "FreeSansBold.ttf", "FreeSansBold.ttf", "FreeSans.ttf"])
         font_path = os.path.join("./assets/fonts", font_face)
         draw = ImageDraw.Draw(image_masked)
-        form = copy.deepcopy(data["form"])
+        data_copy = dict()# copy.deepcopy(data["form"])
+        data_copy['form'] = []
 
         for i, item in enumerate(data["form"]):
             label = item["label"]
             if label == "other" or not label.endswith("_answer"):
+                data_copy["form"].append(item)
                 continue
 
             # pan_answer  dos_answer member_number_answer
@@ -632,7 +638,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
             # print("-" * 20)
             # print(item)
             # print(dup_item)
-            form.append(dup_item)
+            data_copy["form"].append(dup_item)
             # data["form"].append(dup_item)
 
         # Save items
@@ -644,7 +650,7 @@ def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: 
         # print(f'Writing : {json_path}')
         with open(json_path, "w") as json_file:
             json.dump(
-                form,
+                data_copy,
                 json_file,
                 # sort_keys=True,
                 separators=(",", ": "),
@@ -707,7 +713,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
         print("\nPool Executor:")
         print("Time elapsed: %s" % (time.time() - start))
 
-        pool = Pool(processes=int(mp.cpu_count() *.75))
+        pool = Pool(processes=int(mp.cpu_count() *.9))
         pool_results = pool.starmap(__augment_decorated_process, args)
 
         pool.close()
@@ -745,7 +751,7 @@ def visualize_funsd(src_dir: str):
         image, size = load_image_pil(image_path)
 
         # draw predictions over the image
-        draw = ImageDraw.Draw(image)
+        draw = ImageDraw.Draw(image, "RGBA")
         font = ImageFont.load_default()
         label2color = {
             "pan": "blue",
@@ -764,15 +770,23 @@ def visualize_funsd(src_dir: str):
         }
 
         for i, item in enumerate(data["form"]):
-            # print(item)
-            box = item["box"]
             predicted_label = item["label"].lower()
-            draw.rectangle(box, outline=label2color[predicted_label], width=1)
-            draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=label2color[predicted_label], font=font)
+            color = label2color[predicted_label]
 
             for word in item["words"]:
                 box = word["box"]
-                draw.rectangle(box, outline="red")
+                draw.rectangle(box, outline=color, width=1)
+
+            box = item["box"]
+            
+            if predicted_label != 'other':
+                draw.rectangle(box, outline=color, width=1, fill=(0, 180, 0, 50))
+            else:
+                draw.rectangle(box, outline=color, width=1)
+
+            draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=color, font=font, stroke_width=0)
+
+
 
         image.save(f"/tmp/snippet/viz_{filename}.png")
 
@@ -897,7 +911,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "test"
+    name = "train"
 
     root_dir = "/home/greg/dataset/assets-private/corr-indexer"
     root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
@@ -926,12 +940,19 @@ if __name__ == "__main__":
     # decorate_funsd(dst_path)
     
     # STEP 3
-    # augment_decorated_annotation(count=10, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
 
-    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-    # visualize_funsd(aug_aligned_dst_path)
+    # Step 4
+    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+
+    # Debug INFOR
+    # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
+    # visualize_funsd(aug_dest_dir)
+    
+    # visualize_funsd(aug_aligned_dst_path)    
 
     # /home/gbugaj/dataset/private/corr-indexer/dataset-aug/testing_data/images/152658536_0_2_9.png
     # # STEP 2 : No Augmentation
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
+
