@@ -73,9 +73,9 @@ if __name__ == "__main__":
     # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
     img_path = "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
+    # img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
+    # img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
+    # img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
 
     # cal_mean_std('./assets/english/Scanned_documents/')
 
