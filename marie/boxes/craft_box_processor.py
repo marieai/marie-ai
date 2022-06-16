@@ -1,5 +1,6 @@
 from __future__ import print_function
 
+import math
 import os
 import time
 import warnings
@@ -11,7 +12,7 @@ from torch.autograd import Variable
 from marie.lang import Object
 from marie.timer import Timer
 from marie.utils.image_utils import paste_fragment, viewImage
-from .line_processor import line_refiner
+from .line_processor import line_refiner, line_merge
 from .line_processor import find_line_index
 
 import copy
@@ -142,6 +143,47 @@ def get_prediction(
     cv2.imwrite("/tmp/fragments/render_img.png", render_img)
     cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
 
+    # DO LINE DETECTION
+    linkmap = score_link
+    textmap = score_text
+    ret, text_score = cv2.threshold(textmap, low_text, 1, 0)
+    ret, link_score = cv2.threshold(linkmap, link_threshold, 1, 0)
+
+    text_score_comb = np.clip(text_score + link_score, 0, 1) * 255
+    text_score_comb = link_score * 255
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
+    cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
+
+    if True:
+        cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
+        cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
+        cv2.imwrite(os.path.join("/tmp/fragments/", "h-text_score_comb.png"), text_score_comb * 255)
+
+    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(line_img.astype(np.uint8), connectivity=4)
+
+    h, w = line_img.shape
+    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+
+    line_bboxes = []
+    for k in range(1, nLabels):
+        size = stats[k, cv2.CC_STAT_AREA]
+        x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
+        w, h = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
+
+        # size filtering
+        # if size < 4:
+        #     continue
+        box = x, y, w, h
+        line_bboxes.append(box)
+        # x, y, w, h = box
+        color = list(np.random.random(size=3) * 256)
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+
+    cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+
+    line_merge(overlay, line_bboxes)
     # estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text
 
@@ -299,7 +341,7 @@ class BoxProcessorCraft(BoxProcessor):
             craft_net=self.craft_net,
             refine_net=self.refine_net,
             text_threshold=0.6,
-            link_threshold=0.2,
+            link_threshold=0.3,
             low_text=0.3,
             cuda=self.cuda,
             poly=False,

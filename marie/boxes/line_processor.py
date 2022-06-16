@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 
-from marie.utils.overlap import find_overlap
+from marie.utils.overlap import find_overlap, find_overlap_vertical
 
 
 def find_line_index(lines, box):
@@ -31,6 +31,225 @@ def find_line_index(lines, box):
         # raise Exception(msg)
 
     return line_number
+
+
+def line_merge(image, bboxes) -> List[Any]:
+    bboxes = np.array(bboxes)
+    if len(bboxes) == 0:
+        return []
+
+    # sort boxes by the  y-coordinate of the bounding box
+    bboxes_cpy = np.array(bboxes, copy=True)
+    y1 = bboxes_cpy[:, 1]
+    idxs = np.argsort(y1)
+    bboxes = bboxes[idxs]
+    bboxes_sorted = bboxes[idxs]
+    size = len(bboxes)
+    iter_idx = 0
+    print(idxs)
+    print(bboxes_sorted)
+
+    # for i, box_line in enumerate(bboxes):
+    #     overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes)
+    #     overlaps = np.array(overlaps)
+    #     print(f" *** {i} :  {box_line}  -> : {overlaps} , {scores}  , {indexes} | ")
+
+    lines = []
+    min_iou = 0.5
+
+    while len(idxs) > 0:
+        last = len(idxs) - 1
+        idx = idxs[last]
+        box_line = bboxes[idx]
+        overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes_sorted)
+        print(f" *** {iter_idx} :  {box_line}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+
+        # now we check each overlap against each other
+        exp_count = len(overlaps)
+        print("")
+        idx_to_delete = [idx]
+        idx_to_merge = [idx]
+
+        for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
+            print(f"\t\t{k} -> {score} : {index} : {overlap}")
+            if score < min_iou:
+                continue
+            bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes_sorted)
+            ver_count = len(bi_overlaps)
+            if ver_count == exp_count:
+                idx_to_delete.append(index)
+                idx_to_merge.append(index)
+
+        print("*************")
+        print(idxs)
+        print(idx_to_delete)
+
+        lines.append(idx_to_merge)
+
+        if False:
+            for k, overlap in enumerate(overlaps):
+                bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, boxes_copy)
+                ver_count = len(bi_overlaps)
+
+                print(
+                    f"\t\t*** {iter_idx} :  {overlap}  -> : {len(bi_overlaps)} ::: {bi_overlaps} , {bi_scores}  , {bi_indexes}"
+                )
+                if ver_count == exp_count:
+                    # print("# Valid")
+                    pass
+
+        # break
+        idxs = np.setdiff1d(idxs, idx_to_delete)
+        bboxes_sorted = bboxes_sorted[idxs]
+
+        # idxs = np.delete(idxs, idx_to_delete, axis=0)
+        iter_idx = iter_idx + 1
+        print(f"boxes_copy = {len(bboxes)}")
+        print(f"idxs = {len(idxs)}")
+        # prevent inf loop
+        if iter_idx > size:
+            print("ERROR:Infinite loop detected")
+            raise Exception("ERROR:Infinite loop detected")
+
+    print("------------")
+    print(lines)
+    lines_bboxes = []
+
+    for i, idxs in enumerate(lines):
+        print(f"line : {i}  > {idxs}")
+        overlaps = bboxes_sorted[idxs]
+        print(overlaps)
+
+        min_x = overlaps[:, 0].min()
+        min_y = overlaps[:, 1].min()
+        max_w = (overlaps[:, 0] + overlaps[:, 2]).max()
+        # max_w = overlaps[:, 2].max()
+
+        max_h = overlaps[:, 3].max()
+
+        box = [min_x, min_y, max_w, max_h]
+        lines_bboxes.append(box)
+        print(f"\t  {box}")
+    print("**************")
+    img_line = copy.deepcopy(image)
+    h = image.shape[0]
+    w = image.shape[1]
+
+    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+
+    for box in lines_bboxes:
+        print(box)
+        x, y, w, h = box
+        color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+
+    cv2.imwrite(os.path.join("/tmp/fragments", "overlay_refiner.png"), overlay)
+
+
+def line_mergeXXX(image, bboxes) -> List[Any]:
+    bboxes = np.array(bboxes)
+    if len(bboxes) == 0:
+        return []
+
+    # sort boxes by the  y-coordinate of the bounding box
+    bboxes_cpy = np.array(bboxes, copy=True)
+    y1 = bboxes_cpy[:, 1]
+    idxs = np.argsort(y1)
+    bboxes = bboxes[idxs]
+    bboxes_sorted = bboxes[idxs]
+    size = len(bboxes)
+    iter_idx = 0
+    print(idxs)
+    print(bboxes_sorted)
+
+    # for i, box_line in enumerate(bboxes):
+    #     overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes)
+    #     overlaps = np.array(overlaps)
+    #     print(f" *** {i} :  {box_line}  -> : {overlaps} , {scores}  , {indexes} | ")
+
+    lines = []
+    min_iou = 0.5
+
+    while len(bboxes) > 0:
+        last = len(bboxes) - 1
+        idx = idxs[last]
+        box_line = bboxes[idx]
+        overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes_sorted)
+        print(f" *** {iter_idx} :  {box_line}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+
+        # now we check each overlap against each other
+        exp_count = len(overlaps)
+        print("")
+        idx_to_delete = [idx]
+        idx_to_merge = [idx]
+
+        for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
+            print(f"\t\t{k} -> {score} : {index} : {overlap}")
+            bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes_sorted)
+            ver_count = len(bi_overlaps)
+            if ver_count == exp_count and score > min_iou:
+                idx_to_delete.append(index)
+                idx_to_merge.append(index)
+
+        print("*************")
+        print(idxs)
+        print(idx_to_delete)
+
+        lines.append(idx_to_merge)
+
+        if False:
+            for k, overlap in enumerate(overlaps):
+                bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, boxes_copy)
+                ver_count = len(bi_overlaps)
+
+                print(
+                    f"\t\t*** {iter_idx} :  {overlap}  -> : {len(bi_overlaps)} ::: {bi_overlaps} , {bi_scores}  , {bi_indexes}"
+                )
+                if ver_count == exp_count:
+                    # print("# Valid")
+                    pass
+
+        # break
+        bboxes = np.delete(bboxes, idx_to_delete, axis=0)
+        iter_idx = iter_idx + 1
+        print(f"boxes_copy = {len(bboxes)}")
+        # prevent inf loop
+        if iter_idx > size:
+            print("ERROR:Infinite loop detected")
+            raise Exception("ERROR:Infinite loop detected")
+
+    print("------------")
+    print(lines)
+    lines_bboxes = []
+    for i, idxs in enumerate(lines):
+        print(f"line : {i}  > {idxs}")
+        overlaps = bboxes_sorted[idxs]
+        print(overlaps)
+
+        min_x = overlaps[:, 0].min()
+        min_y = overlaps[:, 1].min()
+        max_w = (overlaps[:, 0] + overlaps[:, 2]).max()
+        # max_w = overlaps[:, 2].max()
+
+        max_h = overlaps[:, 3].max()
+
+        box = [min_x, min_y, max_w, max_h]
+        lines_bboxes.append(box)
+        print(f"\t  {box}")
+    print("**************")
+    img_line = copy.deepcopy(image)
+    h = image.shape[0]
+    w = image.shape[1]
+
+    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+
+    for box in lines_bboxes:
+        print(box)
+        x, y, w, h = box
+        color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+
+    cv2.imwrite(os.path.join("/tmp/fragments", "overlay_refiner.png"), overlay)
 
 
 def line_refinerXXXX(image, bboxes, _id, lines_dir) -> List[Any]:
@@ -149,7 +368,7 @@ def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
         kmeans = KMeans(init="k-means++", n_clusters=n_cluster, random_state=0)
         kmeans = kmeans.fit(data_transformed)
         label = kmeans.labels_
-        sil_coeff = silhouette_score(data_transformed, label, metric='euclidean')
+        sil_coeff = silhouette_score(data_transformed, label, metric="euclidean")
         print("For n_clusters={}, The Silhouette Coefficient is {}".format(n_cluster, sil_coeff))
 
     best_k = 1
