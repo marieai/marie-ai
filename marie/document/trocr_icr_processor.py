@@ -28,7 +28,7 @@ from marie.utils.utils import batchify
 from marie import __model_path__
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# device = "cpu"
+device = "cpu"
 
 logger = default_logger
 

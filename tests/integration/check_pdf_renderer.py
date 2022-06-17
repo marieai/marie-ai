@@ -1,3 +1,5 @@
+import io
+import json
 import os
 
 import numpy
@@ -5,6 +7,8 @@ import numpy as np
 import tqdm
 
 import cv2
+
+from marie.numpyencoder import NumpyEncoder
 from marie.utils.utils import ensure_exists
 
 from marie.renderer.pdf_renderer import PdfRenderer
@@ -47,6 +51,12 @@ def __scale_height(img, target_size, crop_size, method=Image.LANCZOS):
     return img.resize((int(w), int(h)), method)
 
 
+def from_json_file(filename):
+    with io.open(filename, "r", encoding="utf-8") as json_file:
+        data = json.load(json_file)
+        return data
+
+
 if __name__ == "__main__":
 
     work_dir_boxes = ensure_exists("/tmp/boxes")
@@ -74,15 +84,14 @@ if __name__ == "__main__":
     img_path = (
         "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
     )
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
+    # img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612898_6.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611418_2.png"
-    img_path = "/home/gbugaj/dataset/private/icr-lines/001.png"
-    # img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
-
-    # cal_mean_std('./assets/english/Scanned_documents/')
+    # img_path = "/home/gbugaj/dataset/private/icr-lines/002.png"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
+    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658545_2.png"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -93,17 +102,50 @@ if __name__ == "__main__":
         image = src_img
         # image = __scale_width(src_img, 2000, 1000)
         # cv2.imwrite("/tmp/resized-2048.png", image)
-
         box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
+        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        # icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
         # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
+        boxes, fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
+        print(lines)
+        result, overlay_image = icr.recognize(key, "test", image, boxes, fragments, lines)
 
-        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.MULTI_LINE)
-        # result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
+        cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
 
-        output_filename = "/tmp/result-2048-craf-lines.pdf"
-        print("Testing pdf render")
+        print(result)
+        json_path = os.path.join("/tmp/fragments", "results.json")
 
+        with open(json_path, "w") as json_file:
+            json.dump(
+                result,
+                json_file,
+                sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=2,
+                cls=NumpyEncoder,
+            )
+
+        # output_filename = "/tmp/fragments/result.pdf"
+        # print("Testing pdf render")
+        #
         # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
         # renderer.render(image, result, output_filename)
+
+    if True:
+        key = img_path.split("/")[-1]
+        image = cv2.imread(img_path)
+
+        output_filename = "/tmp/fragments/result.pdf"
+        print("Testing pdf render")
+        result = from_json_file("/tmp/fragments/results.json")
+
+        renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+        renderer.render(image, result, output_filename)
+
+        print("Testing text render")
+
+        output_filename = "/tmp/fragments/result.txt"
+        renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        renderer.render(image, result, output_filename)

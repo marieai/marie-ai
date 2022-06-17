@@ -70,9 +70,6 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
             # intersection_area = (x_right - x_left) * (y_bottom - y_top)
             intersection_area = y_bottom - y_top
 
-            # if intersection_area < dyr:
-            #     continue
-
             # compute the area of both AABBs
             # bb1_area = (bb1['x2'] - bb1['x1']) * (bb1['y2'] - bb1['y1'])
             # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
@@ -93,12 +90,5 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
             scores.append(iou)
             overlaps.append(bb)
             indexes.append(i)
-
-    # check if we do bidirectional overlap
-    if False and bidirectional and len(overlaps) > 0:
-        print(f"bi_overlap")
-        for overlap in overlaps:
-            bi_overlap, bi_index = find_overlap_vertical(overlap, data, overlap_ratio=0.75, bidirectional=False)
-            print(f"\tbi_overlap----------- : {len(bi_overlap)}   >> {overlap}    :::   {bi_overlap}")
 
     return overlaps, indexes, scores

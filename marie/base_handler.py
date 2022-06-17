@@ -30,6 +30,7 @@ class BaseHandler(metaclass=RegistryHolder):
     Base default handler to load torchscript or eager mode [state_dict] models
     Also, provides handle method per torch serve custom model specification
     """
+
     pass
 
     def __init__(self):
@@ -233,3 +234,7 @@ class BaseHandler(metaclass=RegistryHolder):
         # pylint: disable=unnecessary-pass
         pass
         # pylint: enable=unnecessary-pass
+
+    def unload(self):
+        """Unload the model from GPU/CPU"""
+        pass

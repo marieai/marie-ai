@@ -48,6 +48,8 @@ class TextRenderer(ResultRenderer):
         words = result["words"]
         lines = result["lines"]
 
+        buffer = ""
+
         for i, line in enumerate(lines):
             print(line)
             bbox = line["bbox"]
@@ -78,7 +80,6 @@ class TextRenderer(ResultRenderer):
 
             # def add_column(val, col_len)->str:
             print("Aligned")
-            buffer = ""
 
             # TODO : This needs to be supplied from the box processor
             estimate_character_width = 26
@@ -114,6 +115,9 @@ class TextRenderer(ResultRenderer):
                 buffer += " " * spaces
                 buffer += text
                 # print(f'buffer : {buffer}')
+            buffer += "\n"
+        print("Final ----")
+        print(buffer)
 
-            print("Final ----")
-            print(buffer)
+        with open(output_filename, "w", encoding="UTF-8") as text_file:
+            text_file.write(buffer)

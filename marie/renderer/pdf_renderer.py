@@ -12,6 +12,7 @@ from marie.renderer.renderer import ResultRenderer
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java
 
+
 def determine_font_size(box):
     """
     Try to determine font size
@@ -82,6 +83,12 @@ class PdfRenderer(ResultRenderer):
             words = result["words"]
             lines = result["lines"]
 
+            word2line = dict()
+            for line in lines:
+                for wid in line["wordids"]:
+                    word2line[wid] = line
+
+            print(word2line)
             img_h = img.shape[0]
             img_w = img.shape[1]
 
@@ -99,6 +106,8 @@ class PdfRenderer(ResultRenderer):
                     can.drawString(0, 0, "")
                 else:
                     for idx, word in enumerate(words):
+                        print(word)
+                        wid = word["id"]
                         box = word["box"]
                         text = word["text"]
                         x, y, w, h = box
@@ -107,10 +116,19 @@ class PdfRenderer(ResultRenderer):
                         left_pad = 5  # By observation
                         px0 = x
                         py0 = img_h - y - h * 0.70  # + (h / 2)
-                        # py0 = img_h - y # + (h / 2)
+
+                        # Find baseline for the word
+                        if wid in word2line:
+                            line = word2line[wid]
+                            line_bbox = line["bbox"]
+                            ly = line_bbox[1]
+                            lh = line_bbox[3]
+                            # py0 = ly + lh * 0.70
+                            py0 = img_h - ly - lh * 0.70
+                            # py0 = img_h - y # + (h / 2)
                         font_size = determine_font_size(box)
                         # print(can.getAvailableFonts())
-                        font_size = 12 # 24  # h * .75
+                        font_size = 14  # 24  # h * .75
                         # print(f'font_size = {font_size}  : {box}')
                         # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
                         can.setFont("Helvetica", font_size)
@@ -131,3 +149,5 @@ class PdfRenderer(ResultRenderer):
 
         except Exception as ident:
             raise ident
+
+
