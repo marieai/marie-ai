@@ -1,15 +1,12 @@
 from __future__ import print_function
 
-import copy
 import os
-from time import time
 from typing import List, Any
 
 import cv2
 import numpy as np
-from matplotlib import pyplot as plt
 
-from marie.utils.overlap import find_overlap, find_overlap_vertical
+from marie.utils.overlap import find_overlap_vertical
 
 
 def find_line_index(lines, box):
@@ -20,7 +17,8 @@ def find_line_index(lines, box):
     # prune vertical lines
     x, y, w, h = box
     rat = h / w
-    _, line_indexes = find_overlap(box, lines)
+    # _, line_indexes = find_overlap_vertical(box, lines)
+    overlaps, line_indexes, scores = find_overlap_vertical(box, lines)
     if len(line_indexes) == 1:
         line_number = line_indexes[0] + 1
 
@@ -33,587 +31,105 @@ def find_line_index(lines, box):
     return line_number
 
 
-def line_merge(image, bboxes) -> List[Any]:
-    bboxes = np.array(bboxes)
+def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
     if len(bboxes) == 0:
         return []
-
+    bboxes = np.array(bboxes)
     # sort boxes by the  y-coordinate of the bounding box
-    bboxes_cpy = np.array(bboxes, copy=True)
-    y1 = bboxes_cpy[:, 1]
+    y1 = bboxes[:, 1]
     idxs = np.argsort(y1)
     bboxes = bboxes[idxs]
-    bboxes_sorted = bboxes[idxs]
-    size = len(bboxes)
-    iter_idx = 0
-    print(idxs)
-    print(bboxes_sorted)
-
-    # for i, box_line in enumerate(bboxes):
-    #     overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes)
-    #     overlaps = np.array(overlaps)
-    #     print(f" *** {i} :  {box_line}  -> : {overlaps} , {scores}  , {indexes} | ")
-
     lines = []
-    min_iou = 0.5
+    visited = [False for k in range(0, len(bboxes))]
 
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        idx = idxs[last]
-        box_line = bboxes[idx]
-        overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes_sorted)
-        print(f" *** {iter_idx} :  {box_line}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+    for idx in range(0, len(bboxes)):
+        if visited[idx]:
+            continue
+        visited[idx] = True
+        box = bboxes[idx]
+        overlaps, indexes, scores = find_overlap_vertical(box, bboxes)
+        # print(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
 
         # now we check each overlap against each other
+        # for each item that overlaps our box check to make sure that the ray back is valid
         exp_count = len(overlaps)
-        print("")
-        idx_to_delete = [idx]
         idx_to_merge = [idx]
 
         for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
-            print(f"\t\t{k} -> {score} : {index} : {overlap}")
-            if score < min_iou:
+            # print(f"\t\t{k} -> {score} : {index} : {overlap}")
+            if visited[index] or score < min_iou:
                 continue
-            bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes_sorted)
-            ver_count = len(bi_overlaps)
-            if ver_count == exp_count:
-                idx_to_delete.append(index)
+            bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes)
+            if len(bi_overlaps) == exp_count:
                 idx_to_merge.append(index)
-
-        print("*************")
-        print(idxs)
-        print(idx_to_delete)
-
+                visited[index] = True
+                s_h = box[3]
+                # check if we have candidates that are fully overlapping the source
+                if False:
+                    for m, (bi_overlap, bi_index, bi_score) in enumerate(zip(bi_overlaps, bi_indexes, bi_scores)):
+                        c_h = bboxes[bi_index][3]
+                        if c_h < s_h:
+                            print(f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}")
+                        # print(f"\t\t\t\t{k} -> {s_h}   === {c_h} ")
         lines.append(idx_to_merge)
+        # print("*************")
+        # print(f"idxs = {len(idx_to_merge)}")
 
-        if False:
-            for k, overlap in enumerate(overlaps):
-                bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, boxes_copy)
-                ver_count = len(bi_overlaps)
-
-                print(
-                    f"\t\t*** {iter_idx} :  {overlap}  -> : {len(bi_overlaps)} ::: {bi_overlaps} , {bi_scores}  , {bi_indexes}"
-                )
-                if ver_count == exp_count:
-                    # print("# Valid")
-                    pass
-
-        # break
-        idxs = np.setdiff1d(idxs, idx_to_delete)
-        bboxes_sorted = bboxes_sorted[idxs]
-
-        # idxs = np.delete(idxs, idx_to_delete, axis=0)
-        iter_idx = iter_idx + 1
-        print(f"boxes_copy = {len(bboxes)}")
-        print(f"idxs = {len(idxs)}")
-        # prevent inf loop
-        if iter_idx > size:
-            print("ERROR:Infinite loop detected")
-            raise Exception("ERROR:Infinite loop detected")
-
-    print("------------")
-    print(lines)
     lines_bboxes = []
 
-    for i, idxs in enumerate(lines):
-        print(f"line : {i}  > {idxs}")
-        overlaps = bboxes_sorted[idxs]
-        print(overlaps)
-
+    for i, indexes in enumerate(lines):
+        overlaps = bboxes[indexes]
         min_x = overlaps[:, 0].min()
         min_y = overlaps[:, 1].min()
-        max_w = (overlaps[:, 0] + overlaps[:, 2]).max()
-        # max_w = overlaps[:, 2].max()
-
         max_h = overlaps[:, 3].max()
-
+        max_w = (overlaps[:, 0] + overlaps[:, 2]).max() - min_x
         box = [min_x, min_y, max_w, max_h]
         lines_bboxes.append(box)
-        print(f"\t  {box}")
-    print("**************")
-    img_line = copy.deepcopy(image)
-    h = image.shape[0]
-    w = image.shape[1]
 
-    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
-
-    for box in lines_bboxes:
-        print(box)
-        x, y, w, h = box
-        color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
-
-    cv2.imwrite(os.path.join("/tmp/fragments", "overlay_refiner.png"), overlay)
+    return lines_bboxes
 
 
-def line_mergeXXX(image, bboxes) -> List[Any]:
-    bboxes = np.array(bboxes)
+def line_merge(image, bboxes) -> List[Any]:
     if len(bboxes) == 0:
         return []
 
-    # sort boxes by the  y-coordinate of the bounding box
-    bboxes_cpy = np.array(bboxes, copy=True)
-    y1 = bboxes_cpy[:, 1]
-    idxs = np.argsort(y1)
-    bboxes = bboxes[idxs]
-    bboxes_sorted = bboxes[idxs]
-    size = len(bboxes)
-    iter_idx = 0
-    print(idxs)
-    print(bboxes_sorted)
+    _h = image.shape[0]
+    _w = image.shape[1]
 
-    # for i, box_line in enumerate(bboxes):
-    #     overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes)
-    #     overlaps = np.array(overlaps)
-    #     print(f" *** {i} :  {box_line}  -> : {overlaps} , {scores}  , {indexes} | ")
-
-    lines = []
-    min_iou = 0.5
-
-    while len(bboxes) > 0:
-        last = len(bboxes) - 1
-        idx = idxs[last]
-        box_line = bboxes[idx]
-        overlaps, indexes, scores = find_overlap_vertical(box_line, bboxes_sorted)
-        print(f" *** {iter_idx} :  {box_line}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
-
-        # now we check each overlap against each other
-        exp_count = len(overlaps)
-        print("")
-        idx_to_delete = [idx]
-        idx_to_merge = [idx]
-
-        for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
-            print(f"\t\t{k} -> {score} : {index} : {overlap}")
-            bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes_sorted)
-            ver_count = len(bi_overlaps)
-            if ver_count == exp_count and score > min_iou:
-                idx_to_delete.append(index)
-                idx_to_merge.append(index)
-
-        print("*************")
-        print(idxs)
-        print(idx_to_delete)
-
-        lines.append(idx_to_merge)
-
+    iou_scores = [0.6, 0.5, 0.4, 0.3]
+    # iou_scores = [0.6, 0.6, 0.5, 0.35]
+    merged_bboxes = bboxes
+    for i in range(0, 4):
+        overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
+        # overlay = copy.deepcopy(image)
+        merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i])
         if False:
-            for k, overlap in enumerate(overlaps):
-                bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, boxes_copy)
-                ver_count = len(bi_overlaps)
-
-                print(
-                    f"\t\t*** {iter_idx} :  {overlap}  -> : {len(bi_overlaps)} ::: {bi_overlaps} , {bi_scores}  , {bi_indexes}"
-                )
-                if ver_count == exp_count:
-                    # print("# Valid")
-                    pass
-
-        # break
-        bboxes = np.delete(bboxes, idx_to_delete, axis=0)
-        iter_idx = iter_idx + 1
-        print(f"boxes_copy = {len(bboxes)}")
-        # prevent inf loop
-        if iter_idx > size:
-            print("ERROR:Infinite loop detected")
-            raise Exception("ERROR:Infinite loop detected")
-
-    print("------------")
-    print(lines)
-    lines_bboxes = []
-    for i, idxs in enumerate(lines):
-        print(f"line : {i}  > {idxs}")
-        overlaps = bboxes_sorted[idxs]
-        print(overlaps)
-
-        min_x = overlaps[:, 0].min()
-        min_y = overlaps[:, 1].min()
-        max_w = (overlaps[:, 0] + overlaps[:, 2]).max()
-        # max_w = overlaps[:, 2].max()
-
-        max_h = overlaps[:, 3].max()
-
-        box = [min_x, min_y, max_w, max_h]
-        lines_bboxes.append(box)
-        print(f"\t  {box}")
-    print("**************")
-    img_line = copy.deepcopy(image)
-    h = image.shape[0]
-    w = image.shape[1]
-
-    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
-
-    for box in lines_bboxes:
-        print(box)
-        x, y, w, h = box
-        color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
-
-    cv2.imwrite(os.path.join("/tmp/fragments", "overlay_refiner.png"), overlay)
-
-
-def line_refinerXXXX(image, bboxes, _id, lines_dir) -> List[Any]:
-    """Line refiner creates lines out of set of bounding box regions
-    Ref : https://www.answerminer.com/blog/binning-guide-ideal-histogram
-    """
-    img_h = image.shape[0]
-    img_w = image.shape[1]
-    all_box_lines = []
-
-    _bboxes = np.array(bboxes)
-    h1 = _bboxes[:, 3]
-    idxs = np.argsort(h1)
-    h1 = h1[idxs]
-    print(idxs)
-    print(h1)
-
-    h1 = runningMeanFast(h1, 5)
-    print(h1)
-
-    # for h in h1:
-
-    hmin = np.min(h1)
-    hmax = np.max(h1)
-    hmean = np.mean(h1)
-    q75, q25 = np.percentile(h1, [75, 25])
-    iqr = q75 - q25
-
-    print(h1)
-    std = int(np.std(h1))
-    n = len(h1)
-    print(f" std = {std}, hmin = {hmin}, hmax ={hmax}, hmean = {hmean}, iqr = {iqr}, q25 = {q25}, q75 = {q75}")
-
-    m1 = np.sqrt(n)
-    m2 = np.log2(n) + 1
-    m3 = 2 * np.cbrt(n)
-    m4 = (hmax - hmin) / (3.5 * (std / np.cbrt(n)))
-    m5 = (hmax - hmin) / (2 * (iqr / np.cbrt(n)))
-
-    print(f" std = {std}")
-    print(f" m1 = {m1}")
-    print(f" m2 = {m2}")
-    print(f" m3 = {m3}")
-    print(f" m4 = {m4}")
-    print(f" m5 = {m5}")
-
-    bins = [int(hmean)]
-    start = hmean
-    while True:
-        bin_end = int(start + std)
-        start = bin_end
-        bins.append(bin_end)
-        if bin_end > hmax:
-            break
-
-    print(bins)
-
-
-def runningMeanFast(x, N):
-    return np.convolve(x, np.ones((N,)) / N, mode="valid")[(N - 1) :]
-
-
-def line_refiner(image, bboxes, _id, lines_dir) -> List[Any]:
-    """Line refiner creates lines out of set of bounding box regions
-    Ref : https://www.answerminer.com/blog/binning-guide-ideal-histogram
-    """
-
-    from sklearn import metrics
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import MinMaxScaler
-    from sklearn.metrics import silhouette_score
-    from sklearn.datasets import load_iris
-    from sklearn.cluster import KMeans
-
-    img_h = image.shape[0]
-    img_w = image.shape[1]
-    all_box_lines = []
-
-    print(bboxes)
-    _bboxes = np.array(bboxes)
-    h1 = _bboxes[:, 3]
-    idxs = np.argsort(h1)
-    h1 = h1[idxs]
-
-    print(idxs)
-    print(h1)
-    name = "kmeans"
-    data = h1.reshape(-1, 1)
-    print(data)
-
-    mms = MinMaxScaler()
-    mms.fit(data)
-    data_transformed = mms.transform(data)
-
-    Sum_of_squared_distances = []
-    K = range(1, 12)
-    for k in K:
-        km = KMeans(n_clusters=k)
-        km = km.fit(data_transformed)
-        Sum_of_squared_distances.append(km.inertia_)
-
-    print(data_transformed)
-    print("Sum_of_squared_distances")
-    print(Sum_of_squared_distances)
-
-    plt.plot(K, Sum_of_squared_distances, "bx-")
-    plt.xlabel("k")
-    plt.ylabel("Sum_of_squared_distances")
-    plt.title("Elbow Method For Optimal k")
-    plt.show()
-
-    for n_cluster in range(2, 16):
-        # kmeans = KMeans(n_clusters=n_cluster).fit(data_transformed)
-        kmeans = KMeans(init="k-means++", n_clusters=n_cluster, random_state=0)
-        kmeans = kmeans.fit(data_transformed)
-        label = kmeans.labels_
-        sil_coeff = silhouette_score(data_transformed, label, metric="euclidean")
-        print("For n_clusters={}, The Silhouette Coefficient is {}".format(n_cluster, sil_coeff))
-
-    best_k = 1
-    best_d = 0
-    for i in range(1, len(Sum_of_squared_distances) - 1):
-        a = Sum_of_squared_distances[i]
-        b = Sum_of_squared_distances[i + 1]
-        d = a - b
-        if d > best_d:
-            best_d = d
-            best_k = i + 2
-
-    best_k = 3
-    print(f"Best K = {best_k}")
-    # Fit K-means with Scikit
-    kmeans = KMeans(init="k-means++", n_clusters=best_k, n_init=10, random_state=0)
-    kmeans.fit(data)
-
-    # Predict the cluster for all the samples
-    P = kmeans.predict(data)
-    print("Predictions")
-    print(P)
-
-    return []
-
-    running_mean = runningMeanFast(h1, 4)
-    print(running_mean)
-
-    std = int(np.std(h1))
-    print(f" std = {std}")
-
-    group = 0
-    dy = 0
-    groups = np.zeros(len(h1)).astype(int)
-    group_map = {}
-
-    for i in range(0, len(h1)):
-
-        if i == 0:
-            a = h1[i]
-            b = h1[i]
-        elif i == len(h1) - 1:
-            a = h1[i]
-            b = h1[i - 1]
-        else:
-            a = h1[i - 1]
-            b = h1[i]
-
-        d = abs(b - a)
-        dy += d
-        if d > (std):
-            group += 1
-            break
-
-        if group not in group_map:
-            group_map[group] = []
-
-        group_map[group].append(i)
-        groups[i] = group
-
-        print(f"{i} [{h1[i]}] > a = {a}, b = {b}, d = {d}, dy= {dy}, std = {std}  group = {group}")
-
-    print(groups)
-    print(group_map)
-
-    for k in group_map.keys():
-        print(f"gid = {k}")
-        idx = group_map[k]
-        group_bboxes = _bboxes[idx]
-
-        if True:
-            from PIL import Image, ImageDraw
-
-            img_line = copy.deepcopy(image)
-            viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
-            viz_img = Image.fromarray(viz_img)
-            draw = ImageDraw.Draw(viz_img, "RGBA")
-
-            for box in group_bboxes:
+            for box in merged_bboxes:
                 x, y, w, h = box
+                color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
                 color = list(np.random.random(size=3) * 256)
-                cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 2)
-                draw.rectangle(
-                    [x, y, x + w, y + h],
-                    outline="#993300",
-                    fill=(
-                        int(np.random.random() * 256),
-                        int(np.random.random() * 256),
-                        int(np.random.random() * 256),
-                        125,
-                    ),
-                    width=1,
-                )
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+            cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay)
 
-            viz_img.save(os.path.join(lines_dir, "%s-group.png" % k), format="PNG", subsampling=0, quality=100)
-
-    return []
-
-    # bins = np.array([0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.995, 1.0])
-    # def get_bin(value: float) -> int:
-    #     return np.digitize([value], np.sort(bins))[0]
-
-    for idx, box in enumerate(bboxes):
-        x, y, w, h = box
-        box_line = [0, y, img_w, h]
-        print(h)
-        # box_line = [x, y, w, h]
-        box_line = np.array(box_line).astype(np.int32)
-        all_box_lines.append(box_line)
-        # print(f' >  {idx} : {box} : {box_line}')
-    # print(f'all_box_lines : {len(all_box_lines)}')
-
-    all_box_lines = np.array(all_box_lines)
-    if len(all_box_lines) == 0:
-        return []
-
-    y1 = all_box_lines[:, 1]
     # sort boxes by the  y-coordinate of the bounding box
+
+    # run final pass merge fully overlapping boxes
+    idx_to_remove = []
+    for i, box0 in enumerate(merged_bboxes):
+        x0, y0, w0, h0 = box0
+        for j, box1 in enumerate(merged_bboxes):
+            if i == j:
+                continue
+            x1, y1, w1, h1 = box1
+            if ((x1 > x0) and (x1 + w1) < (x0 + w0)) and (y1 > y0) and (y1 + h1) < (y0 + h0):
+                idx_to_remove.append(j)
+
+    merged_bboxes = np.array(merged_bboxes)
+    if len(idx_to_remove) > 0:
+        merged_bboxes = np.delete(merged_bboxes, np.unique(idx_to_remove), axis=0)
+
+    y1 = merged_bboxes[:, 1]
     idxs = np.argsort(y1)
-    lines = []
-    iter_idx = 0
-    size = len(idxs)
+    merged_bboxes = merged_bboxes[idxs]
 
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        idx = idxs[last]
-        box_line = all_box_lines[idx]
-        overlaps, indexes = find_overlap(box_line, all_box_lines)
-        overlaps = np.array(overlaps)
-        avg_h = int(np.average(overlaps[:, 3]))
-        avg_y = int(np.average(overlaps[:, 1]))
-
-        print(f"{last}, {idx}, {indexes} : {box_line}  ->  {overlaps}")
-
-        min_x = overlaps[:, 0].min()
-        min_y = overlaps[:, 1].min()
-        max_w = overlaps[:, 2].max()
-        max_h = overlaps[:, 3].max()
-        max_y = 0
-
-        for overlap in overlaps:
-            x, y, w, h = overlap
-            dh = y + h
-            if dh > max_y:
-                max_y = dh
-
-        max_h = max_y - min_y
-        max_h = avg_h
-        min_y = avg_y
-
-        box = [min_x, min_y, max_w, max_h]
-        lines.append(box)
-
-        # there is a bug when there is a box index greater than candidate index
-        # last/idx : 8   ,  2  >  [0 1 4 3 6 5 7 8 2] len = 9  /  [0 1 2 3 4 5 6 7 8 9] len = 10
-        # Ex : 'index 9 is out of bounds for axis 0 with size 9'
-        #  numpy.delete(arr, obj, axis=None)[source]¶
-        indexes = indexes[indexes < idxs.size]
-        print(indexes)
-        idxs = np.delete(idxs, indexes, axis=0)
-        iter_idx = iter_idx + 1
-        # prevent inf loop
-        if iter_idx > size:
-            print("ERROR:Infinite loop detected")
-            raise Exception("ERROR:Infinite loop detected")
-
-    # reverse to get the right order
-    lines = np.array(lines)[::-1]
-
-    if True:
-        from PIL import Image, ImageDraw
-
-        img_line = copy.deepcopy(image)
-        viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
-        viz_img = Image.fromarray(viz_img)
-        draw = ImageDraw.Draw(viz_img, "RGBA")
-
-        for line in lines:
-            x, y, w, h = line
-            color = list(np.random.random(size=3) * 256)
-            cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 2)
-            draw.rectangle(
-                [x, y, x + w, y + h],
-                outline="#993300",
-                fill=(
-                    int(np.random.random() * 256),
-                    int(np.random.random() * 256),
-                    int(np.random.random() * 256),
-                    125,
-                ),
-                width=1,
-            )
-
-        cv2.imwrite(os.path.join(lines_dir, "%s-lineXX.png" % _id), img_line)
-        viz_img.save(os.path.join(lines_dir, "%s-linePIL.png" % _id), format="PNG", subsampling=0, quality=100)
-
-    # refine lines as there could be lines that overlap
-    print(f"***** Line candidates size {len(lines)}")
-
-    # sort boxes by the y-coordinate of the bounding box
-    y1 = lines[:, 1]
-    idxs = np.argsort(y1)
-    refine_lines = []
-
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        idx = idxs[last]
-
-        box_line = lines[idx]
-        overlaps, indexes = find_overlap(box_line, lines)
-        overlaps = np.array(overlaps)
-
-        min_x = overlaps[:, 0].min()
-        min_y = overlaps[:, 1].min()
-        max_w = overlaps[:, 2].max()
-        max_h = overlaps[:, 3].max()
-
-        box = [min_x, min_y, max_w, max_h]
-        refine_lines.append(box)
-
-        # there is a bug when there is a box index greater than candidate index
-        # last/idx : 8   ,  2  >  [0 1 4 3 6 5 7 8 2] len = 9  /  [0 1 2 3 4 5 6 7 8 9] len = 10
-        # Ex : 'index 9 is out of bounds for axis 0 with size 9'
-        #  numpy.delete(arr, obj, axis=None)[source]¶
-        indexes = indexes[indexes < idxs.size]
-        idxs = np.delete(idxs, indexes, axis=0)
-
-    print(f"Final line size : {len(refine_lines)}")
-    lines = np.array(refine_lines)[::-1]  # Reverse
-
-    if True:
-        img_line = copy.deepcopy(image)
-
-        for line in lines:
-            x, y, w, h = line
-            color = list(np.random.random(size=3) * 256)
-            cv2.rectangle(img_line, (x, y), (x + w, y + h), color, 1)
-
-        for idx, box in enumerate(bboxes):
-            color = (255, 0, 0)
-            cv2.rectangle(img_line, (box[0], box[1]), (box[0] + box[2], box[1] + box[3]), color, 1)
-
-        cv2.imwrite(os.path.join(lines_dir, "%s-line.png" % _id), img_line)
-
-    line_size = len(lines)
-    print(f"Estimated line count : {line_size}")
-
-    return lines
+    return merged_bboxes

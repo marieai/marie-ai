@@ -12,7 +12,9 @@ from marie.base_handler import BaseHandler
 from marie.timer import Timer
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
+from marie.utils.draw_truetype import drawTrueTypeTextOnImage
 from marie.utils.utils import ensure_exists
+from marie.numpyencoder import NumpyEncoder
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
@@ -74,9 +76,13 @@ class IcrProcessor(BaseHandler):
             _id: Unique Image ID
             key: Unique image key/region for the extraction
             img: A pre-cropped image containing characters
+            boxes: Boxes to recognize
+            image_fragments: Fragments to extract
+            lines: Lines associates with the boxes
         """
         print(f"ICR recognize : {_id}, {key}")
         assert len(boxes) == len(image_fragments), "You must provide the same number of box groups as images."
+        assert len(boxes) == len(lines), "You must provide the same number of lines as boxes."
         encode_fragments = False
 
         try:
@@ -88,35 +94,29 @@ class IcrProcessor(BaseHandler):
             meta = {"imageSize": {"width": img.shape[1], "height": img.shape[0]}, "lang": "en"}
 
             words = []
-            max_line_number = 0
             results = self.recognize_from_fragments(image_fragments)
 
             for i in range(len(boxes)):
                 box, fragment, line = boxes[i], image_fragments[i], lines[i]
                 # txt, confidence = self.extract_text(id, str(i), fragment)
                 extraction = results[i]
-                txt = extraction["text"]
+                txt_label = extraction["text"]
                 confidence = extraction["confidence"]
                 # print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
                 conf_label = f"{confidence:0.4f}"
-                txt_label = txt
 
                 payload = dict()
                 payload["id"] = i
-                payload["text"] = txt
+                payload["text"] = txt_label
                 payload["confidence"] = round(confidence, 4)
                 payload["box"] = box
                 payload["line"] = line
-
                 if encode_fragments:
                     payload["fragment_b64"] = encodeimg2b64(fragment)
 
                 words.append(payload)
 
-                if line > max_line_number:
-                    max_line_number = line
-
-                if False:
+                if True:
                     overlay_image = drawTrueTypeTextOnImage(
                         overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18, (139, 0, 0)
                     )
@@ -124,25 +124,25 @@ class IcrProcessor(BaseHandler):
                         overlay_image, conf_label, (box[0], box[1] + box[3]), 10, (0, 0, 255)
                     )
 
-            if False:
+            if True:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
                 cv2.imwrite(savepath, overlay_image)
 
                 savepath = os.path.join(debug_all_dir, f"{_id}.png")
                 cv2.imwrite(savepath, overlay_image)
 
-            line_ids = np.empty((max(1, max_line_number)), dtype=object)
+            unique_line_ids = np.unique(lines)
+            line_ids = np.empty(len(unique_line_ids), dtype=object)
             words = np.array(words)
 
-            for i in range(0, max(1, max_line_number)):
-                current_lid = i  # + 1
+            for i, line_idx in enumerate(unique_line_ids):
                 word_ids = []
                 box_picks = []
                 word_picks = []
 
                 for word in words:
                     lid = word["line"]
-                    if lid == current_lid:
+                    if line_idx == lid:
                         word_ids.append(word["id"])
                         box_picks.append(word["box"])
                         word_picks.append(word)
@@ -153,6 +153,7 @@ class IcrProcessor(BaseHandler):
                 # print(f'**** {len(box_picks)}')
                 # FIXME : This is a bug and need to be fixed, this should never happen
                 if len(box_picks) == 0:
+                    raise Exception
                     continue
                     if False:
                         line_ids[i] = {
@@ -195,7 +196,7 @@ class IcrProcessor(BaseHandler):
                 "lines": line_ids,
             }
 
-            if False:
+            if True:
                 with open("/tmp/icr/data.json", "w") as f:
                     json.dump(
                         result,

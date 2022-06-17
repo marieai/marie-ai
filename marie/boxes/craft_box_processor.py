@@ -12,7 +12,7 @@ from torch.autograd import Variable
 from marie.lang import Object
 from marie.timer import Timer
 from marie.utils.image_utils import paste_fragment, viewImage
-from .line_processor import line_refiner, line_merge
+from .line_processor import line_merge
 from .line_processor import find_line_index
 
 import copy
@@ -26,7 +26,7 @@ import marie.models.craft.craft_utils
 import marie.models.craft.file_utils
 import marie.models.craft.imgproc
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from marie.boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict
 from marie.utils.utils import ensure_exists
 from marie import __model_path__
@@ -81,21 +81,21 @@ def get_prediction(
     canvas_size,
     mag_ratio,
     refine_net=None,
+    line_refine_net=None,
 ):
     net = craft_net
     show_time = True
     t0 = time.time()
 
+    # mag_ratio = 1.5
     # resize
     img_resized, target_ratio, size_heatmap = craft.imgproc.resize_aspect_ratio(
         image, canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=mag_ratio
     )
     ratio_h = ratio_w = 1 / target_ratio
-    # cv2.imwrite("/tmp/fragments/img_resized.png", img_resized)
+    cv2.imwrite("/tmp/fragments/image.png", img_resized)
     # preprocessing
     x = craft.imgproc.normalizeMeanVariance(img_resized)
-    # cv2.imwrite("/tmp/fragments/norm.png", x)
-
     x = torch.from_numpy(x).permute(2, 0, 1)  # [h, w, c] to [c, h, w]
     x = Variable(x.unsqueeze(0))  # [c, h, w] to [b, c, h, w]
     if cuda:
@@ -140,52 +140,90 @@ def get_prediction(
     if show_time:
         print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    cv2.imwrite("/tmp/fragments/render_img.png", render_img)
-    cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
+    # cv2.imwrite("/tmp/fragments/render_img.png", render_img)
+    # cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
 
     # DO LINE DETECTION
-    linkmap = score_link
-    textmap = score_text
-    ret, text_score = cv2.threshold(textmap, low_text, 1, 0)
-    ret, link_score = cv2.threshold(linkmap, link_threshold, 1, 0)
+    # refine link
+    if line_refine_net is not None:
+        with torch.no_grad():
+            y_refiner = line_refine_net(y, feature)
+        score_link = y_refiner[0, :, :, 0].cpu().data.numpy()
 
-    text_score_comb = np.clip(text_score + link_score, 0, 1) * 255
-    text_score_comb = link_score * 255
+        linkmap = score_link
+        textmap = score_text
+        ret, text_score = cv2.threshold(textmap, low_text, 1, 0)
+        ret, link_score = cv2.threshold(linkmap, link_threshold, 1, 0)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
-    cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
+        text_score_comb = np.clip(text_score + link_score, 0, 1) * 255
+        text_score_comb = link_score * 255
 
-    if True:
-        cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
-        cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
-        cv2.imwrite(os.path.join("/tmp/fragments/", "h-text_score_comb.png"), text_score_comb * 255)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(line_img.astype(np.uint8), connectivity=4)
+        if True:
+            cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
+            cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
+            cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
+            cv2.imwrite(os.path.join("/tmp/fragments/", "h-text_score_comb.png"), text_score_comb * 255)
 
-    h, w = line_img.shape
-    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+        nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(line_img.astype(np.uint8), connectivity=4)
 
-    line_bboxes = []
-    for k in range(1, nLabels):
-        size = stats[k, cv2.CC_STAT_AREA]
-        x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
-        w, h = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
+        h, w = line_img.shape
+        overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+        line_bboxes = []
 
-        # size filtering
-        # if size < 4:
-        #     continue
-        box = x, y, w, h
-        line_bboxes.append(box)
-        # x, y, w, h = box
-        color = list(np.random.random(size=3) * 256)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+        for k in range(1, nLabels):
+            size = stats[k, cv2.CC_STAT_AREA]
+            x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
+            w, h = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
+            # size filtering
+            # if h < 2:
+            #     continue
+            box = x, y, w, h
+            line_bboxes.append(box)
+            color = list(np.random.random(size=3) * 256)
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
 
-    cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+        cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+        lines_bboxes = line_merge(overlay, line_bboxes)
 
-    line_merge(overlay, line_bboxes)
+        # coordinate adjustment
+        ratio_net = 2
+        for k in range(len(lines_bboxes)):
+            lines_bboxes[k] = [
+                int(lines_bboxes[k][0] * ratio_w * ratio_net),
+                int(lines_bboxes[k][1] * ratio_h * ratio_net),
+                int(lines_bboxes[k][2] * ratio_w * ratio_net),
+                int(lines_bboxes[k][3] * ratio_h * ratio_net),
+            ]
+
+        # overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
+        img_line = copy.deepcopy(image)
+        viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
+        viz_img = Image.fromarray(viz_img)
+        draw = ImageDraw.Draw(viz_img, "RGBA")
+
+        for box in lines_bboxes:
+            x, y, w, h = box
+            color = list(np.random.random(size=3) * 256)
+            # cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+            draw.rectangle(
+                [x, y, x + w, y + h],
+                outline="#993300",
+                fill=(
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    125,
+                ),
+                width=1,
+            )
+
+        viz_img.save(os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG")
+
     # estimate_character_width(render_img, boxes)
-    return boxes, polys, ret_score_text
+    return boxes, polys, ret_score_text, lines_bboxes
 
 
 class BoxProcessorCraft(BoxProcessor):
@@ -198,6 +236,11 @@ class BoxProcessorCraft(BoxProcessor):
         super().__init__(work_dir, models_dir, cuda)
         print("Box processor [craft, cuda={}]".format(cuda))
         self.craft_net, self.refine_net = self.__load(models_dir)
+
+    def unload(self):
+        """Unload the model from GPU/CPU"""
+        del self.craft_net
+        del self.refine_net
 
     def __load(self, models_dir: str):
         # load models
@@ -250,7 +293,7 @@ class BoxProcessorCraft(BoxProcessor):
         Treat the image as a single word.
         """
         w = image.shape[1]
-        bboxes, polys, score_text = get_prediction(
+        bboxes, polys, score_text, lines = get_prediction(
             image=image,
             craft_net=self.craft_net,
             refine_net=self.refine_net,
@@ -263,20 +306,21 @@ class BoxProcessorCraft(BoxProcessor):
             canvas_size=w,
             # canvas_size=w + w // 2,
             mag_ratio=1,
+            line_refine_net=None,
         )
 
-        return bboxes, polys, score_text
+        return bboxes, polys, score_text, lines
 
     def psm_sparse(self, image):
         """
         Find as much text as possible (default).
         """
         w = image.shape[1]
-        bboxes, polys, score_text = get_prediction(
+        bboxes, polys, score_text, lines = get_prediction(
             image=image,
             craft_net=self.craft_net,
             refine_net=None,  # self.refine_net,
-            text_threshold=0.6,
+            text_threshold=0.7,
             link_threshold=0.4,
             low_text=0.3,
             cuda=self.cuda,
@@ -285,16 +329,17 @@ class BoxProcessorCraft(BoxProcessor):
             canvas_size=w,
             # canvas_size=w + w // 2,
             mag_ratio=1.0,
+            line_refine_net=self.refine_net,
         )
 
-        return bboxes, polys, score_text
+        return bboxes, polys, score_text, lines
 
     def psm_line(self, image):
         """
         Treat the image as a single text line.
         """
         w = image.shape[1]
-        bboxes, polys, score_text = get_prediction(
+        bboxes, polys, score_text, lines = get_prediction(
             image=image,
             craft_net=self.craft_net,
             refine_net=None,  # self.refine_net,
@@ -306,16 +351,17 @@ class BoxProcessorCraft(BoxProcessor):
             canvas_size=w,
             # canvas_size=w + w // 2,
             mag_ratio=1,
+            line_refine_net=None,
         )
 
-        return bboxes, polys, score_text
+        return bboxes, polys, score_text, lines
 
     def psm_raw_line(self, image):
         """
         Treat the image as a single text line.
         """
         w = image.shape[1]
-        bboxes, polys, score_text = get_prediction(
+        bboxes, polys, score_text, lines = get_prediction(
             image=image,
             craft_net=self.craft_net,
             refine_net=self.refine_net,
@@ -327,16 +373,17 @@ class BoxProcessorCraft(BoxProcessor):
             canvas_size=w,
             # canvas_size=w + w // 2,
             mag_ratio=1,
+            line_refine_net=None,
         )
 
-        return bboxes, polys, score_text
+        return bboxes, polys, score_text, lines
 
     def psm_multiline(self, image):
         """
         Treat the image as a single word.
         """
         w = image.shape[1]
-        bboxes, polys, score_text = get_prediction(
+        bboxes, polys, score_text, lines = get_prediction(
             image=image,
             craft_net=self.craft_net,
             refine_net=self.refine_net,
@@ -349,9 +396,10 @@ class BoxProcessorCraft(BoxProcessor):
             canvas_size=w,
             # canvas_size=w + w // 2,
             mag_ratio=1,
+            line_refine_net=self.refine_net,
         )
 
-        return bboxes, polys, score_text
+        return bboxes, polys, score_text, lines
 
     # @Timer(text="BoundingBoxes in {:.2f} seconds")
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
@@ -373,16 +421,17 @@ class BoxProcessorCraft(BoxProcessor):
             # Make this a configuration
             image_norm = image
             # image_norm = 255 - image
+            lines = []
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
-                bboxes, polys, score_text = self.psm_sparse(image_norm)
+                bboxes, polys, score_text, lines = self.psm_sparse(image_norm)
             elif psm == PSMode.WORD:
-                bboxes, polys, score_text = self.psm_word(image_norm)
+                bboxes, polys, score_text, lines = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
-                bboxes, polys, score_text = self.psm_line(image_norm)
+                bboxes, polys, score_text, lines = self.psm_line(image_norm)
             elif psm == PSMode.MULTI_LINE:
-                bboxes, polys, score_text = self.psm_multiline(image_norm)
+                bboxes, polys, score_text, lines = self.psm_multiline(image_norm)
             elif psm == PSMode.RAW_LINE:
                 # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
                 # as we treat the whole line as BBOX
@@ -408,11 +457,6 @@ class BoxProcessorCraft(BoxProcessor):
             prediction_result["polys"] = polys
             prediction_result["heatmap"] = score_text
 
-            # save score text
-            filename = _id
-            mask_file = os.path.join(debug_dir, "res_" + filename + "_mask.jpg")
-            cv2.imwrite(mask_file, score_text)
-
             # deepcopy image so that original is not altered
             # image = copy.deepcopy(image)
             pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0))
@@ -424,18 +468,6 @@ class BoxProcessorCraft(BoxProcessor):
 
             max_h = image.shape[0]
             max_w = image.shape[1]
-
-            # FIXME  : This is really slow
-            boxes = []
-            for idx, region in enumerate(bboxes):
-                region = np.array(region).astype(np.int32).reshape((-1))
-                region = region.reshape(-1, 2)
-                poly = region.reshape((-1, 1, 2))
-                box = cv2.boundingRect(poly)
-                box = np.array(box).astype(np.int32)
-                boxes.append(box)
-
-            lines = line_refiner(image, boxes, _id, lines_dir)
 
             for idx, region in enumerate(bboxes):
                 region = np.array(region).astype(np.int32).reshape((-1))
@@ -487,41 +519,3 @@ class BoxProcessorCraft(BoxProcessor):
             return rect_from_poly, fragments, rect_line_numbers, prediction_result
         except Exception as ident:
             raise ident
-
-
-if __name__ == "__main__":
-    t = time.time()
-    """ For testing images in a folder """
-    test_folder = "../examples/set-001/test"
-    image_list, _, _ = craft.file_utils.get_files(test_folder)
-    result_folder = "./result/"
-
-    if not os.path.isdir(result_folder):
-        os.mkdir(result_folder)
-
-    boxer = BoxProcessorCraft(work_dir="/tmp/boxes", models_dir="../model_zoo/craft")
-    # load data
-    for k, image_path in enumerate(image_list):
-        print(
-            "Test image {:d}/{:d}: {:s}".format(k + 1, len(image_list), image_path),
-            end="\r",
-        )
-        image = craft.imgproc.loadImage(image_path)
-        filename, file_ext = os.path.splitext(os.path.basename(image_path))
-
-        (
-            rect_from_poly,
-            fragments,
-            rect_line_numbers,
-            prediction_result,
-        ) = boxer.extract_bounding_boxes(filename, "key", image)
-        heatmap = prediction_result["heatmap"]
-        polys = prediction_result["polys"]
-
-        # save score text
-        mask_file = result_folder + "/res_" + filename + "_mask.jpg"
-        cv2.imwrite(mask_file, heatmap)
-        craft.file_utils.saveResult(image_path, image[:, :, ::-1], polys, dirname=result_folder)
-        print("elapsed time : {}s".format(time.time() - t))
-
-    print("Total time : {}s".format(time.time() - t))
