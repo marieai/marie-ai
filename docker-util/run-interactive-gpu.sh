@@ -25,7 +25,7 @@ if [[ -n "$GPUS" ]]; then
     exit 1
   fi
   # shellcheck disable=SC2089
-  DEVICES="'device=$GPUS'"
+  DEVICES='"device=$GPUS"'
   NAME="${CONTAINER_NAME}-$GPUS"
 fi
 
