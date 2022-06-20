@@ -25,7 +25,8 @@ if [[ -n "$GPUS" ]]; then
     exit 1
   fi
   # shellcheck disable=SC2089
-  DEVICES='"device=$GPUS"'
+#  DEVICES='"device=$GPUS"'
+  DEVICES="device=$GPUS"
   NAME="${CONTAINER_NAME}-$GPUS"
 fi
 
@@ -41,8 +42,9 @@ fi
 # container not found.
 # -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION}
 
-docker run -u 0 --user root -it --rm  --gpus "$DEVICES" --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864  \
---name "$NAME" \
+# shellcheck disable=SC2090
+docker run -u 0 --user root -it --rm  --gpus $DEVICES --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864  \
+--name $NAME \
 -v `pwd`/../config:/etc/marie:rw \
 -v /mnt/data/marie-ai/model_zoo:/opt/marie-icr/model_zoo:ro \
 -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw \
