@@ -28,10 +28,17 @@ if [[ -n "$GPUS" ]]; then
 #  DEVICES='"device=$GPUS"'
   DEVICES="device=$GPUS"
   NAME="${CONTAINER_NAME}-$GPUS"
+
+  if [[ $GPUS == "all" ]]; then
+    NAME="${CONTAINER_NAME}"
+  fi
 fi
 
-echo "GPUS Selected > ${DEVICES}"
-echo "NAME          > ${NAME}"
+CONTAINER_ID=$(docker inspect --format="{{.Id}}" ${NAME} 2> /dev/null)
+
+echo "GPUS Selected  > ${DEVICES}"
+echo "CONTAINER_NAME > ${NAME}"
+echo "CONTAINER_ID   > ${CONTAINER_ID}"
 
 if [[ "${CONTAINER_ID}" ]]; then
   # container found.
