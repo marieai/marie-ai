@@ -81,9 +81,7 @@ if __name__ == "__main__":
     # )
     # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
     # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
-    img_path = (
-        "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
-    )
+    img_path = "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
     # img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
@@ -93,6 +91,7 @@ if __name__ == "__main__":
     img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
     img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658545_2.png"
 
+    img_path = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658618_6.png"
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
 
@@ -102,14 +101,18 @@ if __name__ == "__main__":
         image = src_img
         # image = __scale_width(src_img, 2000, 1000)
         # cv2.imwrite("/tmp/resized-2048.png", image)
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=True)
+        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
         # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-        boxes, fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
+        boxes, fragments, lines, _ = box.extract_bounding_boxes(
+            key, "field", image, PSMode.SPARSE
+        )
         print(lines)
-        result, overlay_image = icr.recognize(key, "test", image, boxes, fragments, lines)
+        result, overlay_image = icr.recognize(
+            key, "test", image, boxes, fragments, lines
+        )
 
         cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
 

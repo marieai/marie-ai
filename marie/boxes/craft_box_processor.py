@@ -13,7 +13,7 @@ from marie.lang import Object
 from marie.timer import Timer
 from marie.utils.image_utils import paste_fragment, viewImage
 from .line_processor import line_merge
-from .line_processor import find_line_index
+from .line_processor import find_line_number
 
 import copy
 import cv2
@@ -496,7 +496,7 @@ class BoxProcessorCraft(BoxProcessor):
                 x, y, w, h = box
                 snippet = crop_poly_low(image, poly)
 
-                line_number = find_line_index(lines, box)
+                line_number = find_line_number(lines, box)
                 # line_number = 0
 
                 fragments.append(snippet)

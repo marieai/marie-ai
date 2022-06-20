@@ -15,7 +15,9 @@ class TextRenderer(ResultRenderer):
 
         self.preserve_interword_spaces = False
         if "preserve_interword_spaces" in config:
-            self.preserve_interword_spaces = strtobool(config["preserve_interword_spaces"])
+            self.preserve_interword_spaces = strtobool(
+                config["preserve_interword_spaces"]
+            )
 
     @property
     def name(self):
@@ -41,25 +43,31 @@ class TextRenderer(ResultRenderer):
 
         xs = ceil(h / char_width)
         hs = ceil(w / char_height)
-        bins = hs * xs
-        print(f"Segments size [hs, xs, bins]: {hs},  {xs}, {bins}")
+        print(f"Segments size [hs, xs, bins]: {hs},  {xs}")
         # ['meta', 'words', 'lines']
         meta = result["meta"]
         words = result["words"]
         lines = result["lines"]
 
         buffer = ""
+        start_cell_y = 1
 
         for i, line in enumerate(lines):
-            print(line)
             bbox = line["bbox"]
             wordids = line["wordids"]
             x, y, w, h = bbox
             baseline = y + h
-            celly = baseline // char_height
-            print(f"Baseline # {i} : {baseline}, cell-y = {celly}")
+            cell_y = baseline // char_height
+            delta_cell_y = cell_y - start_cell_y
+            start_cell_y = cell_y
 
-            # we need to sort the words id their 'x'  as the wordids can be out of order.
+            print(
+                f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}"
+            )
+
+            for j in range(1, delta_cell_y):
+                buffer += "\n"
+            # we need to sort the words id their 'x'  as the wordids can be out of order
             word_ids = []
             box_picks = []
             word_picks = []
@@ -75,15 +83,12 @@ class TextRenderer(ResultRenderer):
 
             x1 = box_picks[:, 0]
             sort_index = np.argsort(x1)
-            print(sort_index)
             aligned_words = word_picks[sort_index]
 
-            # def add_column(val, col_len)->str:
-            print("Aligned")
+            # print("Aligned")
 
             # TODO : This needs to be supplied from the box processor
             estimate_character_width = 26
-            print(f"self.preserve_interword_spaces = {self.preserve_interword_spaces}")
 
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
@@ -102,7 +107,7 @@ class TextRenderer(ResultRenderer):
                     if gap > estimate_character_width:
                         spaces = max(1, gap // estimate_character_width)
 
-                print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
+                # print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
 
                 text = word["text"]
                 confidence = word["confidence"]
@@ -111,11 +116,12 @@ class TextRenderer(ResultRenderer):
                 cellx = x // char_width
                 cols = (x + w) // char_width
 
-                print(f"{cellx}, {cols} :: {celly}     >>   {box} :: {text}")
+                # print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
                 buffer += " " * spaces
                 buffer += text
                 # print(f'buffer : {buffer}')
             buffer += "\n"
+
         print("Final ----")
         print(buffer)
 

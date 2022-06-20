@@ -9,24 +9,23 @@ import numpy as np
 from marie.utils.overlap import find_overlap_vertical
 
 
-def find_line_index(lines, box):
+def find_line_number(lines, box):
     """Get line index for specific box"""
-
     line_number = -1
-    # TODO : Figure out better way to handle vertical lines
-    # prune vertical lines
-    x, y, w, h = box
-    rat = h / w
-    # _, line_indexes = find_overlap_vertical(box, lines)
-    overlaps, line_indexes, scores = find_overlap_vertical(box, lines)
-    if len(line_indexes) == 1:
-        line_number = line_indexes[0] + 1
+    overlaps, indexes, scores = find_overlap_vertical(box, lines)
+    if len(indexes) == 1:
+        line_number = indexes[0] + 1
+    elif len(indexes) > 1:
+        iou_best = 0
+        for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
+            if score > iou_best:
+                iou_best = score
+                line_number = index + 1
 
-    print(f"{box}  :: {rat}  : {line_number}")
     if line_number == -1:
         msg = f"Invalid line number : -1, this looks like a bug/vertical line : {box}"
         print(msg)
-        # raise Exception(msg)
+        raise Exception(msg)
 
     return line_number
 
@@ -66,7 +65,9 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
                 s_h = box[3]
                 # check if we have candidates that are fully overlapping the source
                 if False:
-                    for m, (bi_overlap, bi_index, bi_score) in enumerate(zip(bi_overlaps, bi_indexes, bi_scores)):
+                    for m, (bi_overlap, bi_index, bi_score) in enumerate(
+                        zip(bi_overlaps, bi_indexes, bi_scores)
+                    ):
                         c_h = bboxes[bi_index][3]
                         if c_h < s_h:
                             print(f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}")
@@ -109,7 +110,9 @@ def line_merge(image, bboxes) -> List[Any]:
                 color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
                 color = list(np.random.random(size=3) * 256)
                 cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
-            cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay)
+            cv2.imwrite(
+                os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay
+            )
 
     # sort boxes by the  y-coordinate of the bounding box
 
@@ -121,7 +124,11 @@ def line_merge(image, bboxes) -> List[Any]:
             if i == j:
                 continue
             x1, y1, w1, h1 = box1
-            if ((x1 > x0) and (x1 + w1) < (x0 + w0)) and (y1 > y0) and (y1 + h1) < (y0 + h0):
+            if (
+                ((x1 > x0) and (x1 + w1) < (x0 + w0))
+                and (y1 > y0)
+                and (y1 + h1) < (y0 + h0)
+            ):
                 idx_to_remove.append(j)
 
     merged_bboxes = np.array(merged_bboxes)
