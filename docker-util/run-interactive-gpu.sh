@@ -31,7 +31,6 @@ fi
 
 echo "GPUS Selected > ${DEVICES}"
 echo "NAME          > ${NAME}"
-exit 0
 
 if [[ "${CONTAINER_ID}" ]]; then
   # container found.
