@@ -48,6 +48,7 @@ fi
 
 # container not found.
 # -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION}
+#--network=host  \
 
 # shellcheck disable=SC2090
 docker run -u 0 --user root -it --rm  --gpus $DEVICES --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864  \
@@ -57,5 +58,4 @@ docker run -u 0 --user root -it --rm  --gpus $DEVICES --shm-size=4g --ulimit mem
 -v /opt/logs/marie-icr:/opt/marie-icr/logs:rw \
 -v /opt/shares/medrxprovdata:/opt/marie-icr/share:rw  \
 --env-file ./service.env  \
---network=host  \
 -p 5100:5100  ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION}
