@@ -21,6 +21,7 @@ from marie.api.sample_route import SampleRouter
 from marie.common.volume_handler import VolumeHandler
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
+from marie.utils.network import find_open_port
 from marie.version import __version__
 from marie.common.file_io import PathManager
 from marie import __cache_dir__
@@ -70,7 +71,6 @@ if __name__ == "__main__":
     pypath = os.environ["PYTHONPATH"]
     # os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
 
-
     args = ArgParser.server_parser()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Initializing 🦊-Marie : %s", __version__)
@@ -82,15 +82,37 @@ if __name__ == "__main__":
     # Additional Info when using cuda
     if device.type == "cuda":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
-        logger.info("GPU Memory Allocated: %d GB", round(torch.cuda.memory_allocated(0) / 1024**3, 1))
-        logger.info("GPU Memory Cached: %d GB", round(torch.cuda.memory_reserved(0) / 1024**3, 1))
+        logger.info(
+            "GPU Memory Allocated: %d GB",
+            round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
+        )
+        logger.info(
+            "GPU Memory Cached: %d GB",
+            round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1),
+        )
 
     # Setting use_reloader to false prevents application from initializing twice
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ["FLASK_DEBUG"] = "1"
 
     # by default cache is located in '~/.cache' here we will map it under the runtime cache directory
-    os.environ['TORCH_HOME'] = str(__cache_dir__)
+    os.environ["TORCH_HOME"] = str(__cache_dir__)
+
+    # os.environ["MARIE_PORT"] = "-1"
+
+    logger.info(f"Environment variables")
+    for k, v in os.environ.items():
+        logger.info(f"env : {k}={v}")
+
+    server_port = os.getenv("MARIE_PORT", 5000)
+    if server_port == "-1":
+        server_port = find_open_port()
+    else:
+        server_port = int(server_port)
+
+    with open("port.dat", "w", encoding="utf-8") as fsrc:
+        fsrc.write(f"{server_port}")
+        print(f"server_port = {server_port}")
 
     service = create_app()
-    service.run(host="0.0.0.0", port=5100, debug=False, use_reloader=False)
+    service.run(host="0.0.0.0", port=server_port, debug=False, use_reloader=False)

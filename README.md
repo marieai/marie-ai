@@ -93,6 +93,8 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
+
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda && docker push gregbugaj/marie-icr:2.2-cuda
 ```
 
 ### Inference on the gpu
@@ -126,6 +128,14 @@ docker rmi -f $(docker images -f "dangling=true" -q)
 
 ### Docker compose
 
+Install docker-compose https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-compose-on-ubuntu-20-04
+
+```shell
+sudo curl -L "https://github.com/docker/compose/releases/download/v2.6.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/bin/docker-compose
+sudo chmod +x /usr/bin/docker-compose
+docker-compose --version
+```
+
 Start docker compose
 
 ```sh
@@ -139,6 +149,12 @@ Cleanup containers
 ```sh
     docker-compose down --volumes --remove-orphans
 ```
+
+# Default Ports
+
+8500 -- Consul
+5000 -- Traefik - Entrypoint
+7777 -- Traefik - Dashboard
 
 # Setup Redis
 https://hub.docker.com/_/redis
@@ -237,6 +253,11 @@ ImageMagic 6 policy
 /etc/ImageMagick-6/policy.xml
 ```
 
+## Download assets locally
+Load gpt2 dictionary from https://layoutlm.blob.core.windows.net/trocr/dictionaries/gpt2_with_mask.dict.txt
+
+
+
 ## Models to implement
 https://github.com/ibm-aur-nlp/PubLayNet
 
@@ -247,3 +268,6 @@ DocFormer: End-to-End Transformer for Document Understanding
 
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
+
+
+[//]: # ([GraphQL] An error occurred while communicating with the legacy API)
