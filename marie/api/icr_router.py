@@ -434,7 +434,7 @@ class ICRRouter(Executor):
                     payload["args"]["mode"] if "mode" in payload["args"] else ""
                 )
                 output_format = OutputFormat.from_value(
-                    payload["output"] if "output" in payload else "json"
+                    payload["args"]["output"] if "output" in payload["args"] else "json"
                 )
 
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
