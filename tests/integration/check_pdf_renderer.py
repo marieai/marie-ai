@@ -147,8 +147,8 @@ if __name__ == "__main__":
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
         renderer.render(image, result, output_filename)
 
-        print("Testing text render")
-
-        output_filename = "/tmp/fragments/result.txt"
-        renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(image, result, output_filename)
+        # print("Testing text render")
+        #
+        # output_filename = "/tmp/fragments/result.txt"
+        # renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        # renderer.render(image, result, output_filename)

@@ -1,4 +1,5 @@
 import socket
+import os
 
 
 def find_open_port():
@@ -12,6 +13,15 @@ def find_open_port():
     return port
 
 
+def is_docker():
+    path = "/proc/self/cgroup"
+    return (
+        os.path.exists("/.dockerenv")
+        or os.path.isfile(path)
+        and any("docker" in line for line in open(path))
+    )
+
+
 def get_ip_address():
     """
     https://stackoverflow.com/questions/24196932/how-can-i-get-the-ip-address-from-nic-in-python
@@ -21,6 +31,7 @@ def get_ip_address():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
+            sockname = s.getsockname()
             return s.getsockname()[0]
     except Exception as e:
         raise e  # For debug

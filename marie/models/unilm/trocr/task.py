@@ -84,7 +84,11 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
                 target_dict = Dictionary.load(dict_file_like)
             elif args.decoder_pretrained.startswith('roberta'):
                 url = 'https://layoutlm.blob.core.windows.net/trocr/dictionaries/gpt2_with_mask.dict.txt'
-                logger.info('Load gpt2 dictionary from {}'.format(url))            
+
+                if getattr(args, "dict_path_or_url", None) is not None:
+                    url = getattr(args, "dict_path_or_url", None)
+
+                logger.info('Load gpt2 dictionary from {}'.format(url))
                 dict_content = urllib.request.urlopen(url).read().decode()
                 dict_file_like = io.StringIO(dict_content)
                 target_dict = Dictionary.load(dict_file_like)

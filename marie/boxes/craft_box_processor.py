@@ -87,6 +87,7 @@ def get_prediction(
     show_time = True
     t0 = time.time()
 
+    ensure_exists("/tmp/fragments")
     # mag_ratio = 1.5
     # resize
     img_resized, target_ratio, size_heatmap = craft.imgproc.resize_aspect_ratio(
@@ -142,6 +143,7 @@ def get_prediction(
 
     # cv2.imwrite("/tmp/fragments/render_img.png", render_img)
     # cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
+
 
     # DO LINE DETECTION
     # refine link

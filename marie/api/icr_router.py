@@ -1,3 +1,5 @@
+from enum import Enum
+
 import torch
 from torch.backends import cudnn
 
@@ -23,8 +25,11 @@ import marie.processors
 from flask import Blueprint, jsonify
 from flask_restful import Resource, reqparse, request
 
+from marie.enums import BetterEnum
 from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
+from marie.renderer.pdf_renderer import PdfRenderer
+from marie.renderer.text_renderer import TextRenderer
 from marie.serve.runtimes import monitoring
 from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
 from marie.boxes.box_processor import PSMode
@@ -151,10 +156,31 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     if file_type not in ALLOWED_TYPES:
         raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
 
+    # if we have a tiff file we need to store as RAW otherwise only first page will be converted
+    if file_type == "tiff":
+        store_raw = True
+
     tmp_file, checksum = store_temp_file(data, queue_id, file_type, store_raw)
     logger.info(f"File info: {file_type}, {tmp_file}")
 
     return tmp_file, checksum, file_type
+
+
+class OutputFormat(Enum):
+    """Output format for the document"""
+
+    JSON = "json"  # Render document as JSON output
+    PDF = "pdf"  # Render document as PDF
+    TEXT = "text"  # Render document as plain TEXT
+
+    @staticmethod
+    def from_value(value: str):
+        if value is None:
+            return OutputFormat.JSON
+        for data in OutputFormat:
+            if data.value == value.lower():
+                return data
+        return OutputFormat.JSON
 
 
 class ICRRouter(Executor):
@@ -164,12 +190,27 @@ class ICRRouter(Executor):
             raise RuntimeError("Expected app arguments is null")
 
         prefix = "/api"
-        app.add_url_rule(rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"])
-        # app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
-        app.add_url_rule(rule=f"/{prefix}/status", endpoint="status", view_func=self.status, methods=["GET"])
-        app.add_url_rule(rule=f"/{prefix}", endpoint="api_index", view_func=self.status, methods=["GET"])
         app.add_url_rule(
-            rule=f"{prefix}/extract/<queue_id>", endpoint="extract", view_func=self.extract, methods=["POST"]
+            rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"]
+        )
+        # app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
+        app.add_url_rule(
+            rule=f"/{prefix}/status",
+            endpoint="status",
+            view_func=self.status,
+            methods=["GET"],
+        )
+        app.add_url_rule(
+            rule=f"/{prefix}",
+            endpoint="api_index",
+            view_func=self.status,
+            methods=["GET"],
+        )
+        app.add_url_rule(
+            rule=f"{prefix}/extract/<queue_id>",
+            endpoint="extract",
+            view_func=self.extract,
+            methods=["POST"],
         )
 
         self.show_error = True  # show prediction errors
@@ -195,8 +236,13 @@ class ICRRouter(Executor):
 
         build = {}
         if os.path.exists(".build"):
-            with open(".build", "r") as fp:
-                build = json.load(fp)
+            try:
+                with open(".build", "r") as fp:
+                    build = json.load(fp)
+            except Exception as ex:
+                build = {"status": "Unable to read .build file"}
+                logger.error(ex)
+
         host = get_ip_address()
 
         return (
@@ -207,6 +253,7 @@ class ICRRouter(Executor):
                     "component": [
                         {"name": "craft", "version": "1.0.0"},
                         {"name": "craft-benchmark", "version": "1.0.0"},
+                        {"name": "trocr", "version": "1.0.0"},
                     ],
                     "build": build,
                 }
@@ -218,38 +265,58 @@ class ICRRouter(Executor):
         logger.info(f"Self : {self}")
         return {"index": "complete"}
 
-    def process_extract_fullpage(self, frames, queue_id, checksum, pms_mode, args, **kwargs):
+    def process_extract_fullpage(
+        self, frames, queue_id, checksum, pms_mode, args, **kwargs
+    ):
         """Process full page extraction"""
-        # TODO : Implement multipage tiff processing
+        # Extract each page and augment it with a page in range 1..N+1
+        results = []
+        for i, frame in enumerate(frames):
+            # if i != 2:
+            #     continue
 
-        page_index = 0
-        img = frames[page_index]
-        h = img.shape[0]
-        w = img.shape[1]
-        # allow for small padding around the component
-        padding = 4
-        overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-        overlay[padding : h + padding, padding : w + padding] = img
+            img = frames[i]
+            h = img.shape[0]
+            w = img.shape[1]
+            # allow for small padding around the component
+            padding = 4
+            overlay = (
+                np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            )
+            overlay[padding : h + padding, padding : w + padding] = img
 
-        boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
-            queue_id, checksum, overlay, pms_mode
-        )
-        result, overlay_image = self.icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
+            boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
+                queue_id, checksum, overlay, pms_mode
+            )
+            result, overlay_image = self.icr_processor.recognize(
+                queue_id, checksum, overlay, boxes, img_fragments, lines
+            )
 
-        cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}.png", overlay_image)
-        result["overlay_b64"] = encodeToBase64(overlay_image)
+            cv2.imwrite(f"/tmp/marie/overlay_image_{i}.png", overlay_image)
+            # result["overlay_b64"] = encodeToBase64(overlay_image)
 
-        return result
+            result["meta"]["page"] = i
+            results.append(result)
 
-    def process_extract_regions(self, frames, queue_id, checksum, pms_mode, regions, args):
+        return results
+
+    def process_extract_regions(
+        self, frames, queue_id, checksum, pms_mode, regions, args
+    ):
         """Process region based extract"""
-        filter_snippets = bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
+        filter_snippets = (
+            bool(strtobool(args["filter_snippets"]))
+            if "filter_snippets" in args
+            else False
+        )
         output = []
         extended = []
 
         for region in regions:
             # validate required fields
-            if not all(key in region for key in ("id", "pageIndex", "x", "y", "w", "h")):
+            if not all(
+                key in region for key in ("id", "pageIndex", "x", "y", "w", "h")
+            ):
                 raise Exception(f"Required key missing in region : {region}")
 
         for region in regions:
@@ -266,12 +333,19 @@ class ICRRouter(Executor):
                 img = img[y : y + h, x : x + w].copy()
                 # allow for small padding around the component
                 padding = 4
-                overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+                overlay = (
+                    np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+                )
                 overlay[padding : h + padding, padding : w + padding] = img
                 cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
 
                 logger.info(f"pms_mode = {pms_mode}")
-                boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
+                (
+                    boxes,
+                    img_fragments,
+                    lines,
+                    _,
+                ) = self.box_processor.extract_bounding_boxes(
                     queue_id, checksum, overlay, pms_mode
                 )
 
@@ -348,12 +422,20 @@ class ICRRouter(Executor):
 
             pms_mode = PSMode.from_value(payload["mode"] if "mode" in payload else "")
             regions = payload["regions"] if "regions" in payload else []
+            output_format = OutputFormat.from_value(
+                payload["output"] if "output" in payload else "json"
+            )
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             args = {}
             if "args" in payload:
                 args = payload["args"]
-                pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
+                pms_mode = PSMode.from_value(
+                    payload["args"]["mode"] if "mode" in payload["args"] else ""
+                )
+                output_format = OutputFormat.from_value(
+                    payload["output"] if "output" in payload else "json"
+                )
 
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
             loaded, frames = load_image(tmp_file, file_type)
@@ -362,18 +444,39 @@ class ICRRouter(Executor):
                 raise Exception(f"Unable to read image : {tmp_file}")
 
             frame_len = len(frames)
-            logger.info(f"frame size, regions size : {frame_len}, {len(regions)}")
-
-            if len(regions) == 0:
-                result = self.process_extract_fullpage(frames, queue_id, checksum, pms_mode, args)
-            else:
-                result = self.process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
-
-            serialized = json.dumps(
-                result, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+            logger.info(
+                f"frames , regions , output_format, pms_mode : {frame_len}, {len(regions)}, {output_format}, {pms_mode}"
             )
 
-            return serialized, 200
+            if len(regions) == 0:
+                results = self.process_extract_fullpage(
+                    frames, queue_id, checksum, pms_mode, args
+                )
+            else:
+                results = self.process_extract_regions(
+                    frames, queue_id, checksum, pms_mode, regions, args
+                )
+
+            rendered_output = None
+            if output_format == OutputFormat.JSON:
+                rendered_output = json.dumps(
+                    results,
+                    sort_keys=True,
+                    separators=(",", ": "),
+                    ensure_ascii=False,
+                    indent=2,
+                    cls=NumpyEncoder,
+                )
+            elif output_format == OutputFormat.PDF:
+                # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+                # renderer.render(image, result, output_filename)
+                raise Exception("PDF Not implemented")
+            elif output_format == OutputFormat.TEXT:
+                output_filename = "/tmp/fragments/result.txt"
+                renderer = TextRenderer(config={"preserve_interword_spaces": True})
+                rendered_output = renderer.render(frames, results, output_filename)
+
+            return rendered_output, 200
         except BaseException as error:
             logger.error("Extract error", error)
             if self.show_error:
