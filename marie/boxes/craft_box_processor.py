@@ -450,7 +450,7 @@ class BoxProcessorCraft(BoxProcessor):
                 fragments.append(image_norm)
                 rect_line_numbers.append(0)
 
-                return rect_from_poly, fragments, rect_line_numbers, prediction_result
+                return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines
             else:
                 raise Exception(f"PSM mode not supported : {psm}")
 
@@ -497,9 +497,7 @@ class BoxProcessorCraft(BoxProcessor):
 
                 x, y, w, h = box
                 snippet = crop_poly_low(image, poly)
-
                 line_number = find_line_number(lines, box)
-                # line_number = 0
 
                 fragments.append(snippet)
                 rect_from_poly.append(box)
@@ -518,6 +516,6 @@ class BoxProcessorCraft(BoxProcessor):
 
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)
-            return rect_from_poly, fragments, rect_line_numbers, prediction_result
+            return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines
         except Exception as ident:
             raise ident

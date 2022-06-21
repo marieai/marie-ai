@@ -34,6 +34,10 @@ DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda &
 docker push gregbugaj/marie-icr:2.2-cuda
 ```
 
+cd ~/dev/marie-ai/docker-util/ && docker container stop $(docker container ls -q --filter name='marie*') && ./update.sh && ./run-all.sh
+cd ~/dev/marie-ai/docker-util/ && docker container stop $(docker container ls -q --filter name='marie*') && ./update.sh && ./run-all.sh
+docker container stop $(docker container ls -q --filter name='marie*')
+
 -v `pwd`/../cache:/opt/marie-icr/.cache:rw \
 
 Starting in Development mode
@@ -141,7 +145,7 @@ Start docker compose
 ```sh
 DOCKER_BUILDKIT=1 docker-compose up
 
-docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose up
+docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose up -d
 ```
 
 Cleanup containers
@@ -268,6 +272,3 @@ DocFormer: End-to-End Transformer for Document Understanding
 
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
-
-
-[//]: # ([GraphQL] An error occurred while communicating with the legacy API)

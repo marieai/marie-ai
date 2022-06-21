@@ -132,7 +132,6 @@ def get_text(cfg, task, generator, model, samples, bpe):
         output_score = decoder_output["score"]
         score = torch.exp(output_score)
         score = score.cpu().detach().numpy().item()
-        print(f"score : {output_score}, {score}")
 
         hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
             hypo_tokens=decoder_output["tokens"].int().cpu(),
@@ -147,6 +146,8 @@ def get_text(cfg, task, generator, model, samples, bpe):
         detok_hypo_str = bpe.decode(hypo_str)
         predictions.append(detok_hypo_str)
         scores.append(score)
+
+        print(f"score : {output_score}, {score}  : {detok_hypo_str}")
 
     return predictions, scores
 
