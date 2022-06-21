@@ -15,49 +15,60 @@ class TextRenderer(ResultRenderer):
 
         self.preserve_interword_spaces = False
         if "preserve_interword_spaces" in config:
-            self.preserve_interword_spaces = strtobool(config["preserve_interword_spaces"])
+            self.preserve_interword_spaces = strtobool(
+                config["preserve_interword_spaces"]
+            )
 
     @property
     def name(self):
         return "TextRenderer"
 
-    def render(self, image, result, output_filename):
-        print("Rendering ...")
+    def __render_page(self, image, result, page_index):
+        """Render page into text"""
         # 8px X 22px = 2.75 pytorch
         # 8px X 19px = 2.375 vscode
+        if image is None:
+            raise Exception("Image or list of images expected")
 
         char_ratio = 2.75
         char_width = 20  # 8
         char_height = int(char_width * char_ratio)
         shape = image.shape
 
-        print(f"Char ratio : {char_ratio}")
-        print(f"Char width : {char_width}")
-        print(f"Char height : {char_height}")
-        print(f"Image size : {shape}")
+        # print(f"Char ratio : {char_ratio}")
+        # print(f"Char width : {char_width}")
+        # print(f"Char height : {char_height}")
+        # print(f"Image size : {shape}")
 
         h = shape[0]
         w = shape[1]
 
         xs = ceil(h / char_width)
         hs = ceil(w / char_height)
-        bins = hs * xs
-        print(f"Segments size [hs, xs, bins]: {hs},  {xs}, {bins}")
         # ['meta', 'words', 'lines']
         meta = result["meta"]
         words = result["words"]
         lines = result["lines"]
 
+        buffer = ""
+        start_cell_y = 1
+
         for i, line in enumerate(lines):
-            print(line)
             bbox = line["bbox"]
             wordids = line["wordids"]
             x, y, w, h = bbox
             baseline = y + h
-            celly = baseline // char_height
-            print(f"Baseline # {i} : {baseline}, cell-y = {celly}")
+            cell_y = baseline // char_height
+            delta_cell_y = cell_y - start_cell_y
+            start_cell_y = cell_y
 
-            # we need to sort the words id their 'x'  as the wordids can be out of order.
+            # print(
+            #     f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}"
+            # )
+
+            for j in range(1, delta_cell_y):
+                buffer += "\n"
+            # we need to sort the words id their 'x'  as the wordids can be out of order
             word_ids = []
             box_picks = []
             word_picks = []
@@ -73,16 +84,10 @@ class TextRenderer(ResultRenderer):
 
             x1 = box_picks[:, 0]
             sort_index = np.argsort(x1)
-            print(sort_index)
             aligned_words = word_picks[sort_index]
-
-            # def add_column(val, col_len)->str:
-            print("Aligned")
-            buffer = ""
 
             # TODO : This needs to be supplied from the box processor
             estimate_character_width = 26
-            print(f"self.preserve_interword_spaces = {self.preserve_interword_spaces}")
 
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
@@ -101,7 +106,7 @@ class TextRenderer(ResultRenderer):
                     if gap > estimate_character_width:
                         spaces = max(1, gap // estimate_character_width)
 
-                print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
+                # print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
 
                 text = word["text"]
                 confidence = word["confidence"]
@@ -110,10 +115,32 @@ class TextRenderer(ResultRenderer):
                 cellx = x // char_width
                 cols = (x + w) // char_width
 
-                print(f"{cellx}, {cols} :: {celly}     >>   {box} :: {text}")
+                # print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
                 buffer += " " * spaces
                 buffer += text
-                # print(f'buffer : {buffer}')
 
-            print("Final ----")
-            print(buffer)
+            if i < len(lines) - 1:
+                buffer += "\n"
+
+        return buffer
+
+    def render(self, frames, results, output_filename):
+        """Renders results into output stream"""
+        # The form feed character is sometimes used in plain text files of source code as a delimiter for a page break
+        page_seperator = "\f"  # or \x0c
+        # page_seperator = "\n\n__SEP__\n\n"
+        buffer = ""
+        for page_index, (image, result) in enumerate(zip(frames, results)):
+            content = self.__render_page(image, result, page_index)
+            buffer += content
+            if len(frames) > 1:
+                if page_index < len(frames) - 1:
+                    buffer += page_seperator
+
+        print("------- Final ------")
+        print(buffer)
+
+        with open(output_filename, "w", encoding="UTF-8") as text_file:
+            text_file.write(buffer)
+
+        return buffer

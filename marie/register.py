@@ -60,7 +60,9 @@ class DebugWebServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(bytes("<html><head><title>Registry info</title></head>", "utf-8"))
+        self.wfile.write(
+            bytes("<html><head><title>Registry info</title></head>", "utf-8")
+        )
         self.wfile.write(bytes("<p>Request: %s</p>" % self.path, "utf-8"))
         self.wfile.write(bytes("<body>", "utf-8"))
         self.wfile.write(bytes("<p>Service status.</p>", "utf-8"))
@@ -101,7 +103,9 @@ def verify_connection(cfg: EndpointConfig) -> bool:
     return False
 
 
-def createClient(cfg: EndpointConfig, verify: bool = True) -> Tuple[consul.Consul, bool]:
+def createClient(
+    cfg: EndpointConfig, verify: bool = True
+) -> Tuple[consul.Consul, bool]:
     """
     Create new consul client
     """
@@ -193,7 +197,12 @@ def start_watchdog(interval, service_host, service_port):
 
     def _register(_service_host, _service_port):
         nonlocal sid
-        logger.info("watchdog:Host, Port, ServiceId : %s, %s, %s", _service_host, _service_port, sid)
+        logger.info(
+            "watchdog:Host, Port, ServiceId : %s, %s, %s",
+            _service_host,
+            _service_port,
+            sid,
+        )
         online = verify_connection(config)
         logger.info("watchdog:consul online : %s", online)
         service_name = "traefik-system-ingress"
@@ -201,7 +210,11 @@ def start_watchdog(interval, service_host, service_port):
         if online:
             node = getServiceByNameAndId(service_name, sid)
             if node is None:
-                sid = register(service_host=_service_host, service_port=_service_port, service_id=sid)
+                sid = register(
+                    service_host=_service_host,
+                    service_port=_service_port,
+                    service_id=sid,
+                )
                 logger.info("watchdog:Re-registered service: %s", sid)
 
     logger.info("watchdog:starting with interval : %s", interval)
@@ -215,7 +228,12 @@ if __name__ == "__main__":
     # parser.add_argument('--port', type=int, default=-1, help='Port number to export (-1 dynamic)')
     # parser.add_argument('--ip', type=str, default='127.0.0.1', help='Service IP to expose, blank for dynamic')
     # parser.add_argument('--watchdog-interval', type=int, default=60, help='watchdog interval checkin seconds')
-    parser.add_argument("--config", type=str, default="./config/marie-debug.yml", help="Configuration file")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="./config/marie-debug.yml",
+        help="Configuration file",
+    )
 
     opt = parser.parse_args()
 
@@ -246,11 +264,19 @@ if __name__ == "__main__":
     if serverPort == -1:
         serverPort = find_open_port()
 
-    current_service_id = register(service_host=hostName, service_port=serverPort, service_id=None)
+    with open("port.dat", "r", encoding="utf-8") as fsrc:
+        serverPort = int(fsrc.read())
+        print(f"port = {serverPort}")
+
+    current_service_id = register(
+        service_host=hostName, service_port=serverPort, service_id=None
+    )
     logger.info("Registered service: %s", current_service_id)
 
     def _target():
-        return start_watchdog(watchdog_interval, service_host=hostName, service_port=serverPort)
+        return start_watchdog(
+            watchdog_interval, service_host=hostName, service_port=serverPort
+        )
 
     watchdog_task = threading.Thread(target=_target, daemon=debug_server).start()
 
