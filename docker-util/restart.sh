@@ -6,7 +6,7 @@ echo "Restarting container : ${CONTAINER_NAME}"
 
 
 if  [ $(id -u) = 0 ]; then
-   echo "This script must not be run as root, run under 'rms-svc' account."
+   echo "This script must not be run as root, run under 'app-svc' account."
    exit 1
 fi
 
