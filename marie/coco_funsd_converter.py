@@ -154,7 +154,9 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     """
     src_file = os.path.join(src_dir, "annotations/instances_default.json")
     print(f"src_dir : {src_dir}")
+    print(f"output_path : {output_path}")
     print(f"src_file : {src_file}")
+
 
     data = from_json_file(src_file)
     categories = data["categories"]
@@ -325,13 +327,13 @@ def normalize_bbox(bbox, size):
     ]
 
 
-def extract_icr(snippet, boxp, icrp):
+def extract_icr(image, boxp, icrp):
     key = "coco"
-    boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", snippet, PSMode.SPARSE)
+    boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
     if boxes is None or len(boxes) == 0:
         print("Empty boxes")
         return [], []
-    result, overlay_image = icrp.recognize(key, "test", snippet, boxes, img_fragments, lines)
+    result, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
 
     return boxes, result
 
@@ -349,6 +351,11 @@ def decorate_funsd(src_dir: str):
     icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+
+        print(f"guid = {guid}")
+        if guid == 1:
+            break
+        
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
@@ -364,7 +371,7 @@ def decorate_funsd(src_dir: str):
             snippet = image[y0:y1, x0:x1, :]
 
             # export cropped region
-            if False:
+            if True:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
@@ -377,9 +384,12 @@ def decorate_funsd(src_dir: str):
                 print(f"No results for : {guid}-{i}")
                 continue
 
-            if False:
+            if True:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
+
+
+            continue
 
             words = []
             text = ""
@@ -933,19 +943,19 @@ if __name__ == "__main__":
     # TRAIN -> 1, 2, 3
     # TEST  -> 1, 2, 3
 
-    # STEP 1train
+    # STEP 1 : Convert COCO to FUNSD like format
     # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
     
     # STEP 3
     # augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
-    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
-    # Debug INFOR
+    # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
     # visualize_funsd(aug_dest_dir)
     
