@@ -108,12 +108,13 @@ def main_image(src_image):
     # prepare for the model
     # we do not want to use the pytesseract
     # LayoutLMv2FeatureExtractor requires the PyTesseract library but it was not found in your environment. You can install it with pip:
-    processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
+    # processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
 
     # Method:2 Create Layout processor with custom future extractor
     # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    # tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
-    # processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    feature_extractor = LayoutLMv2FeatureExtractor(size = 512, apply_ocr=False)# 224
+    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
+    processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     # Display vocabulary
     # print(tokenizer.get_vocab())
@@ -135,20 +136,22 @@ def main_image(src_image):
     filename = src_image.split("/")[-1]
     json_path = os.path.join(home, '.marie', f'{filename}.json')
 
-    # if not os.path.exists(json_path):
-    #     raise Exception(f"OCR File not found : {json_path}")
+    if not os.path.exists(json_path):
+        raise Exception(f"OCR File not found : {json_path}")
 
     # results = from_json_file("/tmp/ocr-results.json")
-    # results = from_json_file(json_path)
-    results = obtain_words(image)
+    results = from_json_file(json_path)
+
+    print(results)
+    # results = obtain_words(image)
     visualize_icr(image, results)
 
     words = []
     boxes = []
 
     for i, word in enumerate(results["words"]):
-        # words.append(word["text"].lower())
-        words.append(word["text"])
+        words.append(word["text"].lower())
+        # words.append(word["text"])
         box_norm = normalize_bbox(word["box"], (width, height))
         boxes.append(box_norm)
 
@@ -172,6 +175,12 @@ def main_image(src_image):
     print("Expected Keys : ", expected_keys)
     print("Actual Keys : ", actual_keys)
 
+    img_tensor = encoded_inputs["image"]
+    img = Image.fromarray((img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0))
+    img.save(f'/tmp/tensors/img_tensor.png')
+    
+    
+    os.exit()
     for key in expected_keys:
         print(f"key: {key}")
         print(encoded_inputs[key])
@@ -255,19 +264,81 @@ def main_image(src_image):
     image.save(f"/tmp/tensors/{filename}")
 
 
-def visualize_icr(image, icr_data):
+def visualize_icrXXXX(image, icr_data):
     viz_img = image.copy()
-
-    draw = ImageDraw.Draw(viz_img)
-    font = ImageFont.load_default()
+    size = 18
+    draw = ImageDraw.Draw(viz_img, "RGBA")
+    try:
+        font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeMono.ttf"), size)
+    except Exception as ex:
+        # print(ex)
+        font = ImageFont.load_default()
 
     for i, item in enumerate(icr_data["words"]):
         box = item["box"]
         text = item["text"]
-        draw.rectangle(box, outline="red", width=1)
-        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=1)
+        draw.rectangle(
+            [box[0], box[1], box[0] + box[2], box[1] + box[3]], outline="#993300", fill=(0, 180, 0, 125), width=1
+        )
+        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
 
     viz_img.save(f"/tmp/tensors/visualize_icr.png")
+
+
+def visualize_icr(image, icr_data):
+    viz_img = image.copy()
+
+    size = 14
+    draw = ImageDraw.Draw(viz_img, "RGBA")
+    try:
+        font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
+    except Exception as ex:
+        print(ex)
+        font = ImageFont.load_default()
+    
+    # print(icr_data)
+    words_all = []
+    boxes_all = []
+    # sort boxes by the  y-coordinate of the bounding box
+    words = icr_data["words"]
+    for idx, word in enumerate(words):
+        box = np.array(word['box']).astype(np.int32)
+        boxes_all.append(box)
+    
+    words = np.array(words)
+    boxes_all = np.array(boxes_all)
+    print(boxes_all[:, 0])
+    # Sort boxes by x,y then reverse to get the right order    
+    # idx = np.lexsort((boxes_all[:, 0], boxes_all[:, 1]))[::-1]
+    ind = np.lexsort((boxes_all[:,0], boxes_all[:,1]))    
+    sorted_words = words[ind]
+
+    print(boxes_all)
+    print(idx)
+    print(sorted_words)
+
+    for i, item in enumerate(words):
+        box = item["box"]
+        text = f'({i}){item["text"]}'
+        words_all.append(text)
+        
+        # get text size
+        text_size = font.getsize(text)
+        button_size = (text_size[0]+8, text_size[1]+8)
+        # create image with correct size and black background
+        button_img = Image.new('RGBA', button_size, color=(150,255,150,150))
+        # put text on button with 10px margins
+        button_draw = ImageDraw.Draw(button_img, "RGBA")
+        button_draw.text((4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1)
+        # draw.rectangle(box, outline="red", width=1)
+        # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
+        # put button on source image in position (0, 0)
+        viz_img.paste(button_img, (box[0], box[1]))
+
+    viz_img.save(f"/tmp/tensors/visualize_icr.png")
+    st = " ".join(words_all)
+    print(st)
+
     # viz_img.show()
 
 
@@ -328,6 +399,13 @@ def ocr_dir(src_dir, filename_filter="*.png"):
 
 
 if __name__ == "__main__":
+
+    # a = np.array([(3, 2, 4,6), (6, 2, 4,6), (3, 6, 4,6), (3, 4, 4,6), (16, 4, 4,6), (16, 1, 4,6),(5, 3, 4,6)])
+    # ind = np.lexsort((a[:,1],a[:,0]))    
+
+    # print(a[ind])
+
+    # os.exit()
     os.putenv("TOKENIZERS_PARALLELISM", "false")
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
     image_path = "/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/152658535_2.png"
@@ -348,7 +426,7 @@ if __name__ == "__main__":
     fname = "152658671_2.png"  # P
     fname = "152658679_0.png"  # F
 
-    fname = "152658540_0.png"
+    fname = "152658535_2.png"
     
     # image_path = f"/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/{fname}"
     # image_path = f"/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/{fname}"
@@ -364,12 +442,19 @@ if __name__ == "__main__":
     print(f'image_path : {image_path}')
 
     # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test", fname)
-    main_image(image_path)
+    # main_image(image_path)
+
+# (pytorch) gbugaj@asp-gpu001:~/dev/marie-ai$ CUDA_VISIBLE_DEVICES=1 PYTHONPATH="$PWD" python ./marie/run_funsd_inference.py 
+# json_path : /home/gbugaj/.marie/152658535_2.png.json
+# image_path : /home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658535_2.png
+# output dir : /home/gbugaj/.marie
+# ['17190', 'humana.', '022497 2/3', 'findings', 'review', 'summary', 'request', '(humana', '25074497', 'id', 'only):', 'use', '1', 'young', 'member', 'marsha', 'name:', 'identification', 'member', 'number:', 'h60258563', '08/1', '1955', 'member', 'date', 'of', 'birth:', '25/', 'h60258563', 'patient', 'number:', 'account', '1/25/2022', 'date(s):', '01/25/2022', 'service', '820220280085030', 'number(s):', 'claim', 'company', 'insurance', 'humana', 'legal', 'entity:', 'supported', 'billed', 'code', 'units', 'rationale', 'of', 'date', 'code', 'service', 'documentation', '90670', 'does', '01/25/2022', '90670', 'not', 'substantiate', 'cpt', '90670', 'for', 'code', '01/25/2022', 'date', 'of', 'service', 'the', 'as', 'medical', 'record', 'include', 'the', 'did', 'not', 'and', 'dosage', 'of', 'preumococcal', 'route', 'completed', 'vaccine.', 'reviews', 'are', 'using', 'the', 'cpt', 'coding', 'guidelines', 'and', 'when', 'applicable', 'cms', 'guidelines', 'for', 'medicare', 'member.', 'documentation', 'does', '01/25/2022', 'g0009', 'g0009', 'not', 'substantlate', 'hcpcs', 'g0009', 'for', 'code', 'date', 'of', '01/25/2022', 'the', 'service', 'as', 'medical', 'record', 'did', 'include', 'the', 'not', 'administration', 'of', 'preumococcal', 'vaccine.', 'completed', 'reviews', 'are', 'hcpcs', 'guidelines', 'using', 'the', 'coding', 'guidelines', 'and', 'when', 'applicable', 'cms', 'for', 'medicare', 'member.', 'gchl92nen']
+# [[12, 14, 24, 36], [113, 36, 258, 67], [10, 99, 23, 141], [184, 149, 263, 172], [116, 151, 185, 170], [261, 151, 350, 170], [116, 181, 193, 203], [214, 181, 297, 200], [422, 181, 511, 199], [190, 182, 214, 199], [332, 182, 385, 201], [298, 184, 331, 199], [10, 190, 27, 234], [503, 200, 571, 217], [117, 201, 196, 219], [423, 201, 502, 217], [196, 202, 255, 219], [195, 219, 314, 239], [117, 220, 197, 239], [314, 220, 392, 238], [423, 220, 524, 238], [422, 238, 456, 256], [482, 238, 528, 257], [117, 239, 197, 258], [196, 239, 239, 258], [239, 239, 262, 256], [262, 239, 313, 256], [452, 239, 483, 256], [423, 257, 526, 277], [116, 258, 185, 277], [256, 257, 334, 278], [183, 259, 255, 277], [540, 276, 636, 295], [183, 277, 254, 298], [421, 276, 529, 297], [116, 278, 185, 297], [421, 295, 587, 315], [170, 294, 270, 317], [117, 297, 170, 316], [586, 314, 672, 335], [500, 315, 586, 332], [423, 316, 498, 333], [117, 316, 165, 335], [167, 316, 225, 335], [438, 369, 538, 394], [231, 370, 286, 390], [285, 370, 334, 390], [351, 370, 402, 388], [674, 370, 762, 389], [186, 371, 210, 389], [142, 372, 186, 390], [463, 388, 512, 406], [141, 390, 209, 408], [555, 406, 692, 427], [417, 407, 476, 426], [692, 407, 738, 426], [117, 408, 224, 428], [227, 408, 289, 428], [738, 408, 773, 425], [553, 425, 663, 443], [665, 425, 700, 442], [748, 425, 807, 444], [805, 425, 836, 442], [701, 426, 747, 443], [685, 442, 791, 462], [554, 443, 597, 460], [597, 443, 620, 460], [619, 443, 683, 461], [813, 443, 847, 460], [791, 445, 813, 460], [555, 460, 627, 480], [625, 460, 686, 480], [752, 460, 818, 480], [818, 460, 853, 479], [686, 461, 717, 479], [719, 462, 752, 478], [604, 478, 642, 497], [642, 478, 709, 500], [707, 479, 731, 497], [731, 477, 860, 499], [554, 480, 605, 497], [733, 494, 832, 519], [554, 496, 627, 514], [629, 496, 701, 514], [701, 498, 734, 514], [554, 513, 607, 535], [604, 514, 637, 532], [638, 514, 674, 532], [674, 513, 738, 535], [735, 514, 829, 535], [827, 514, 864, 532], [554, 532, 607, 551], [605, 530, 700, 555], [699, 532, 743, 551], [741, 530, 835, 553], [834, 532, 863, 550], [555, 549, 640, 570], [641, 550, 721, 568], [555, 568, 692, 588], [692, 569, 738, 588], [115, 568, 225, 592], [418, 570, 478, 587], [228, 571, 290, 588], [739, 571, 773, 587], [553, 587, 665, 606], [665, 587, 725, 605], [773, 587, 832, 605], [831, 587, 861, 604], [725, 587, 771, 604], [553, 605, 597, 622], [597, 605, 620, 622], [685, 605, 791, 624], [814, 605, 847, 622], [619, 605, 683, 622], [791, 607, 813, 622], [555, 622, 627, 641], [626, 622, 685, 641], [686, 622, 717, 641], [752, 622, 820, 641], [818, 622, 853, 641], [718, 624, 752, 641], [553, 641, 684, 659], [683, 641, 706, 658], [706, 641, 834, 661], [554, 658, 628, 676], [734, 657, 832, 679], [629, 658, 701, 675], [701, 660, 734, 676], [638, 674, 700, 694], [760, 673, 854, 697], [555, 675, 606, 696], [604, 675, 637, 694], [697, 674, 762, 697], [778, 691, 873, 715], [554, 694, 591, 711], [592, 694, 644, 711], [644, 694, 736, 715], [737, 694, 781, 711], [553, 711, 584, 729], [585, 711, 669, 729], [670, 710, 751, 730], [117, 911, 203, 926]]
 
 
     # message = hash_file(image_path)
     # print(message)
-    # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/images", filename_filter="152658538_2.png")
+    ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/images", filename_filter="152658538_2.png")
     # 
 
     if False:
