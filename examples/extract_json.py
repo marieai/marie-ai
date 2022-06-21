@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 api_base_url = "http://127.0.0.1:5100/api"
 api_base_url = "http://65.49.54.125:5100/api"
 api_base_url = "http://192.168.1.12:5000/api"
-api_base_url = "http://184.105.180.28:5000/api"
+api_base_url = "http://184.105.180.8:5000/api"
 
 # api_base_url = "http://184.105.180.28:6003/api"
 # api_base_url = "http://184.105.180.40:6003/api"
@@ -112,6 +112,7 @@ if __name__ == "__main__":
     # src = "/home/gbugaj/dev/sk-snippet-dump/hashed/AARON_JANES/38585416cc1f22103336f3419390c9ce.tif"
     src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
+    src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
     icr_data = process_extract(
         queue_id=default_queue_id, mode="multiline", file_location=src
     )

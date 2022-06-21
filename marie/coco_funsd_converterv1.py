@@ -328,7 +328,7 @@ def normalize_bbox(bbox, size):
 
 def extract_icr(image, boxp, icrp):
     key = "coco"
-    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
+    boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
     if boxes is None or len(boxes) == 0:
         print("Empty boxes")
         return [], []
@@ -346,10 +346,8 @@ def decorate_funsd(src_dir: str):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
-
-    from marie.boxes.line_processor import find_line_number
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
@@ -363,26 +361,19 @@ def decorate_funsd(src_dir: str):
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
-        # line_numbers : line number associated with bounding box
-        # lines : raw line boxes that can be used for further processing
-        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(file, "lines", image, PSMode.MULTI_LINE)
 
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
             snippet = image[y0:y1, x0:x1, :]
-            line_number = find_line_number(line_bboxes, [x0, y0, x1 - x0, y1 - y0])
 
-            # each snippet could be on multiple lines
-            print(f"line_number = {line_number}")
             # export cropped region
             if True:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr(snippet, boxp, icrp)
-            results.pop("meta", None)
 
             print(boxes)
             print(results)
@@ -395,7 +386,7 @@ def decorate_funsd(src_dir: str):
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
-            # continue
+            continue
 
             words = []
             text = ""
@@ -420,9 +411,7 @@ def decorate_funsd(src_dir: str):
 
             item["words"] = words
             item["text"] = text
-            item["line_number"] = line_number
 
-            print(item)
         # create masked image for OTHER label
         image_masked, _ = load_image(image_path)
         index = 0
@@ -433,39 +422,31 @@ def decorate_funsd(src_dir: str):
             cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
             index = i + 1
 
-        if True:
+        if False:
             file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
-        # masked boxes will be same as the original ones
         boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
 
         x0 = 0
         y0 = 0
 
-        print("-------- MASKED ----------")
         for i, word in enumerate(results_masked["words"]):
             w_text = word["text"]
             x, y, w, h = word["box"]
-            line_number = find_line_number(line_bboxes, [x, y, w, h])
-
             w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
             adj_word = {"text": w_text, "box": w_box}
             item = {
                 "id": index + i,
                 "text": w_text,
                 "box": w_box,
-                "line_number": line_number,
                 "linking": [],
                 "label": "other",
                 "words": [adj_word],
             }
-
-            print(item)
             data["form"].append(item)
 
         json_path = os.path.join(output_ann_dir, file)
-        print(json_path)
         with open(json_path, "w") as json_file:
             json.dump(
                 data,
@@ -967,7 +948,7 @@ if __name__ == "__main__":
     # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
 
     # STEP 3
     # augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
@@ -976,7 +957,7 @@ if __name__ == "__main__":
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Debug INFO
-    visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
+    # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
     # visualize_funsd(aug_dest_dir)
 
     # visualize_funsd(aug_aligned_dst_path)
