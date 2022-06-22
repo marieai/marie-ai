@@ -423,17 +423,17 @@ class BoxProcessorCraft(BoxProcessor):
             # Make this a configuration
             image_norm = image
             # image_norm = 255 - image
-            lines = []
+            lines_bboxes = []
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
-                bboxes, polys, score_text, lines = self.psm_sparse(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_sparse(image_norm)
             elif psm == PSMode.WORD:
-                bboxes, polys, score_text, lines = self.psm_word(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
-                bboxes, polys, score_text, lines = self.psm_line(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_line(image_norm)
             elif psm == PSMode.MULTI_LINE:
-                bboxes, polys, score_text, lines = self.psm_multiline(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_multiline(image_norm)
             elif psm == PSMode.RAW_LINE:
                 # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
                 # as we treat the whole line as BBOX
@@ -450,7 +450,7 @@ class BoxProcessorCraft(BoxProcessor):
                 fragments.append(image_norm)
                 rect_line_numbers.append(0)
 
-                return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines
+                return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines_bboxes
             else:
                 raise Exception(f"PSM mode not supported : {psm}")
 
@@ -497,7 +497,7 @@ class BoxProcessorCraft(BoxProcessor):
 
                 x, y, w, h = box
                 snippet = crop_poly_low(image, poly)
-                line_number = find_line_number(lines, box)
+                line_number = find_line_number(lines_bboxes, box)
 
                 fragments.append(snippet)
                 rect_from_poly.append(box)
@@ -516,6 +516,6 @@ class BoxProcessorCraft(BoxProcessor):
 
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)
-            return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines
+            return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines_bboxes
         except Exception as ident:
             raise ident

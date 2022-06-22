@@ -5,10 +5,10 @@ import time
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-api_base_url = "http://127.0.0.1:5100/api"
-api_base_url = "http://65.49.54.125:5100/api"
-api_base_url = "http://192.168.1.12:5000/api"
-api_base_url = "http://184.105.180.8:5000/api"
+api_base_url = "http://127.0.0.1:5000/api"
+# api_base_url = "http://65.49.54.125:5100/api"
+# api_base_url = "http://192.168.1.12:5000/api"
+# api_base_url = "http://184.105.180.8:5000/api"
 
 # api_base_url = "http://184.105.180.28:6003/api"
 # api_base_url = "http://184.105.180.40:6003/api"
@@ -63,18 +63,18 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         # mode['word]=> extraction mode
         # output['json']=> json,text,pdf
 
-        json_payload = {"data": base64_str, "mode": mode, "output": "text"}
+        json_payload = {"data": base64_str, "mode": mode, "output": "json"}
         # print(json_payload)
         # Upload file to api
         print(f"Uploading to marie-ai for processing : {file}")
 
         for k in range(1):
             start = time.time()
-            json_result = requests.post(
-                upload_url, headers=auth_headers, json=json_payload
-            )
-            txt = json_result.text
-            print(txt)
+            result = requests.post(upload_url, headers=auth_headers, json=json_payload)
+            json_result = result.json()
+            print(json_result)
+            # txt = json_result.text
+            # print(txt)
             delta = time.time() - start
             print(f"Request time : {delta}")
 
@@ -91,9 +91,15 @@ def visualize_icr(image, icr_data):
         print(ex)
         font = ImageFont.load_default()
 
+    print(f"pages = {len(icr_data)}")
+    icr_data = icr_data[0]
+
     for i, item in enumerate(icr_data["words"]):
         box = item["box"]
         text = item["text"]
+        line = item["line"]
+        text = f"{i} : {line} - {text} "
+
         draw.rectangle(
             [box[0], box[1], box[0] + box[2], box[1] + box[3]],
             outline="#993300",
@@ -103,6 +109,7 @@ def visualize_icr(image, icr_data):
         draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
 
     viz_img.show()
+    viz_img.save("/tmp/snippet/extract.png")
 
 
 if __name__ == "__main__":
@@ -110,12 +117,11 @@ if __name__ == "__main__":
     src = "./set-001/test/fragment-003.png"
     # src = "./set-001/test/fragment-002.png"
     # src = "/home/gbugaj/dev/sk-snippet-dump/hashed/AARON_JANES/38585416cc1f22103336f3419390c9ce.tif"
-    src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
+    # src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
-    icr_data = process_extract(
-        queue_id=default_queue_id, mode="multiline", file_location=src
-    )
+    # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
+    icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
     print(icr_data)
     image = Image.open(src).convert("RGB")
-    # visualize_icr(image, icr_data)
+    visualize_icr(image, icr_data)
+

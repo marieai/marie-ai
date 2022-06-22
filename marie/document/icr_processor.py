@@ -69,19 +69,19 @@ class IcrProcessor(BaseHandler):
         """
         raise Exception("Not Implemented")
 
-    # @Timer(text="ICR in {:.2f} seconds")
-    def recognize(self, _id, key, img, boxes, image_fragments, lines):
+    def recognize(self, _id, key, img, boxes, fragments, lines):
         """Recognize text from multiple images.
         Args:
             _id: Unique Image ID
             key: Unique image key/region for the extraction
-            img: A pre-cropped image containing characters
+            img: Image to run recognition againts,
             boxes: Boxes to recognize
-            image_fragments: Fragments to extract
-            lines: Lines associates with the boxes
+            fragments: Image fragments to extract, A pre-cropped image containing characters
+            lines: Lines associates with the image fragment / boxes
         """
+
         print(f"ICR recognize : {_id}, {key}")
-        assert len(boxes) == len(image_fragments), "You must provide the same number of box groups as images."
+        assert len(boxes) == len(fragments), "You must provide the same number of box groups as images."
         assert len(boxes) == len(lines), "You must provide the same number of lines as boxes."
         encode_fragments = False
 
@@ -94,29 +94,38 @@ class IcrProcessor(BaseHandler):
             meta = {"imageSize": {"width": img.shape[1], "height": img.shape[0]}, "lang": "en"}
 
             words = []
-            results = self.recognize_from_fragments(image_fragments)
+            results = self.recognize_from_fragments(fragments)
+            # reindex based on their X positions (LTR) reading order
+            boxes = np.array(boxes)
+            lines = np.array(lines)
+            results = np.array(results)
 
-            for i in range(len(boxes)):
-                box, fragment, line = boxes[i], image_fragments[i], lines[i]
-                # txt, confidence = self.extract_text(id, str(i), fragment)
-                extraction = results[i]
+            indices = np.argsort(boxes[:, 0])
+            print(f"indices : {indices}")
+            # boxes = boxes[indices]
+            # fragments = np.take(fragments, indices)
+            # lines = np.take(lines, indices)
+            # results = np.take(results, indices)
+
+
+            # for i, (box, fragment, line, extraction) in enumerate(zip(boxes, fragments, lines, results)):
+            for i, index in enumerate(indices):
+                box = boxes[index]
+                fragment = fragments[index]
+                line = lines[index]
+                extraction = results[index]
+
                 txt_label = extraction["text"]
                 confidence = extraction["confidence"]
-                # print('Processing [box, line, txt, conf] : {}, {}, {}, {}'.format(box, line, txt, confidence))
                 conf_label = f"{confidence:0.4f}"
 
-                payload = dict()
-                payload["id"] = i
-                payload["text"] = txt_label
-                payload["confidence"] = round(confidence, 4)
-                payload["box"] = box
-                payload["line"] = line
+                payload = {"id": i, "text": txt_label, "confidence": round(confidence, 4), "box": box, "line": line}
                 if encode_fragments:
                     payload["fragment_b64"] = encodeimg2b64(fragment)
 
                 words.append(payload)
 
-                if True:
+                if False:
                     overlay_image = drawTrueTypeTextOnImage(
                         overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18, (139, 0, 0)
                     )
@@ -124,57 +133,39 @@ class IcrProcessor(BaseHandler):
                         overlay_image, conf_label, (box[0], box[1] + box[3]), 10, (0, 0, 255)
                     )
 
-            if True:
+            if False:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
                 cv2.imwrite(savepath, overlay_image)
 
                 savepath = os.path.join(debug_all_dir, f"{_id}.png")
                 cv2.imwrite(savepath, overlay_image)
 
-            unique_line_ids = np.unique(lines)
-            line_ids = np.empty(len(unique_line_ids), dtype=object)
-            words = np.array(words)
+            unique_line_ids = sorted(np.unique(lines))
+            line_results = np.empty(len(unique_line_ids), dtype=object)
+            aligned_words = []
 
-            for i, line_idx in enumerate(unique_line_ids):
+            for i, line_numer in enumerate(unique_line_ids):
                 word_ids = []
                 box_picks = []
                 word_picks = []
 
-                for word in words:
-                    lid = word["line"]
-                    if line_idx == lid:
-                        word_ids.append(word["id"])
-                        box_picks.append(word["box"])
-                        word_picks.append(word)
-
-                box_picks = np.array(box_picks)
-                word_picks = np.array(word_picks)
-
-                # print(f'**** {len(box_picks)}')
-                # FIXME : This is a bug and need to be fixed, this should never happen
-                if len(box_picks) == 0:
-                    raise Exception
-                    continue
-                    if False:
-                        line_ids[i] = {
-                            "line": i + 1,
-                            "wordids": word_ids,
-                            "text": "",
-                            "bbox": [0, 0, 0, 0],
-                            "confidence": round(0, 4),
-                        }
-
-                x1 = box_picks[:, 0]
-                idxs = np.argsort(x1)
-                aligned_words = word_picks[idxs]
                 _w = []
                 _conf = []
 
-                for wd in aligned_words:
-                    _w.append(wd["text"])
-                    _conf.append(wd["confidence"])
+                for word in words:
+                    if line_numer == word["line"]:
+                        word_picks.append(word)
+                        word_ids.append(word["id"])
+                        box_picks.append(word["box"])
+                        _w.append(word["text"])
+                        _conf.append(word["confidence"])
+                        aligned_words.append(word)
+
+                if len(box_picks) == 0:
+                    raise Exception("Every word needs to be associated with a box")
 
                 text = " ".join(_w)
+                box_picks = np.array(box_picks)
 
                 min_x = box_picks[:, 0].min()
                 min_y = box_picks[:, 1].min()
@@ -182,21 +173,24 @@ class IcrProcessor(BaseHandler):
                 max_h = box_picks[:, 3].max()
                 bbox = [min_x, min_y, max_w, max_h]
 
-                line_ids[i] = {
-                    "line": i + 1,
-                    "wordids": word_ids,
-                    "text": text,
-                    "bbox": bbox,
+                line_results[i] = {
+                    "line": i + 1,  # Line index (1.. N), relative to the image
+                    "wordids": word_ids,  # Word ID that make this line
+                    "text": text,  # Text from merged text line
+                    "bbox": bbox,  # Bounding box of the text
                     "confidence": round(np.average(_conf), 4),
                 }
 
             result = {
                 "meta": meta,
-                "words": words,
-                "lines": line_ids,
+                "words": aligned_words,
+                "lines": line_results,
             }
 
-            if True:
+            if len(words) != len(aligned_words):
+                raise Exception(f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}")
+
+            if False:
                 with open("/tmp/icr/data.json", "w") as f:
                     json.dump(
                         result,
@@ -209,7 +203,7 @@ class IcrProcessor(BaseHandler):
                     )
 
                 print("------ Extraction ------------")
-                for line in line_ids:
+                for line in line_results:
                     txt = line["text"]
                     print(f" >> {txt}")
 

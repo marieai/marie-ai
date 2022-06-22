@@ -394,11 +394,9 @@ def decorate_funsd(src_dir: str):
             if True:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
-
-            # continue
-
             words = []
             text = ""
+
             try:
                 text = " ".join([line["text"] for line in results["lines"]])
             except Exception as ex:
@@ -810,6 +808,7 @@ def visualize_funsd(src_dir: str):
             else:
                 draw.rectangle(box, outline=color, width=1)
 
+            predicted_label = f"{i} - {predicted_label}"
             draw.text((box[0] + 10, box[1] - 10), text=predicted_label, fill=color, font=font, stroke_width=0)
 
         image.save(f"/tmp/snippet/viz_{filename}.png")
@@ -967,7 +966,7 @@ if __name__ == "__main__":
     # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
 
     # STEP 3
     # augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
