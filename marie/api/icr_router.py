@@ -190,9 +190,7 @@ class ICRRouter(Executor):
             raise RuntimeError("Expected app arguments is null")
 
         prefix = "/api"
-        app.add_url_rule(
-            rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"]
-        )
+        app.add_url_rule(rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"])
         # app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
         app.add_url_rule(
             rule=f"/{prefix}/status",
@@ -265,27 +263,21 @@ class ICRRouter(Executor):
         logger.info(f"Self : {self}")
         return {"index": "complete"}
 
-    def process_extract_fullpage(
-        self, frames, queue_id, checksum, pms_mode, args, **kwargs
-    ):
+    def process_extract_fullpage(self, frames, queue_id, checksum, pms_mode, args, **kwargs):
         """Process full page extraction"""
         # Extract each page and augment it with a page in range 1..N+1
         results = []
-        for i, frame in enumerate(frames):
+        for i, img in enumerate(frames):
             # if i != 2:
             #     continue
-
-            img = frames[i]
             h = img.shape[0]
             w = img.shape[1]
             # allow for small padding around the component
             padding = 4
-            overlay = (
-                np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-            )
+            overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
             overlay[padding : h + padding, padding : w + padding] = img
 
-            boxes, img_fragments, lines, _ = self.box_processor.extract_bounding_boxes(
+            boxes, img_fragments, lines, _, lines_bboxes = self.box_processor.extract_bounding_boxes(
                 queue_id, checksum, overlay, pms_mode
             )
             result, overlay_image = self.icr_processor.recognize(
@@ -300,23 +292,15 @@ class ICRRouter(Executor):
 
         return results
 
-    def process_extract_regions(
-        self, frames, queue_id, checksum, pms_mode, regions, args
-    ):
+    def process_extract_regions(self, frames, queue_id, checksum, pms_mode, regions, args):
         """Process region based extract"""
-        filter_snippets = (
-            bool(strtobool(args["filter_snippets"]))
-            if "filter_snippets" in args
-            else False
-        )
+        filter_snippets = bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
         output = []
         extended = []
 
         for region in regions:
             # validate required fields
-            if not all(
-                key in region for key in ("id", "pageIndex", "x", "y", "w", "h")
-            ):
+            if not all(key in region for key in ("id", "pageIndex", "x", "y", "w", "h")):
                 raise Exception(f"Required key missing in region : {region}")
 
         for region in regions:
@@ -333,9 +317,7 @@ class ICRRouter(Executor):
                 img = img[y : y + h, x : x + w].copy()
                 # allow for small padding around the component
                 padding = 4
-                overlay = (
-                    np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-                )
+                overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 overlay[padding : h + padding, padding : w + padding] = img
                 cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
 
@@ -345,9 +327,7 @@ class ICRRouter(Executor):
                     img_fragments,
                     lines,
                     _,
-                ) = self.box_processor.extract_bounding_boxes(
-                    queue_id, checksum, overlay, pms_mode
-                )
+                ) = self.box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
 
                 result, overlay_image = self.icr_processor.recognize(
                     queue_id, checksum, overlay, boxes, img_fragments, lines
@@ -422,17 +402,13 @@ class ICRRouter(Executor):
 
             pms_mode = PSMode.from_value(payload["mode"] if "mode" in payload else "")
             regions = payload["regions"] if "regions" in payload else []
-            output_format = OutputFormat.from_value(
-                payload["output"] if "output" in payload else "json"
-            )
+            output_format = OutputFormat.from_value(payload["output"] if "output" in payload else "json")
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             args = {}
             if "args" in payload:
                 args = payload["args"]
-                pms_mode = PSMode.from_value(
-                    payload["args"]["mode"] if "mode" in payload["args"] else ""
-                )
+                pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
                 output_format = OutputFormat.from_value(
                     payload["args"]["output"] if "output" in payload["args"] else "json"
                 )
@@ -449,19 +425,19 @@ class ICRRouter(Executor):
             )
 
             if len(regions) == 0:
-                results = self.process_extract_fullpage(
-                    frames, queue_id, checksum, pms_mode, args
-                )
+                results = self.process_extract_fullpage(frames, queue_id, checksum, pms_mode, args)
             else:
-                results = self.process_extract_regions(
-                    frames, queue_id, checksum, pms_mode, regions, args
-                )
+                results = self.process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
+
+            print('--------------------')
+            print('--------------------')
+            print(results)
 
             rendered_output = None
             if output_format == OutputFormat.JSON:
                 rendered_output = json.dumps(
                     results,
-                    sort_keys=True,
+                    # sort_keys=True,
                     separators=(",", ": "),
                     ensure_ascii=False,
                     indent=2,
