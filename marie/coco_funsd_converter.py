@@ -390,7 +390,11 @@ def extract_icr(image, boxp, icrp):
             file_path = os.path.join("/tmp/snippet", f"empty_boxes-{checksum}.png")
             cv2.imwrite(file_path, image)
 
-        return [], []
+        h = image.shape[0]
+        w = image.shape[1]
+        boxes = [[0, 0, w, h]]
+        img_fragments = [image]
+        lines = [1]
 
     result, overlay_image = icrp.recognize(
         key, "test", image, boxes, img_fragments, lines
