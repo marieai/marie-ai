@@ -25,7 +25,18 @@ def find_line_number(lines, box):
     if line_number == -1:
         msg = f"Invalid line number : -1, this looks like a bug/vertical line : {box}"
         print(msg)
-        raise Exception(msg)
+        # raise Exception(msg)
+        # find the closest line
+        min_y = 100000
+        for i, line in enumerate(lines):
+            line_y = line[1] + line[3]
+            box_y = box[1] + box[3] // 2
+            dy = abs(box_y - line_y)
+            if dy < min_y:
+                line_number = i + 1
+                min_y = dy
+
+        print(f"Adjusted closest line_number = {line_number}")
 
     return line_number
 

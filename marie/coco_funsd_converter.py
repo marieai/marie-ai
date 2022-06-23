@@ -574,7 +574,7 @@ def decorate_funsd(src_dir: str):
 
         for i, item in enumerate(data_form_sorted):
             data["form"].append(item)
-            print(f"\t=>  {item}")
+            # print(f"\t=>  {item}")
 
         json_path = os.path.join(output_ann_dir, file)
         print(json_path)
