@@ -44,13 +44,17 @@ class IcrProcessor(BaseHandler):
         """
 
         print("ICR processing : {}, {}".format(_id, key))
-        results = self.recognize_from_boxes([image], [0, 0, image.shape[1], image.shape[0]])
+        results = self.recognize_from_boxes(
+            [image], [0, 0, image.shape[1], image.shape[0]]
+        )
         if len(results) == 1:
             r = results[0]
             return r["text"], r["confidence"]
         return None, 0
 
-    def recognize_from_boxes(self, image, boxes, **kwargs) -> typing.List[typing.Dict[str, any]]:
+    def recognize_from_boxes(
+        self, image, boxes, **kwargs
+    ) -> typing.List[typing.Dict[str, any]]:
         """Recognize text from image using lists of bounding boxes.
 
         Args:
@@ -81,8 +85,12 @@ class IcrProcessor(BaseHandler):
         """
 
         print(f"ICR recognize : {_id}, {key}")
-        assert len(boxes) == len(fragments), "You must provide the same number of box groups as images."
-        assert len(boxes) == len(lines), "You must provide the same number of lines as boxes."
+        assert len(boxes) == len(
+            fragments
+        ), "You must provide the same number of box groups as images."
+        assert len(boxes) == len(
+            lines
+        ), "You must provide the same number of lines as boxes."
         encode_fragments = False
 
         try:
@@ -91,22 +99,20 @@ class IcrProcessor(BaseHandler):
             debug_dir = ensure_exists(os.path.join("/tmp/icr", _id))
             debug_all_dir = ensure_exists(os.path.join("/tmp/icr", "fields", key))
 
-            meta = {"imageSize": {"width": img.shape[1], "height": img.shape[0]}, "lang": "en"}
+            meta = {
+                "imageSize": {"width": img.shape[1], "height": img.shape[0]},
+                "lang": "en",
+            }
 
             words = []
             results = self.recognize_from_fragments(fragments)
-            # reindex based on their X positions (LTR) reading order
+            # reindex based on their X positions LTR reading order
             boxes = np.array(boxes)
             lines = np.array(lines)
             results = np.array(results)
 
             indices = np.argsort(boxes[:, 0])
             print(f"indices : {indices}")
-            # boxes = boxes[indices]
-            # fragments = np.take(fragments, indices)
-            # lines = np.take(lines, indices)
-            # results = np.take(results, indices)
-
 
             # for i, (box, fragment, line, extraction) in enumerate(zip(boxes, fragments, lines, results)):
             for i, index in enumerate(indices):
@@ -119,7 +125,13 @@ class IcrProcessor(BaseHandler):
                 confidence = extraction["confidence"]
                 conf_label = f"{confidence:0.4f}"
 
-                payload = {"id": i, "text": txt_label, "confidence": round(confidence, 4), "box": box, "line": line}
+                payload = {
+                    "id": i,
+                    "text": txt_label,
+                    "confidence": round(confidence, 4),
+                    "box": box,
+                    "line": line,
+                }
                 if encode_fragments:
                     payload["fragment_b64"] = encodeimg2b64(fragment)
 
@@ -127,10 +139,18 @@ class IcrProcessor(BaseHandler):
 
                 if False:
                     overlay_image = drawTrueTypeTextOnImage(
-                        overlay_image, txt_label, (box[0], box[1] + box[3] // 2), 18, (139, 0, 0)
+                        overlay_image,
+                        txt_label,
+                        (box[0], box[1] + box[3] // 2),
+                        18,
+                        (139, 0, 0),
                     )
                     overlay_image = drawTrueTypeTextOnImage(
-                        overlay_image, conf_label, (box[0], box[1] + box[3]), 10, (0, 0, 255)
+                        overlay_image,
+                        conf_label,
+                        (box[0], box[1] + box[3]),
+                        10,
+                        (0, 0, 255),
                     )
 
             if False:
@@ -181,6 +201,11 @@ class IcrProcessor(BaseHandler):
                     "confidence": round(np.average(_conf), 4),
                 }
 
+            # print("aligned_words")
+            # print(aligned_words)
+            # for i, word in enumerate(aligned_words):
+            #     print(f"  -> {word}")
+
             result = {
                 "meta": meta,
                 "words": aligned_words,
@@ -188,7 +213,9 @@ class IcrProcessor(BaseHandler):
             }
 
             if len(words) != len(aligned_words):
-                raise Exception(f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}")
+                raise Exception(
+                    f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}"
+                )
 
             if False:
                 with open("/tmp/icr/data.json", "w") as f:
