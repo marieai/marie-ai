@@ -5,6 +5,8 @@ import time
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+from marie.utils.utils import ensure_exists
+
 api_base_url = "http://127.0.0.1:5000/api"
 # api_base_url = "http://65.49.54.125:5100/api"
 # api_base_url = "http://192.168.1.12:5000/api"
@@ -92,27 +94,31 @@ def visualize_icr(image, icr_data):
         font = ImageFont.load_default()
 
     print(f"pages = {len(icr_data)}")
-    icr_data = icr_data[0]
 
-    for i, item in enumerate(icr_data["words"]):
-        box = item["box"]
-        text = item["text"]
-        line = item["line"]
-        text = f"{i} : {line} - {text} "
+    for i, icr_page in enumerate(icr_data):
+        for j, item in enumerate(icr_page["words"]):
+            box = item["box"]
+            text = item["text"]
+            line = item["line"]
+            text = f"{i} : {line} - {text} "
 
-        draw.rectangle(
-            [box[0], box[1], box[0] + box[2], box[1] + box[3]],
-            outline="#993300",
-            fill=(0, 180, 0, 125),
-            width=1,
-        )
-        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
+            draw.rectangle(
+                [box[0], box[1], box[0] + box[2], box[1] + box[3]],
+                outline="#993300",
+                fill=(0, 180, 0, 125),
+                width=1,
+            )
+            draw.text(
+                (box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0
+            )
 
-    viz_img.show()
-    viz_img.save("/tmp/snippet/extract.png")
+        viz_img.show()
+        viz_img.save("/tmp/snippet/extract.png")
 
 
 if __name__ == "__main__":
+    ensure_exists("/tmp/snippet")
+
     # Specify the path to the file you would like to process
     src = "./set-001/test/fragment-003.png"
     # src = "./set-001/test/fragment-002.png"
@@ -120,8 +126,10 @@ if __name__ == "__main__":
     # src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
-    icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
+    src = "/home/greg/dataset/assets-private/corr-indexer/dataset/training_data/images/152624545_1.png"
+    icr_data = process_extract(
+        queue_id=default_queue_id, mode="multiline", file_location=src
+    )
     print(icr_data)
     image = Image.open(src).convert("RGB")
     visualize_icr(image, icr_data)
-
