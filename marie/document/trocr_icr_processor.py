@@ -7,7 +7,6 @@ from typing import Tuple, Any, List, Dict
 from torchvision.transforms import Compose, InterpolationMode
 
 from marie.lang import Object
-from marie.logger import setup_logger
 from marie.logging.predefined import default_logger
 from marie.models.unilm.trocr.task import SROIETextRecognitionTask
 
@@ -30,7 +29,7 @@ from marie import __model_path__
 logger = default_logger
 
 
-@Timer(text="init in {:.4f} seconds")
+# @Timer(text="init in {:.4f} seconds")
 def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compose, str]:
     # Currently, there is no support for mix precision(fp16) evaluation on CPU
     # https://github.com/pytorch/pytorch/issues/23377
@@ -200,8 +199,10 @@ class TrOcrIcrProcessor(IcrProcessor):
         """
 
         logger.info("ICR processing : recognize_from_boxes via boxes")
-        # 64 16GB
-        batch_size = 64
+
+        batch_size = 64 # 64 16GB
+        batch_size = 98 # 98 24GB
+
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
 
