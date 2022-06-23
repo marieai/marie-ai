@@ -69,6 +69,7 @@ if __name__ == "__main__":
 
     # export PYTHONPATH = "$PWD"
     pypath = os.environ["PYTHONPATH"]
+
     # os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
 
     args = ArgParser.server_parser()
