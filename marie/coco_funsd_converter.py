@@ -102,9 +102,7 @@ def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
 
     # paste the image if the width or height is smaller than the requested target size
     if max((ow, oh)) < target_size:
-        new_im = Image.new(
-            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
-        )
+        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
         new_im.paste(img)
         return new_im, new_im.size
 
@@ -115,9 +113,7 @@ def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
     # if resized height is less than target then we pad it
     rw, rh = resized.size
     if rh < target_size:
-        new_im = Image.new(
-            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
-        )
+        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
         new_im.paste(resized)
         return new_im, new_im.size
 
@@ -130,9 +126,7 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
 
     # paste the image if the width or height is smaller than the requested target size
     if max((ow, oh)) < target_size:
-        new_im = Image.new(
-            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
-        )
+        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
         new_im.paste(img)
         return new_im, new_im.size
 
@@ -143,9 +137,7 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
     # if resized height is less than target then we pad it
     rw, rh = resized.size
     if rh < target_size:
-        new_im = Image.new(
-            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
-        )
+        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
         new_im.paste(resized)
         return new_im, new_im.size
 
@@ -259,9 +251,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             found_cat_id.append(ano["category_id"])
             # validate that we don't have duplicate question/answer mappings, we might change this down the road
             cat_name = cat_id_name[ano["category_id"]]
-            category_counts[cat_name] = (
-                1 if cat_name not in category_counts else category_counts[cat_name] + 1
-            )
+            category_counts[cat_name] = 1 if cat_name not in category_counts else category_counts[cat_name] + 1
             count = category_counts[cat_name]
             if False and count > 1:
                 msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}]"
@@ -379,9 +369,7 @@ def extract_icr(image, boxp, icrp):
         return boxes, result
 
     key = checksum
-    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
-        key, "field", image, PSMode.SPARSE
-    )
+    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
@@ -396,9 +384,7 @@ def extract_icr(image, boxp, icrp):
         img_fragments = [image]
         lines = [1]
 
-    result, overlay_image = icrp.recognize(
-        key, "test", image, boxes, img_fragments, lines
-    )
+    result, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -424,9 +410,7 @@ def decorate_funsd(src_dir: str):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(
-        work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
-    )
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
     icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
@@ -443,9 +427,7 @@ def decorate_funsd(src_dir: str):
         image, size = load_image(image_path)
         # line_numbers : line number associated with bounding box
         # lines : raw line boxes that can be used for further processing
-        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
-            file, "lines", image, PSMode.MULTI_LINE
-        )
+        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(file, "lines", image, PSMode.MULTI_LINE)
 
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
@@ -464,12 +446,7 @@ def decorate_funsd(src_dir: str):
             boxes, results = extract_icr(snippet, boxp, icrp)
             results.pop("meta", None)
 
-            if (
-                results is None
-                or len(results) == 0
-                or results["lines"] is None
-                or len(results["lines"]) == 0
-            ):
+            if results is None or len(results) == 0 or results["lines"] is None or len(results["lines"]) == 0:
                 print(f"No results for : {guid}-{i}")
                 continue
 
@@ -513,9 +490,7 @@ def decorate_funsd(src_dir: str):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
-            cv2.rectangle(
-                image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1
-            )
+            cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
             index = i + 1
 
         if True:
@@ -616,9 +591,7 @@ def generate_pan(num_char):
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMono.ttf", font_size, layout_engine=ImageFont.Layout.BASIC)
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMonoBold.ttf", font_size)
-    return ImageFont.truetype(
-        font_path, font_size, layout_engine=ImageFont.Layout.BASIC
-    )
+    return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
 
 
 def generate_text(label, width, height, fontPath):
@@ -707,9 +680,7 @@ def generate_text(label, width, height, fontPath):
 
 
 # @Timer(text="Aug in {:.4f} seconds")
-def __augment_decorated_process(
-    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
-):
+def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
 
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
@@ -848,9 +819,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     # slower comparing to  pool.starmap
     if False:
         futures = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=int(mp.cpu_count() * 0.75)
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(mp.cpu_count() * 0.75)) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
                 feature = executor.submit(
@@ -985,9 +954,7 @@ def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
 
 
 def rescale_annotation_frame(src_json_path: str, src_image_path: str):
-    print(
-        f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}"
-    )
+    print(f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}")
 
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
@@ -1005,9 +972,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
             item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
             for word in item["words"]:
                 bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
-                word["box"] = resize_align_bbox(
-                    bbox, orig_w, orig_h, target_w, target_h
-                )
+                word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
     except Exception as ex:
         print(src_json_path)
         print(ex)
@@ -1016,9 +981,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     return data, resized
 
 
-def __rescale_annotate_frames(
-    ann_dir_dest, img_dir_dest, filename, json_path, image_path
-):
+def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path):
     if False and filename != "152618378_2":
         return
 
@@ -1065,9 +1028,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             json_path = os.path.join(ann_dir, file)
             filename = file.split("/")[-1].split(".")[0]
             image_path = os.path.join(img_dir, file).replace("json", "png")
-            __rescale_annotate_frames(
-                ann_dir_dest, img_dir_dest, filename, json_path, image_path
-            )
+            __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path)
 
     if True:
         args = []
@@ -1143,9 +1104,7 @@ if __name__ == "__main__":
 
     # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
-    visualize_funsd(
-        "/home/greg/dataset/assets-private/corr-indexer/dataset/training_data"
-    )
+    visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
     # visualize_funsd(aug_dest_dir)
 
     # visualize_funsd(aug_aligned_dst_path)

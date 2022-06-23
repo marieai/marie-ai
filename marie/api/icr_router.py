@@ -327,6 +327,7 @@ class ICRRouter(Executor):
                     img_fragments,
                     lines,
                     _,
+                    lines_bboxes
                 ) = self.box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
 
                 result, overlay_image = self.icr_processor.recognize(

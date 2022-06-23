@@ -163,6 +163,7 @@ class IcrProcessor(BaseHandler):
             unique_line_ids = sorted(np.unique(lines))
             line_results = np.empty(len(unique_line_ids), dtype=object)
             aligned_words = []
+            word_index = 0
 
             for i, line_numer in enumerate(unique_line_ids):
                 word_ids = []
@@ -174,12 +175,14 @@ class IcrProcessor(BaseHandler):
 
                 for word in words:
                     if line_numer == word["line"]:
+                        word["word_index"] = word_index
                         word_picks.append(word)
                         word_ids.append(word["id"])
                         box_picks.append(word["box"])
                         _w.append(word["text"])
                         _conf.append(word["confidence"])
                         aligned_words.append(word)
+                        word_index += 1
 
                 if len(box_picks) == 0:
                     raise Exception("Every word needs to be associated with a box")
