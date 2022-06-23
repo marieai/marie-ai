@@ -378,12 +378,18 @@ def extract_icr(image, boxp, icrp):
         result = json_data["result"]
         return boxes, result
 
-    key = "coco"
+    key = checksum
     boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
         key, "field", image, PSMode.SPARSE
     )
+
+    # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
-        print("Empty boxes")
+        print(f"Empty boxes for : {checksum}")
+        if True:
+            file_path = os.path.join("/tmp/snippet", f"empty_boxes-{checksum}.png")
+            cv2.imwrite(file_path, image)
+
         return [], []
 
     result, overlay_image = icrp.recognize(
