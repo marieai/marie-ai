@@ -155,6 +155,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
     src_file = os.path.join(src_dir, "annotations/instances_default.json")
+
     print(f"src_dir : {src_dir}")
     print(f"output_path : {output_path}")
     print(f"src_file : {src_file}")
@@ -211,6 +212,14 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         "dos_answer": [id_map["dos"], id_map["dos_answer"]],
         "patient_name": [id_map["patient_name"], id_map["patient_name_answer"]],
         "patient_name_answer": [id_map["patient_name"], id_map["patient_name_answer"]],
+        "paragraph": [-1],
+        "greeting": [-1],
+        "address": [-1],
+        "question": [-1],
+        "answer": [-1],
+        "document_control": [-1],
+        "header": [-1],
+        "letter_date": [-1],
     }
 
     for category in categories:
@@ -294,8 +303,12 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             print(f"category_name => {category_name}")
             label = category_name
 
+            gen_id = random.randint(0, 10000000)
+            if category_name in id_map:
+                gen_id = id_map[category_name]
+
             item = {
-                "id": id_map[category_name],
+                "id": gen_id,
                 "text": "POPULATE_VIA_ICR",
                 "box": bbox,
                 "linking": [link_map[category_name]],
@@ -410,8 +423,8 @@ def decorate_funsd(src_dir: str):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
@@ -908,7 +921,16 @@ def visualize_funsd(src_dir: str):
             "member_name": "blue",
             "member_name_answer": "green",
             "patient_name": "blue",
-            "patient_name_answer": "green",
+
+            "paragraph": "purple",
+            "greeting": "blue",
+            "address": "orange",
+            "question": "blue",
+            "answer": "aqua",
+            "document_control": "grey",
+            "header": "brown",
+            "letter_date": "lime",
+
             "other": "red",
         }
 
@@ -923,7 +945,7 @@ def visualize_funsd(src_dir: str):
             box = item["box"]
 
             if predicted_label != "other":
-                draw.rectangle(box, outline=color, width=1, fill=(0, 180, 0, 50))
+                draw.rectangle(box, outline=color, width=1, )# fill=(0, 180, 0, 50)
             else:
                 draw.rectangle(box, outline=color, width=1)
 
@@ -1058,10 +1080,10 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "train"
+    name = "test"
 
     # Home
-    if True:
+    if False:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
@@ -1073,7 +1095,7 @@ if __name__ == "__main__":
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
 
     # LP-01
-    if False:
+    if True:
         root_dir = "/home/gbugaj/dataset/private/corr-indexer"
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
@@ -1094,7 +1116,7 @@ if __name__ == "__main__":
     # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    decorate_funsd(dst_path)
+    # decorate_funsd(dst_path)
 
     # STEP 3
     # augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
@@ -1103,8 +1125,8 @@ if __name__ == "__main__":
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Debug INFO
-    # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
-    visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
+    visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
+    # visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
     # visualize_funsd(aug_dest_dir)
 
     # visualize_funsd(aug_aligned_dst_path)
