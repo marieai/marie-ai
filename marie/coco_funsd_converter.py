@@ -226,18 +226,6 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         cat_id_name[category["id"]] = category["name"]
         cat_name_id[category["name"]] = category["id"]
 
-    # Generate NER Tags
-    ner_tags = []
-    for question, answer in question_answer_map.items():
-        ner_tags.append("B-" + question.upper())
-        ner_tags.append("I-" + question.upper())
-
-        ner_tags.append("B-" + answer.upper())
-        ner_tags.append("I-" + answer.upper())
-
-    print("Converted ner_tags =>")
-    print(ner_tags)
-
     ano_groups = {}
     # Group annotations by image_id as their key
     for ano in annotations:
@@ -423,8 +411,8 @@ def decorate_funsd(src_dir: str):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=False)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=False)
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
@@ -434,6 +422,29 @@ def decorate_funsd(src_dir: str):
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
+
+        found = False
+        requires_one = {"paragraph", "greeting", "address", "question"}
+        requires_one = {"paragraph", "greeting", "question"}
+
+        for i, item in enumerate(data["form"]):
+            label = item['label']            
+            if label in requires_one:
+                found = True
+                break
+
+        if not found:
+            print(f'Skipping document : {guid} : {file}')
+            continue
+            
+        
+        # "paragraph": [-1],
+        # "": [-1],
+        # "answer": [-1],
+        # "document_control": [-1],
+        # "header": [-1],
+        # "letter_date": [-1],
+
 
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
@@ -452,7 +463,7 @@ def decorate_funsd(src_dir: str):
             # each snippet could be on multiple lines
             print(f"line_number = {line_number}")
             # export cropped region
-            if True:
+            if False:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
@@ -463,7 +474,7 @@ def decorate_funsd(src_dir: str):
                 print(f"No results for : {guid}-{i}")
                 continue
 
-            if True:
+            if False:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
@@ -921,6 +932,7 @@ def visualize_funsd(src_dir: str):
             "member_name": "blue",
             "member_name_answer": "green",
             "patient_name": "blue",
+            "patient_name_answer": "green",
 
             "paragraph": "purple",
             "greeting": "blue",
@@ -1089,13 +1101,13 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if False:
+    if True:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
 
     # LP-01
-    if True:
+    if False:
         root_dir = "/home/gbugaj/dataset/private/corr-indexer"
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
@@ -1119,17 +1131,18 @@ if __name__ == "__main__":
     # decorate_funsd(dst_path)
 
     # STEP 3
-    # augment_decorated_annotation(count=1000, src_dir=dst_path, dest_dir=aug_dest_dir)
+    # augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Debug INFO
-    visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
+    # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
     # visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
     # visualize_funsd(aug_dest_dir)
 
     # visualize_funsd(aug_aligned_dst_path)
+    # visualize_funsd(dst_path)
 
     # /home/gbugaj/dataset/private/corr-indexer/dataset-aug/testing_data/images/152658536_0_2_9.png
     # # STEP 2 : No Augmentation
