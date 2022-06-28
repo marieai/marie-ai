@@ -1108,7 +1108,7 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if False:
+    if True:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1138,13 +1138,13 @@ if __name__ == "__main__":
     decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=250, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-    visualize_funsd(aug_dest_dir)
+    # visualize_funsd(aug_dest_dir)
 
     # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
