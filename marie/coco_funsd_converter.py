@@ -220,6 +220,8 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         "document_control": [-1],
         "header": [-1],
         "letter_date": [-1],
+        "url": [-1],
+        "phone": [-1],
     }
 
     for category in categories:
@@ -615,7 +617,8 @@ def generate_pan(num_char):
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMono.ttf", font_size, layout_engine=ImageFont.Layout.BASIC)
     # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMonoBold.ttf", font_size)
-    return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
+    # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
+    return ImageFont.truetype(font_path, font_size)
 
 
 def generate_text(label, width, height, fontPath):
@@ -920,6 +923,7 @@ def visualize_funsd(src_dir: str):
         # draw predictions over the image
         draw = ImageDraw.Draw(image, "RGBA")
         font = ImageFont.load_default()
+        # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
         label2color = {
             "pan": "blue",
             "pan_answer": "green",
@@ -941,10 +945,13 @@ def visualize_funsd(src_dir: str):
             "answer": "aqua",
             "document_control": "grey",
             "header": "brown",
-            "letter_date": "lime",
+            "letter_date": "deeppink",
+            "url": "darkorange",
+            "phone": "darkmagenta",
 
             "other": "red",
         }
+
 
         for i, item in enumerate(data["form"]):
             predicted_label = item["label"].lower()
@@ -1092,16 +1099,16 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
 
 if __name__ == "__main__":
-    name = "test"
+    name = "train"
 
     # Home
-    if False:
+    if True:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if True:
+    if False:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1125,21 +1132,23 @@ if __name__ == "__main__":
     # TEST  -> 1, 2, 3
 
     # STEP 1 : Convert COCO to FUNSD like format
-    # convert_coco_to_funsd(src_dir, dst_path)
+    convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
 
     # STEP 3
-    # augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
-    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+
+    # Step 5
+    visualize_funsd(aug_dest_dir)
 
     # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
     # visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
-    # visualize_funsd(aug_dest_dir)
 
     # visualize_funsd(aug_aligned_dst_path)
     # visualize_funsd(dst_path)
