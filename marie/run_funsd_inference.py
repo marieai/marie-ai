@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 import cv2
 from PIL import Image, ImageDraw, ImageFont
+from pathlib import Path
+
+import hashlib
+import imghdr
 
 import logging
 import os
@@ -70,18 +74,20 @@ def iob_to_label(label):
 
 
 
-def obtain_words(src_image):
+def obtain_words(src_image, boxp = None, icrp= None):
     image = read_image(src_image)
 
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+    if boxp is None:
+        boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    if icrp is None:
+        icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
 
     key = "funsd"
-    boxes, img_fragments, lines, _ = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
+    boxes, img_fragments, lines, _ , lines_bboxes = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
     results, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
 
     print(boxes)
@@ -97,9 +103,45 @@ def obtain_words(src_image):
 
     return results
 
-feature_size = 224 * 3 # 224
 
-def main_image(src_image):
+def load_image(fname, image_type, page_index=0):
+    """ "
+    Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
+    array with image as first element
+    """
+    import skimage.io as skio
+
+    if fname is None:
+        return False, None
+
+    if image_type == "tiff":
+        loaded, frames = cv2.imreadmulti(fname, [], cv2.IMREAD_ANYCOLOR)
+        if not loaded:
+            return False, []
+        # each frame needs to be converted to RGB format
+        converted = []
+        for frame in frames:
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            converted.append(frame)
+
+        return loaded, converted
+
+    img = skio.imread(fname)  # RGB order
+    if img.shape[0] == 2:
+        img = img[0]
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    if img.shape[2] == 4:
+        img = img[:, :, :3]
+    img = np.array(img)
+
+    return True, [img]
+
+
+feature_size = 224 * 1 # 224
+
+def main_image(src_image, model, device):
     # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
     labels = ['O', 'B-MEMBER_NAME', 'I-MEMBER_NAME', 'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER', 'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER', 'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER', 'B-PAN', 'I-PAN', 'B-PAN_ANSWER', 'I-PAN_ANSWER', 'B-DOS', 'I-DOS', 'B-DOS_ANSWER', 'I-DOS_ANSWER', 'B-PATIENT_NAME', 'I-PATIENT_NAME', 'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER', 'B-HEADER', 'I-HEADER', 'B-DOCUMENT_CONTROL', 'I-DOCUMENT_CONTROL', 'B-LETTER_DATE', 'I-LETTER_DATE', 'B-PARAGRAPH', 'I-PARAGRAPH', 'B-ADDRESS', 'I-ADDRESS', 'B-QUESTION', 'I-QUESTION', 'B-ANSWER', 'I-ANSWER', 'B-PHONE', 'I-PHONE', 'B-URL', 'I-URL', 'B-GREETING', 'I-GREETING']
     logger.info("Labels : {}", labels)
@@ -120,14 +162,29 @@ def main_image(src_image):
 
     # Display vocabulary
     # print(tokenizer.get_vocab())
+    
+    ALLOWED_TYPES = {"png", "jpeg", "tiff"}
+    data = None
 
-    image = Image.open(src_image).convert("RGB")
+    with open(src_image, "rb") as file:
+        data = file.read()
+
+    with io.BytesIO(data) as memfile:
+        file_type = imghdr.what(memfile)
+
+    if file_type not in ALLOWED_TYPES:
+        raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+
+    loaded, frames = load_image(src_image, file_type, 0)
+
+    # You may need to convert the color.
+    img = cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(img)
+
+    # image = Image.open(src_image).convert("RGB")
     # image.show()
 
     width, height = image.size
-
-    # Next, let's move everything to the GPU, if it's available.
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ## Need to obtain boxes and OCR for the document    
     from pathlib import Path
@@ -137,6 +194,8 @@ def main_image(src_image):
     print(f"output dir : {ocr_output_dir}")
     filename = src_image.split("/")[-1]
     json_path = os.path.join(home, '.marie', f'{filename}.json')
+
+    print(f"Processing OCR file: {json_path}")
 
     if not os.path.exists(json_path):
         raise Exception(f"OCR File not found : {json_path}")
@@ -189,16 +248,7 @@ def main_image(src_image):
     for k, v in encoded_inputs.items():
         encoded_inputs[k] = v.to(device)
 
-    from pathlib import Path
-    home = str(Path.home())
-    model_dir = os.path.join(home, './tmp/models/layoutlmv2-finetuned-gb', "checkpoint-6500")
-    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints"
-    print(f"output dir : {model_dir}")
 
-    # load the fine-tuned model from the hub
-    # model = LayoutLMv2ForTokenClassification.from_pretrained("/tmp/models/layoutlmv2-finetuned-cord")
-    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
-    model.to(device)
 
     # forward pass
     outputs = model(**encoded_inputs)
@@ -284,26 +334,6 @@ def main_image(src_image):
     # image.show()
     image.save(f"/tmp/tensors/{filename}")
 
-
-def visualize_icrXXXX(image, icr_data):
-    viz_img = image.copy()
-    size = 18
-    draw = ImageDraw.Draw(viz_img, "RGBA")
-    try:
-        font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeMono.ttf"), size)
-    except Exception as ex:
-        # print(ex)
-        font = ImageFont.load_default()
-
-    for i, item in enumerate(icr_data["words"]):
-        box = item["box"]
-        text = item["text"]
-        draw.rectangle(
-            [box[0], box[1], box[0] + box[2], box[1] + box[3]], outline="#993300", fill=(0, 180, 0, 125), width=1
-        )
-        draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
-
-    viz_img.save(f"/tmp/tensors/visualize_icr.png")
 
 
 def visualize_icr(image, icr_data):
@@ -393,15 +423,27 @@ def ocr_dir(src_dir, filename_filter="*.png"):
     print(f"output dir : {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
 
+    work_dir_boxes = ensure_exists("/tmp/boxes")
+    work_dir_icr = ensure_exists("/tmp/icr")
+
+    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+
     for idx, _path in enumerate(glob.glob(os.path.join(src_dir, filename_filter))):
         filename = _path.split("/")[-1]
         json_path = os.path.join(home, '.marie', f'{filename}.json')
         print(f" : {_path}")
         print(f" : {filename}")
         print(f" : {json_path}")
-        image = Image.open(image_path).convert("RGB")
+
+        if os.path.exists(json_path):
+            print(f'OCR output exists : {json_path}')
+            continue
+
+        image = Image.open(_path).convert("RGB")
         # image.show()
-        results = obtain_words(image)
+        
+        results = obtain_words(image, boxp, icrp)
         print(results)
 
         with open(json_path, "w") as json_file:
@@ -416,21 +458,16 @@ def ocr_dir(src_dir, filename_filter="*.png"):
             )
 
         visualize_icr(image, results)
-        break
-
+        
 
 if __name__ == "__main__":
-
-    # a = np.array([(3, 2, 4,6), (6, 2, 4,6), (3, 6, 4,6), (3, 4, 4,6), (16, 4, 4,6), (16, 1, 4,6),(5, 3, 4,6)])
-    # ind = np.lexsort((a[:,1],a[:,0]))    
 
     # print(a[ind])
 
     # os.exit()
     os.putenv("TOKENIZERS_PARALLELISM", "false")
+    
     image_path = "/home/greg/dataset/assets-private/corr-indexer/dataset/train_dataset/images/152606114_2.png"
-    image_path = "/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/152658535_2.png"
-    image_path = "/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/152658533_2.png"
     
     fname = "152658775_13.png" # F
     fname = "152658533_2.png"  # F
@@ -451,38 +488,53 @@ if __name__ == "__main__":
     
     # image_path = f"/home/greg/dataset/assets-private/corr-indexer-converted/dataset/testing_data/images/{fname}"
     # image_path = f"/home/gbugaj/dataset/private/corr-indexer-converted/dataset/testing_data/images/{fname}"
-    image_path = f"/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/{fname}"
+    # image_path = f"/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/{fname}"
 
 
-    from pathlib import Path
-    home = str(Path.home())
-    json_path = os.path.join(home, '.marie', f'{fname}.json')
+    # from pathlib import Path
+    # home = str(Path.home())
+    # json_path = os.path.join(home, '.marie', f'{fname}.json')
     # json_path = f"/tmp/ocr-results.json"
 
-    print(f'json_path : {json_path}')
-    print(f'image_path : {image_path}')
+    # print(f'json_path : {json_path}')
+    # print(f'image_path : {image_path}')
 
     # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test", fname)
     # main_image(image_path)
 
-
     # message = hash_file(image_path)
     # print(message)
-    ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/images", filename_filter=fname)
-    # 
+    # ocr_dir("/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/images", filename_filter=fname)
+
+    # ocr_dir("/data/dataset/private/corr-indexer/validation", filename_filter="*.png")
+
+    # os.exit()    
+
+    home = str(Path.home())
+    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints"
+    print(f"LayoutLMv2model dir : {model_dir}")
+    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
+    # Next, let's move everything to the GPU, if it's available.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
     if True:
-        from pathlib import Path
         home = str(Path.home())
         marie_home = os.path.join(home, '.marie')
+        print(f'marie_home = {marie_home}')
         for idx, _path in enumerate(glob.glob(os.path.join(marie_home, "*"))):
             filename = _path.split("/")[-1].replace(".json", "")
             print(filename)
             # json_path = os.path.join(home, '.marie', f'{filename}.json')
-            image_path = f"/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/{filename}"
+            # image_path = f"/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/{filename}"
+            
+            image_path = f"/data/dataset/private/corr-indexer/validation/{filename}"
             print(image_path)
+            if not os.path.exists(image_path):
+                continue
+
             try:
-                main_image(image_path)
+                main_image(image_path, model, device)
             except Exception as e:
                 print(e)
                 raise e
