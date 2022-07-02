@@ -42,6 +42,7 @@ from marie.common.file_io import PathManager
 from marie.document.craft_icr_processor import CraftIcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from datetime import datetime
 
 logger = MarieLogger("")
 
@@ -92,8 +93,6 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
 
     upload_dir = ensure_exists(f"/tmp/marie/{queue_id}")
     ext = TYPES_TO_EXT[file_type]
-
-    from datetime import datetime
 
     current_datetime = datetime.now()
     str_current_datetime = str(current_datetime)
@@ -172,6 +171,7 @@ class OutputFormat(Enum):
     JSON = "json"  # Render document as JSON output
     PDF = "pdf"  # Render document as PDF
     TEXT = "text"  # Render document as plain TEXT
+    ASSETS = "assets"  # Render and return all available assets
 
     @staticmethod
     def from_value(value: str):
@@ -267,6 +267,8 @@ class ICRRouter(Executor):
         """Process full page extraction"""
         # Extract each page and augment it with a page in range 1..N+1
         results = []
+        assets = []
+
         for i, img in enumerate(frames):
             # if i != 2:
             #     continue
@@ -277,17 +279,19 @@ class ICRRouter(Executor):
             overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
             overlay[padding : h + padding, padding : w + padding] = img
 
-            boxes, img_fragments, lines, _, lines_bboxes = self.box_processor.extract_bounding_boxes(
+            boxes, img_fragments, lines, _, line_bboxes = self.box_processor.extract_bounding_boxes(
                 queue_id, checksum, overlay, pms_mode
             )
             result, overlay_image = self.icr_processor.recognize(
                 queue_id, checksum, overlay, boxes, img_fragments, lines
             )
 
-            cv2.imwrite(f"/tmp/marie/overlay_image_{i}.png", overlay_image)
+            # cv2.imwrite(f"/tmp/marie/overlay_image_{i}.png", overlay_image)
             # result["overlay_b64"] = encodeToBase64(overlay_image)
-
             result["meta"]["page"] = i
+            result["meta"]["lines"] = lines
+            result["meta"]["line_bboxes"] = line_bboxes
+
             results.append(result)
 
         return results
@@ -322,13 +326,9 @@ class ICRRouter(Executor):
                 cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
 
                 logger.info(f"pms_mode = {pms_mode}")
-                (
-                    boxes,
-                    img_fragments,
-                    lines,
-                    _,
-                    lines_bboxes
-                ) = self.box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
+                (boxes, img_fragments, lines, _, lines_bboxes) = self.box_processor.extract_bounding_boxes(
+                    queue_id, checksum, overlay, pms_mode
+                )
 
                 result, overlay_image = self.icr_processor.recognize(
                     queue_id, checksum, overlay, boxes, img_fragments, lines
@@ -430,28 +430,22 @@ class ICRRouter(Executor):
             else:
                 results = self.process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
 
-            print('--------------------')
-            print('--------------------')
+            print("--------------------")
+            print("--------------------")
             print(results)
 
             rendered_output = None
+
             if output_format == OutputFormat.JSON:
-                rendered_output = json.dumps(
-                    results,
-                    # sort_keys=True,
-                    separators=(",", ": "),
-                    ensure_ascii=False,
-                    indent=2,
-                    cls=NumpyEncoder,
-                )
+                rendered_output = self.render_as_json(queue_id, frames, results)
             elif output_format == OutputFormat.PDF:
                 # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
                 # renderer.render(image, result, output_filename)
                 raise Exception("PDF Not implemented")
             elif output_format == OutputFormat.TEXT:
-                output_filename = "/tmp/fragments/result.txt"
-                renderer = TextRenderer(config={"preserve_interword_spaces": True})
-                rendered_output = renderer.render(frames, results, output_filename)
+                rendered_output = self.render_as_text(queue_id, frames, results)
+            elif output_format == OutputFormat.ASSETS:
+                rendered_output = self.render_as_assets(queue_id, frames, results)
 
             return rendered_output, 200
         except BaseException as error:
@@ -460,3 +454,31 @@ class ICRRouter(Executor):
                 return {"error": str(error)}, 500
             else:
                 return {"error": "inference exception"}, 500
+
+    def render_as_json(self, queue_id, frames, results):
+        """Renders specific results as JSON"""
+        rendered_output = json.dumps(
+            results,
+            # sort_keys=True,
+            separators=(",", ": "),
+            ensure_ascii=False,
+            indent=2,
+            cls=NumpyEncoder,
+        )
+        return rendered_output
+
+    def render_as_text(self, queue_id, frames, results):
+        """Renders specific results as text"""
+        checksum = hash((queue_id, results.__hash__()))
+        work_dir = ensure_exists(f"/tmp/marie/{queue_id}")
+        str_current_datetime = str(datetime.now())
+        output_filename = f"{work_dir}/{checksum}_{str_current_datetime}.txt"
+        renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        rendered_output = renderer.render(frames, results, output_filename)
+        return rendered_output
+
+    def render_as_assets(self, queue_id, frames, results):
+        """Render all documents as assets"""
+
+        json_results = self.render_as_json(queue_id, frames, results)
+        text_results = self.render_as_text(queue_id, frames, results)
