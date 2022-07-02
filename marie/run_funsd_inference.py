@@ -157,7 +157,7 @@ def main_image(src_image, model, device):
     # Method:2 Create Layout processor with custom future extractor
     # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
     feature_extractor = LayoutLMv2FeatureExtractor(size = feature_size, apply_ocr=False)# 224
-    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-base-uncased")
+    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-large-uncased")
     processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     # Display vocabulary
@@ -248,29 +248,33 @@ def main_image(src_image, model, device):
     for k, v in encoded_inputs.items():
         encoded_inputs[k] = v.to(device)
 
-
-
     # forward pass
     outputs = model(**encoded_inputs)
     print(outputs.logits.shape)
 
+    import torch.nn.functional as F
+
     logits = outputs.logits
-    # probability = softmax(outputs.logits, axis=-1)
-    # print(outputs.logits)
-    # print('Probabilities : ')
-    # print(probability)
+    # print(logits)
 
     # https://discuss.pytorch.org/t/logits-vs-log-softmax/95979
-    import torch.nn.functional as F
-    print('Probas from logits:\n', F.softmax(logits, dim=-1))
-    print('Log-softmax:\n', F.log_softmax(logits, dim=-1))
-    print('Difference between logits and log-softmax:\n', logits - F.log_softmax(logits, dim=-1))
-    print('Probas from log-softmax:\n', F.softmax(F.log_softmax(logits, dim=-1), dim=-1))
+    # print('Probas from logits:\n', F.softmax(logits[0], dim=-1))
+    # print('Log-softmax:\n', F.log_softmax(logits, dim=-1))
+    # print('Difference between logits and log-softmax:\n', logits - F.log_softmax(logits, dim=-1))
+    # print('Probas from log-softmax:\n', F.softmax(F.log_softmax(logits, dim=-1), dim=-1))
 
     # Let's create the true predictions, true labels (in terms of label names) as well as the true boxes.
 
+    # aa = outputs.logits.argmax(2)
+    # print(aa)
+
     predictions = outputs.logits.argmax(-1).squeeze().tolist()
     token_boxes = encoded_inputs.bbox.squeeze().tolist()
+
+    # print(predictions)
+    # os.exit()
+    # score = torch.exp(logits)
+    # score = score.cpu().detach().numpy().item()
 
     width, height = image.size
 
@@ -512,7 +516,10 @@ if __name__ == "__main__":
 
     home = str(Path.home())
     model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints"
+    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints/checkpoint-3000/"
+    
     print(f"LayoutLMv2model dir : {model_dir}")
+
     model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -535,6 +542,7 @@ if __name__ == "__main__":
 
             try:
                 main_image(image_path, model, device)
+                # break
             except Exception as e:
                 print(e)
                 raise e
