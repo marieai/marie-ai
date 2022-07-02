@@ -2,6 +2,7 @@ import base64
 import os
 import time
 
+import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
@@ -22,6 +23,8 @@ api_base_url = "http://127.0.0.1:5000/api"
 # api_base_url = "http://184.105.180.41:6001/api" ## A5000
 # api_base_url = "http://184.105.180.51:6000/api"
 # api_base_url = "http://172.83.13.224:6000/api"
+
+# api_base_url = "http://172.83.15.97:6000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -65,7 +68,9 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         # mode['word]=> extraction mode
         # output['json']=> json,text,pdf
 
+        json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
         json_payload = {"data": base64_str, "mode": mode, "output": "json"}
+
         # print(json_payload)
         # Upload file to api
         print(f"Uploading to marie-ai for processing : {file}")
@@ -95,6 +100,30 @@ def visualize_icr(image, icr_data):
 
     print(f"pages = {len(icr_data)}")
 
+    for j, item in enumerate(icr_data):
+        lines_bboxes = item["meta"]["line_bboxes"]
+        for k, box in enumerate(lines_bboxes):
+            print(box)
+            x, y, w, h = box
+            draw.rectangle(
+                [x, y, x + w, y + h],
+                outline="#993300",
+                fill=(
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    int(np.random.random() * 256),
+                    125,
+                ),
+                width=1,
+            )
+            #
+            # draw.rectangle(
+            #     [box[0], box[1], box[0] + box[2], box[1] + box[3]],
+            #     outline="#993300",
+            #     fill=(0, 180, 0, 125),
+            #     width=1,
+            # )
+
     for i, icr_page in enumerate(icr_data):
         for j, item in enumerate(icr_page["words"]):
             box = item["box"]
@@ -108,9 +137,7 @@ def visualize_icr(image, icr_data):
                 fill=(0, 180, 0, 125),
                 width=1,
             )
-            draw.text(
-                (box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0
-            )
+            draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
 
         viz_img.show()
         viz_img.save("/tmp/snippet/extract.png")
@@ -126,10 +153,10 @@ if __name__ == "__main__":
     # src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
-    src = "/home/greg/dataset/assets-private/corr-indexer/dataset/training_data/images/152624545_1.png"
-    icr_data = process_extract(
-        queue_id=default_queue_id, mode="multiline", file_location=src
-    )
+    # src = "/home/greg/dataset/assets-private/corr-indexer/dataset/training_data/images/152624545_1.png"
+    # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-25.tif" # {'error': 'Invalid line number : -1, this looks like a bug/vertical line : [147, 882, 75, 12]'}
+    # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-28.tif"
+    icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
     print(icr_data)
     image = Image.open(src).convert("RGB")
     visualize_icr(image, icr_data)
