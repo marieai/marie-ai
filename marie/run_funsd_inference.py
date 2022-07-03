@@ -516,7 +516,7 @@ if __name__ == "__main__":
 
     home = str(Path.home())
     model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints"
-    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints/checkpoint-3000/"
+    model_dir = "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints/checkpoint-9000/"
     
     print(f"LayoutLMv2model dir : {model_dir}")
 

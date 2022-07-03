@@ -663,7 +663,21 @@ def generate_text(label, width, height, fontPath):
                 "%d %B %Y",
                 "%b %d, %Y",
             ]
-            label_text = fake.date(pattern=random.choice(patterns))
+            
+            # make composite DOS
+            # date-date
+            # date thought date
+            # date to date
+
+            if np.random.choice([0, 1], p=[0.3, 0.7]):
+                pattern = random.choice(patterns)
+                sel_reg = random.choice(["-", "to", "thought"])
+                d1 = fake.date(pattern=pattern)
+                d2 = fake.date(pattern=pattern)
+                label_text = f"{d1} {sel_reg} {d2}"
+            else:
+                label_text = fake.date(pattern=random.choice(patterns))
+
 
         if label == "pan_answer":
             label_text = fake.member_id()
@@ -1132,13 +1146,13 @@ if __name__ == "__main__":
     # TEST  -> 1, 2, 3
 
     # STEP 1 : Convert COCO to FUNSD like format
-    convert_coco_to_funsd(src_dir, dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
     decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=250, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=500, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
