@@ -133,37 +133,6 @@ class TextExtractionExecutor(Executor):
         self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=has_cuda)
         self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
 
-    def status(self, **kwargs):
-        """Get application status"""
-        import os
-
-        build = {}
-        if os.path.exists(".build"):
-            try:
-                with open(".build", "r") as fp:
-                    build = json.load(fp)
-            except Exception as ex:
-                build = {"status": "Unable to read .build file"}
-                logger.error(ex)
-
-        host = get_ip_address()
-
-        return (
-            jsonify(
-                {
-                    "name": "marie-ai",
-                    "host": host,
-                    "component": [
-                        {"name": "craft", "version": "1.0.0"},
-                        {"name": "craft-benchmark", "version": "1.0.0"},
-                        {"name": "trocr", "version": "1.0.0"},
-                    ],
-                    "build": build,
-                }
-            ),
-            200,
-        )
-
     def info(self, **kwargs):
         logger.info(f"Self : {self}")
         return {"index": "complete"}
