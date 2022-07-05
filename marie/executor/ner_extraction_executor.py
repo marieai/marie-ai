@@ -593,6 +593,9 @@ def aggregate_results(
                 "DOS_ANSWER",
                 "MEMBER_NAME",
                 "MEMBER_NAME_ANSWER",
+
+                # "QUESTION"
+                "ANSWER" # Only collect ANSWERs for now
             ]
 
             # keys = ["PAN", "PAN_ANSWER"]
@@ -685,10 +688,10 @@ def aggregate_results(
                     )
 
         expected_pair = [
-            ["PAN", "PAN_ANSWER"],
-            ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
-            ["DOS", "DOS_ANSWER"],
-            ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
+            ["PAN", ["PAN_ANSWER", "ANSWER"]],
+            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+            ["DOS", ["DOS_ANSWER", "ANSWER"]],
+            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
         ]
 
         for k in aggregated_keys.keys():
@@ -696,22 +699,23 @@ def aggregate_results(
 
             for pair in expected_pair:
                 expected_question = pair[0]
-                expected_answer = pair[1]
+                expected_answers = pair[1]
+
                 found_question = None
                 found_answer = None
 
                 for ner_key in ner_keys:
                     key = ner_key["key"]
-                    # print(f"{key} : {ner_key}")
                     if expected_question == key:
                         found_question = ner_key
-                    if expected_answer == key:
+                    if key in expected_answers:
                         found_answer = ner_key
 
                 if found_question is not None and found_answer is not None:
                     # check LTR order
                     bbox_q = found_question["bbox"]
                     bbox_a = found_answer["bbox"]
+
                     if bbox_a[0] < bbox_q[0]:
                         logger.warning("Answer is not on right of question")
                         continue
@@ -723,8 +727,6 @@ def aggregate_results(
                         "value": {"question": found_question, "answer": found_answer},
                     }
                     aggregated_kv.append(kv_result)
-                    found_question = None
-                    found_answer = None
 
         # for each line aggregate possible KEY-VALUES
         # frame.show()
