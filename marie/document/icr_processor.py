@@ -9,14 +9,16 @@ import base64
 import json
 
 from marie.base_handler import BaseHandler
-from marie.timer import Timer
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 from marie.utils.draw_truetype import drawTrueTypeTextOnImage
 from marie.utils.utils import ensure_exists
 from marie.numpyencoder import NumpyEncoder
+from marie.logging.predefined import default_logger
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
+
+logger = default_logger
 
 
 def encodeimg2b64(img: np.ndarray) -> str:
@@ -43,7 +45,7 @@ class IcrProcessor(BaseHandler):
             image: A pre-cropped image containing characters
         """
 
-        print("ICR processing : {}, {}".format(_id, key))
+        logger.debug("ICR processing : {}, {}".format(_id, key))
         results = self.recognize_from_boxes(
             [image], [0, 0, image.shape[1], image.shape[0]]
         )
@@ -84,7 +86,7 @@ class IcrProcessor(BaseHandler):
             lines: Lines associates with the image fragment / boxes
         """
 
-        print(f"ICR recognize : {_id}, {key}")
+        logger.debug(f"ICR recognize : {_id}, {key}")
         assert len(boxes) == len(
             fragments
         ), "You must provide the same number of box groups as images."
@@ -104,15 +106,22 @@ class IcrProcessor(BaseHandler):
                 "lang": "en",
             }
 
+            # fail fast as we have not found any bounding boxes
+            if len(boxes) == 0:
+                logger.warning("Empty bounding boxes, possibly a blank page")
+                return {
+                    "meta": meta,
+                    "words": [],
+                    "lines": [],
+                }, overlay_image
+
             words = []
             results = self.recognize_from_fragments(fragments)
             # reindex based on their X positions LTR reading order
             boxes = np.array(boxes)
             lines = np.array(lines)
             results = np.array(results)
-
             indices = np.argsort(boxes[:, 0])
-            print(f"indices : {indices}")
 
             # for i, (box, fragment, line, extraction) in enumerate(zip(boxes, fragments, lines, results)):
             for i, index in enumerate(indices):

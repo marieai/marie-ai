@@ -1,4 +1,4 @@
-import marie.processors
+import marie.executor
 from flask_restful import Resource, reqparse
 from marie.boxes import box_processor
 from marie.utils.utils import current_milli_time
