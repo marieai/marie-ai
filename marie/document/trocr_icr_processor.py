@@ -208,6 +208,7 @@ class TrOcrIcrProcessor(IcrProcessor):
 
         batch_size = 64  # 64 16GB
         batch_size = 98  # 98 24GB
+        batch_size = 64  # 98 24GB
 
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
