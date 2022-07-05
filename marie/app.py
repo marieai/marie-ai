@@ -8,13 +8,14 @@ import torch
 
 import conf
 from api import api
-from flask import Flask
+from flask import Flask, url_for
 
 from arg_parser import ArgParser
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
 import marie.api.WorkflowRoutes as WorkflowRoutes
 from marie.api.icr_router import ICRRouter
+from marie.api.ner_router import NERRouter
 from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
 
@@ -58,8 +59,28 @@ def create_app():
         # app.register_blueprint(WorkflowRoutes.blueprint)
         # RouteHandler.register_route(SampleRouter(app))
         RouteHandler.register_route(ICRRouter(app))
+        RouteHandler.register_route(NERRouter(app))
 
     return app
+
+
+def list_routes(app):
+    output = []
+    for rule in app.url_map.iter_rules():
+
+        options = {}
+        for arg in rule.arguments:
+            options[arg] = "[{0}]".format(arg)
+
+        methods = ",".join(rule.methods)
+        url = url_for(rule.endpoint, **options)
+        line = "{:50s} {:20s} {}".format(rule.endpoint, methods, url)
+        output.append(line)
+
+    for line in sorted(output):
+        print(line)
+
+    return output
 
 
 if __name__ == "__main__":
@@ -74,22 +95,23 @@ if __name__ == "__main__":
 
     args = ArgParser.server_parser()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Initializing 🦊-Marie : %s", __version__)
+    logger.info("Initializing 🦊-Marie (X002): %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
     logger.info("Python runtime: %s", sys.version.replace("\n", ""))
     logger.info("Environment : %s", conf.APP_ENV)
     logger.info("Torch version : %s", torch.__version__)
     logger.info("Using device: %s", device)
+
     # Additional Info when using cuda
     if device.type == "cuda":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
         logger.info(
             "GPU Memory Allocated: %d GB",
-            round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_allocated(0) / 1024**3, 1),
         )
         logger.info(
             "GPU Memory Cached: %d GB",
-            round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_reserved(0) / 1024**3, 1),
         )
 
     # Setting use_reloader to false prevents application from initializing twice

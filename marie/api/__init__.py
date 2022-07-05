@@ -21,6 +21,8 @@ from marie.utils.base64 import base64StringToBytes, encodeToBase64
 
 from datetime import datetime
 
+logger = MarieLogger("")
+
 api = Api(
     prefix=marie.conf.API_PREFIX
 )  # AttributeError: module 'config' has no attribute 'API_PREFIX

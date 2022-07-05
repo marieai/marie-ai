@@ -8,7 +8,7 @@ from torch.backends import cudnn
 from marie import Executor, requests, __model_path__
 
 import os
-
+import transformers
 import numpy as np
 import cv2
 
@@ -23,7 +23,6 @@ from typing import Optional
 import torch
 
 import numpy as np
-from transformers.utils import check_min_version
 
 from PIL import Image
 from transformers import (
@@ -33,6 +32,7 @@ from transformers import (
     LayoutLMv2TokenizerFast,
 )
 
+from transformers.utils import check_min_version
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from marie.boxes.line_processor import find_line_number
@@ -107,12 +107,8 @@ def create_processor():
     # Method:2 Create Layout processor with custom future extractor
     # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
     feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
-        "microsoft/layoutlmv2-large-uncased"
-    )
-    processor = LayoutLMv2Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
+    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-large-uncased")
+    processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     return processor
 
@@ -183,9 +179,7 @@ def get_label_info():
     return id2label, label2id
 
 
-def visualize_prediction(
-    output_filename, frame, true_predictions, true_boxes, true_scores
-):
+def visualize_prediction(output_filename, frame, true_predictions, true_boxes, true_scores):
     image = frame.copy()
     # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
     label2color = {
@@ -242,7 +236,7 @@ def get_font(size):
     try:
         font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
     except Exception as ex:
-        print(ex)
+        # print(ex)
         font = ImageFont.load_default()
 
     return font
@@ -264,9 +258,7 @@ def visualize_icr(frames, results, filename):
         size = 14
         draw = ImageDraw.Draw(viz_img, "RGBA")
         try:
-            font = ImageFont.truetype(
-                os.path.join("./assets/fonts", "FreeSans.ttf"), size
-            )
+            font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
         except Exception as ex:
             print(ex)
             font = ImageFont.load_default()
@@ -287,9 +279,7 @@ def visualize_icr(frames, results, filename):
             button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
             # put text on button with 10px margins
             button_draw = ImageDraw.Draw(button_img, "RGBA")
-            button_draw.text(
-                (4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1
-            )
+            button_draw.text((4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1)
             # draw.rectangle(box, outline="red", width=1)
             # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
             # put button on source image in position (0, 0)
@@ -353,6 +343,10 @@ def main_image(
     # Obtain OCR results
     file_hash = hash_file(src_image)
     root_dir = get_marie_home()
+
+    ensure_exists(os.path.join(root_dir, "ocr"))
+    ensure_exists(os.path.join(root_dir, "annotation"))
+
     ocr_json_path = os.path.join(root_dir, "ocr", f"{file_hash}.json")
     annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
 
@@ -422,9 +416,7 @@ def main_image(
         # Debug tensor info
         if False:
             img_tensor = encoded_inputs["image"]
-            img = Image.fromarray(
-                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
-            )
+            img = Image.fromarray((img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0))
             img.save(f"/tmp/tensors/tensor_{file_hash}_{k}.png")
 
         for ek, ev in encoded_inputs.items():
@@ -445,9 +437,7 @@ def main_image(
         # get predictions
         true_predictions = [id2label[prediction] for prediction in predictions]
         true_boxes = [unnormalize_box(box, width, height) for box in token_boxes]
-        true_scores = [
-            round(normalized_logits[i][val], 6) for i, val in enumerate(predictions)
-        ]
+        true_scores = [round(normalized_logits[i][val], 6) for i, val in enumerate(predictions)]
 
         # show detail scores
         if False:
@@ -464,18 +454,14 @@ def main_image(
         }
 
         output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
-        visualize_prediction(
-            output_filename, image, true_predictions, true_boxes, true_scores
-        )
+        visualize_prediction(output_filename, image, true_predictions, true_boxes, true_scores)
 
         annotations.append(annotation)
     store_json_object(annotations, annotation_json_path)
     return annotations
 
 
-def aggregate_results(
-    src_image: str, text_executor: Optional[TextExtractionExecutor] = None
-):
+def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExecutor] = None):
     if not os.path.exists(src_image):
         raise FileNotFoundError(src_image)
 
@@ -506,15 +492,11 @@ def aggregate_results(
     logger.info("Changing coordinate format from xyxy->xyhw")
     for data in ocr_results:
         for word in data["words"]:
-            word["box"] = CoordinateFormat.convert(
-                word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
-            )
+            word["box"] = CoordinateFormat.convert(word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH)
 
     for data in annotation_results:
         for i, box in enumerate(data["boxes"]):
-            box = CoordinateFormat.convert(
-                box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
-            )
+            box = CoordinateFormat.convert(box, CoordinateFormat.XYXY, CoordinateFormat.XYWH)
             data["boxes"][i] = box
             # print(f" {i} : {box}")
 
@@ -534,9 +516,7 @@ def aggregate_results(
         font = get_font(14)
         # aggregate boxes into their lines
         groups = {}
-        for j, (prediction, pred_box, pred_score) in enumerate(
-            zip(true_predictions, true_boxes, true_scores)
-        ):
+        for j, (prediction, pred_box, pred_score) in enumerate(zip(true_predictions, true_boxes, true_scores)):
             # discard 'O' other
             label = prediction[2:]
             if not label:
@@ -595,7 +575,6 @@ def aggregate_results(
                 "MEMBER_NAME_ANSWER",
             ]
 
-            # keys = ["PAN", "PAN_ANSWER"]
             line_aggregator = []
 
             for key in expected_keys:
@@ -722,6 +701,7 @@ def aggregate_results(
                         "category": category,
                         "value": {"question": found_question, "answer": found_answer},
                     }
+
                     aggregated_kv.append(kv_result)
                     found_question = None
                     found_answer = None
@@ -756,9 +736,7 @@ class NerExtractionExecutor(Executor):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-        self.logger = MarieLogger(
-            getattr(self.metas, "name", self.__class__.__name__)
-        ).logger
+        self.logger = MarieLogger(getattr(self.metas, "name", self.__class__.__name__)).logger
 
         self.logger.info("NER Extraction Executor")
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -770,12 +748,15 @@ class NerExtractionExecutor(Executor):
             cudnn.benchmark = False
             cudnn.deterministic = False
 
-        models_dir: str = os.path.join(
-            __model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500"
-        )
+        ensure_exists("/tmp/tensors")
+        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500")
 
         self.model, self.device = create_model_for_token_classification(models_dir)
         self.text_executor = TextExtractionExecutor()
+
+    def info(self, **kwargs):
+        logger.info(f"Self : {self}")
+        return {"index": "ner-complete"}
 
     # @requests()
     def extract(self, docs: Optional[DocumentArray] = None, **kwargs):

@@ -30,9 +30,19 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.3
 
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.2 && docker push gregbugaj/marie-icr:2.2
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda && docker push gregbugaj/marie-icr:2.2-cuda
-docker push gregbugaj/marie-icr:2.2-cuda
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
+docker push gregbugaj/marie-icr:2.3-cuda
 ```
+
+gregbugaj/marie-icr:2.3-cuda                  de66c17c67a4   17 minutes ago      7.56GB
+
+
+docker stop $(docker ps -q)
+docker rmi -f $(docker images -aq)
+docker logs  marie-icr-0  -f --since 0m
+
+docker container stop $(docker container ls -aq) && docker system prune -af --volumes
+
 
 cd ~/dev/marie-ai/docker-util/ && docker container stop $(docker container ls -q --filter name='marie*') && ./update.sh && ./run-all.sh
 cd ~/dev/marie-ai/docker-util/ && docker container stop $(docker container ls -q --filter name='marie*') && ./update.sh && ./run-all.sh
@@ -98,7 +108,7 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
 
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda && docker push gregbugaj/marie-icr:2.2-cuda
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda --no-cache && docker push gregbugaj/marie-icr:2.2-cuda
 ```
 
 ### Inference on the gpu
@@ -273,3 +283,5 @@ DocFormer: End-to-End Transformer for Document Understanding
 
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
+
+ 

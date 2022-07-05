@@ -9,22 +9,16 @@ from PIL import Image, ImageDraw, ImageFont
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:5000/api"
-# api_base_url = "http://65.49.54.125:5100/api"
-# api_base_url = "http://192.168.1.12:5000/api"
-# api_base_url = "http://184.105.180.8:5000/api"
+api_base_url = "http://172.83.15.97:6000/api"  # marie-009
+# api_base_url = "http://184.105.180.27:6000/api"  # marie-008
+# api_base_url = "http://184.105.180.21:6000/api"  # marie-006
+# api_base_url = "http://184.105.180.25:6000/api"  # marie-007
+# api_base_url = "http://172.83.13.210:6000/api"  # marie-004
+# api_base_url = "http://184.105.180.15:6000/api"  # marie-003
+# # api_base_url = "http://184.105.180.6:6000/api"  # marie-0\
+#
 
-# api_base_url = "http://184.105.180.28:6003/api"
-# api_base_url = "http://184.105.180.40:6003/api"
-# api_base_url = "http://184.105.180.39:6003/api"
-# api_base_url = "http://184.105.180.27:6003/api"
-
-# api_base_url = "http://184.105.180.46:6000/api"
-# api_base_url = "http://184.105.180.47:6000/api"
-# api_base_url = "http://184.105.180.41:6001/api" ## A5000
-# api_base_url = "http://184.105.180.51:6000/api"
-# api_base_url = "http://172.83.13.224:6000/api"
-
-# api_base_url = "http://172.83.15.97:6000/api"
+# api_base_url = "http://184.105.180.8:5000/api" # Loadballancer
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -43,6 +37,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
+    upload_url = f"{api_base_url}/ner/{queue_id}"
 
     if False and not online(api_base_url):
         raise Exception(f"API server is not online : {api_base_url}")
@@ -153,10 +148,16 @@ if __name__ == "__main__":
     # src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
-    # src = "/home/greg/dataset/assets-private/corr-indexer/dataset/training_data/images/152624545_1.png"
+    src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
+    src = "/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
     # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-25.tif" # {'error': 'Invalid line number : -1, this looks like a bug/vertical line : [147, 882, 75, 12]'}
     # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-28.tif"
     icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
     print(icr_data)
     image = Image.open(src).convert("RGB")
     visualize_icr(image, icr_data)
+
+
+# Model load elapsed: 102.28931069374084
+# OCR file  : /home/app-svc/.marie/ocr/0ff60be73d3a16058e62fd859db644eb47039d8a.json
+# NER file  : /home/app-svc/.marie/annotation/0ff60be73d3a16058e62fd859db644eb47039d8a.json

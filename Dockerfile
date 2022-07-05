@@ -58,6 +58,9 @@ RUN git clone https://github.com/ying09/TextFuseNet.git&& \
     cd TextFuseNet  && \
     python setup.py build install
 
+
+RUN python3 -m pip install transformers
+
 FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
 
 ARG http_proxy

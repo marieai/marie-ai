@@ -60,7 +60,7 @@ fi
 CONFIG_DIR="/mnt/data/marie-ai/$CONFIG"
 if [ ! -d "${CONFIG_DIR}" ]; then
     echo "Config directory '$CONFIG_DIR' DOES NOT exists."
-    exit 1
+    # exit 1
 fi
 
 # exit 0
