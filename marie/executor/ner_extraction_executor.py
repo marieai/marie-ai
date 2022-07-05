@@ -667,18 +667,17 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
 
         expected_pair = [
             ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER"]],
+            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
             ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER"]],
+            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
         ]
 
-        for k in aggregated_keys.keys():
-            ner_keys = aggregated_keys[k]
+        for pair in expected_pair:
+            expected_question = pair[0]
+            expected_answer = pair[1]
 
-            for pair in expected_pair:
-                expected_question = pair[0]
-                expected_answers = pair[1]
-
+            for k in aggregated_keys.keys():
+                ner_keys = aggregated_keys[k]
                 found_question = None
                 found_answer = None
 
@@ -686,26 +685,70 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                     key = ner_key["key"]
                     if expected_question == key:
                         found_question = ner_key
-                    if key in expected_answers:
-                        found_answer = ner_key
-
-                if found_question is not None and found_answer is not None:
-                    # check LTR order
-                    bbox_q = found_question["bbox"]
-                    bbox_a = found_answer["bbox"]
-
-                    if bbox_a[0] < bbox_q[0]:
-                        logger.warning("Answer is not on right of question")
                         continue
+                    # find the first match
+                    if found_question is not None and found_answer is None:
+                        # find the first match
+                        for exp_key in expected_answer:
+                            if key in exp_key:
+                                found_answer = ner_key
+                                break
 
-                    category = found_question["key"]
-                    kv_result = {
-                        "page": i,
-                        "category": category,
-                        "value": {"question": found_question, "answer": found_answer},
-                    }
+                        if found_answer is not None:
+                            bbox_q = found_question["bbox"]
+                            bbox_a = found_answer["bbox"]
 
-                    aggregated_kv.append(kv_result)
+                            if bbox_a[0] < bbox_q[0]:
+                                logger.warning("Answer is not on right of question")
+                                continue
+
+                            category = found_question["key"]
+                            kv_result = {
+                                "page": i,
+                                "category": category,
+                                "value": {"question": found_question, "answer": found_answer},
+                            }
+
+                            aggregated_kv.append(kv_result)
+
+        if False:
+            for k in aggregated_keys.keys():
+                ner_keys = aggregated_keys[k]
+
+                for pair in expected_pair:
+                    expected_question = pair[0]
+                    expected_answer = pair[1]
+
+                    found_question = None
+                    found_answer = None
+
+                    for ner_key in ner_keys:
+                        key = ner_key["key"]
+                        if expected_question == key:
+                            found_question = ner_key
+                        # find the first match
+                        for exp_key in expected_answer:
+                            if key in exp_key:
+                                found_answer = ner_key
+                                break
+
+                    if found_question is not None and found_answer is not None:
+                        # check LTR order
+                        bbox_q = found_question["bbox"]
+                        bbox_a = found_answer["bbox"]
+
+                        if bbox_a[0] < bbox_q[0]:
+                            logger.warning("Answer is not on right of question")
+                            continue
+
+                        category = found_question["key"]
+                        kv_result = {
+                            "page": i,
+                            "category": category,
+                            "value": {"question": found_question, "answer": found_answer},
+                        }
+
+                        aggregated_kv.append(kv_result)
 
         # for each line aggregate possible KEY-VALUES
         # frame.show()
