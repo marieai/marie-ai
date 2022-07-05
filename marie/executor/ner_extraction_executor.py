@@ -332,11 +332,15 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
     docs = docs_from_image(snippet)
     kwa = {"payload": {"output": "json", "mode": "raw_line"}}
     results = text_executor.extract(docs, **kwa)
-
+    print("##########")
+    print(results)
     if len(results) > 0:
         words = results[0]["words"]
         if len(words) > 0:
             word = words[0]
+            if word["text"] == "CASHIER":
+                return "BORKED"
+
             return word["text"], word["confidence"]
 
     return "", 0.0
@@ -724,21 +728,25 @@ def aggregate_results(
                         "value": {"question": found_question, "answer": found_answer},
                     }
                     aggregated_kv.append(kv_result)
+                    found_question = None
+                    found_answer = None
 
         # for each line aggregate possible KEY-VALUES
         # frame.show()
         viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
-        # Decorate our answers with proper TEXT
-        for agg_result in aggregated_kv:
-            question = agg_result["value"]["question"]
-            answer = agg_result["value"]["answer"]
+    # Decorate our answers with proper TEXT
+    for agg_result in aggregated_kv:
+        page_index = int(agg_result["page"])
+        frame = frames[page_index]
+        question = agg_result["value"]["question"]
+        answer = agg_result["value"]["answer"]
 
-            w1, c1 = get_ocr_line_bbox(question["bbox"], frame, text_executor)
-            w2, c2 = get_ocr_line_bbox(answer["bbox"], frame, text_executor)
+        w1, c1 = get_ocr_line_bbox(question["bbox"], frame, text_executor)
+        w2, c2 = get_ocr_line_bbox(answer["bbox"], frame, text_executor)
 
-            question["text"] = {"text": w1, "confidence": c1}
-            answer["text"] = {"text": w2, "confidence": c2}
+        question["text"] = {"text": w1, "confidence": c1}
+        answer["text"] = {"text": w2, "confidence": c2}
 
     return aggregated_kv
 
