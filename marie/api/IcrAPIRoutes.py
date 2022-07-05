@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 
 import marie.conf
-import marie.processors
+import marie.executor
 
 from flask import Blueprint, jsonify
 from flask_restful import Resource, reqparse, request

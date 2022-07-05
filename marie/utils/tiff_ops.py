@@ -40,11 +40,15 @@ def convert_group4(src_path, dst_path):
     with Image(filename=src_path) as image:
         # -define quantum:polarity=min-is-white
         library.MagickSetOption(
-            image.wand, "quantum:polarity".encode("utf-8"), "min-is-white".encode("utf-8")  # MagickWand  # option
+            image.wand,
+            "quantum:polarity".encode("utf-8"),
+            "min-is-white".encode("utf-8"),  # MagickWand  # option
         )  # value
 
         library.MagickSetOption(
-            image.wand, "tiff:rows-per-strip".encode("utf-8"), "1".encode("utf-8")  # MagickWand  # option
+            image.wand,
+            "tiff:rows-per-strip".encode("utf-8"),
+            "1".encode("utf-8"),  # MagickWand  # option
         )  # value
 
         library.MagickSetImageCompression(image.wand, 8)
@@ -66,7 +70,12 @@ def __process_burst(frame, name, generated_name, dest_dir, index, tmpdirname):
         print(f"Bursting page# {index} : {name} > {generated_name} > {output_path}")
         # TODO : Replace this with image magic methods so we can do this  in one step
         with TiffWriter(output_path_tmp) as tif_writer:
-            tif_writer.write(frame, photometric="minisblack", description=generated_name, metadata=None)
+            tif_writer.write(
+                frame,
+                photometric="minisblack",
+                description=generated_name,
+                metadata=None,
+            )
         convert_group4(output_path_tmp, output_path)
     except Exception as ident:
         raise ident
@@ -84,7 +93,15 @@ def burst_tiff(src_img_path, dest_dir):
             for i, frame in enumerate(frames):
                 index = i + 1
                 generated_name = f"{name}_page_{index:04}.tif"
-                executor.submit(__process_burst, frame, name, generated_name, dest_dir, index, tmp_dir)
+                executor.submit(
+                    __process_burst,
+                    frame,
+                    name,
+                    generated_name,
+                    dest_dir,
+                    index,
+                    tmp_dir,
+                )
 
 
 def merge_tiff(src_dir, dst_img_path, sort_key):
@@ -102,6 +119,28 @@ def merge_tiff(src_dir, dst_img_path, sort_key):
                     composite.image_add(frame)
             except Exception as ident:
                 raise ident
+
+        composite.compression = "group4"
+        composite.resolution = (300, 300)
+        composite.save(filename=dst_img_path)
+
+
+def merge_tiff_frames(
+    frames,
+    dst_img_path,
+):
+    """Merge individual tiff frames into a multipage tiff"""
+    from wand.image import Image
+
+    print(f"Creating multipage tiff : {dst_img_path}")
+    with Image() as composite:
+        try:
+            for src_img in frames:
+                src_img = Image.from_array(src_img)
+                frame = src_img.image_get()
+                composite.image_add(frame)
+        except Exception as ident:
+            raise ident
 
         composite.compression = "group4"
         composite.resolution = (300, 300)

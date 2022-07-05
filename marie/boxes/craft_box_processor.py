@@ -147,6 +147,7 @@ def get_prediction(
 
     # DO LINE DETECTION
     # refine link
+    lines_bboxes = []
     if line_refine_net is not None:
         with torch.no_grad():
             y_refiner = line_refine_net(y, feature)
@@ -422,19 +423,19 @@ class BoxProcessorCraft(BoxProcessor):
             # to make this a configurable option
             # Make this a configuration
             image_norm = image
-            # image_norm = 255 - image
             lines_bboxes = []
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
                 bboxes, polys, score_text, lines_bboxes = self.psm_sparse(image_norm)
-            elif psm == PSMode.WORD:
-                bboxes, polys, score_text, lines_bboxes = self.psm_word(image_norm)
+            # elif psm == PSMode.WORD:
+            #     bboxes, polys, score_text, lines_bboxes = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
                 bboxes, polys, score_text, lines_bboxes = self.psm_line(image_norm)
             elif psm == PSMode.MULTI_LINE:
                 bboxes, polys, score_text, lines_bboxes = self.psm_multiline(image_norm)
-            elif psm == PSMode.RAW_LINE:
+            elif psm == PSMode.RAW_LINE or psm == PSMode.WORD:
+                # NOTE: Semantics have changed and now both RAW_LINE and WORD are same
                 # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
                 # as we treat the whole line as BBOX
                 # bboxes, polys, score_text = self.psm_raw_line(image_norm)

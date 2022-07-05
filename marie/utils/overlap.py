@@ -38,7 +38,9 @@ def find_overlap(box, data, overlap_ratio=0.75):
 
 
 def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = True):
-    """Find overlap between a box and a data set"""
+    """Find overlap between a box and a data set
+    expected box format in [x, y, w, h]
+    """
     overlaps = []
     indexes = []
     scores = []
