@@ -332,17 +332,12 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
     docs = docs_from_image(snippet)
     kwa = {"payload": {"output": "json", "mode": "raw_line"}}
     results = text_executor.extract(docs, **kwa)
-    print("##########")
-    print(results)
+
     if len(results) > 0:
         words = results[0]["words"]
         if len(words) > 0:
             word = words[0]
-            if word["text"] == "CASHIER":
-                return "BORKED"
-
             return word["text"], word["confidence"]
-
     return "", 0.0
 
 
