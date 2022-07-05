@@ -573,9 +573,8 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                 "DOS_ANSWER",
                 "MEMBER_NAME",
                 "MEMBER_NAME_ANSWER",
-
                 # "QUESTION"
-                "ANSWER" # Only collect ANSWERs for now
+                "ANSWER",  # Only collect ANSWERs for now
             ]
 
             line_aggregator = []
@@ -668,9 +667,9 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
 
         expected_pair = [
             ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER"]],
             ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER"]],
         ]
 
         for k in aggregated_keys.keys():

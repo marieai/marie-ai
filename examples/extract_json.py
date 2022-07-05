@@ -18,7 +18,7 @@ api_base_url = "http://172.83.15.97:6000/api"  # marie-009
 # # api_base_url = "http://184.105.180.6:6000/api"  # marie-0\
 #
 
-# api_base_url = "http://184.105.180.8:5000/api" # Loadballancer
+api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
