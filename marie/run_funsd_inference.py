@@ -782,20 +782,16 @@ if __name__ == "__main__":
     home = get_marie_home()
     output_dir = os.path.join(home, ".marie")
     # "/data/dataset/private/corr-indexer/validation",
+    # "/home/greg/dataset/assets-private/corr-indexer/validation",
 
-    if False:
+    if True:
         ocr_dir(
-            "/home/greg/dataset/assets-private/corr-indexer/validation",
+            "/data/dataset/private/corr-indexer/validation",
             output_dir,
             filename_filter="*.png",
         )
         os.exit()
 
-    if False:
-        ocr_dir(
-            "/home/greg/dataset/assets-private/corr-indexer/validation",
-            filename_filter="*.png",
-        )
 
     model_dir = (
         "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints/checkpoint-9000/"
@@ -803,10 +799,15 @@ if __name__ == "__main__":
     model_dir = (
         "/home/greg/dev/marie-ai/model_zoo/ner-rms-corr/fp16-56k-checkpoint-8500"
     )
+    model_dir = (
+        "/home/gbugaj/dev/unilm/layoutlmft/examples/checkpoints-tuned-pan/checkpoint-250"
+    )
     # model_dir = (
     #     "/home/greg/dev/marie-ai/model_zoo/ner-rms-corr/fp32-250k-checkpoint-2800"
     # )
 
+
+    os.exit()
 
     model, device = create_model_for_token_classification(model_dir)
 
