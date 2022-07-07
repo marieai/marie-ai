@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import shutil
+import string
 import uuid
 from functools import lru_cache
 
@@ -75,7 +76,18 @@ class MemberProvider(BaseProvider):
     def member_id(self) -> str:
         # print(rstr.xeger(r'[A-Z]\d[A-Z] \d[A-Z]\d'))
         sel_reg = random.choice(self.possible_regexes)
-        return rstr.xeger(sel_reg)
+        val = rstr.xeger(sel_reg)
+
+        # There are cases when we will add prexif / suffix to the PAN seperated with space
+        if np.random.choice([0, 1], p=[0.7, 0.3]):
+            N = random.choice([2, 3, 4])
+            res = "".join(random.choices(string.ascii_uppercase, k=N))
+            if np.random.choice([1, 0], p=[0.7, 0.3]):
+                val = f"{res} {val}"
+            else:
+                val = f"{val} {res}"
+
+        return val
 
 
 fake.add_provider(MemberProvider)
@@ -102,7 +114,9 @@ def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
 
     # paste the image if the width or height is smaller than the requested target size
     if max((ow, oh)) < target_size:
-        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
+        new_im = Image.new(
+            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
+        )
         new_im.paste(img)
         return new_im, new_im.size
 
@@ -113,7 +127,9 @@ def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
     # if resized height is less than target then we pad it
     rw, rh = resized.size
     if rh < target_size:
-        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
+        new_im = Image.new(
+            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
+        )
         new_im.paste(resized)
         return new_im, new_im.size
 
@@ -126,7 +142,9 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
 
     # paste the image if the width or height is smaller than the requested target size
     if max((ow, oh)) < target_size:
-        new_im = Image.new("RGB", (min(ow, target_size), target_size), color=(255, 255, 255))
+        new_im = Image.new(
+            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
+        )
         new_im.paste(img)
         return new_im, new_im.size
 
@@ -137,7 +155,9 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
     # if resized height is less than target then we pad it
     rw, rh = resized.size
     if rh < target_size:
-        new_im = Image.new("RGB", (min(rw, target_size), target_size), color=(255, 255, 255))
+        new_im = Image.new(
+            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
+        )
         new_im.paste(resized)
         return new_im, new_im.size
 
@@ -250,7 +270,9 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             found_cat_id.append(ano["category_id"])
             # validate that we don't have duplicate question/answer mappings, we might change this down the road
             cat_name = cat_id_name[ano["category_id"]]
-            category_counts[cat_name] = 1 if cat_name not in category_counts else category_counts[cat_name] + 1
+            category_counts[cat_name] = (
+                1 if cat_name not in category_counts else category_counts[cat_name] + 1
+            )
             count = category_counts[cat_name]
             if False and count > 1:
                 msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}]"
@@ -372,7 +394,9 @@ def extract_icr(image, boxp, icrp):
         return boxes, result
 
     key = checksum
-    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
+    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
+        key, "field", image, PSMode.SPARSE
+    )
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
@@ -387,7 +411,9 @@ def extract_icr(image, boxp, icrp):
         img_fragments = [image]
         lines = [1]
 
-    result, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
+    result, overlay_image = icrp.recognize(
+        key, "test", image, boxes, img_fragments, lines
+    )
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -413,7 +439,9 @@ def decorate_funsd(src_dir: str):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    boxp = BoxProcessorCraft(
+        work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    )
     icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
@@ -430,16 +458,15 @@ def decorate_funsd(src_dir: str):
         requires_one = {"paragraph", "greeting", "question"}
 
         for i, item in enumerate(data["form"]):
-            label = item['label']            
+            label = item["label"]
             if label in requires_one:
                 found = True
                 break
 
         if not found:
-            print(f'Skipping document : {guid} : {file}')
+            print(f"Skipping document : {guid} : {file}")
             continue
-            
-        
+
         # "paragraph": [-1],
         # "": [-1],
         # "answer": [-1],
@@ -447,13 +474,14 @@ def decorate_funsd(src_dir: str):
         # "header": [-1],
         # "letter_date": [-1],
 
-
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
         # line_numbers : line number associated with bounding box
         # lines : raw line boxes that can be used for further processing
-        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(file, "lines", image, PSMode.MULTI_LINE)
+        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
+            file, "lines", image, PSMode.MULTI_LINE
+        )
 
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
@@ -472,7 +500,12 @@ def decorate_funsd(src_dir: str):
             boxes, results = extract_icr(snippet, boxp, icrp)
             results.pop("meta", None)
 
-            if results is None or len(results) == 0 or results["lines"] is None or len(results["lines"]) == 0:
+            if (
+                results is None
+                or len(results) == 0
+                or results["lines"] is None
+                or len(results["lines"]) == 0
+            ):
                 print(f"No results for : {guid}-{i}")
                 continue
 
@@ -516,7 +549,9 @@ def decorate_funsd(src_dir: str):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
-            cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
+            cv2.rectangle(
+                image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1
+            )
             index = i + 1
 
         if True:
@@ -663,7 +698,7 @@ def generate_text(label, width, height, fontPath):
                 "%d %B %Y",
                 "%b %d, %Y",
             ]
-            
+
             # make composite DOS
             # date-date
             # date thought date
@@ -677,7 +712,6 @@ def generate_text(label, width, height, fontPath):
                 label_text = f"{d1} {sel_reg} {d2}"
             else:
                 label_text = fake.date(pattern=random.choice(patterns))
-
 
         if label == "pan_answer":
             label_text = fake.member_id()
@@ -721,7 +755,9 @@ def generate_text(label, width, height, fontPath):
 
 
 # @Timer(text="Aug in {:.4f} seconds")
-def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
+def __augment_decorated_process(
+    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
+):
 
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
@@ -860,7 +896,9 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     # slower comparing to  pool.starmap
     if False:
         futures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=int(mp.cpu_count() * 0.75)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=int(mp.cpu_count() * 0.75)
+        ) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
                 feature = executor.submit(
@@ -951,7 +989,6 @@ def visualize_funsd(src_dir: str):
             "member_name_answer": "green",
             "patient_name": "blue",
             "patient_name_answer": "green",
-
             "paragraph": "purple",
             "greeting": "blue",
             "address": "orange",
@@ -962,10 +999,8 @@ def visualize_funsd(src_dir: str):
             "letter_date": "deeppink",
             "url": "darkorange",
             "phone": "darkmagenta",
-
             "other": "red",
         }
-
 
         for i, item in enumerate(data["form"]):
             predicted_label = item["label"].lower()
@@ -978,7 +1013,11 @@ def visualize_funsd(src_dir: str):
             box = item["box"]
 
             if predicted_label != "other":
-                draw.rectangle(box, outline=color, width=1, )# fill=(0, 180, 0, 50)
+                draw.rectangle(
+                    box,
+                    outline=color,
+                    width=1,
+                )  # fill=(0, 180, 0, 50)
             else:
                 draw.rectangle(box, outline=color, width=1)
 
@@ -1009,7 +1048,9 @@ def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
 
 
 def rescale_annotation_frame(src_json_path: str, src_image_path: str):
-    print(f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}")
+    print(
+        f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}"
+    )
 
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
@@ -1027,7 +1068,9 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
             item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
             for word in item["words"]:
                 bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
-                word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
+                word["box"] = resize_align_bbox(
+                    bbox, orig_w, orig_h, target_w, target_h
+                )
     except Exception as ex:
         print(src_json_path)
         print(ex)
@@ -1036,7 +1079,9 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     return data, resized
 
 
-def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path):
+def __rescale_annotate_frames(
+    ann_dir_dest, img_dir_dest, filename, json_path, image_path
+):
     if False and filename != "152618378_2":
         return
 
@@ -1083,7 +1128,9 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             json_path = os.path.join(ann_dir, file)
             filename = file.split("/")[-1].split(".")[0]
             image_path = os.path.join(img_dir, file).replace("json", "png")
-            __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path)
+            __rescale_annotate_frames(
+                ann_dir_dest, img_dir_dest, filename, json_path, image_path
+            )
 
     if True:
         args = []
