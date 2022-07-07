@@ -1159,11 +1159,70 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
         print("Time elapsed[all]: %s" % (time.time() - start))
 
 
+def splitDataset(src_dir, output_path, split_percentage):
+    """
+    Split dataset for training and evaluation.
+    ARGS:
+        src_dir  : input folder path where starts imagePath
+        outputPath : output folder where new train/test directory will be outputed
+        split      : split ration ex: .8-.2
+    """
+
+    print("src_dir  = {}".format(src_dir))
+    print("output_path".format(output_path))
+    print("split      = {}".format(split_percentage))
+
+    ann_dir = os.path.join(src_dir, "annotations")
+    img_dir = os.path.join(
+        src_dir,
+        "images",
+    )
+
+    file_set = []
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        json_path = os.path.join(ann_dir, file)
+        image_path = os.path.join(img_dir, file).replace("json", "png")
+        filename = image_path.split("/")[-1].split(".")[0]
+        item = {"annotation": json_path, "image": image_path, "filename": filename}
+        file_set.append(item)
+
+    nSamples = len(file_set)
+    sample_count = int(nSamples * split_percentage)
+    print(nSamples)
+    print(sample_count)
+
+    np.random.shuffle(file_set)
+
+    ann_dir_out = os.path.join(output_path, "annotations")
+    img_dir_out = os.path.join(
+        output_path,
+        "images",
+    )
+
+    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(ann_dir_out, exist_ok=True)
+    os.makedirs(img_dir_out, exist_ok=True)
+
+    datalist = file_set[0:sample_count]
+
+    for item in datalist:
+        print(f"Spliting : {item}")
+        ann = item["annotation"]
+        img = item["image"]
+        filename = item["filename"]
+
+        shutil.copyfile(ann, os.path.join(ann_dir_out, f"{filename}.json"))
+        shutil.copyfile(img, os.path.join(img_dir_out, f"{filename}.png"))
+
+        os.remove(ann)
+        os.remove(img)
+
+
 if __name__ == "__main__":
     name = "test"
 
     # Home
-    if False:
+    if True:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
@@ -1193,19 +1252,26 @@ if __name__ == "__main__":
     # TEST  -> 1, 2, 3
 
     # STEP 1 : Convert COCO to FUNSD like format
-    convert_coco_to_funsd(src_dir, dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    decorate_funsd(dst_path)
+    # decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=50, src_dir=dst_path, dest_dir=aug_dest_dir)
+    # augment_decorated_annotation(count=50, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
-    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
     # visualize_funsd(aug_dest_dir)
+
+    # split data set from
+    splitDataset(
+        "/home/greg/dataset/assets-private/corr-indexer-augmented/dataset/training_data/",
+        "/tmp/split",
+        0.10,
+    )
 
     # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")

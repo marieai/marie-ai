@@ -324,7 +324,7 @@ class BoxProcessorCraft(BoxProcessor):
             craft_net=self.craft_net,
             refine_net=None,  # self.refine_net,
             text_threshold=0.7,
-            link_threshold=0.4,
+            link_threshold=0.45,
             low_text=0.3,
             cuda=self.cuda,
             poly=False,
