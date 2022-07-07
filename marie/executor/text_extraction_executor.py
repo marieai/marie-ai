@@ -17,8 +17,6 @@ import numpy as np
 
 import cv2
 
-from flask import jsonify
-
 from marie.logging.logger import MarieLogger
 from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
