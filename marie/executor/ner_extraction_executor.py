@@ -670,6 +670,7 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
             ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
             ["DOS", ["DOS_ANSWER", "ANSWER"]],
             ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
         ]
 
         for pair in expected_pair:
@@ -791,9 +792,10 @@ class NerExtractionExecutor(Executor):
         if has_cuda:
             cudnn.benchmark = False
             cudnn.deterministic = False
-
+        # ~/dev/marie-ai/model_zoo/ner-rms-corr/checkpoints-tuned-pan
         ensure_exists("/tmp/tensors")
         models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500")
+        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan")
 
         self.model, self.device = create_model_for_token_classification(models_dir)
         self.text_executor = TextExtractionExecutor()
