@@ -573,6 +573,10 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                 "DOS_ANSWER",
                 "MEMBER_NAME",
                 "MEMBER_NAME_ANSWER",
+
+                "MEMBER_NUMBER",
+                "MEMBER_NUMBER_ANSWER",
+
                 # "QUESTION"
                 "ANSWER",  # Only collect ANSWERs for now
             ]
