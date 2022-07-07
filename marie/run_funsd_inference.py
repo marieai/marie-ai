@@ -786,7 +786,7 @@ if __name__ == "__main__":
 
     if True:
         ocr_dir(
-            "/data/dataset/private/corr-indexer/validation",
+            "/home/greg/dataset/assets-private/corr-indexer/validation",
             output_dir,
             filename_filter="*.png",
         )
@@ -810,7 +810,7 @@ if __name__ == "__main__":
     os.exit()
 
     model, device = create_model_for_token_classification(model_dir)
-
+    #
     if False:
         # image_path = f"/data/dataset/private/corr-indexer/validation/{filename}"
         image_dir = f"/home/greg/dataset/assets-private/corr-indexer/validation"
