@@ -1,3 +1,4 @@
+from builtins import print
 from enum import Enum
 from typing import Optional, Dict
 
@@ -14,6 +15,10 @@ import cv2
 
 from marie.logging.logger import MarieLogger
 from marie.utils.utils import ensure_exists
+from marie.utils.nms import non_max_suppression_fast
+from marie.boxes.line_processor import line_merge
+from marie.utils.overlap import find_overlap_horizontal
+from marie.utils.overlap import merge_bboxes_as_block
 
 import cv2
 from PIL import Image, ImageDraw, ImageFont
@@ -521,9 +526,14 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
             label = prediction[2:]
             if not label:
                 continue
-            if pred_box == [0.0, 0.0, 0.0, 0.0]:
+            # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
+            if pred_box == [0.0, 0.0, 0.0, 0.0] or pred_box[2] == 0 or pred_box[3] == 0:
                 continue
             line_number = find_line_number(lines_bboxes, pred_box)
+            # REMOVEME
+            if line_number not in [19]:
+                continue
+
             if line_number not in groups:
                 groups[line_number] = []
 
@@ -556,30 +566,43 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                     ),
                     width=1,
                 )
-            #
-            # if False or line_idx not in [10, 11]:
+            # #
+            # if True or line_idx not in [19]:
             #     continue
 
             prediction_indexes = np.array(groups[line_idx])
+            if False:
+                # The bounding boxes for this predictions can be out of order so we sort them by their X coordinate
+                true_boxes = np.array(true_boxes)
+                bboxes = true_boxes[prediction_indexes]
+                bboxes = np.array(bboxes)
+                # sort boxes by the  y-coordinate of the bounding box
+                x1 = bboxes[:, 0]
+                idxs = np.argsort(x1)
+                prediction_indexes = prediction_indexes[idxs]
+                print(prediction_indexes)
+
             # print(f"*** line : {line_idx} : {prediction_indexes}")
             # PAN PAN_ANSWER PATIENT_NAME PATIENT_NAME_ANSWER
 
             expected_keys = [
                 "PAN",
-                "PAN_ANSWER",
-                "PATIENT_NAME",
-                "PATIENT_NAME_ANSWER",
-                "DOS",
-                "DOS_ANSWER",
-                "MEMBER_NAME",
-                "MEMBER_NAME_ANSWER",
-
-                "MEMBER_NUMBER",
-                "MEMBER_NUMBER_ANSWER",
-
-                # "QUESTION"
-                "ANSWER",  # Only collect ANSWERs for now
+                # "PAN_ANSWER",
+                # "PATIENT_NAME",
+                # "PATIENT_NAME_ANSWER",
+                # "DOS",
+                # "DOS_ANSWER",
+                # "MEMBER_NAME",
+                # "MEMBER_NAME_ANSWER",
+                #
+                # "MEMBER_NUMBER",
+                # "MEMBER_NUMBER_ANSWER",
+                #
+                # # "QUESTION"
+                # "ANSWER",  # Only collect ANSWERs for now
             ]
+
+            expected_keys = ["PAN"]
 
             line_aggregator = []
 
@@ -631,14 +654,9 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                     bboxes = true_boxes[group_index]
                     scores = true_scores[group_index]
                     group_score = round(np.average(scores), 6)
-                    # create a bounding box around our blocks which could be possibly overlapping or being slit
-                    overlaps = bboxes
-                    min_x = overlaps[:, 0].min()
-                    min_y = overlaps[:, 1].min()
-                    max_h = overlaps[:, 3].max()
-                    max_w = (overlaps[:, 0] + overlaps[:, 2]).max() - min_x
-                    group_bbox = [min_x, min_y, max_w, max_h]
-                    group_bbox = [round(k, 4) for k in group_bbox]
+
+                    # create a bounding box around our blocks which could be possibly overlapping or being split
+                    group_bbox = merge_bboxes_as_block(bboxes)
 
                     key_result = {
                         "line": line_idx,
@@ -668,6 +686,58 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                         ),
                         width=1,
                     )
+
+        # check if we have possible overlaps when there is a mislabeled token, this could be a flag
+        # B-PAN I-PAN I-PAN B-PAN-ANS I-PAN
+
+        print("------ORIGINAL------")
+        print(aggregated_keys)
+
+        for ag_key in aggregated_keys.keys():
+            row_items = aggregated_keys[ag_key]
+            row_boxes = []
+            for item in row_items:
+                row_boxes.append(item["bbox"])
+
+            bboxes = row_boxes
+            visited = [False for k in range(0, len(bboxes))]
+            to_merge = {}
+            for idx in range(0, len(bboxes)):
+                if visited[idx]:
+                    continue
+                visited[idx] = True
+                box = bboxes[idx]
+                overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
+                print(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+                to_merge[ag_key] = [idx]
+                for k,v_index in zip (overlaps, indexes):
+                    visited[v_index] = True
+                    to_merge[ag_key].append(v_index)
+
+            print("to_merge ")
+            print(to_merge)
+
+            for key, idxs in to_merge.items():
+                items = aggregated_keys[key]
+                items = np.array(items)
+                idxs = np.array(idxs)
+                picks = items[idxs]
+                remaining = np.delete(items, idxs)
+
+                score_avg = np.average([item["scores"] for item in picks])
+                block = merge_bboxes_as_block([item["bbox"] for item in picks])
+
+                new_item = picks[0]
+                new_item["score"] = score_avg
+                new_item["bbox"] = block
+
+                new_items = [new_item]
+                for r in remaining:
+                    new_items.append(r)
+                aggregated_keys[key] = new_items
+
+        print("------MERGED------")
+        print(aggregated_keys)
 
         expected_pair = [
             ["PAN", ["PAN_ANSWER", "ANSWER"]],
@@ -799,7 +869,8 @@ class NerExtractionExecutor(Executor):
         # ~/dev/marie-ai/model_zoo/ner-rms-corr/checkpoints-tuned-pan
         ensure_exists("/tmp/tensors")
         models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500")
-        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan")
+        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-250")
+        # models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-3500")
 
         self.model, self.device = create_model_for_token_classification(models_dir)
         self.text_executor = TextExtractionExecutor()
@@ -829,3 +900,4 @@ class NerExtractionExecutor(Executor):
         ner_results = aggregate_results(image_src, self.text_executor)
 
         return ner_results
+
