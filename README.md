@@ -220,23 +220,20 @@ https://github.com/Lightning-AI
 
 ## Implement models
 
-Implement secondary box detection method.
-[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
-
-Implement DocFormer: End-to-End Transformer for Document Understanding
-[DocFormer_End-to-End_Transforme](https://openaccess.thecvf.com/content/ICCV2021/papers/Appalaraju_DocFormer_End-to-End_Transformer_for_Document_Understanding_ICCV_2021_paper.pdf)
-
-
 ## Stream processing
 [KSQL Stream processing example ](https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/)
 [KSQL](https://pypi.org/project/ksql/)
  
 
 ## Research 
-
+[table-transformer](https://github.com/microsoft/table-transformer)
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
+Implement secondary box detection method.
+[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
+Implement DocFormer: End-to-End Transformer for Document Understanding
+[DocFormer_End-to-End_Transforme](https://openaccess.thecvf.com/content/ICCV2021/papers/Appalaraju_DocFormer_End-to-End_Transformer_for_Document_Understanding_ICCV_2021_paper.pdf)
 
 ## 
 Install `fairseq` from source, the release version is  missing `convert_namespace_to_omegaconf`

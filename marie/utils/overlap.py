@@ -96,7 +96,6 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
     return overlaps, indexes, scores
 
 
-
 def find_overlap_horizontal(box, data):
     """Find overlap between a box and a data set
     expected box format in [x, y, w, h]
@@ -154,15 +153,14 @@ def find_overlap_horizontal(box, data):
 
 
 def merge_bboxes_as_block(bboxes):
-    """Merge bouding boxes into one block"""
+    """Merge bounding boxes into one block"""
     bboxes = np.array(bboxes)
 
     min_x = bboxes[:, 0].min()
     min_y = bboxes[:, 1].min()
     max_h = bboxes[:, 3].max()
     max_w = (bboxes[:, 0] + bboxes[:, 2]).max() - min_x
-    group_bbox = [min_x, min_y, max_w, max_h]
-    group_bbox = [round(k, 4) for k in group_bbox]
+    block = [min_x, min_y, max_w, max_h]
+    block = [round(k, 6) for k in block]
 
-    return group_bbox
-
+    return block
