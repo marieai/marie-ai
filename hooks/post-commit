@@ -12,4 +12,5 @@ DATE_WITH_TIME=`date "+%Y%m%d-%H%M%S"` #add %3N as we want millisecond too
 template='{"branch":"%s","commit":"%s", "timestamp":"%s"}'
 json_string=$(printf "$template" "$branch" "$short_hash" "$DATE_WITH_TIME")
 
-echo "$json_string" | tee  '../../.build' > /dev/null
+echo $json_string
+echo "$json_string" | tee  '.build' > /dev/null
