@@ -9,13 +9,13 @@ from PIL import Image, ImageDraw, ImageFont
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:5000/api"
-api_base_url = "http://172.83.15.97:6000/api"  # marie-009
+# api_base_url = "http://172.83.15.97:6000/api"  # marie-009
 # api_base_url = "http://184.105.180.27:6000/api"  # marie-008
 # api_base_url = "http://184.105.180.21:6000/api"  # marie-006
 # api_base_url = "http://184.105.180.25:6000/api"  # marie-007
 # api_base_url = "http://172.83.13.210:6000/api"  # marie-004
 # api_base_url = "http://184.105.180.15:6000/api"  # marie-003
-api_base_url = "http://184.105.180.6:6000/api"  # marie-0\
+api_base_url = "http://184.105.180.6:6000/api"  # marie-0
 #
 
 # api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
@@ -150,6 +150,7 @@ if __name__ == "__main__":
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
     src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
     src = "/home/gbugaj/tmp/PID_886_7652_0_157518994.tif"
+    src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
     # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-25.tif" # {'error': 'Invalid line number : -1, this looks like a bug/vertical line : [147, 882, 75, 12]'}
     # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-28.tif"
     icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
