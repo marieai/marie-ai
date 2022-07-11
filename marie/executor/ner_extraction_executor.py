@@ -633,21 +633,21 @@ def aggregate_results(
             prediction_indexes = np.array(groups[line_idx])
 
             expected_keys = [
-                # "PAN",
-                # "PAN_ANSWER",
-                # "PATIENT_NAME",
-                # "PATIENT_NAME_ANSWER",
-                # "DOS",
-                # "DOS_ANSWER",
-                # "MEMBER_NAME",
-                # "MEMBER_NAME_ANSWER",
-                # "MEMBER_NUMBER",
-                # "MEMBER_NUMBER_ANSWER",
-                # "QUESTION",
-                # "ANSWER",  # Only collect ANSWERs for now
-                "LETTER_DATE",
-                "PHONE",
-                "URL"
+                "PAN",
+                "PAN_ANSWER",
+                "PATIENT_NAME",
+                "PATIENT_NAME_ANSWER",
+                "DOS",
+                "DOS_ANSWER",
+                "MEMBER_NAME",
+                "MEMBER_NAME_ANSWER",
+                "MEMBER_NUMBER",
+                "MEMBER_NUMBER_ANSWER",
+                "QUESTION",
+                "ANSWER",  # Only collect ANSWERs for now
+                # "LETTER_DATE",
+                # "PHONE",
+                # "URL"
                 # "ADDRESS"
             ]
 
@@ -758,12 +758,12 @@ def aggregate_results(
                     aggregated_keys[_k] = np.concatenate([new_item], remaining)
 
         expected_pair = [
-            # ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            # ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
-            # ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            # ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
-            # ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-            ["QUESTION", ["ANSWER"]],
+            ["PAN", ["PAN_ANSWER", "ANSWER"]],
+            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+            ["DOS", ["DOS_ANSWER", "ANSWER"]],
+            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
+            # ["QUESTION", ["ANSWER"]],
         ]
 
         for pair in expected_pair:
