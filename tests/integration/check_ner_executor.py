@@ -4,6 +4,7 @@ import os
 from marie.executor import NerExtractionExecutor
 from marie.utils.image_utils import hash_file
 from marie.utils.json import store_json_object
+from marie.utils.utils import ensure_exists
 
 
 def process_file(executor: NerExtractionExecutor, img_path: str):
@@ -29,15 +30,18 @@ def process_dir(executor: NerExtractionExecutor, image_dir: str):
 
 
 if __name__ == "__main__":
-    executor = NerExtractionExecutor()
-    process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
+    ensure_exists("/tmp/tensors/json")
 
-    if False:
+    executor = NerExtractionExecutor()
+    # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
+
+    if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_718_7393_0_156664823.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
-        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        # img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png" # Invalid token marking
+        img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png" # Invalid token marking
+        img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif" # Invalid token marking
 
-        process_file(executor)
+        process_file(executor, img_path)
