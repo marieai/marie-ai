@@ -18,10 +18,10 @@ import numpy as np
 import cv2
 
 from marie.logging.logger import MarieLogger
-from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.serve.runtimes import monitoring
 from marie.utils.docs import array_from_docs
+from marie.utils.image_utils import hash_bytes
 from marie.utils.utils import ensure_exists
 from marie.utils.base64 import base64StringToBytes, encodeToBase64
 from marie.utils.network import get_ip_address
@@ -343,8 +343,12 @@ class TextExtractionExecutor(Executor):
                 )
 
             frames = array_from_docs(docs)
-            checksum = str(abs(hash(frames.data.tobytes())))
             frame_len = len(frames)
+            # convert frames into a checksum
+            src = []
+            for i, frame in enumerate(frames):
+                src = np.append(src, np.ravel(frame))
+            checksum = hash_bytes(src)
 
             logger.info(
                 f"frames , regions , output_format, pms_mode, coordinate_format, checksum:  {frame_len}, {len(regions)}, {output_format}, {pms_mode}, {coordinate_format}, {checksum}"
