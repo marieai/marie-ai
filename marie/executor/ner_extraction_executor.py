@@ -893,7 +893,7 @@ class NerExtractionExecutor(Executor):
         image_src: str = kwargs.get("img_path", None)
 
         for key, value in kwargs.items():
-            print("The value of {} is {}".format(key, value))
+            print("The value of {} is {}".format(key, value)) 
 
         root_dir = f"/tmp/ner/{queue_id}/{checksum}"
         ensure_exists(root_dir)
