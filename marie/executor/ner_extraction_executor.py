@@ -753,6 +753,7 @@ def aggregate_results(
 
                     aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
+        # expected KV pairs
         expected_pair = [
             ["PAN", ["PAN_ANSWER", "ANSWER"]],
             ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
@@ -762,12 +763,23 @@ def aggregate_results(
             ["QUESTION", ["ANSWER"]],
         ]
 
+        # expected fields groups that indicate that the field could have been present but there was not associated
+        # KV pair
+        possible_field = {
+            "PAN": ["PAN", "PAN_ANSWER"],
+            "PATIENT_NAME": ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
+            "DOS": ["DOS", "DOS_ANSWER"],
+            "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
+            "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
+        }
+
         for pair in expected_pair:
             expected_question = pair[0]
             expected_answer = pair[1]
 
             for k in aggregated_keys.keys():
                 ner_keys = aggregated_keys[k]
+
                 found_question = None
                 found_answer = None
 
