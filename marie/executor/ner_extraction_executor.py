@@ -633,21 +633,21 @@ def aggregate_results(
             prediction_indexes = np.array(groups[line_idx])
 
             expected_keys = [
-                # "PAN",
-                # "PAN_ANSWER",
-                # "PATIENT_NAME",
-                # "PATIENT_NAME_ANSWER",
-                # "DOS",
-                # "DOS_ANSWER",
-                # "MEMBER_NAME",
-                # "MEMBER_NAME_ANSWER",
-                # "MEMBER_NUMBER",
-                # "MEMBER_NUMBER_ANSWER",
-                # "QUESTION",
-                # "ANSWER",  # Only collect ANSWERs for now
-                "LETTER_DATE",
-                "PHONE",
-                "URL"
+                "PAN",
+                "PAN_ANSWER",
+                "PATIENT_NAME",
+                "PATIENT_NAME_ANSWER",
+                "DOS",
+                "DOS_ANSWER",
+                "MEMBER_NAME",
+                "MEMBER_NAME_ANSWER",
+                "MEMBER_NUMBER",
+                "MEMBER_NUMBER_ANSWER",
+                "QUESTION",
+                "ANSWER",  # Only collect ANSWERs for now
+                # "LETTER_DATE",
+                # "PHONE",
+                # "URL"
                 # "ADDRESS"
             ]
 
@@ -740,6 +740,7 @@ def aggregate_results(
 
                 for _k, idxs in to_merge.items():
                     items = aggregated_keys[_k]
+                    items = np.array(items)
                     # there is nothing to merge, except the original block
                     if len(idxs) == 1:
                         continue
@@ -755,15 +756,15 @@ def aggregate_results(
                     new_item["score"] = score_avg
                     new_item["bbox"] = block
 
-                    aggregated_keys[_k] = np.concatenate([new_item], remaining)
+                    aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
         expected_pair = [
-            # ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            # ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
-            # ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            # ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
-            # ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-            ["QUESTION", ["ANSWER"]],
+            ["PAN", ["PAN_ANSWER", "ANSWER"]],
+            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+            ["DOS", ["DOS_ANSWER", "ANSWER"]],
+            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
+            # ["QUESTION", ["ANSWER"]],
         ]
 
         for pair in expected_pair:
@@ -870,7 +871,7 @@ class NerExtractionExecutor(Executor):
             __model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500"
         )
         models_dir: str = os.path.join(
-            __model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-7000"
+            __model_path__, "ner-rms-corr",  "checkpoint-best"
         )
         # models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-3500")
 
