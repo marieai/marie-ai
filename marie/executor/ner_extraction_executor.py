@@ -565,10 +565,10 @@ def aggregate_results(
                 box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
             )
             data["boxes"][i] = box
-            # print(f" {i} : {box}")
 
     aggregated_kv = []
-    print(f"frames len = : {len(frames)}")
+    aggregated_meta = []
+
     for i, (ocr, ann, frame) in enumerate(zip(ocr_results, annotation_results, frames)):
         print(f"Processing page # {i}")
         logger.info(f"Processing page # {i}")
@@ -642,9 +642,7 @@ def aggregate_results(
 
             # expected_keys = ["PAN", "PAN_ANSWER"]
             line_aggregator = []
-
             color_map = {"ADDRESS": get_random_color()}
-            # color_map = {"ADDRESS": get_random_color()}
 
             for key in expected_keys:
                 aggregated = []
@@ -753,6 +751,42 @@ def aggregate_results(
 
                     aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
+
+        # expected fields groups that indicate that the field could have been present but there was not associated
+        possible_field = {
+            "PAN": ["PAN", "PAN_ANSWER"],
+            "PATIENT_NAME": ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
+            "DOS": ["DOS", "DOS_ANSWER"],
+            "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
+            "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
+        }
+
+        print(">>>>>>>>>>>")
+        possible_field_meta = {}
+
+        for field in possible_field.keys():
+            fields = possible_field[field]
+            possible_field_meta[field] = {
+                "page": i,
+                "found": False,
+                "fields": []
+            }
+
+            for k in aggregated_keys.keys():
+                ner_keys = aggregated_keys[k]
+                for ner_key in ner_keys:
+                    key = ner_key["key"]
+                    if key in fields:
+                        print(f"found : {field} > {key}")
+                        possible_field_meta[field]["found"] = True
+                        possible_field_meta[field]["fields"].append(key)
+
+        print(possible_field_meta)
+        aggregated_meta.append({
+            "page":i,
+            "fields": possible_field_meta
+        })
+
         # expected KV pairs
         expected_pair = [
             ["PAN", ["PAN_ANSWER", "ANSWER"]],
@@ -762,16 +796,6 @@ def aggregate_results(
             ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
             ["QUESTION", ["ANSWER"]],
         ]
-
-        # expected fields groups that indicate that the field could have been present but there was not associated
-        # KV pair
-        possible_field = {
-            "PAN": ["PAN", "PAN_ANSWER"],
-            "PATIENT_NAME": ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
-            "DOS": ["DOS", "DOS_ANSWER"],
-            "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
-            "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
-        }
 
         for pair in expected_pair:
             expected_question = pair[0]
@@ -846,7 +870,14 @@ def aggregate_results(
             visualize_extract_kv(output_filename, frames[k], items)
 
     logger.info(f"aggregated_kv : {aggregated_kv}")
-    return aggregated_kv
+
+    results = {
+        "meta": aggregated_meta,
+        "kv": aggregated_kv
+    }
+
+    # return aggregated_kv
+    return results
 
 
 class NerExtractionExecutor(Executor):

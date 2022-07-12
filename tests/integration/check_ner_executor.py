@@ -24,10 +24,9 @@ def process_file(executor: NerExtractionExecutor, img_path: str):
 
 
 def process_dir(executor: NerExtractionExecutor, image_dir: str):
-    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.png"))):
+    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.tif"))):
         try:
             process_file(executor, img_path)
-            break
         except Exception as e:
             print(e)
             # raise e
@@ -37,24 +36,27 @@ if __name__ == "__main__":
     ensure_exists("/tmp/tensors/json")
     executor = NerExtractionExecutor()
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
+    # process_dir(executor, "/home/gbugaj/tmp/medrx")
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_718_7393_0_156664823.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
-        # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
+        img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
         img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        img_path = (
-            f"/home/greg/tmp/PID_1925_9289_0_157186264.png"  # Invalid token marking
-        )
-        img_path = (
-            f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        )
-        img_path = (
-            f"/home/greg/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        )
-        img_path = f"/home/greg/tmp/image8918637216567684920.pdf"
-        img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png"
+        img_path = f"/home/gbugaj/tmp/medrx/PID_1313_8120_0_157638578.tif"
+        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        # img_path = (
+        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.png"  # Invalid token marking
+        # )
+        # img_path = (
+        #     f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
+        # )
+        # img_path = (
+        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
+        # )
+        # img_path = f"/home/greg/tmp/image8918637216567684920.pdf"
+        # img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png"
 
         docs = docs_from_file(img_path)
         frames = array_from_docs(docs)
