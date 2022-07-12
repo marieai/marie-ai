@@ -1,22 +1,12 @@
 from builtins import print
-from enum import Enum
-from typing import Optional, Dict
-
 import torch
 from docarray import DocumentArray
 from torch.backends import cudnn
 
 from marie import Executor, requests, __model_path__
 
-import os
-import transformers
-import numpy as np
-import cv2
-
 from marie.logging.logger import MarieLogger
 from marie.utils.utils import ensure_exists
-from marie.utils.nms import non_max_suppression_fast
-from marie.boxes.line_processor import line_merge
 from marie.utils.overlap import find_overlap_horizontal
 from marie.utils.overlap import merge_bboxes_as_block
 
@@ -48,6 +38,7 @@ from marie.utils.docs import (
     array_from_docs,
     docs_from_image,
     load_image,
+    __convert_frames,
 )
 
 from marie.utils.image_utils import viewImage, read_image, hash_file
@@ -425,19 +416,14 @@ def main_image(
     if not os.path.exists(ocr_json_path) and text_executor is None:
         raise Exception(f"OCR File not found : {ocr_json_path}")
 
-    loaded, frames = load_image(src_image, format="pil")
+    loaded, frames = load_image(src_image, img_format="pil")
     if not loaded:
         raise Exception(f"Unable to load image file: {src_image}")
 
     if not os.path.exists(ocr_json_path):
         results, frames = obtain_ocr(src_image, text_executor)
         # convert CV frames to PIL frame
-        converted = []
-        for frame in frames:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = Image.fromarray(frame)
-            converted.append(frame)
-        frames = converted
+        frames = __convert_frames(frames, img_format="pil")
         store_json_object(results, ocr_json_path)
 
     results = load_json_file(ocr_json_path)
@@ -449,6 +435,9 @@ def main_image(
     id2label, label2id = get_label_info()
 
     for k, (result, image) in enumerate(zip(results, frames)):
+        if not isinstance(image, Image.Image):
+            raise "Frame should have been an PIL.Image instance"
+
         # image.show()
         size = image.size
         width = image.size[0]
@@ -554,7 +543,7 @@ def aggregate_results(
     if not os.path.exists(ocr_json_path):
         raise FileNotFoundError(annotation_json_path)
 
-    loaded, frames = load_image(src_image, format="pil")
+    loaded, frames = load_image(src_image, img_format="pil")
     if not loaded:
         raise Exception(f"Unable to load image file: {src_image}")
 
@@ -648,13 +637,15 @@ def aggregate_results(
                 # "LETTER_DATE",
                 # "PHONE",
                 # "URL"
-                # "ADDRESS"
+                # "ADDRESS",
             ]
 
             # expected_keys = ["PAN", "PAN_ANSWER"]
             line_aggregator = []
 
             color_map = {"ADDRESS": get_random_color()}
+            # color_map = {"ADDRESS": get_random_color()}
+
             for key in expected_keys:
                 aggregated = []
                 skip_to = -1
@@ -708,11 +699,15 @@ def aggregate_results(
                         aggregated_keys[line_idx] = []
                     aggregated_keys[line_idx].append(key_result)
 
+                    color = (
+                        color_map[field] if field in color_map else get_random_color()
+                    )
+
                     draw_box(
                         draw,
                         group_bbox,
                         None,
-                        get_random_color(),
+                        color,
                         font,
                     )
 
@@ -764,7 +759,7 @@ def aggregate_results(
             ["DOS", ["DOS_ANSWER", "ANSWER"]],
             ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
             ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-            # ["QUESTION", ["ANSWER"]],
+            ["QUESTION", ["ANSWER"]],
         ]
 
         for pair in expected_pair:
@@ -794,7 +789,7 @@ def aggregate_results(
                             bbox_a = found_answer["bbox"]
 
                             if bbox_a[0] < bbox_q[0]:
-                                logger.warning("Answer is not on right of question")
+                                logger.warning("Answer is not on the right of question")
                                 continue
 
                             category = found_question["key"]
@@ -871,7 +866,7 @@ class NerExtractionExecutor(Executor):
             __model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500"
         )
         models_dir: str = os.path.join(
-            __model_path__, "ner-rms-corr",  "checkpoint-best"
+            __model_path__, "ner-rms-corr", "checkpoint-best"
         )
         # models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-3500")
 
@@ -894,7 +889,7 @@ class NerExtractionExecutor(Executor):
         image_src: str = kwargs.get("img_path", None)
 
         for key, value in kwargs.items():
-            print("The value of {} is {}".format(key, value)) 
+            print("The value of {} is {}".format(key, value))
 
         root_dir = f"/tmp/ner/{queue_id}/{checksum}"
         ensure_exists(root_dir)

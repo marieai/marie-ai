@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 
 import cv2
+import hashlib
 
 
 def read_image(image):
@@ -25,7 +26,7 @@ def read_image(image):
         elif len(image.shape) == 3 and image.shape[2] == 4:  # RGBA
             img = image[:, :, :3]
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    elif type(image) == PIL.Image.Image: # convert pil to OpenCV
+    elif type(image) == PIL.Image.Image:  # convert pil to OpenCV
         img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     else:
         raise Exception(f"Unhandled image type : {type(image)}")
@@ -34,9 +35,11 @@ def read_image(image):
 
 
 def paste_fragment(overlay, fragment, pos=(0, 0)):
-    col = (list(np.random.choice(range(256), size=3)))
+    col = list(np.random.choice(range(256), size=3))
     color = [int(col[0]), int(col[1]), int(col[2])]
-    fragment = cv2.copyMakeBorder(fragment, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=color)
+    fragment = cv2.copyMakeBorder(
+        fragment, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=color
+    )
 
     fragment = cv2.cvtColor(fragment, cv2.COLOR_BGR2RGB)
     fragment_pil = Image.fromarray(fragment)
@@ -73,12 +76,9 @@ def imwrite(output_path, img, dpi=None):
         print(ident)
 
 
-
 def hash_file(filename):
     """ "This function returns the SHA-1 hash
     of the file passed into it"""
-    import hashlib
-
     # make a hash object
     h = hashlib.sha1()
 
@@ -92,5 +92,14 @@ def hash_file(filename):
             chunk = file.read(1024)
             h.update(chunk)
 
+    # return the hex representation of digest
+    return h.hexdigest()
+
+
+def hash_bytes(data):
+    """ "This function returns the SHA-1 hash
+    of the file passed into it"""
+    h = hashlib.sha1()
+    h.update(data)
     # return the hex representation of digest
     return h.hexdigest()
