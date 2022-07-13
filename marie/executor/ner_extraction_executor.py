@@ -27,6 +27,14 @@ from transformers import (
     LayoutLMv2TokenizerFast,
 )
 
+from transformers import (
+    LayoutLMv3Processor,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3ForTokenClassification,
+    LayoutLMv3TokenizerFast,
+)
+
+
 from transformers.utils import check_min_version
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -95,30 +103,41 @@ def obtain_ocr(src_image: str, text_executor: TextExtractionExecutor):
 
 def create_processor():
     """prepare for the model"""
-
-    # we do not want to use the pytesseract
-    # LayoutLMv2FeatureExtractor requires the PyTesseract library but it was not found in your environment. You can install it with pip:
-    # processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
-
+    # https://github.com/huggingface/transformers/blob/main/tests/models/layoutlmv3/test_processor_layoutlmv3.py
     # Method:2 Create Layout processor with custom future extractor
-    # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
-        "microsoft/layoutlmv2-large-uncased"
-    )
-    processor = LayoutLMv2Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
+    v2 = False
 
-    return processor
+    if v2:
+        feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+        tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
+            "microsoft/layoutlmv2-large-uncased"
+        )
+        processor = LayoutLMv2Processor(
+            feature_extractor=feature_extractor, tokenizer=tokenizer
+        )
+    else:
+        feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
+        processor = LayoutLMv3Processor(
+            feature_extractor=feature_extractor, tokenizer=tokenizer
+        )
+
+    return processor, feature_extractor, tokenizer
 
 
 def create_model_for_token_classification(model_dir: str):
     """
     Create token classification model
     """
-    print(f"LayoutLMv2ForTokenClassification dir : {model_dir}")
-    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
+    model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
+    print(f"TokenClassification dir : {model_dir}")
+
+    id2label, label2id = get_label_info()
+    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(id2label))
+    model = LayoutLMv3ForTokenClassification.from_pretrained(
+        model_dir, num_labels=len(id2label)
+    )
+
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -431,12 +450,21 @@ def main_image(
 
     assert len(results) == len(frames)
     annotations = []
-    processor = create_processor()
+    processor, feature_extractor, tokenizer = create_processor()
     id2label, label2id = get_label_info()
 
     for k, (result, image) in enumerate(zip(results, frames)):
         if not isinstance(image, Image.Image):
             raise "Frame should have been an PIL.Image instance"
+
+        # not batched
+        # input_feat_extract = feature_extractor(image, return_tensors="pt")
+        # input_processor = processor(image, return_tensors="pt")
+        #
+        # p1 = input_feat_extract["pixel_values"].sum()
+        # p2 = input_processor["pixel_values"].sum()
+
+        # print(f" input val = {p1} : {p2}")
 
         # image.show()
         size = image.size
@@ -468,9 +496,11 @@ def main_image(
             return_tensors="pt",
         )
 
+        print(encoded_inputs.keys())
         # Debug tensor info
-        if False:
-            img_tensor = encoded_inputs["image"]
+        if True:
+            # img_tensor = encoded_inputs["image"] # v2
+            img_tensor = encoded_inputs["pixel_values"]  # v3
             img = Image.fromarray(
                 (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
             )
@@ -499,7 +529,7 @@ def main_image(
         ]
 
         # show detail scores
-        if False:
+        if True:
             for i, val in enumerate(predictions):
                 tp = true_predictions[i]
                 score = normalized_logits[i][val]
@@ -569,6 +599,37 @@ def aggregate_results(
     aggregated_kv = []
     aggregated_meta = []
 
+    expected_keys = [
+        "PAN",
+        "PAN_ANSWER",
+        "PATIENT_NAME",
+        "PATIENT_NAME_ANSWER",
+        "DOS",
+        "DOS_ANSWER",
+        "MEMBER_NAME",
+        "MEMBER_NAME_ANSWER",
+        "MEMBER_NUMBER",
+        "MEMBER_NUMBER_ANSWER",
+        "QUESTION",
+        "ANSWER",  # Only collect ANSWERs for now
+        "LETTER_DATE",
+        "PHONE",
+        "URL"
+        # "ADDRESS",
+    ]
+
+    # expected_keys = ["PAN", "PAN_ANSWER"]
+
+    # expected KV pairs
+    expected_pair = [
+        ["PAN", ["PAN_ANSWER", "ANSWER"]],
+        ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+        ["DOS", ["DOS_ANSWER", "ANSWER"]],
+        ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+        ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
+        ["QUESTION", ["ANSWER"]],
+    ]
+
     for i, (ocr, ann, frame) in enumerate(zip(ocr_results, annotation_results, frames)):
         print(f"Processing page # {i}")
         logger.info(f"Processing page # {i}")
@@ -621,26 +682,6 @@ def aggregate_results(
 
             prediction_indexes = np.array(groups[line_idx])
 
-            expected_keys = [
-                "PAN",
-                "PAN_ANSWER",
-                "PATIENT_NAME",
-                "PATIENT_NAME_ANSWER",
-                "DOS",
-                "DOS_ANSWER",
-                "MEMBER_NAME",
-                "MEMBER_NAME_ANSWER",
-                "MEMBER_NUMBER",
-                "MEMBER_NUMBER_ANSWER",
-                "QUESTION",
-                "ANSWER",  # Only collect ANSWERs for now
-                # "LETTER_DATE",
-                # "PHONE",
-                # "URL"
-                # "ADDRESS",
-            ]
-
-            # expected_keys = ["PAN", "PAN_ANSWER"]
             line_aggregator = []
             color_map = {"ADDRESS": get_random_color()}
 
@@ -751,7 +792,6 @@ def aggregate_results(
 
                     aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
-
         # expected fields groups that indicate that the field could have been present but there was not associated
         possible_field = {
             "PAN": ["PAN", "PAN_ANSWER"],
@@ -766,11 +806,7 @@ def aggregate_results(
 
         for field in possible_field.keys():
             fields = possible_field[field]
-            possible_field_meta[field] = {
-                "page": i,
-                "found": False,
-                "fields": []
-            }
+            possible_field_meta[field] = {"page": i, "found": False, "fields": []}
 
             for k in aggregated_keys.keys():
                 ner_keys = aggregated_keys[k]
@@ -782,20 +818,7 @@ def aggregate_results(
                         possible_field_meta[field]["fields"].append(key)
 
         print(possible_field_meta)
-        aggregated_meta.append({
-            "page":i,
-            "fields": possible_field_meta
-        })
-
-        # expected KV pairs
-        expected_pair = [
-            ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
-            ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
-            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-            ["QUESTION", ["ANSWER"]],
-        ]
+        aggregated_meta.append({"page": i, "fields": possible_field_meta})
 
         for pair in expected_pair:
             expected_question = pair[0]
@@ -871,10 +894,7 @@ def aggregate_results(
 
     logger.info(f"aggregated_kv : {aggregated_kv}")
 
-    results = {
-        "meta": aggregated_meta,
-        "kv": aggregated_kv
-    }
+    results = {"meta": aggregated_meta, "kv": aggregated_kv}
 
     # return aggregated_kv
     return results
@@ -903,11 +923,7 @@ class NerExtractionExecutor(Executor):
         if has_cuda:
             cudnn.benchmark = False
             cudnn.deterministic = False
-        # ~/dev/marie-ai/model_zoo/ner-rms-corr/checkpoints-tuned-pan
         ensure_exists("/tmp/tensors")
-        models_dir: str = os.path.join(
-            __model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500"
-        )
         models_dir: str = os.path.join(
             __model_path__, "ner-rms-corr", "checkpoint-best"
         )

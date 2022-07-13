@@ -3,6 +3,7 @@ import os
 import time
 
 import numpy as np
+import transformers
 
 from marie.executor import NerExtractionExecutor
 from marie.utils.docs import load_image, docs_from_file, array_from_docs
@@ -33,18 +34,23 @@ def process_dir(executor: NerExtractionExecutor, image_dir: str):
 
 
 if __name__ == "__main__":
+
+    # pip install git+https://github.com/huggingface/transformers
+    # 4.18.0  -> 4.21.0.dev0
+    print(transformers.__version__)
+
     ensure_exists("/tmp/tensors/json")
     executor = NerExtractionExecutor()
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, "/home/gbugaj/tmp/medrx")
 
     if True:
-        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_718_7393_0_156664823.png"
+        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
-        img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
-        img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1313_8120_0_157638578.tif"
+        # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
+        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        # img_path = f"/home/gbugaj/tmp/medrx/PID_1313_8120_0_157638578.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         # img_path = (
         #     f"/home/greg/tmp/PID_1925_9289_0_157186264.png"  # Invalid token marking
