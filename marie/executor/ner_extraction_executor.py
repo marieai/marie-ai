@@ -2,6 +2,7 @@ from builtins import print
 import torch
 from docarray import DocumentArray
 from torch.backends import cudnn
+import torch.nn.functional as nn
 
 from marie import Executor, requests, __model_path__
 
@@ -14,7 +15,7 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 import logging
 import os
-from typing import Optional
+from typing import Optional, List, Any, Tuple, Dict
 import torch
 
 import numpy as np
@@ -122,20 +123,23 @@ def create_processor():
             feature_extractor=feature_extractor, tokenizer=tokenizer
         )
 
-    return processor, feature_extractor, tokenizer
+    return processor
 
 
-def create_model_for_token_classification(model_dir: str):
+def create_model_for_token_classification(model_dir: str, fp16: bool):
     """
     Create token classification model
     """
-    model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
+    model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned/checkpoint-6500"
     print(f"TokenClassification dir : {model_dir}")
 
-    id2label, label2id = get_label_info()
-    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(id2label))
+    labels, _, _ = get_label_info()
+    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
+
     model = LayoutLMv3ForTokenClassification.from_pretrained(
-        model_dir, num_labels=len(id2label)
+        model_dir, num_labels=len(labels)
     )
 
     # Next, let's move everything to the GPU, if it's available.
@@ -190,12 +194,13 @@ def get_label_info():
         "I-GREETING",
     ]
 
+    # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
     logger.info(f"Labels : {labels}")
 
     id2label = {v: k for v, k in enumerate(labels)}
     label2id = {k: v for v, k in enumerate(labels)}
 
-    return id2label, label2id
+    return labels, id2label, label2id
 
 
 def get_label_colors():
@@ -407,6 +412,83 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
     return "", 0.0
 
 
+def _filter(
+    values: List[Any], probabilities: List[float], threshold: float
+) -> List[Any]:
+    return [value for probs, value in zip(probabilities, values) if probs >= threshold]
+
+
+def infer(
+    models_dir: str,
+    image: Any,
+    labels: List[str],
+    threshold: float,
+    words: List[Any],
+    boxes: List[Any],
+) -> Tuple[List, List]:
+    logger.info(f"Performing inference using the model at {models_dir}")
+
+    model, device = create_model_for_token_classification(models_dir, True)
+    processor = create_processor()
+
+    id2label = {v: k for v, k in enumerate(labels)}
+    all_preds = []
+    all_bboxes = []
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    logger.info(
+        f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
+    )
+
+    # image = # Image.open(eg["path"]).convert("RGB")
+    width, height = image.size
+
+    # Encode the image
+    encoding = processor(
+        # fmt: off
+        image,
+        words,
+        boxes=boxes,
+        truncation=True,
+        return_offsets_mapping=True,
+        return_tensors="pt"
+        # fmt: on
+    )
+
+    for ek, ev in encoding.items():
+        encoding[ek] = ev.to(device)
+
+    offset_mapping = encoding.pop("offset_mapping")
+
+    # Perform forward pass
+    outputs = model(**encoding)
+
+    # Get the predictions and probabilities
+    probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+    _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+    _token_boxes = encoding.bbox.squeeze().tolist()
+
+    # Filter the predictions and bounding boxes based on a threshold
+    predictions = _filter(_predictions, probs, threshold)
+    token_boxes = _filter(_token_boxes, probs, threshold)
+
+    # Only keep non-subword predictions
+    is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+    true_predictions = [
+        id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]
+    ]
+    true_boxes = [
+        unnormalize_box(box, width, height)
+        for idx, box in enumerate(token_boxes)
+        if not is_subword[idx]
+    ]
+
+    all_preds.append(true_predictions)
+    all_bboxes.append(true_boxes)
+
+    return (all_preds, all_bboxes)
+
+
 def main_image(
     src_image: str,
     model,
@@ -450,24 +532,13 @@ def main_image(
 
     assert len(results) == len(frames)
     annotations = []
-    processor, feature_extractor, tokenizer = create_processor()
-    id2label, label2id = get_label_info()
+    processor = create_processor()
+    labels, id2label, label2id = get_label_info()
 
     for k, (result, image) in enumerate(zip(results, frames)):
         if not isinstance(image, Image.Image):
             raise "Frame should have been an PIL.Image instance"
 
-        # not batched
-        # input_feat_extract = feature_extractor(image, return_tensors="pt")
-        # input_processor = processor(image, return_tensors="pt")
-        #
-        # p1 = input_feat_extract["pixel_values"].sum()
-        # p2 = input_processor["pixel_values"].sum()
-
-        # print(f" input val = {p1} : {p2}")
-
-        # image.show()
-        size = image.size
         width = image.size[0]
         height = image.size[1]
         words = []
@@ -487,16 +558,20 @@ def main_image(
 
         assert len(words) == len(boxes)
 
+        inf_result = infer("", image, labels, 0.1, words, boxes)
+
         encoded_inputs = processor(
+            # fmt: off
             image,
             words,
             boxes=boxes,
-            padding="max_length",
             truncation=True,
-            return_tensors="pt",
+            return_offsets_mapping=True,
+            return_tensors="pt"
+            # fmt: on
         )
-
         print(encoded_inputs.keys())
+
         # Debug tensor info
         if True:
             # img_tensor = encoded_inputs["image"] # v2
@@ -508,6 +583,8 @@ def main_image(
 
         for ek, ev in encoded_inputs.items():
             encoded_inputs[ek] = ev.to(device)
+
+        offset_mapping = encoded_inputs.pop("offset_mapping")
 
         # forward pass
         outputs = model(**encoded_inputs)
@@ -927,9 +1004,10 @@ class NerExtractionExecutor(Executor):
         models_dir: str = os.path.join(
             __model_path__, "ner-rms-corr", "checkpoint-best"
         )
-        # models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan", "checkpoint-3500")
 
-        self.model, self.device = create_model_for_token_classification(models_dir)
+        self.model, self.device = create_model_for_token_classification(
+            models_dir, True
+        )
         self.text_executor = TextExtractionExecutor()
 
     def info(self, **kwargs):

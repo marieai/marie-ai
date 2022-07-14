@@ -1206,7 +1206,7 @@ def splitDataset(src_dir, output_path, split_percentage):
     datalist = file_set[0:sample_count]
 
     for item in datalist:
-        print(f"Spliting : {item}")
+        print(f"Splitting : {item}")
         ann = item["annotation"]
         img = item["image"]
         filename = item["filename"]
@@ -1228,7 +1228,7 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if True:
+    if  False:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1264,14 +1264,14 @@ if __name__ == "__main__":
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-    # visualize_funsd(aug_dest_dir)
+    visualize_funsd(aug_dest_dir)
 
     # split data set from
-    splitDataset(
-        "/home/greg/dataset/assets-private/corr-indexer-augmented/dataset/training_data/",
-        "/tmp/split",
-        0.10,
-    )
+    # splitDataset(
+    #     "/home/greg/dataset/assets-private/corr-indexer-augmented/dataset/training_data/",
+    #     "/tmp/split",
+    #     0.10,
+    # )
 
     # Debug INFO
     # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
