@@ -1,5 +1,8 @@
-from builtins import print
+import os
+import cv2
 import torch
+from builtins import print
+
 from docarray import DocumentArray
 from torch.backends import cudnn
 import torch.nn.functional as nn
@@ -11,12 +14,9 @@ from marie.utils.utils import ensure_exists
 from marie.utils.overlap import find_overlap_horizontal
 from marie.utils.overlap import merge_bboxes_as_block
 
-import cv2
 from PIL import Image, ImageDraw, ImageFont
 import logging
-import os
 from typing import Optional, List, Any, Tuple, Dict
-import torch
 
 import numpy as np
 
@@ -117,11 +117,10 @@ def create_processor():
             feature_extractor=feature_extractor, tokenizer=tokenizer
         )
     else:
+        # Max model size is 512, so we will need to handle any documents larger thjan ath
         feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
         tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
-        processor = LayoutLMv3Processor(
-            feature_extractor=feature_extractor, tokenizer=tokenizer
-        )
+        processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     return processor
 
@@ -132,7 +131,7 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
     """
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
-    model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned/checkpoint-6500"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-50000"
     print(f"TokenClassification dir : {model_dir}")
 
     labels, _, _ = get_label_info()
@@ -152,46 +151,38 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
 def get_label_info():
     labels = [
         "O",
-        "B-MEMBER_NAME",
-        "I-MEMBER_NAME",
-        "B-MEMBER_NAME_ANSWER",
-        "I-MEMBER_NAME_ANSWER",
-        "B-MEMBER_NUMBER",
-        "I-MEMBER_NUMBER",
-        "B-MEMBER_NUMBER_ANSWER",
-        "I-MEMBER_NUMBER_ANSWER",
-        "B-PAN",
-        "I-PAN",
-        "B-PAN_ANSWER",
-        "I-PAN_ANSWER",
-        "B-DOS",
-        "I-DOS",
-        "B-DOS_ANSWER",
-        "I-DOS_ANSWER",
-        "B-PATIENT_NAME",
-        "I-PATIENT_NAME",
-        "B-PATIENT_NAME_ANSWER",
-        "I-PATIENT_NAME_ANSWER",
-        "B-HEADER",
-        "I-HEADER",
-        "B-DOCUMENT_CONTROL",
-        "I-DOCUMENT_CONTROL",
-        "B-LETTER_DATE",
-        "I-LETTER_DATE",
-        "B-PARAGRAPH",
-        "I-PARAGRAPH",
-        "B-ADDRESS",
-        "I-ADDRESS",
-        "B-QUESTION",
-        "I-QUESTION",
-        "B-ANSWER",
-        "I-ANSWER",
-        "B-PHONE",
-        "I-PHONE",
-        "B-URL",
-        "I-URL",
-        "B-GREETING",
-        "I-GREETING",
+        'B-MEMBER_NAME', 'I-MEMBER_NAME',
+        'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER',
+        'B-PAN', 'I-PAN',
+        'B-PATIENT_NAME', 'I-PATIENT_NAME',
+        'B-DOS', 'I-DOS',
+        'B-DOS_ANSWER', 'I-DOS_ANSWER',
+        'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER',
+        'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER',
+        'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER',
+        'B-PAN_ANSWER', 'I-PAN_ANSWER',
+        'B-ADDRESS', 'I-ADDRESS',
+        'B-GREETING', 'I-GREETING',
+        'B-HEADER', 'I-HEADER',
+        'B-LETTER_DATE', 'I-LETTER_DATE',
+        'B-PARAGRAPH', 'I-PARAGRAPH',
+        'B-QUESTION', 'I-QUESTION',
+        'B-ANSWER', 'I-ANSWER',
+        'B-DOCUMENT_CONTROL', 'I-DOCUMENT_CONTROL',
+        'B-PHONE', 'I-PHONE',
+        'B-URL', 'I-URL',
+        'B-CLAIM_NUMBER', 'I-CLAIM_NUMBER',
+        'B-CLAIM_NUMBER_ANSWER', 'I-CLAIM_NUMBER_ANSWER',
+        'B-BIRTHDATE', 'I-BIRTHDATE',
+        'B-BIRTHDATE_ANSWER', 'I-BIRTHDATE_ANSWER',
+        'B-BILLED_AMT', 'I-BILLED_AMT',
+        'B-BILLED_AMT_ANSWER', 'I-BILLED_AMT_ANSWER',
+        'B-PAID_AMT', 'I-PAID_AMT',
+        'B-PAID_AMT_ANSWER', 'I-PAID_AMT_ANSWER',
+        'B-CHECK_AMT', 'I-CHECK_AMT',
+        'B-CHECK_AMT_ANSWER', 'I-CHECK_AMT_ANSWER',
+        'B-CHECK_NUMBER', 'I-CHECK_NUMBER',
+        'B-CHECK_NUMBER_ANSWER', 'I-CHECK_NUMBER_ANSWER',
     ]
 
     # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
@@ -204,7 +195,7 @@ def get_label_info():
 
 
 def get_label_colors():
-    return {
+    v2 = {
         "pan": "blue",
         "pan_answer": "green",
         "dos": "orange",
@@ -229,6 +220,47 @@ def get_label_colors():
         "phone": "darkmagenta",
         "other": "red",
     }
+
+    v3 = {
+        "pan": "blue",
+        "pan_answer": "green",
+        "dos": "orange",
+        "dos_answer": "violet",
+        "member": "blue",
+        "member_answer": "green",
+        "member_number": "blue",
+        "member_number_answer": "green",
+        "member_name": "blue",
+        "member_name_answer": "green",
+        "patient_name": "blue",
+        "patient_name_answer": "green",
+        "paragraph": "purple",
+        "greeting": "blue",
+        "address": "orange",
+        "question": "blue",
+        "answer": "aqua",
+        "document_control": "grey",
+        "header": "brown",
+        "letter_date": "deeppink",
+        "url": "darkorange",
+        "phone": "darkmagenta",
+        "other": "red",
+
+        "claim_number": "darkmagenta",
+        "claim_number_answer": "green",
+        "birthdate": "green",
+        "birthdate_answer": "red",
+        "billed_amt": "green",
+        "billed_amt_answer": "orange",
+        "paid_amt": "green",
+        "paid_amt_answer": "blue",
+        "check_amt": "orange",
+        "check_amt_answer": "darkmagenta",
+        "check_number": "orange",
+        "check_number_answer": "blue",
+    }
+
+    return v3
 
 
 def draw_box(draw, box, text, fill_color, font):
