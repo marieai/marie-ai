@@ -77,11 +77,11 @@ def check_layoutlmv3(img_path):
 if __name__ == "__main__":
 
     # pip install git+https://github.com/huggingface/transformers
-    # 4.18.0  -> 4.21.0.dev0
+    # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
-    img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-    ensure_exists("/tmp/tensors/json")
-    # check_layoutlmv3(img_path)
+    # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
+    # ensure_exists("/tmp/tensors/json")
+    # # check_layoutlmv3(img_path)
 
     executor = NerExtractionExecutor()
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-        img_path = f"/home/greg/dataset/assets-private/corr-indexer-augmented/dataset/training_data/images/152608859_1_1_0.png"
+        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693875.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"

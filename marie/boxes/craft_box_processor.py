@@ -164,7 +164,7 @@ def get_prediction(
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        if True:
+        if False:
             cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
             cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
             cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
@@ -188,7 +188,7 @@ def get_prediction(
             color = list(np.random.random(size=3) * 256)
             cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
 
-        cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+        # cv2.imwrite("/tmp/fragments/img_line.png", overlay)
         lines_bboxes = line_merge(overlay, line_bboxes)
 
         # coordinate adjustment
@@ -223,8 +223,7 @@ def get_prediction(
                 width=1,
             )
 
-        viz_img.save(os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG")
-
+        # viz_img.save(os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG")
     # estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text, lines_bboxes
 
@@ -406,7 +405,7 @@ class BoxProcessorCraft(BoxProcessor):
 
     # @Timer(text="BoundingBoxes in {:.2f} seconds")
     def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
-        print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
+        # print("Extracting bounding boxes : mode={} key={}, id={}".format(psm, key, _id))
 
         if img is None:
             raise Exception("Input image can't be empty")

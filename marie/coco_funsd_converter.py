@@ -165,6 +165,7 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
 
 
 def load_image(image_path):
+    print(image_path)
     image = cv2.imread(image_path)
     h, w = image.shape[0], image.shape[1]
     return image, (w, h)
@@ -242,6 +243,18 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         "letter_date": [-1],
         "url": [-1],
         "phone": [-1],
+        "claim_number": [-1],
+        "claim_number_answer": [-1],
+        "birthdate": [-1],
+        "birthdate_answer": [-1],
+        "billed_amt": [-1],
+        "billed_amt_answer": [-1],
+        "paid_amt": [-1],
+        "paid_amt_answer": [-1],
+        "check_amt": [-1],
+        "check_amt_answer": [-1],
+        "check_number": [-1],
+        "check_number_answer": [-1],
     }
 
     for category in categories:
@@ -1000,6 +1013,21 @@ def visualize_funsd(src_dir: str):
             "url": "darkorange",
             "phone": "darkmagenta",
             "other": "red",
+
+            "claim_number": "darkmagenta",
+            "claim_number_answer": "green",
+            "birthdate": "green",
+            "birthdate_answer": "red",
+            "billed_amt": "green",
+            "billed_amt_answer": "orange",
+            "paid_amt": "green",
+            "paid_amt_answer": "blue",
+            "check_amt": "orange",
+            "check_amt_answer": "darkmagenta",
+            "check_number": "orange",
+            "check_number_answer": "blue",
+
+
         }
 
         for i, item in enumerate(data["form"]):
@@ -1219,7 +1247,6 @@ def splitDataset(src_dir, output_path, split_percentage):
 
 
 if __name__ == "__main__":
-    name = "test"
 
     # Home
     if True:
@@ -1228,7 +1255,7 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if  False:
+    if False:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1239,7 +1266,12 @@ if __name__ == "__main__":
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
-    src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
+    name = "test"
+    src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
+    #
+    # name = "train"
+    # src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
+
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
     aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
 
@@ -1258,13 +1290,13 @@ if __name__ == "__main__":
     # decorate_funsd(dst_path)
 
     # STEP 3
-    # augment_decorated_annotation(count=50, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=150, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
-    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-    visualize_funsd(aug_dest_dir)
+    # visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
