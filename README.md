@@ -30,7 +30,6 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.3
 
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.2 && docker push gregbugaj/marie-icr:2.2
-<<<<<<< Updated upstream
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
 docker push gregbugaj/marie-icr:2.3-cuda
 =======
