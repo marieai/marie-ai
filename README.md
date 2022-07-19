@@ -29,18 +29,12 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.3
 ```
 
 ```sh
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.2 && docker push gregbugaj/marie-icr:2.2
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
-docker push gregbugaj/marie-icr:2.3-cuda
-=======
-
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
 docker push gregbugaj/marie-icr:2.3-cuda
 
->>>>>>> Stashed changes
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
+docker push gregbugaj/marie-icr:2.3-cuda
 ```
-
-gregbugaj/marie-icr:2.3-cuda                  de66c17c67a4   17 minutes ago      7.56GB
 
 
 docker stop $(docker ps -q)
@@ -219,23 +213,20 @@ https://github.com/Lightning-AI
 
 ## Implement models
 
-Implement secondary box detection method.
-[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
-
-Implement DocFormer: End-to-End Transformer for Document Understanding
-[DocFormer_End-to-End_Transforme](https://openaccess.thecvf.com/content/ICCV2021/papers/Appalaraju_DocFormer_End-to-End_Transformer_for_Document_Understanding_ICCV_2021_paper.pdf)
-
-
 ## Stream processing
 [KSQL Stream processing example ](https://www.confluent.io/blog/sysmon-security-event-processing-real-time-ksql-helk/)
 [KSQL](https://pypi.org/project/ksql/)
  
 
 ## Research 
-
+[table-transformer](https://github.com/microsoft/table-transformer)
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
+Implement secondary box detection method.
+[TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
+Implement DocFormer: End-to-End Transformer for Document Understanding
+[DocFormer_End-to-End_Transforme](https://openaccess.thecvf.com/content/ICCV2021/papers/Appalaraju_DocFormer_End-to-End_Transformer_for_Document_Understanding_ICCV_2021_paper.pdf)
 
 ## 
 Install `fairseq` from source, the release version is  missing `convert_namespace_to_omegaconf`
