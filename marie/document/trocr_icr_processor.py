@@ -152,7 +152,7 @@ def get_text(cfg, task, generator, model, samples, bpe):
         predictions.append(detok_hypo_str)
         scores.append(score)
 
-        print(f"score : {output_score}, {score}  : {detok_hypo_str}")
+        logger.debug(f"score : {output_score}, {score}  : {detok_hypo_str}")
 
     return predictions, scores
 
@@ -204,7 +204,7 @@ class TrOcrIcrProcessor(IcrProcessor):
                 (H, W, 3).
         """
 
-        logger.info("ICR processing : recognize_from_boxes via boxes")
+        logger.debug("ICR processing : recognize_from_boxes via boxes")
 
         batch_size = 64  # 64 16GB
         batch_size = 98  # 98 24GB
@@ -241,11 +241,11 @@ class TrOcrIcrProcessor(IcrProcessor):
                     confidence = round(score, 4)
                     row = {"confidence": confidence, "id": img_name, "text": text}
                     results.append(row)
-                    logger.info(f"results : {row}")
+                    logger.debug(f"results : {row}")
 
-                logger.info("Batch time : %s" % (time.time() - batch_start))
+                logger.debug("Batch time : %s" % (time.time() - batch_start))
 
-            logger.info("ICR Time elapsed: %s" % (time.time() - start))
+            logger.debug("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex

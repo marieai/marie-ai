@@ -88,7 +88,6 @@ class PdfRenderer(ResultRenderer):
                 for wid in line["wordids"]:
                     word2line[wid] = line
 
-            print(word2line)
             img_h = img.shape[0]
             img_w = img.shape[1]
 

@@ -1,26 +1,22 @@
-from enum import Enum
-from typing import Optional, Dict
-
+import os
+import cv2
 import torch
+from builtins import print
+
 from docarray import DocumentArray
 from torch.backends import cudnn
+import torch.nn.functional as nn
 
 from marie import Executor, requests, __model_path__
 
-import os
-import transformers
-import numpy as np
-import cv2
-
 from marie.logging.logger import MarieLogger
 from marie.utils.utils import ensure_exists
+from marie.utils.overlap import find_overlap_horizontal
+from marie.utils.overlap import merge_bboxes_as_block
 
-import cv2
 from PIL import Image, ImageDraw, ImageFont
 import logging
-import os
-from typing import Optional
-import torch
+from typing import Optional, List, Any, Tuple, Dict
 
 import numpy as np
 
@@ -31,6 +27,14 @@ from transformers import (
     LayoutLMv2ForTokenClassification,
     LayoutLMv2TokenizerFast,
 )
+
+from transformers import (
+    LayoutLMv3Processor,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3ForTokenClassification,
+    LayoutLMv3TokenizerFast,
+)
+
 
 from transformers.utils import check_min_version
 
@@ -43,6 +47,7 @@ from marie.utils.docs import (
     array_from_docs,
     docs_from_image,
     load_image,
+    __convert_frames,
 )
 
 from marie.utils.image_utils import viewImage, read_image, hash_file
@@ -99,26 +104,43 @@ def obtain_ocr(src_image: str, text_executor: TextExtractionExecutor):
 
 def create_processor():
     """prepare for the model"""
-
-    # we do not want to use the pytesseract
-    # LayoutLMv2FeatureExtractor requires the PyTesseract library but it was not found in your environment. You can install it with pip:
-    # processor = LayoutLMv2Processor.from_pretrained("microsoft/layoutlmv2-base-uncased", revision="no_ocr")
-
+    # https://github.com/huggingface/transformers/blob/main/tests/models/layoutlmv3/test_processor_layoutlmv3.py
     # Method:2 Create Layout processor with custom future extractor
-    # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv2TokenizerFast.from_pretrained("microsoft/layoutlmv2-large-uncased")
-    processor = LayoutLMv2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    v2 = False
+
+    if v2:
+        feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+        tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
+            "microsoft/layoutlmv2-large-uncased"
+        )
+        processor = LayoutLMv2Processor(
+            feature_extractor=feature_extractor, tokenizer=tokenizer
+        )
+    else:
+        # Max model size is 512, so we will need to handle any documents larger thjan ath
+        feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
+        processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     return processor
 
 
-def create_model_for_token_classification(model_dir: str):
+def create_model_for_token_classification(model_dir: str, fp16: bool):
     """
     Create token classification model
     """
-    print(f"LayoutLMv2ForTokenClassification dir : {model_dir}")
-    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir)
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-50000"
+    print(f"TokenClassification dir : {model_dir}")
+
+    labels, _, _ = get_label_info()
+    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
+
+    model = LayoutLMv3ForTokenClassification.from_pretrained(
+        model_dir, num_labels=len(labels)
+    )
+
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -129,60 +151,51 @@ def create_model_for_token_classification(model_dir: str):
 def get_label_info():
     labels = [
         "O",
-        "B-MEMBER_NAME",
-        "I-MEMBER_NAME",
-        "B-MEMBER_NAME_ANSWER",
-        "I-MEMBER_NAME_ANSWER",
-        "B-MEMBER_NUMBER",
-        "I-MEMBER_NUMBER",
-        "B-MEMBER_NUMBER_ANSWER",
-        "I-MEMBER_NUMBER_ANSWER",
-        "B-PAN",
-        "I-PAN",
-        "B-PAN_ANSWER",
-        "I-PAN_ANSWER",
-        "B-DOS",
-        "I-DOS",
-        "B-DOS_ANSWER",
-        "I-DOS_ANSWER",
-        "B-PATIENT_NAME",
-        "I-PATIENT_NAME",
-        "B-PATIENT_NAME_ANSWER",
-        "I-PATIENT_NAME_ANSWER",
-        "B-HEADER",
-        "I-HEADER",
-        "B-DOCUMENT_CONTROL",
-        "I-DOCUMENT_CONTROL",
-        "B-LETTER_DATE",
-        "I-LETTER_DATE",
-        "B-PARAGRAPH",
-        "I-PARAGRAPH",
-        "B-ADDRESS",
-        "I-ADDRESS",
-        "B-QUESTION",
-        "I-QUESTION",
-        "B-ANSWER",
-        "I-ANSWER",
-        "B-PHONE",
-        "I-PHONE",
-        "B-URL",
-        "I-URL",
-        "B-GREETING",
-        "I-GREETING",
+        'B-MEMBER_NAME', 'I-MEMBER_NAME',
+        'B-MEMBER_NUMBER', 'I-MEMBER_NUMBER',
+        'B-PAN', 'I-PAN',
+        'B-PATIENT_NAME', 'I-PATIENT_NAME',
+        'B-DOS', 'I-DOS',
+        'B-DOS_ANSWER', 'I-DOS_ANSWER',
+        'B-PATIENT_NAME_ANSWER', 'I-PATIENT_NAME_ANSWER',
+        'B-MEMBER_NAME_ANSWER', 'I-MEMBER_NAME_ANSWER',
+        'B-MEMBER_NUMBER_ANSWER', 'I-MEMBER_NUMBER_ANSWER',
+        'B-PAN_ANSWER', 'I-PAN_ANSWER',
+        'B-ADDRESS', 'I-ADDRESS',
+        'B-GREETING', 'I-GREETING',
+        'B-HEADER', 'I-HEADER',
+        'B-LETTER_DATE', 'I-LETTER_DATE',
+        'B-PARAGRAPH', 'I-PARAGRAPH',
+        'B-QUESTION', 'I-QUESTION',
+        'B-ANSWER', 'I-ANSWER',
+        'B-DOCUMENT_CONTROL', 'I-DOCUMENT_CONTROL',
+        'B-PHONE', 'I-PHONE',
+        'B-URL', 'I-URL',
+        'B-CLAIM_NUMBER', 'I-CLAIM_NUMBER',
+        'B-CLAIM_NUMBER_ANSWER', 'I-CLAIM_NUMBER_ANSWER',
+        'B-BIRTHDATE', 'I-BIRTHDATE',
+        'B-BIRTHDATE_ANSWER', 'I-BIRTHDATE_ANSWER',
+        'B-BILLED_AMT', 'I-BILLED_AMT',
+        'B-BILLED_AMT_ANSWER', 'I-BILLED_AMT_ANSWER',
+        'B-PAID_AMT', 'I-PAID_AMT',
+        'B-PAID_AMT_ANSWER', 'I-PAID_AMT_ANSWER',
+        'B-CHECK_AMT', 'I-CHECK_AMT',
+        'B-CHECK_AMT_ANSWER', 'I-CHECK_AMT_ANSWER',
+        'B-CHECK_NUMBER', 'I-CHECK_NUMBER',
+        'B-CHECK_NUMBER_ANSWER', 'I-CHECK_NUMBER_ANSWER',
     ]
 
+    # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
     logger.info(f"Labels : {labels}")
 
     id2label = {v: k for v, k in enumerate(labels)}
     label2id = {k: v for v, k in enumerate(labels)}
 
-    return id2label, label2id
+    return labels, id2label, label2id
 
 
-def visualize_prediction(output_filename, frame, true_predictions, true_boxes, true_scores):
-    image = frame.copy()
-    # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
-    label2color = {
+def get_label_colors():
+    v2 = {
         "pan": "blue",
         "pan_answer": "green",
         "dos": "orange",
@@ -208,6 +221,72 @@ def visualize_prediction(output_filename, frame, true_predictions, true_boxes, t
         "other": "red",
     }
 
+    v3 = {
+        "pan": "blue",
+        "pan_answer": "green",
+        "dos": "orange",
+        "dos_answer": "violet",
+        "member": "blue",
+        "member_answer": "green",
+        "member_number": "blue",
+        "member_number_answer": "green",
+        "member_name": "blue",
+        "member_name_answer": "green",
+        "patient_name": "blue",
+        "patient_name_answer": "green",
+        "paragraph": "purple",
+        "greeting": "blue",
+        "address": "orange",
+        "question": "blue",
+        "answer": "aqua",
+        "document_control": "grey",
+        "header": "brown",
+        "letter_date": "deeppink",
+        "url": "darkorange",
+        "phone": "darkmagenta",
+        "other": "red",
+
+        "claim_number": "darkmagenta",
+        "claim_number_answer": "green",
+        "birthdate": "green",
+        "birthdate_answer": "red",
+        "billed_amt": "green",
+        "billed_amt_answer": "orange",
+        "paid_amt": "green",
+        "paid_amt_answer": "blue",
+        "check_amt": "orange",
+        "check_amt_answer": "darkmagenta",
+        "check_number": "orange",
+        "check_number_answer": "blue",
+    }
+
+    return v3
+
+
+def draw_box(draw, box, text, fill_color, font):
+    # in  xywh -> x1y1x2y2
+    draw.rectangle(
+        [(box[0], box[1]), (box[0] + box[2], box[1] + box[3])],
+        outline="red",
+        fill=fill_color,
+        width=1,
+    )
+    if text is not None:
+        draw.text(
+            (box[0] + 10, box[1] - 10),
+            text=f"{text}",
+            fill="red",
+            font=font,
+            width=1,
+        )
+
+
+def visualize_prediction(
+    output_filename, frame, true_predictions, true_boxes, true_scores
+):
+    image = frame.copy()
+    # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
+    label2color = get_label_colors()
     draw = ImageDraw.Draw(image, "RGBA")
     font = get_font(14)
 
@@ -218,7 +297,7 @@ def visualize_prediction(output_filename, frame, true_predictions, true_boxes, t
             continue
 
         predicted_label = iob_to_label(prediction).lower()
-        draw.rectangle(box, outline=label2color[predicted_label], width=1)
+        draw.rectangle(box, outline=label2color[predicted_label.lower()], width=1)
         draw.text(
             (box[0] + 10, box[1] - 10),
             text=f"{predicted_label} : {score}",
@@ -232,11 +311,52 @@ def visualize_prediction(output_filename, frame, true_predictions, true_boxes, t
     del draw
 
 
+def visualize_extract_kv(output_filename, frame, kv_results):
+    """Visualize KV prediction"""
+    image = frame.copy()
+    draw = ImageDraw.Draw(image, "RGBA")
+    font = get_font(10)
+
+    for i, kv in enumerate(kv_results):
+        question = kv["value"]["question"]
+        answer = kv["value"]["answer"]
+
+        q_box = question["bbox"]
+        a_box = answer["bbox"]
+
+        draw_box(
+            draw,
+            q_box,
+            None,
+            get_random_color(),
+            font,
+        )
+
+        draw_box(
+            draw,
+            a_box,
+            None,
+            get_random_color(),
+            font,
+        )
+
+    image.save(output_filename)
+    del draw
+
+
+def get_random_color():
+    return (
+        np.random.randint(50, 255),
+        np.random.randint(50, 255),
+        np.random.randint(50, 255),
+        70,
+    )
+
+
 def get_font(size):
     try:
         font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
     except Exception as ex:
-        # print(ex)
         font = ImageFont.load_default()
 
     return font
@@ -257,11 +377,7 @@ def visualize_icr(frames, results, filename):
 
         size = 14
         draw = ImageDraw.Draw(viz_img, "RGBA")
-        try:
-            font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeSans.ttf"), size)
-        except Exception as ex:
-            print(ex)
-            font = ImageFont.load_default()
+        font = get_font(size)
 
         words_all = []
         words = np.array(result["words"])
@@ -279,24 +395,21 @@ def visualize_icr(frames, results, filename):
             button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
             # put text on button with 10px margins
             button_draw = ImageDraw.Draw(button_img, "RGBA")
-            button_draw.text((4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1)
+            button_draw.text(
+                (4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1
+            )
             # draw.rectangle(box, outline="red", width=1)
             # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
             # put button on source image in position (0, 0)
             viz_img.paste(button_img, (box[0], box[1]))
 
         for i, box in enumerate(lines_bboxes):
-            xy = [(box[0], box[1]), (box[0] + box[2], box[1] + box[3])]
-            draw.rectangle(
-                xy,
-                outline="red",
-                fill=(
-                    np.random.randint(50, 255),
-                    np.random.randint(50, 255),
-                    np.random.randint(50, 255),
-                    70,
-                ),
-                width=1,
+            draw_box(
+                draw,
+                box,
+                None,  # f"{q_text} : {q_confidence}",
+                get_random_color(),
+                font,
             )
 
         if filename is None:
@@ -331,6 +444,83 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
     return "", 0.0
 
 
+def _filter(
+    values: List[Any], probabilities: List[float], threshold: float
+) -> List[Any]:
+    return [value for probs, value in zip(probabilities, values) if probs >= threshold]
+
+
+def infer(
+    models_dir: str,
+    image: Any,
+    labels: List[str],
+    threshold: float,
+    words: List[Any],
+    boxes: List[Any],
+) -> Tuple[List, List]:
+    logger.info(f"Performing inference using the model at {models_dir}")
+
+    model, device = create_model_for_token_classification(models_dir, True)
+    processor = create_processor()
+
+    id2label = {v: k for v, k in enumerate(labels)}
+    all_preds = []
+    all_bboxes = []
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    logger.info(
+        f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
+    )
+
+    # image = # Image.open(eg["path"]).convert("RGB")
+    width, height = image.size
+
+    # Encode the image
+    encoding = processor(
+        # fmt: off
+        image,
+        words,
+        boxes=boxes,
+        truncation=True,
+        return_offsets_mapping=True,
+        return_tensors="pt"
+        # fmt: on
+    )
+
+    for ek, ev in encoding.items():
+        encoding[ek] = ev.to(device)
+
+    offset_mapping = encoding.pop("offset_mapping")
+
+    # Perform forward pass
+    outputs = model(**encoding)
+
+    # Get the predictions and probabilities
+    probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+    _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+    _token_boxes = encoding.bbox.squeeze().tolist()
+
+    # Filter the predictions and bounding boxes based on a threshold
+    predictions = _filter(_predictions, probs, threshold)
+    token_boxes = _filter(_token_boxes, probs, threshold)
+
+    # Only keep non-subword predictions
+    is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+    true_predictions = [
+        id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]
+    ]
+    true_boxes = [
+        unnormalize_box(box, width, height)
+        for idx, box in enumerate(token_boxes)
+        if not is_subword[idx]
+    ]
+
+    all_preds.append(true_predictions)
+    all_bboxes.append(true_boxes)
+
+    return (all_preds, all_bboxes)
+
+
 def main_image(
     src_image: str,
     model,
@@ -359,19 +549,14 @@ def main_image(
     if not os.path.exists(ocr_json_path) and text_executor is None:
         raise Exception(f"OCR File not found : {ocr_json_path}")
 
-    loaded, frames = load_image(src_image, format="pil")
+    loaded, frames = load_image(src_image, img_format="pil")
     if not loaded:
         raise Exception(f"Unable to load image file: {src_image}")
 
     if not os.path.exists(ocr_json_path):
         results, frames = obtain_ocr(src_image, text_executor)
         # convert CV frames to PIL frame
-        converted = []
-        for frame in frames:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = Image.fromarray(frame)
-            converted.append(frame)
-        frames = converted
+        frames = __convert_frames(frames, img_format="pil")
         store_json_object(results, ocr_json_path)
 
     results = load_json_file(ocr_json_path)
@@ -380,11 +565,12 @@ def main_image(
     assert len(results) == len(frames)
     annotations = []
     processor = create_processor()
-    id2label, label2id = get_label_info()
+    labels, id2label, label2id = get_label_info()
 
     for k, (result, image) in enumerate(zip(results, frames)):
-        # image.show()
-        size = image.size
+        if not isinstance(image, Image.Image):
+            raise "Frame should have been an PIL.Image instance"
+
         width = image.size[0]
         height = image.size[1]
         words = []
@@ -404,23 +590,33 @@ def main_image(
 
         assert len(words) == len(boxes)
 
+        inf_result = infer("", image, labels, 0.1, words, boxes)
+
         encoded_inputs = processor(
+            # fmt: off
             image,
             words,
             boxes=boxes,
-            padding="max_length",
             truncation=True,
-            return_tensors="pt",
+            return_offsets_mapping=True,
+            return_tensors="pt"
+            # fmt: on
         )
+        print(encoded_inputs.keys())
 
         # Debug tensor info
-        if False:
-            img_tensor = encoded_inputs["image"]
-            img = Image.fromarray((img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0))
+        if True:
+            # img_tensor = encoded_inputs["image"] # v2
+            img_tensor = encoded_inputs["pixel_values"]  # v3
+            img = Image.fromarray(
+                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+            )
             img.save(f"/tmp/tensors/tensor_{file_hash}_{k}.png")
 
         for ek, ev in encoded_inputs.items():
             encoded_inputs[ek] = ev.to(device)
+
+        offset_mapping = encoded_inputs.pop("offset_mapping")
 
         # forward pass
         outputs = model(**encoded_inputs)
@@ -437,10 +633,12 @@ def main_image(
         # get predictions
         true_predictions = [id2label[prediction] for prediction in predictions]
         true_boxes = [unnormalize_box(box, width, height) for box in token_boxes]
-        true_scores = [round(normalized_logits[i][val], 6) for i, val in enumerate(predictions)]
+        true_scores = [
+            round(normalized_logits[i][val], 6) for i, val in enumerate(predictions)
+        ]
 
         # show detail scores
-        if False:
+        if True:
             for i, val in enumerate(predictions):
                 tp = true_predictions[i]
                 score = normalized_logits[i][val]
@@ -454,14 +652,18 @@ def main_image(
         }
 
         output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
-        visualize_prediction(output_filename, image, true_predictions, true_boxes, true_scores)
+        visualize_prediction(
+            output_filename, image, true_predictions, true_boxes, true_scores
+        )
 
         annotations.append(annotation)
     store_json_object(annotations, annotation_json_path)
     return annotations
 
 
-def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExecutor] = None):
+def aggregate_results(
+    src_image: str, text_executor: Optional[TextExtractionExecutor] = None
+):
     if not os.path.exists(src_image):
         raise FileNotFoundError(src_image)
 
@@ -480,7 +682,7 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
     if not os.path.exists(ocr_json_path):
         raise FileNotFoundError(annotation_json_path)
 
-    loaded, frames = load_image(src_image, format="pil")
+    loaded, frames = load_image(src_image, img_format="pil")
     if not loaded:
         raise Exception(f"Unable to load image file: {src_image}")
 
@@ -492,16 +694,51 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
     logger.info("Changing coordinate format from xyxy->xyhw")
     for data in ocr_results:
         for word in data["words"]:
-            word["box"] = CoordinateFormat.convert(word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH)
+            word["box"] = CoordinateFormat.convert(
+                word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
+            )
 
     for data in annotation_results:
         for i, box in enumerate(data["boxes"]):
-            box = CoordinateFormat.convert(box, CoordinateFormat.XYXY, CoordinateFormat.XYWH)
+            box = CoordinateFormat.convert(
+                box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
+            )
             data["boxes"][i] = box
-            # print(f" {i} : {box}")
 
     aggregated_kv = []
-    print(f"frames len = : {len(frames)}")
+    aggregated_meta = []
+
+    expected_keys = [
+        "PAN",
+        "PAN_ANSWER",
+        "PATIENT_NAME",
+        "PATIENT_NAME_ANSWER",
+        "DOS",
+        "DOS_ANSWER",
+        "MEMBER_NAME",
+        "MEMBER_NAME_ANSWER",
+        "MEMBER_NUMBER",
+        "MEMBER_NUMBER_ANSWER",
+        "QUESTION",
+        "ANSWER",  # Only collect ANSWERs for now
+        "LETTER_DATE",
+        "PHONE",
+        "URL"
+        # "ADDRESS",
+    ]
+
+    # expected_keys = ["PAN", "PAN_ANSWER"]
+
+    # expected KV pairs
+    expected_pair = [
+        ["PAN", ["PAN_ANSWER", "ANSWER"]],
+        ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
+        ["DOS", ["DOS_ANSWER", "ANSWER"]],
+        ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
+        ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
+        ["QUESTION", ["ANSWER"]],
+    ]
+
     for i, (ocr, ann, frame) in enumerate(zip(ocr_results, annotation_results, frames)):
         print(f"Processing page # {i}")
         logger.info(f"Processing page # {i}")
@@ -516,25 +753,25 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
         font = get_font(14)
         # aggregate boxes into their lines
         groups = {}
-        for j, (prediction, pred_box, pred_score) in enumerate(zip(true_predictions, true_boxes, true_scores)):
+        for j, (prediction, pred_box, pred_score) in enumerate(
+            zip(true_predictions, true_boxes, true_scores)
+        ):
             # discard 'O' other
             label = prediction[2:]
             if not label:
                 continue
-            if pred_box == [0.0, 0.0, 0.0, 0.0]:
+            # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
+            if pred_box == [0.0, 0.0, 0.0, 0.0] or pred_box[2] == 0 or pred_box[3] == 0:
                 continue
             line_number = find_line_number(lines_bboxes, pred_box)
             if line_number not in groups:
                 groups[line_number] = []
-
             groups[line_number].append(j)
 
         # aggregate boxes into key/value pairs via simple state machine for each line
         aggregated_keys = {}
 
         for line_idx, line_box in enumerate(lines_bboxes):
-            # print(f"\t\t\t  line_idx = {line_idx}")
-
             if line_idx not in groups:
                 logger.debug(f"Line does not have any groups : {line_idx} : {line_box}")
                 continue
@@ -548,55 +785,26 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                 draw.rectangle(
                     xy,
                     outline="red",
-                    fill=(
-                        np.random.randint(50, 255),
-                        np.random.randint(50, 255),
-                        np.random.randint(50, 255),
-                        180,
-                    ),
+                    fill=get_random_color(),
                     width=1,
                 )
-            #
-            # if False or line_idx not in [10, 11]:
-            #     continue
 
             prediction_indexes = np.array(groups[line_idx])
-            # print(f"*** line : {line_idx} : {prediction_indexes}")
-            # PAN PAN_ANSWER PATIENT_NAME PATIENT_NAME_ANSWER
-
-            expected_keys = [
-                "PAN",
-                "PAN_ANSWER",
-                "PATIENT_NAME",
-                "PATIENT_NAME_ANSWER",
-                "DOS",
-                "DOS_ANSWER",
-                "MEMBER_NAME",
-                "MEMBER_NAME_ANSWER",
-
-                "MEMBER_NUMBER",
-                "MEMBER_NUMBER_ANSWER",
-
-                # "QUESTION"
-                "ANSWER",  # Only collect ANSWERs for now
-            ]
 
             line_aggregator = []
+            color_map = {"ADDRESS": get_random_color()}
 
             for key in expected_keys:
-                # print(f"Scanning for key : {key}")
                 aggregated = []
                 skip_to = -1
-
                 for m in range(0, len(prediction_indexes)):
                     if skip_to != -1 and m <= skip_to:
                         continue
-
                     pred_idx = prediction_indexes[m]
                     prediction = true_predictions[pred_idx]
                     label = prediction[2:]
-                    # print(f"{m} [{skip_to}] > {label} : {prediction}  ")
                     aggregator = []
+
                     if label == key:
                         for n in range(m, len(prediction_indexes)):
                             pred_idx = prediction_indexes[n]
@@ -604,7 +812,6 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                             label = prediction[2:]
                             if label != key:
                                 break
-                            # print(f"\tN > {n} [{pred_idx}] >  {label} : {prediction} ")
                             aggregator.append(pred_idx)
                             skip_to = n
 
@@ -614,68 +821,113 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                 if len(aggregated) > 0:
                     line_aggregator.append({"key": key, "groups": aggregated})
 
-            # frame.show()
-
             true_predictions = np.array(true_predictions)
             true_boxes = np.array(true_boxes)
             true_scores = np.array(true_scores)
 
             for line_agg in line_aggregator:
-                # print(f"Aggro : {line_agg}")
                 field = line_agg["key"]
                 group_indexes = line_agg["groups"]
 
                 for group_index in group_indexes:
-                    # print(f" index_groups > {group_index}")
-                    # print(f"prediction_indexes : {prediction_indexes}")
                     bboxes = true_boxes[group_index]
                     scores = true_scores[group_index]
                     group_score = round(np.average(scores), 6)
-                    # create a bounding box around our blocks which could be possibly overlapping or being slit
-                    overlaps = bboxes
-                    min_x = overlaps[:, 0].min()
-                    min_y = overlaps[:, 1].min()
-                    max_h = overlaps[:, 3].max()
-                    max_w = (overlaps[:, 0] + overlaps[:, 2]).max() - min_x
-                    group_bbox = [min_x, min_y, max_w, max_h]
-                    group_bbox = [round(k, 4) for k in group_bbox]
+                    # create a bounding box around our blocks which could be possibly overlapping or being split
+                    group_bbox = merge_bboxes_as_block(bboxes)
 
                     key_result = {
                         "line": line_idx,
                         "key": field,
                         "bbox": group_bbox,
-                        "scores": group_score,
+                        "score": group_score,
                     }
 
                     if line_idx not in aggregated_keys:
                         aggregated_keys[line_idx] = []
                     aggregated_keys[line_idx].append(key_result)
 
-                    draw.rectangle(
-                        [
-                            (group_bbox[0], group_bbox[1]),
-                            (
-                                group_bbox[0] + group_bbox[2],
-                                group_bbox[1] + group_bbox[3],
-                            ),
-                        ],
-                        outline="red",
-                        fill=(
-                            np.random.randint(50, 255),
-                            np.random.randint(50, 255),
-                            np.random.randint(50, 255),
-                            180,
-                        ),
-                        width=1,
+                    color = (
+                        color_map[field] if field in color_map else get_random_color()
                     )
 
-        expected_pair = [
-            ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
-            ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
-            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-        ]
+                    draw_box(
+                        draw,
+                        group_bbox,
+                        None,
+                        color,
+                        font,
+                    )
+
+        # check if we have possible overlaps when there is a mislabeled token, this could be a flag
+        # B-PAN I-PAN I-PAN B-PAN-ANS I-PAN
+
+        for key in expected_keys:
+            for ag_key in aggregated_keys.keys():
+                row_items = aggregated_keys[ag_key]
+                bboxes = [row["bbox"] for row in row_items if row["key"] == key]
+                visited = [False for _ in range(0, len(bboxes))]
+                to_merge = {}
+
+                for idx in range(0, len(bboxes)):
+                    if visited[idx]:
+                        continue
+                    visited[idx] = True
+                    box = bboxes[idx]
+                    overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
+                    to_merge[ag_key] = [idx]
+
+                    for _, overlap_idx in zip(overlaps, indexes):
+                        visited[overlap_idx] = True
+                        to_merge[ag_key].append(overlap_idx)
+
+                for _k, idxs in to_merge.items():
+                    items = aggregated_keys[_k]
+                    items = np.array(items)
+                    # there is nothing to merge, except the original block
+                    if len(idxs) == 1:
+                        continue
+
+                    idxs = np.array(idxs)
+                    picks = items[idxs]
+                    remaining = np.delete(items, idxs)
+
+                    score_avg = round(np.average([item["score"] for item in picks]), 6)
+                    block = merge_bboxes_as_block([item["bbox"] for item in picks])
+
+                    new_item = picks[0]
+                    new_item["score"] = score_avg
+                    new_item["bbox"] = block
+
+                    aggregated_keys[_k] = np.concatenate(([new_item], remaining))
+
+        # expected fields groups that indicate that the field could have been present but there was not associated
+        possible_field = {
+            "PAN": ["PAN", "PAN_ANSWER"],
+            "PATIENT_NAME": ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
+            "DOS": ["DOS", "DOS_ANSWER"],
+            "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
+            "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
+        }
+
+        print(">>>>>>>>>>>")
+        possible_field_meta = {}
+
+        for field in possible_field.keys():
+            fields = possible_field[field]
+            possible_field_meta[field] = {"page": i, "found": False, "fields": []}
+
+            for k in aggregated_keys.keys():
+                ner_keys = aggregated_keys[k]
+                for ner_key in ner_keys:
+                    key = ner_key["key"]
+                    if key in fields:
+                        print(f"found : {field} > {key}")
+                        possible_field_meta[field]["found"] = True
+                        possible_field_meta[field]["fields"].append(key)
+
+        print(possible_field_meta)
+        aggregated_meta.append({"page": i, "fields": possible_field_meta})
 
         for pair in expected_pair:
             expected_question = pair[0]
@@ -683,6 +935,7 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
 
             for k in aggregated_keys.keys():
                 ner_keys = aggregated_keys[k]
+
                 found_question = None
                 found_answer = None
 
@@ -704,62 +957,26 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
                             bbox_a = found_answer["bbox"]
 
                             if bbox_a[0] < bbox_q[0]:
-                                logger.warning("Answer is not on right of question")
+                                logger.warning("Answer is not on the right of question")
                                 continue
 
                             category = found_question["key"]
                             kv_result = {
                                 "page": i,
                                 "category": category,
-                                "value": {"question": found_question, "answer": found_answer},
+                                "value": {
+                                    "question": found_question,
+                                    "answer": found_answer,
+                                },
                             }
 
                             aggregated_kv.append(kv_result)
 
-        if False:
-            for k in aggregated_keys.keys():
-                ner_keys = aggregated_keys[k]
-
-                for pair in expected_pair:
-                    expected_question = pair[0]
-                    expected_answer = pair[1]
-
-                    found_question = None
-                    found_answer = None
-
-                    for ner_key in ner_keys:
-                        key = ner_key["key"]
-                        if expected_question == key:
-                            found_question = ner_key
-                        # find the first match
-                        for exp_key in expected_answer:
-                            if key in exp_key:
-                                found_answer = ner_key
-                                break
-
-                    if found_question is not None and found_answer is not None:
-                        # check LTR order
-                        bbox_q = found_question["bbox"]
-                        bbox_a = found_answer["bbox"]
-
-                        if bbox_a[0] < bbox_q[0]:
-                            logger.warning("Answer is not on right of question")
-                            continue
-
-                        category = found_question["key"]
-                        kv_result = {
-                            "page": i,
-                            "category": category,
-                            "value": {"question": found_question, "answer": found_answer},
-                        }
-
-                        aggregated_kv.append(kv_result)
-
-        # for each line aggregate possible KEY-VALUES
-        # frame.show()
         viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
     # Decorate our answers with proper TEXT
+    kv_indexed = {}
+
     for agg_result in aggregated_kv:
         page_index = int(agg_result["page"])
         frame = frames[page_index]
@@ -772,7 +989,24 @@ def aggregate_results(src_image: str, text_executor: Optional[TextExtractionExec
         question["text"] = {"text": w1, "confidence": c1}
         answer["text"] = {"text": w2, "confidence": c2}
 
-    return aggregated_kv
+        if page_index not in kv_indexed:
+            kv_indexed[page_index] = []
+
+        kv_indexed[page_index].append(agg_result)
+
+    # visualize results per page
+    if True:
+        for k in range(0, len(frames)):
+            output_filename = f"/tmp/tensors/kv_{file_hash}_{k}.png"
+            items = [row for row in aggregated_kv if int(row["page"]) == k]
+            visualize_extract_kv(output_filename, frames[k], items)
+
+    logger.info(f"aggregated_kv : {aggregated_kv}")
+
+    results = {"meta": aggregated_meta, "kv": aggregated_kv}
+
+    # return aggregated_kv
+    return results
 
 
 class NerExtractionExecutor(Executor):
@@ -785,7 +1019,9 @@ class NerExtractionExecutor(Executor):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-        self.logger = MarieLogger(getattr(self.metas, "name", self.__class__.__name__)).logger
+        self.logger = MarieLogger(
+            getattr(self.metas, "name", self.__class__.__name__)
+        ).logger
 
         self.logger.info("NER Extraction Executor")
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -796,12 +1032,14 @@ class NerExtractionExecutor(Executor):
         if has_cuda:
             cudnn.benchmark = False
             cudnn.deterministic = False
-        # ~/dev/marie-ai/model_zoo/ner-rms-corr/checkpoints-tuned-pan
         ensure_exists("/tmp/tensors")
-        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "fp16-56k-checkpoint-8500")
-        models_dir: str = os.path.join(__model_path__, "ner-rms-corr", "checkpoints-tuned-pan")
+        models_dir: str = os.path.join(
+            __model_path__, "ner-rms-corr", "checkpoint-best"
+        )
 
-        self.model, self.device = create_model_for_token_classification(models_dir)
+        self.model, self.device = create_model_for_token_classification(
+            models_dir, True
+        )
         self.text_executor = TextExtractionExecutor()
 
     def info(self, **kwargs):

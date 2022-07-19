@@ -102,9 +102,12 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
 def line_merge(image, bboxes) -> List[Any]:
     if len(bboxes) == 0:
         return []
-
-    _h = image.shape[0]
-    _w = image.shape[1]
+    if image is not None:
+        _h = image.shape[0]
+        _w = image.shape[1]
+    else:
+        _h = 0
+        _w = 0
 
     iou_scores = [0.6, 0.5, 0.4, 0.3]
     # iou_scores = [0.6, 0.6, 0.5, 0.35]
