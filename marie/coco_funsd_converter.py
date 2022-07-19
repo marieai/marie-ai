@@ -65,7 +65,7 @@ class MemberProvider(BaseProvider):
             "^(0{0}|0{3})1\d{8}$",
             "^(33)[0-9A-Z]{2,4}$",
             "^P1.+$|^PZ[0-9]{6}$",
-            "^C\d{1}[A-Z0-9]{6}[A-Z]-{2}$",
+            # "^C\d{1}[A-Z0-9]{6}[A-Z]-{2}$",
             "^[0-9]{6}\\-C[0-9]{6}$",
             "^(?!W)[A-Z]{3}[0-9]{5}$",
             "^[0-9]{5,8}-[0-9]{5,6}P",
@@ -78,14 +78,23 @@ class MemberProvider(BaseProvider):
         sel_reg = random.choice(self.possible_regexes)
         val = rstr.xeger(sel_reg)
 
+        # remove all not valid characters
+        punctuation = "-._ "
+        printable = string.digits + string.ascii_letters + punctuation
+        val = "".join(char for char in val if char in printable)
+
         # There are cases when we will add prexif / suffix to the PAN seperated with space
-        if np.random.choice([0, 1], p=[0.7, 0.3]):
+        if " " not in val and np.random.choice([0, 1], p=[0.7, 0.3]):
             N = random.choice([2, 3, 4])
-            res = "".join(random.choices(string.ascii_uppercase, k=N))
+            res = "".join(random.choices(string.ascii_letters, k=N))
             if np.random.choice([1, 0], p=[0.7, 0.3]):
                 val = f"{res} {val}"
             else:
                 val = f"{val} {res}"
+
+        val = val.lower()
+        if np.random.choice([0, 1], p=[0.5, 0.5]):
+            val = val.upper()
 
         return val
 
@@ -459,15 +468,14 @@ def decorate_funsd(src_dir: str):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        # if guid == 5:
-        #     break
+        if guid == 5:
+            break
 
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
 
         found = False
-        requires_one = {"paragraph", "greeting", "address", "question"}
         requires_one = {"paragraph", "greeting", "question"}
 
         for i, item in enumerate(data["form"]):
@@ -673,10 +681,10 @@ def generate_text(label, width, height, fontPath):
     # if label != "member_name_answer":
     #     return "", 0
 
-    avg_line_height = 45
-    est_line_count = height // avg_line_height
+    avg_line_height = 40
+    est_line_count = max(1, height // avg_line_height)
 
-    height = min(height, 60)
+    height = min(height, 50)
     # Generate text inside image
     font_size = int(height * 1)
 
@@ -691,15 +699,34 @@ def generate_text(label, width, height, fontPath):
     index = 0
     label_text = ""
 
+    # ADD Generation for following
+    # member_number_answer
+    # pan_answer
+    # member_name_answer
+    # patient_name_answer
+    # dos_answer
+    # check_amt_answer
+    # paid_amt_answer
+    # billed_amt_answer
+    # birthdate_answer
+    # check_number_answer
+    # claim_number_answer
+    # letter_date
+    # phone X
+    # url X
+
     while True:
         if index > 5:
             font_size = font_size - dec
-            # font = ImageFont.truetype(fontPath, font_size)
             font = get_cached_font(fontPath, font_size)
             index = 0
             space_w, _ = draw.textsize(" ", font=font)
 
-        if label == "dos_answer":
+        if (
+            label == "dos_answer"
+            or label == "birthdate_answer"
+            or label == "letter_date"
+        ):
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
             patterns = [
                 "%Y%m%d",
@@ -717,23 +744,55 @@ def generate_text(label, width, height, fontPath):
             # date thought date
             # date to date
 
-            if np.random.choice([0, 1], p=[0.3, 0.7]):
-                pattern = random.choice(patterns)
-                sel_reg = random.choice(["-", "to", "thought"])
-                d1 = fake.date(pattern=pattern)
-                d2 = fake.date(pattern=pattern)
-                label_text = f"{d1} {sel_reg} {d2}"
-            else:
+            if label == "dos_answer":
+                if np.random.choice([0, 1], p=[0.3, 0.7]):
+                    pattern = random.choice(patterns)
+                    sel_reg = random.choice(["-", " - ", " ", " to ", " thought "])
+                    d1 = fake.date(pattern=pattern)
+                    d2 = fake.date(pattern=pattern)
+                    label_text = f"{d1}{sel_reg}{d2}"
+                else:
+                    label_text = fake.date(pattern=random.choice(patterns))
+            elif label == "birthdate_answer" or label == "letter_date":
                 label_text = fake.date(pattern=random.choice(patterns))
 
         if label == "pan_answer":
             label_text = fake.member_id()
         if label == "member_number_answer":
             label_text = fake.member_id()
+        if label == "claim_number_answer":
+            label_text = fake.member_id()
+
         if label == "member_name_answer" or label == "patient_name_answer":
             label_text = fake.name()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.upper()
+
+        if label == "phone":
+            label_text = fake.phone_number()
+
+        if label == "url":
+            label_text = fake.domain_name()
+            if np.random.choice([0, 1], p=[0.5, 0.5]):
+                label_text = fake.company_email()
+
+        if (
+            label == "check_amt_answer"
+            or label == "paid_amt_answer"
+            or label == "billed_amt_answer"
+        ):
+            label_text = fake.pricetag()
+            if np.random.choice([0, 1], p=[0.5, 0.5]):
+                label_text = label_text.replace("$", "")
+
+        if label == "address":
+            # print(f"Address height : {est_line_count} > {height}")
+            if est_line_count == 1:
+                label_text = fake.address().replace("\n", " ")
+            elif est_line_count == 2:
+                label_text = fake.address()
+            else:
+                label_text = f"{fake.company()}\n{fake.address()}"
 
         # partition data into boxes splitting on blank spaces
         text_chunks = label_text.split(" ")
@@ -771,7 +830,7 @@ def generate_text(label, width, height, fontPath):
 def __augment_decorated_process(
     guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
 ):
-
+    Faker.seed(0)
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
 
@@ -792,26 +851,47 @@ def __augment_decorated_process(
     image_path = image_path.replace("json", "png")
     filename = image_path.split("/")[-1].split(".")[0]
 
-    image_masked, size = load_image_pil(image_path)
-
     for k in range(0, count):
         print(f"Iter : {guid} , {k} of {count} ; {filename} ")
         font_face = np.random.choice(
             [
                 "FreeSansOblique.ttf",
-                "FreeSansBold.ttf",
-                "FreeSansBold.ttf",
+                # "FreeSansBold.ttf",
                 "FreeSans.ttf",
+                "OpenSans-Light.ttf",
+                "FreeMono.ttf",
+                "vpscourt.ttf",
             ]
         )
         font_path = os.path.join("./assets/fonts", font_face)
-        draw = ImageDraw.Draw(image_masked)
-        data_copy = dict()  # copy.deepcopy(data["form"])
+
+        data_copy = dict()
         data_copy["form"] = []
+
+        masked_fields = [
+            "member_number_answer",
+            "pan_answer",
+            "member_name_answer",
+            "patient_name_answer",
+            "dos_answer",
+            "check_amt_answer",
+            "paid_amt_answer",
+            "billed_amt_answer",
+            "birthdate_answer",
+            "check_number_answer",
+            "claim_number_answer",
+            "letter_date",
+            "phone",
+            "url",
+            "address",
+        ]
+
+        image_masked, size = load_image_pil(image_path)
+        draw = ImageDraw.Draw(image_masked)
 
         for i, item in enumerate(data["form"]):
             label = item["label"]
-            if label == "other" or not label.endswith("_answer"):
+            if label == "other" or label not in masked_fields:
                 data_copy["form"].append(item)
                 continue
 
@@ -826,7 +906,6 @@ def __augment_decorated_process(
 
             # Generate text inside image
             font_size, label_text, segments = generate_text(label, w, h, font_path)
-            # font = ImageFont.truetype(font_path, font_size)  # need to get this from cache
             font = get_cached_font(font_path, font_size)
 
             # x0, y0, x1, y1 = xy
@@ -865,7 +944,6 @@ def __augment_decorated_process(
             # print(item)
             # print(dup_item)
             data_copy["form"].append(dup_item)
-            # data["form"].append(dup_item)
 
         # Save items
         out_name_prefix = f"{filename}_{guid}_{k}"
@@ -901,7 +979,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if False:
+    if True:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -932,7 +1010,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if True:
+    if False:
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
@@ -1013,7 +1091,6 @@ def visualize_funsd(src_dir: str):
             "url": "darkorange",
             "phone": "darkmagenta",
             "other": "red",
-
             "claim_number": "darkmagenta",
             "claim_number_answer": "green",
             "birthdate": "green",
@@ -1026,8 +1103,6 @@ def visualize_funsd(src_dir: str):
             "check_amt_answer": "darkmagenta",
             "check_number": "orange",
             "check_number_answer": "blue",
-
-
         }
 
         for i, item in enumerate(data["form"]):
@@ -1266,11 +1341,12 @@ if __name__ == "__main__":
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
-    name = "test"
-    src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
     #
-    # name = "train"
-    # src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
+    # name = "test"
+    # src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
+
+    name = "test"
+    src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
 
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
     aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
@@ -1290,13 +1366,13 @@ if __name__ == "__main__":
     # decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=150, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-    # visualize_funsd(aug_dest_dir)
+    visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
