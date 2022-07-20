@@ -34,7 +34,6 @@ docker push gregbugaj/marie-icr:2.3-cuda
 
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
 docker push gregbugaj/marie-icr:2.3-cuda
-
 ```
 
 
