@@ -106,7 +106,7 @@ def create_processor():
     """prepare for the model"""
     # https://github.com/huggingface/transformers/blob/main/tests/models/layoutlmv3/test_processor_layoutlmv3.py
     # Method:2 Create Layout processor with custom future extractor
-    v2 = False
+    v2 = True
 
     if v2:
         feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
@@ -131,15 +131,15 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
     """
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
-    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-50000"
+    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_4900_0.000266997521976009"
     print(f"TokenClassification dir : {model_dir}")
 
     labels, _, _ = get_label_info()
-    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
+    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
 
-    model = LayoutLMv3ForTokenClassification.from_pretrained(
-        model_dir, num_labels=len(labels)
-    )
+    # model = LayoutLMv3ForTokenClassification.from_pretrained(
+    #     model_dir, num_labels=len(labels)
+    # )
 
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -606,8 +606,8 @@ def main_image(
 
         # Debug tensor info
         if True:
-            # img_tensor = encoded_inputs["image"] # v2
-            img_tensor = encoded_inputs["pixel_values"]  # v3
+            img_tensor = encoded_inputs["image"] # v2
+            # img_tensor = encoded_inputs["pixel_values"]  # v3
             img = Image.fromarray(
                 (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
             )
@@ -723,7 +723,13 @@ def aggregate_results(
         "ANSWER",  # Only collect ANSWERs for now
         "LETTER_DATE",
         "PHONE",
-        "URL"
+        "URL",
+        "CLAIM_NUMBER",
+        "CLAIM_NUMBER_ANSWER",
+        "BIRTHDATE",
+        "BIRTHDATE_ANSWER",
+        "BILLED_AMT",
+        "BILLED_AMT_ANSWER",
         # "ADDRESS",
     ]
 
@@ -732,10 +738,13 @@ def aggregate_results(
     # expected KV pairs
     expected_pair = [
         ["PAN", ["PAN_ANSWER", "ANSWER"]],
+        ["CLAIM_NUMBER", ["CLAIM_NUMBER_ANSWER", "ANSWER"]],
+        ["BIRTHDATE", ["BIRTHDATE_ANSWER", "ANSWER"]],
         ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
         ["DOS", ["DOS_ANSWER", "ANSWER"]],
         ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
         ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
+        ["BILLED_AMT", ["BILLED_AMT_ANSWER"]],
         ["QUESTION", ["ANSWER"]],
     ]
 
@@ -908,6 +917,10 @@ def aggregate_results(
             "DOS": ["DOS", "DOS_ANSWER"],
             "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
             "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
+            "CLAIM_NUMBER": ["CLAIM_NUMBER", "CLAIM_NUMBER_ANSWER"],
+            "BIRTHDATE": ["BIRTHDATE", "BIRTHDATE_ANSWER"],
+            "BILLED_AMT": ["BILLED_AMT", "BILLED_AMT_ANSWER"],
+
         }
 
         print(">>>>>>>>>>>")
