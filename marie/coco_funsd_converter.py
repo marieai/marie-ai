@@ -468,8 +468,8 @@ def decorate_funsd(src_dir: str):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        if guid == 5:
-            break
+        # if guid == 5:
+        #     break
 
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
@@ -883,7 +883,7 @@ def __augment_decorated_process(
             "letter_date",
             "phone",
             "url",
-            "address",
+            # "address",
         ]
 
         image_masked, size = load_image_pil(image_path)
@@ -979,7 +979,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if True:
+    if False:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -1010,7 +1010,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if False:
+    if True:
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
@@ -1324,13 +1324,13 @@ def splitDataset(src_dir, output_path, split_percentage):
 if __name__ == "__main__":
 
     # Home
-    if True:
+    if False:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if False:
+    if True:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1345,7 +1345,7 @@ if __name__ == "__main__":
     # name = "test"
     # src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
 
-    name = "test"
+    name = "train"
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
 
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
@@ -1360,13 +1360,13 @@ if __name__ == "__main__":
     # TEST  -> 1, 2, 3
 
     # STEP 1 : Convert COCO to FUNSD like format
-    # convert_coco_to_funsd(src_dir, dst_path)
+    convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
