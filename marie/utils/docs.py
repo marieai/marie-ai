@@ -181,7 +181,11 @@ def load_image(img_path, img_format: str = "cv"):
         converted = __convert_frames(frames, img_format)
         return loaded, converted
 
+
     img = skio.imread(img_path)  # RGB order
+    # img = Image.open(img_path).convert('RGB')
+    # return True, [img]
+
     if img.shape[0] == 2:
         img = img[0]
     if len(img.shape) == 2:
