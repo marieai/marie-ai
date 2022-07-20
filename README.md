@@ -276,7 +276,6 @@ https://github.com/ibm-aur-nlp/PubLayNet
 
 DocFormer: End-to-End Transformer for Document Understanding
 
-
 ## Credits
 
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 

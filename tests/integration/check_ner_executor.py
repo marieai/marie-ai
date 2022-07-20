@@ -84,12 +84,12 @@ if __name__ == "__main__":
     # # check_layoutlmv3(img_path)
 
     executor = NerExtractionExecutor()
-    # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
+    process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, "/home/gbugaj/tmp/medrx")
 
-    if True:
+    if False:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693875.png"
+        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692831.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
