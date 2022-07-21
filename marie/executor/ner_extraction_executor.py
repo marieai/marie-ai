@@ -109,9 +109,12 @@ def create_processor():
     v2 = True
 
     if v2:
-        feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+        # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
+        feature_extractor = LayoutLMv2FeatureExtractor(size=224, apply_ocr=False, do_resize=True, resample=Image.LANCZOS)
         tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
-            "microsoft/layoutlmv2-large-uncased"
+            "microsoft/layoutlmv2-large-uncased",
+            is_split_into_words = True,
+            # only_label_first_subword = True
         )
         processor = LayoutLMv2Processor(
             feature_extractor=feature_extractor, tokenizer=tokenizer
@@ -458,15 +461,13 @@ def infer(
     threshold: float,
     words: List[Any],
     boxes: List[Any],
-) -> Tuple[List, List]:
+) -> Tuple[List, List, List]:
     logger.info(f"Performing inference using the model at {models_dir}")
 
     model, device = create_model_for_token_classification(models_dir, True)
     processor = create_processor()
 
     id2label = {v: k for v, k in enumerate(labels)}
-    all_preds = []
-    all_bboxes = []
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     logger.info(
@@ -501,9 +502,13 @@ def infer(
     _predictions = outputs.logits.argmax(-1).squeeze().tolist()
     _token_boxes = encoding.bbox.squeeze().tolist()
 
+    normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+
     # Filter the predictions and bounding boxes based on a threshold
-    predictions = _filter(_predictions, probs, threshold)
-    token_boxes = _filter(_token_boxes, probs, threshold)
+    # predictions = _filter(_predictions, probs, threshold)
+    # token_boxes = _filter(_token_boxes, probs, threshold)
+    predictions = _predictions
+    token_boxes = _token_boxes
 
     # Only keep non-subword predictions
     is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
@@ -516,10 +521,20 @@ def infer(
         if not is_subword[idx]
     ]
 
-    all_preds.append(true_predictions)
-    all_bboxes.append(true_boxes)
+    true_scores = [
+        round(normalized_logits[idx][val], 6) for idx, val in enumerate(predictions) if not is_subword[idx]
+    ]
 
-    return (all_preds, all_bboxes)
+    all_predictions = []
+    all_boxes = []
+    all_scores = []
+
+    all_predictions.append(true_predictions)
+    all_boxes.append(true_boxes)
+    all_scores.append(true_scores)
+
+    assert len(true_predictions) == len(true_boxes) == len(true_scores)
+    return (all_predictions, all_boxes, all_scores)
 
 
 def main_image(
@@ -591,7 +606,11 @@ def main_image(
 
         assert len(words) == len(boxes)
 
-        inf_result = infer("", image, labels, 0.1, words, boxes)
+        (all_predictions, all_boxes, all_scores) = infer("", image, labels, 0.1, words, boxes)
+
+        print(all_predictions)
+        print(all_boxes)
+        print(all_scores)
 
         encoded_inputs = processor(
             # fmt: off
@@ -638,8 +657,12 @@ def main_image(
             round(normalized_logits[i][val], 6) for i, val in enumerate(predictions)
         ]
 
+        true_predictions = all_predictions[0]
+        true_boxes  = all_boxes[0]
+        true_scores = all_scores[0]
+
         # show detail scores
-        if True:
+        if False:
             for i, val in enumerate(predictions):
                 tp = true_predictions[i]
                 score = normalized_logits[i][val]
@@ -731,6 +754,8 @@ def aggregate_results(
         "BIRTHDATE_ANSWER",
         "BILLED_AMT",
         "BILLED_AMT_ANSWER",
+        "PAID_AMT",
+        "PAID_AMT_ANSWER",
         # "ADDRESS",
     ]
 
@@ -746,6 +771,7 @@ def aggregate_results(
         ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
         ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
         ["BILLED_AMT", ["BILLED_AMT_ANSWER"]],
+        ["PAID_AMT", ["PAID_AMT_ANSWER"]],
         ["QUESTION", ["ANSWER"]],
     ]
 
@@ -921,6 +947,7 @@ def aggregate_results(
             "CLAIM_NUMBER": ["CLAIM_NUMBER", "CLAIM_NUMBER_ANSWER"],
             "BIRTHDATE": ["BIRTHDATE", "BIRTHDATE_ANSWER"],
             "BILLED_AMT": ["BILLED_AMT", "BILLED_AMT_ANSWER"],
+            "PAID_AMT": ["PAID_AMT", "PAID_AMT_ANSWER"],
 
         }
 
