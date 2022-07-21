@@ -2,6 +2,8 @@ import glob
 import os
 import time
 
+import PIL.ImageQt
+import cv2.cv2
 import numpy as np
 import transformers
 from PIL import Image, ImageDraw, ImageFont
@@ -11,6 +13,21 @@ from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
+
+from detectron2.data.detection_utils import read_image
+from detectron2.data.transforms import ResizeTransform, TransformList
+import torch
+
+def load_image(image_path):
+    image = read_image(image_path, format="RGB")
+    h = image.shape[0]
+    w = image.shape[1]
+
+    # img_trans = TransformList([ResizeTransform(h=h, w=w, new_h=224, new_w=224, interp=Image.LANCZOS)])
+    img_trans = TransformList([ResizeTransform(h=h, w=w, new_h=224, new_w=224, interp=None)])
+    t1 = img_trans.apply_image(image).copy()
+    image = torch.tensor(img_trans.apply_image(image).copy()).permute(2, 0, 1)  # copy to make it writeable
+    return image, (w, h)
 
 
 def process_file(executor: NerExtractionExecutor, img_path: str):
@@ -44,7 +61,6 @@ def check_layoutlmv3(img_path):
 
     loaded, frames = load_image(img_path, img_format="pil")
     image = frames[0]
-
 
     feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
     tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
@@ -83,6 +99,8 @@ if __name__ == "__main__":
     # ensure_exists("/tmp/tensors/json")
     # # check_layoutlmv3(img_path)
 
+    p1 = load_image("/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif")
+
     executor = NerExtractionExecutor()
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, "/home/gbugaj/tmp/medrx")
@@ -97,23 +115,12 @@ if __name__ == "__main__":
         # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637299.tif"
+        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
+        # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637257.tif"
         # img_path = f"/home/gbugaj/tmp/address-001.png"
-        img_path = f"/home/gbugaj/tmp/paid-001.png"
-        # img
-        # _path = f"/home/gbugaj/tmp/medrx/PID_1313_8120_0_157638578.tif"
-        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        # img_path = (
-        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.png"  # Invalid token marking
-        # )
-        # img_path = (
-        #     f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        # )
-        # img_path = (
-        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        # )
-        # img_path = f"/home/greg/tmp/image8918637216567684920.pdf"
-        # img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png"
+        # img_path = f"/home/gbugaj/tmp/paid-001.png"
+        # img_path = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.png"
 
         docs = docs_from_file(img_path)
         frames = array_from_docs(docs)
