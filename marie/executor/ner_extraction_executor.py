@@ -481,8 +481,12 @@ def infer(
 
     # image = # Image.open(eg["path"]).convert("RGB")
     width, height = image.size
-
+    # https://huggingface.co/docs/transformers/model_doc/layoutlmv2#transformers.LayoutLMv2ForTokenClassification
     # Encode the image
+    word_labels = []
+    for i in range(0, len(boxes)):
+        word_labels.append(1)
+
     encoding = processor(
         # fmt: off
         image,
@@ -490,6 +494,7 @@ def infer(
         boxes=boxes,
         truncation=True,
         return_offsets_mapping=True,
+        padding="max_length",
         return_tensors="pt"
         # fmt: on
     )
