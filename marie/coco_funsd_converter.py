@@ -869,21 +869,21 @@ def __augment_decorated_process(
         data_copy["form"] = []
 
         masked_fields = [
-            "member_number_answer",
-            "pan_answer",
-            "member_name_answer",
-            "patient_name_answer",
-            "dos_answer",
-            "check_amt_answer",
-            "paid_amt_answer",
-            "billed_amt_answer",
-            "birthdate_answer",
-            "check_number_answer",
-            "claim_number_answer",
-            "letter_date",
-            "phone",
-            "url",
-            # "address",
+            # "member_number_answer",
+            # "pan_answer",
+            # "member_name_answer",
+            # "patient_name_answer",
+            # "dos_answer",
+            # "check_amt_answer",
+            # "paid_amt_answer",
+            # "billed_amt_answer",
+            # "birthdate_answer",
+            # "check_number_answer",
+            # "claim_number_answer",
+            # "letter_date",
+            # "phone",
+            # "url",
+            "address",
         ]
 
         image_masked, size = load_image_pil(image_path)
@@ -1324,13 +1324,13 @@ def splitDataset(src_dir, output_path, split_percentage):
 if __name__ == "__main__":
 
     # Home
-    if False:
+    if True:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if True:
+    if False:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1358,21 +1358,20 @@ if __name__ == "__main__":
 
     # TRAIN -> 1, 2, 3
     # TEST  -> 1, 2, 3
-
     # STEP 1 : Convert COCO to FUNSD like format
     convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    decorate_funsd(dst_path)
-
-    # STEP 3
-    augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
-
-    # Step 4
-    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-
-    # Step 5
-    visualize_funsd(aug_dest_dir)
+    # decorate_funsd(dst_path)
+    #
+    # # STEP 3
+    # augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
+    #
+    # # Step 4
+    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    #
+    # # Step 5
+    # visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
