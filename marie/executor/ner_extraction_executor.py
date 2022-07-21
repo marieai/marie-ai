@@ -135,12 +135,7 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
     model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_4900_0.000266997521976009"
-    # model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-6500"
-
-    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_500_0.004618985112756491/"
-    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_700_0.0007946904515847564/"
-    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_2000_0.00010320210276404396/"
-    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd/checkpoint-6000"
+    model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_68600_2.8741624191752635e-06"
     print(f"TokenClassification dir : {model_dir}")
 
     labels, _, _ = get_label_info()
