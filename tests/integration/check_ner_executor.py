@@ -89,31 +89,18 @@ if __name__ == "__main__":
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1864_9100_0_157637285.png"
+        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1515_8370_0_157159253.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637299.tif"
+        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637299.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637257.tif"
         # img_path = f"/home/gbugaj/tmp/address-001.png"
-        img_path = f"/home/gbugaj/tmp/paid-001.png"
-        # img
-        # _path = f"/home/gbugaj/tmp/medrx/PID_1313_8120_0_157638578.tif"
-        # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        # img_path = (
-        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.png"  # Invalid token marking
-        # )
-        # img_path = (
-        #     f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        # )
-        # img_path = (
-        #     f"/home/greg/tmp/PID_1925_9289_0_157186264.tif"  # Invalid token marking
-        # )
-        # img_path = f"/home/greg/tmp/image8918637216567684920.pdf"
-        # img_path = f"/home/greg/tmp/PID_1925_9289_0_157186264.png"
+        # img_path = f"/home/gbugaj/tmp/paid-001.png"
+
 
         docs = docs_from_file(img_path)
         frames = array_from_docs(docs)
