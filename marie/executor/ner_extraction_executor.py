@@ -106,14 +106,14 @@ def create_processor():
     """prepare for the model"""
     # https://github.com/huggingface/transformers/blob/main/tests/models/layoutlmv3/test_processor_layoutlmv3.py
     # Method:2 Create Layout processor with custom future extractor
-    v2 = True
+    v2 = False
 
     if v2:
         # feature_extractor = LayoutLMv2FeatureExtractor(apply_ocr=False)
         feature_extractor = LayoutLMv2FeatureExtractor(size=224, apply_ocr=False, do_resize=True, resample=Image.LANCZOS)
         tokenizer = LayoutLMv2TokenizerFast.from_pretrained(
             "microsoft/layoutlmv2-large-uncased",
-            is_split_into_words = True,
+            # is_split_into_words = True,
             # only_label_first_subword = True
         )
         processor = LayoutLMv2Processor(
@@ -136,14 +136,16 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
     # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
     model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_4900_0.000266997521976009"
     model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_68600_2.8741624191752635e-06"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned/checkpoint-17000" # GOOD
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-segment_level_layout/checkpoint-500/"
     print(f"TokenClassification dir : {model_dir}")
 
     labels, _, _ = get_label_info()
-    model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
+    # model = LayoutLMv2ForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
 
-    # model = LayoutLMv3ForTokenClassification.from_pretrained(
-    #     model_dir, num_labels=len(labels)
-    # )
+    model = LayoutLMv3ForTokenClassification.from_pretrained(
+        model_dir, num_labels=len(labels)
+    )
 
     # Next, let's move everything to the GPU, if it's available.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -189,7 +191,6 @@ def get_label_info():
         'B-CHECK_NUMBER_ANSWER', 'I-CHECK_NUMBER_ANSWER',
     ]
 
-    # labels = ["O", "B-HEADER", "I-HEADER", "B-QUESTION", "I-QUESTION", "B-ANSWER", "I-ANSWER"]
     logger.info(f"Labels : {labels}")
 
     id2label = {v: k for v, k in enumerate(labels)}
@@ -199,32 +200,6 @@ def get_label_info():
 
 
 def get_label_colors():
-    v2 = {
-        "pan": "blue",
-        "pan_answer": "green",
-        "dos": "orange",
-        "dos_answer": "violet",
-        "member": "blue",
-        "member_answer": "green",
-        "member_number": "blue",
-        "member_number_answer": "green",
-        "member_name": "blue",
-        "member_name_answer": "green",
-        "patient_name": "blue",
-        "patient_name_answer": "green",
-        "paragraph": "purple",
-        "greeting": "blue",
-        "address": "orange",
-        "question": "blue",
-        "answer": "aqua",
-        "document_control": "grey",
-        "header": "brown",
-        "letter_date": "deeppink",
-        "url": "darkorange",
-        "phone": "darkmagenta",
-        "other": "red",
-    }
-
     v3 = {
         "pan": "blue",
         "pan_answer": "green",
@@ -447,7 +422,6 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
             return word["text"], word["confidence"]
     return "", 0.0
 
-
 def _filter(
     values: List[Any], probabilities: List[float], threshold: float
 ) -> List[Any]:
@@ -476,8 +450,12 @@ def infer(
 
     # image = # Image.open(eg["path"]).convert("RGB")
     width, height = image.size
-
+    # https://huggingface.co/docs/transformers/model_doc/layoutlmv2#transformers.LayoutLMv2ForTokenClassification
     # Encode the image
+    word_labels = []
+    for i in range(0, len(boxes)):
+        word_labels.append(1)
+
     encoding = processor(
         # fmt: off
         image,
@@ -485,6 +463,7 @@ def infer(
         boxes=boxes,
         truncation=True,
         return_offsets_mapping=True,
+        padding="max_length",
         return_tensors="pt"
         # fmt: on
     )
@@ -495,14 +474,13 @@ def infer(
     offset_mapping = encoding.pop("offset_mapping")
 
     # Perform forward pass
-    outputs = model(**encoding)
-
-    # Get the predictions and probabilities
-    probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
-    _predictions = outputs.logits.argmax(-1).squeeze().tolist()
-    _token_boxes = encoding.bbox.squeeze().tolist()
-
-    normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+    with torch.no_grad():
+        outputs = model(**encoding)
+        # Get the predictions and probabilities
+        probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+        _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+        _token_boxes = encoding.bbox.squeeze().tolist()
+        normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
 
     # Filter the predictions and bounding boxes based on a threshold
     # predictions = _filter(_predictions, probs, threshold)
@@ -593,8 +571,8 @@ def main_image(
         boxes = []
 
         for i, word in enumerate(result["words"]):
-            words.append(word["text"].lower())
             box_norm = normalize_bbox(word["box"], (width, height))
+            words.append(word["text"].lower())
             boxes.append(box_norm)
 
             # This is to prevent following error
@@ -626,8 +604,8 @@ def main_image(
 
         # Debug tensor info
         if True:
-            img_tensor = encoded_inputs["image"] # v2
-            # img_tensor = encoded_inputs["pixel_values"]  # v3
+            # img_tensor = encoded_inputs["image"] # v2
+            img_tensor = encoded_inputs["pixel_values"]  # v3
             img = Image.fromarray(
                 (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
             )
