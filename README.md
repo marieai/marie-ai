@@ -280,4 +280,6 @@ DocFormer: End-to-End Transformer for Document Understanding
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
 
- https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
+https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
+https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
+https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder

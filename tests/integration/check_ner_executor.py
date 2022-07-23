@@ -99,13 +99,13 @@ if __name__ == "__main__":
     # ensure_exists("/tmp/tensors/json")
     # # check_layoutlmv3(img_path)
 
-    p1 = load_image("/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif")
+    # p1 = load_image("/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif")
 
     executor = NerExtractionExecutor()
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
-    # process_dir(executor, "/home/gbugaj/tmp/medrx")
+    process_dir(executor, "/home/gbugaj/tmp/medrx")
 
-    if True:
+    if False:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1864_9100_0_157637285.png"
 
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         # img_path = f"/home/gbugaj/tmp/PID_1925_9291_0_157186552.tif"
         # img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637299.tif"
+        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637277.tif"
         img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637257.tif"
