@@ -122,7 +122,9 @@ def create_processor():
     else:
         # Max model size is 512, so we will need to handle any documents larger thjan ath
         feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
-        tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-large"
+            # only_label_first_subword = True
+        )
         processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     return processor
@@ -137,7 +139,10 @@ def create_model_for_token_classification(model_dir: str, fp16: bool):
     model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_4900_0.000266997521976009"
     model_dir = "/mnt/data/models/layoutlmv2-large-finetuned-funsd_68600_2.8741624191752635e-06"
     model_dir = "/mnt/data/models/layoutlmv3-base-finetuned/checkpoint-17000" # GOOD
-    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-segment_level_layout/checkpoint-500/"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-750"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-5250" # GOOD MODEL
+    model_dir = "/mnt/data/models/layoutlmv3-large-finetuned-funsd/checkpoint-250"
+    model_dir = "/mnt/data/models/layoutlmv3-large-finetuned-funsd/checkpoint-6750"
     print(f"TokenClassification dir : {model_dir}")
 
     labels, _, _ = get_label_info()
