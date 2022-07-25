@@ -1,2 +1,2 @@
 from .text_extraction_executor import TextExtractionExecutor
-from .ner_extraction_executor import NerExtractionExecutor
+from .ner.ner_extraction_executor import NerExtractionExecutor

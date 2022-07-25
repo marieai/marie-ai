@@ -280,4 +280,28 @@ DocFormer: End-to-End Transformer for Document Understanding
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
 
- https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
+https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
+https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
+https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
+https://github.com/NielsRogge/Transformers-Tutorials/blob/master/LayoutLMv2/FUNSD/True_inference_with_LayoutLMv2ForTokenClassification_%2B_Gradio_demo.ipynb
+
+-----------------
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd/checkpoint-2000"
+    # model_dir = "/home/greg/tmp/models/layoutlmv3-base-finetuned-funsd-original/checkpoint-1500"
+    model_dir = (
+        "/mnt/data/models/layoutlmv2-large-finetuned-funsd_4900_0.000266997521976009"
+    )
+    model_dir = (
+        "/mnt/data/models/layoutlmv2-large-finetuned-funsd_68600_2.8741624191752635e-06"
+    )
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned/checkpoint-17000"  # GOOD
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-segment_level_layout/checkpoint-1000"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-500"
+    model_dir = "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-750"
+    model_dir = (
+        "/mnt/data/models/layoutlmv3-base-finetuned-funsd/checkpoint-5250"  # GOOD MODEL
+    )
+    model_dir = "/mnt/data/models/layoutlmv3-large-finetuned-funsd/checkpoint-250"
+    model_dir = (
+        "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
+    )
