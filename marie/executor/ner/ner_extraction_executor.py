@@ -256,103 +256,6 @@ def _filter(
     return [value for probs, value in zip(probabilities, values) if probs >= threshold]
 
 
-def infer(
-    file_hash: str,
-    frame_idx: int,
-    model: Any,
-    processor: Any,
-    image: Any,
-    labels: List[str],
-    threshold: float,
-    words: List[Any],
-    boxes: List[Any],
-    device: str,
-) -> Tuple[List, List, List]:
-    logger.info(f"Performing inference")
-
-    id2label = {v: k for v, k in enumerate(labels)}
-
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    logger.info(
-        f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
-    )
-
-    # image = # Image.open(eg["path"]).convert("RGB")
-    width, height = image.size
-    # https://huggingface.co/docs/transformers/model_doc/layoutlmv2#transformers.LayoutLMv2ForTokenClassification
-    # Encode the image
-    word_labels = []
-    for i in range(0, len(boxes)):
-        word_labels.append(1)
-
-    encoding = processor(
-        # fmt: off
-        image,
-        words,
-        boxes=boxes,
-        truncation=True,
-        return_offsets_mapping=True,
-        padding="max_length",
-        return_tensors="pt"
-        # fmt: on
-    )
-    offset_mapping = encoding.pop("offset_mapping")
-
-    # Debug tensor info
-    if False:
-        # img_tensor = encoded_inputs["image"] # v2
-        img_tensor = encoding["pixel_values"]  # v3
-        img = Image.fromarray(
-            (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
-        )
-        img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
-
-    for ek, ev in encoding.items():
-        encoding[ek] = ev.to(device)
-
-    # Perform forward pass
-    with torch.no_grad():
-        outputs = model(**encoding)
-        # Get the predictions and probabilities
-        probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
-        _predictions = outputs.logits.argmax(-1).squeeze().tolist()
-        _token_boxes = encoding.bbox.squeeze().tolist()
-        normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
-
-    # TODO : Filer the results
-    # Filter the predictions and bounding boxes based on a threshold
-    # predictions = _filter(_predictions, probs, threshold)
-    # token_boxes = _filter(_token_boxes, probs, threshold)
-    predictions = _predictions
-    token_boxes = _token_boxes
-
-    # Only keep non-subword predictions
-    is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
-    true_predictions = [
-        id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]
-    ]
-    true_boxes = [
-        unnormalize_box(box, width, height)
-        for idx, box in enumerate(token_boxes)
-        if not is_subword[idx]
-    ]
-
-    true_scores = [
-        round(normalized_logits[idx][val], 6)
-        for idx, val in enumerate(predictions)
-        if not is_subword[idx]
-    ]
-
-    all_predictions = []
-    all_boxes = []
-    all_scores = []
-
-    all_predictions.append(true_predictions)
-    all_boxes.append(true_boxes)
-    all_scores.append(true_scores)
-
-    assert len(true_predictions) == len(true_boxes) == len(true_scores)
-    return all_predictions, all_boxes, all_scores
 
 
 class NerExtractionExecutor(Executor):
@@ -388,48 +291,123 @@ class NerExtractionExecutor(Executor):
         models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
 
         models_dir = (
-            "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
+            "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
         )
 
+        self.debug_visuals = False
         self.model = load_model(models_dir, True, self.device)
         self.processor = create_processor()
-        self.text_executor = TextExtractionExecutor()
+        self.text_executor: Optional[TextExtractionExecutor] = TextExtractionExecutor()
+
 
     def info(self, **kwargs):
         logger.info(f"Self : {self}")
         return {"index": "ner-complete"}
 
-    def aggregate_results(
-        self, src_image: str, text_executor: Optional[TextExtractionExecutor] = None
-    ):
-        if not os.path.exists(src_image):
-            raise FileNotFoundError(src_image)
+    def inference(
+            self,
+            image: Any,
+            words: List[Any],
+            boxes: List[Any],
+            labels: List[str],
+            threshold: float,
+    ) -> Tuple[List, List, List]:
+        """ Run Inference on the model with given processor"""
+        logger.info(f"Performing inference")
+        model = self.model
+        processor = self.processor
+        device = self.device
+        id2label = {v: k for v, k in enumerate(labels)}
 
-        # Obtain OCR results
-        file_hash = hash_file(src_image)
-        root_dir = get_marie_home()
-        ocr_json_path = os.path.join(root_dir, "ocr", f"{file_hash}.json")
-        annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        logger.info(
+            f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
+        )
 
-        print(f"OCR file  : {ocr_json_path}")
-        print(f"NER file  : {annotation_json_path}")
+        # image = # Image.open(eg["path"]).convert("RGB")
+        width, height = image.size
+        # https://huggingface.co/docs/transformers/model_doc/layoutlmv2#transformers.LayoutLMv2ForTokenClassification
+        # Encode the image
 
-        if not os.path.exists(ocr_json_path):
-            raise FileNotFoundError(ocr_json_path)
+        encoding = processor(
+            # fmt: off
+            image,
+            words,
+            boxes=boxes,
+            truncation=True,
+            return_offsets_mapping=True,
+            padding="max_length",
+            return_tensors="pt"
+            # fmt: on
+        )
+        offset_mapping = encoding.pop("offset_mapping")
 
-        if not os.path.exists(ocr_json_path):
-            raise FileNotFoundError(annotation_json_path)
+        # Debug tensor info
+        if False:
+            # img_tensor = encoded_inputs["image"] # v2
+            img_tensor = encoding["pixel_values"]  # v3
+            img = Image.fromarray(
+                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+            )
+            # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
 
-        loaded, frames = load_image(src_image, img_format="pil")
-        if not loaded:
-            raise Exception(f"Unable to load image file: {src_image}")
+        # ensure proper device placement
+        for ek, ev in encoding.items():
+            encoding[ek] = ev.to(device)
 
-        ocr_results = load_json_file(ocr_json_path)
-        annotation_results = load_json_file(annotation_json_path)
+        # Perform forward pass
+        with torch.no_grad():
+            outputs = model(**encoding)
+            # Get the predictions and probabilities
+            probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+            _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+            _token_boxes = encoding.bbox.squeeze().tolist()
+            normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+
+        # TODO : Filer the results
+        # Filter the predictions and bounding boxes based on a threshold
+        # predictions = _filter(_predictions, probs, threshold)
+        # token_boxes = _filter(_token_boxes, probs, threshold)
+        predictions = _predictions
+        token_boxes = _token_boxes
+
+        # Only keep non-subword predictions
+        is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+        true_predictions = [
+            id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]
+        ]
+        true_boxes = [
+            unnormalize_box(box, width, height)
+            for idx, box in enumerate(token_boxes)
+            if not is_subword[idx]
+        ]
+
+        true_scores = [
+            round(normalized_logits[idx][val], 6)
+            for idx, val in enumerate(predictions)
+            if not is_subword[idx]
+        ]
+
+        all_predictions = []
+        all_boxes = []
+        all_scores = []
+
+        all_predictions.append(true_predictions)
+        all_boxes.append(true_boxes)
+        all_scores.append(true_scores)
+
+        assert len(true_predictions) == len(true_boxes) == len(true_scores)
+        return all_predictions, all_boxes, all_scores
+
+
+    def postprocess( self, frames, annotation_results, ocr_results, file_hash):
+        """Post-process extracted data"""
+
         assert len(annotation_results) == len(ocr_results) == len(frames)
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
         logger.info("Changing coordinate format from xyxy->xyhw")
+
         for data in ocr_results:
             for word in data["words"]:
                 word["box"] = CoordinateFormat.convert(
@@ -730,6 +708,7 @@ class NerExtractionExecutor(Executor):
             viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
         # Decorate our answers with proper TEXT
+        text_executor: Optional[TextExtractionExecutor] = self.text_executor
         kv_indexed = {}
 
         for agg_result in aggregated_kv:
@@ -750,7 +729,7 @@ class NerExtractionExecutor(Executor):
             kv_indexed[page_index].append(agg_result)
 
         # visualize results per page
-        if True:
+        if self.debug_visuals:
             for k in range(0, len(frames)):
                 output_filename = f"/tmp/tensors/kv_{file_hash}_{k}.png"
                 items = [row for row in aggregated_kv if int(row["page"]) == k]
@@ -759,19 +738,16 @@ class NerExtractionExecutor(Executor):
         logger.info(f"aggregated_kv : {aggregated_kv}")
         results = {"meta": aggregated_meta, "kv": aggregated_kv}
 
-        # return aggregated_kv
         return results
 
-    def main_image(
-        self,
-        src_image: str,
-        model,
-        device,
-        text_executor: Optional[TextExtractionExecutor] = None,
-    ):
+
+    def preprocess(self, src_image: str):
+        """Pre-process src image for NER extraction"""
+
         if not os.path.exists(src_image):
             print(f"File not found : {src_image}")
             return
+
         # Obtain OCR results
         file_hash = hash_file(src_image)
         root_dir = get_marie_home()
@@ -788,7 +764,7 @@ class NerExtractionExecutor(Executor):
         print(f"OCR file  : {ocr_json_path}")
         print(f"NER file  : {annotation_json_path}")
 
-        if not os.path.exists(ocr_json_path) and text_executor is None:
+        if not os.path.exists(ocr_json_path) and self.text_executor is None:
             raise Exception(f"OCR File not found : {ocr_json_path}")
 
         loaded, frames = load_image(src_image, img_format="pil")
@@ -796,52 +772,55 @@ class NerExtractionExecutor(Executor):
             raise Exception(f"Unable to load image file: {src_image}")
 
         if not os.path.exists(ocr_json_path):
-            results, frames = obtain_ocr(src_image, text_executor)
+            results, frames = obtain_ocr(src_image, self.text_executor)
             # convert CV frames to PIL frame
             frames = __convert_frames(frames, img_format="pil")
             store_json_object(results, ocr_json_path)
 
-        results = load_json_file(ocr_json_path)
-        visualize_icr(frames, results, file_hash)
+        ocr_results = load_json_file(ocr_json_path)
+        visualize_icr(frames, ocr_results, file_hash)
 
-        assert len(results) == len(frames)
+        assert len(ocr_results) == len(frames)
+        boxes = []
+        words = []
+
+        for k, (result, image) in enumerate(zip(ocr_results, frames)):
+            if not isinstance(image, Image.Image):
+                raise "Frame should have been an PIL.Image instance"
+            boxes.append([])
+            words.append([])
+
+            for i, word in enumerate(result["words"]):
+                words[k].append(word["text"])
+                boxes[k].append(normalize_bbox(word["box"], (image.size[0], image.size[1])))
+                # This is to prevent following error
+                # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
+                if len(boxes[k]) == 512:
+                    print("Clipping MAX boxes at 512")
+                    break
+            assert len(words[k]) == len(boxes[k])
+        assert len(frames) == len(boxes) == len(words)
+        return frames, boxes, words, ocr_results, file_hash
+
+    def process(self, frames, boxes, words, file_hash):
+        """process NER extraction"""
+
         annotations = []
         labels, id2label, label2id = get_label_info()
 
-        for k, (result, image) in enumerate(zip(results, frames)):
-            if not isinstance(image, Image.Image):
+        for k, (_image, _boxes, _words) in enumerate(zip(frames, boxes, words)):
+            if not isinstance(_image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
 
-            width = image.size[0]
-            height = image.size[1]
-            words = []
-            boxes = []
+            width = _image.size[0]
+            height = _image.size[1]
 
-            for i, word in enumerate(result["words"]):
-                box_norm = normalize_bbox(word["box"], (width, height))
-                words.append(word["text"].lower())
-                boxes.append(box_norm)
-
-                # This is to prevent following error
-                # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
-                # print(len(boxes))
-                if len(boxes) == 512:
-                    print("Clipping MAX boxes at 512")
-                    break
-
-            assert len(words) == len(boxes)
-
-            (all_predictions, all_boxes, all_scores) = infer(
-                file_hash,
-                k,
-                self.model,
-                self.processor,
-                image,
+            all_predictions, all_boxes, all_scores = self.inference(
+                _image,
+                _words,
+                _boxes,
                 labels,
                 0.1,
-                words,
-                boxes,
-                self.device,
             )
 
             true_predictions = all_predictions[0]
@@ -861,18 +840,23 @@ class NerExtractionExecutor(Executor):
                 "boxes": true_boxes,
                 "scores": true_scores,
             }
-
-            output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
-            visualize_prediction(
-                output_filename,
-                image,
-                true_predictions,
-                true_boxes,
-                true_scores,
-                label2color=get_label_colors(),
-            )
-
             annotations.append(annotation)
+
+            if self.debug_visuals:
+                output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
+                visualize_prediction(
+                    output_filename,
+                    _image,
+                    true_predictions,
+                    true_boxes,
+                    true_scores,
+                    label2color=get_label_colors(),
+                )
+
+        root_dir = get_marie_home()
+        annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
+        ensure_exists(os.path.join(root_dir, "annotation"))
+
         store_json_object(annotations, annotation_json_path)
         return annotations
 
@@ -890,7 +874,8 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             print("The value of {} is {}".format(key, value))
 
-        self.main_image(image_src, self.model, self.device, self.text_executor)
-        ner_results = self.aggregate_results(image_src, self.text_executor)
+        frames, boxes, words, ocr_results, file_hash = self.preprocess(image_src)
+        annotations = self.process(frames, boxes, words, file_hash)
+        ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
 
         return ner_results
