@@ -228,14 +228,12 @@ class TextExtractionExecutor(Executor):
                 img = frames[page_index]
                 img = img[y : y + h, x : x + w].copy()
                 # allow for small padding around the component
-                padding = 4
+                padding = 0
                 overlay = (
                     np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 )
                 overlay[padding : h + padding, padding : w + padding] = img
-                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
-
-                logger.info(f"pms_mode = {pms_mode}")
+                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
                 (
                     boxes,
                     img_fragments,
@@ -417,3 +415,5 @@ class TextExtractionExecutor(Executor):
 
         json_results = self.render_as_json(queue_id, checksum, frames, results)
         text_results = self.render_as_text(queue_id, checksum, frames, results)
+
+        raise Exception("Not Implemented")
