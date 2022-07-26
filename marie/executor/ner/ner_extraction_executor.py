@@ -1,4 +1,6 @@
 import os
+import time
+
 import cv2
 import torch
 from builtins import print
@@ -21,6 +23,7 @@ from marie.executor.ner.utils import (
 )
 
 from marie.logging.logger import MarieLogger
+from marie.timer import Timer
 from marie.utils.utils import ensure_exists
 from marie.utils.overlap import find_overlap_horizontal
 from marie.utils.overlap import merge_bboxes_as_block
@@ -53,7 +56,7 @@ from marie.utils.docs import (
     array_from_docs,
     docs_from_image,
     load_image,
-    __convert_frames,
+    convert_frames,
 )
 
 from marie.utils.image_utils import viewImage, read_image, hash_file
@@ -229,8 +232,11 @@ def get_label_colors():
         "check_number_answer": "blue",
     }
 
-
+# @Timer(text="OCR Line in {:.4f} seconds")
 def get_ocr_line_bbox(bbox, frame, text_executor):
+    show_time = True
+    t0 = time.time()
+
     box = np.array(bbox).astype(np.int32)
     x, y, w, h = box
     img = frame
@@ -242,20 +248,16 @@ def get_ocr_line_bbox(bbox, frame, text_executor):
     kwa = {"payload": {"output": "json", "mode": "raw_line"}}
     results = text_executor.extract(docs, **kwa)
 
+    t1 = time.time()
+    if show_time:
+        print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
+
     if len(results) > 0:
         words = results[0]["words"]
         if len(words) > 0:
             word = words[0]
             return word["text"], word["confidence"]
     return "", 0.0
-
-
-def _filter(
-    values: List[Any], probabilities: List[float], threshold: float
-) -> List[Any]:
-    return [value for probs, value in zip(probabilities, values) if probs >= threshold]
-
-
 
 
 class NerExtractionExecutor(Executor):
@@ -290,29 +292,34 @@ class NerExtractionExecutor(Executor):
 
         models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
 
-        models_dir = (
-            "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
-        )
+        models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
+        models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
 
         self.debug_visuals = False
         self.model = load_model(models_dir, True, self.device)
         self.processor = create_processor()
         self.text_executor: Optional[TextExtractionExecutor] = TextExtractionExecutor()
 
-
     def info(self, **kwargs):
         logger.info(f"Self : {self}")
         return {"index": "ner-complete"}
 
+    def _filter(
+        self, values: List[Any], probabilities: List[float], threshold: float
+    ) -> List[Any]:
+        return [
+            value for probs, value in zip(probabilities, values) if probs >= threshold
+        ]
+
     def inference(
-            self,
-            image: Any,
-            words: List[Any],
-            boxes: List[Any],
-            labels: List[str],
-            threshold: float,
+        self,
+        image: Any,
+        words: List[Any],
+        boxes: List[Any],
+        labels: List[str],
+        threshold: float,
     ) -> Tuple[List, List, List]:
-        """ Run Inference on the model with given processor"""
+        """Run Inference on the model with given processor"""
         logger.info(f"Performing inference")
         model = self.model
         processor = self.processor
@@ -359,7 +366,9 @@ class NerExtractionExecutor(Executor):
         with torch.no_grad():
             outputs = model(**encoding)
             # Get the predictions and probabilities
-            probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+            probs = (
+                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+            )
             _predictions = outputs.logits.argmax(-1).squeeze().tolist()
             _token_boxes = encoding.bbox.squeeze().tolist()
             normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
@@ -374,7 +383,9 @@ class NerExtractionExecutor(Executor):
         # Only keep non-subword predictions
         is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
         true_predictions = [
-            id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]
+            id2label[pred]
+            for idx, pred in enumerate(predictions)
+            if not is_subword[idx]
         ]
         true_boxes = [
             unnormalize_box(box, width, height)
@@ -399,8 +410,7 @@ class NerExtractionExecutor(Executor):
         assert len(true_predictions) == len(true_boxes) == len(true_scores)
         return all_predictions, all_boxes, all_scores
 
-
-    def postprocess( self, frames, annotation_results, ocr_results, file_hash):
+    def postprocess(self, frames, annotation_results, ocr_results, file_hash):
         """Post-process extracted data"""
 
         assert len(annotation_results) == len(ocr_results) == len(frames)
@@ -740,7 +750,6 @@ class NerExtractionExecutor(Executor):
 
         return results
 
-
     def preprocess(self, src_image: str):
         """Pre-process src image for NER extraction"""
 
@@ -771,14 +780,25 @@ class NerExtractionExecutor(Executor):
         if not loaded:
             raise Exception(f"Unable to load image file: {src_image}")
 
-        if not os.path.exists(ocr_json_path):
-            results, frames = obtain_ocr(src_image, self.text_executor)
-            # convert CV frames to PIL frame
-            frames = __convert_frames(frames, img_format="pil")
-            store_json_object(results, ocr_json_path)
+        retry = False
+        if os.path.exists(ocr_json_path):
+            ocr_results = load_json_file(ocr_json_path)
+            if "error" in ocr_results:
+                msg = ocr_results["error"]
+                logger.info(f"Retrying document > {file_hash} due to : {msg}")
+                os.remove(ocr_json_path)
 
-        ocr_results = load_json_file(ocr_json_path)
-        visualize_icr(frames, ocr_results, file_hash)
+        if not os.path.exists(ocr_json_path)
+            ocr_results, frames = obtain_ocr(src_image, self.text_executor)
+            # convert CV frames to PIL frame
+            frames = convert_frames(frames, img_format="pil")
+            store_json_object(ocr_results, ocr_json_path)
+
+        if ocr_results is None or "error" in ocr_results:
+            return False, frames, [], [], ocr_results, file_hash
+
+        if self.debug_visuals:
+            visualize_icr(frames, ocr_results, file_hash)
 
         assert len(ocr_results) == len(frames)
         boxes = []
@@ -792,7 +812,9 @@ class NerExtractionExecutor(Executor):
 
             for i, word in enumerate(result["words"]):
                 words[k].append(word["text"])
-                boxes[k].append(normalize_bbox(word["box"], (image.size[0], image.size[1])))
+                boxes[k].append(
+                    normalize_bbox(word["box"], (image.size[0], image.size[1]))
+                )
                 # This is to prevent following error
                 # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
                 if len(boxes[k]) == 512:
@@ -800,7 +822,7 @@ class NerExtractionExecutor(Executor):
                     break
             assert len(words[k]) == len(boxes[k])
         assert len(frames) == len(boxes) == len(words)
-        return frames, boxes, words, ocr_results, file_hash
+        return True, frames, boxes, words, ocr_results, file_hash
 
     def process(self, frames, boxes, words, file_hash):
         """process NER extraction"""
@@ -874,7 +896,7 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             print("The value of {} is {}".format(key, value))
 
-        frames, boxes, words, ocr_results, file_hash = self.preprocess(image_src)
+        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(image_src)
         annotations = self.process(frames, boxes, words, file_hash)
         ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
 

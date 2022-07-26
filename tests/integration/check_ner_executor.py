@@ -93,8 +93,8 @@ if __name__ == "__main__":
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
-        # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/merged.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
+        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
+        # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
 
         docs = docs_from_file(img_path)
         frames = array_from_docs(docs)
