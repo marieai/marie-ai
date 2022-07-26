@@ -93,21 +93,7 @@ def visualize_extract_kv(output_filename, frame, kv_results):
     draw = ImageDraw.Draw(image, "RGBA")
     font = get_font(10)
 
-    for i, kv in enumerate(kv_results):
-        question = kv["value"]["question"]
-        answer = kv["value"]["answer"]
-
-        q_box = question["bbox"]
-        a_box = answer["bbox"]
-
-        draw_box(
-            draw,
-            q_box,
-            None,
-            get_random_color(),
-            font,
-        )
-
+    def __draw(a_box,):
         draw_box(
             draw,
             a_box,
@@ -115,6 +101,13 @@ def visualize_extract_kv(output_filename, frame, kv_results):
             get_random_color(),
             font,
         )
+
+    for i, kv in enumerate(kv_results):
+        if "question" in kv["value"]:
+            __draw(kv["value"]["question"]["bbox"])
+
+        if "answer" in kv["value"]:
+            __draw(kv["value"]["answer"]["bbox"])
 
     image.save(output_filename)
     del draw

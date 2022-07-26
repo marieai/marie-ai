@@ -83,181 +83,6 @@ def obtain_ocr(src_image: str, text_executor: TextExtractionExecutor):
     return results, frames
 
 
-def create_processor():
-    """prepare for the model"""
-    # Method:2 Create Layout processor with custom future extractor
-    # Max model size is 512, so we will need to handle any documents larger than that
-    feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
-        "microsoft/layoutlmv3-large"
-        # only_label_first_subword = True
-    )
-    processor = LayoutLMv3Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
-
-    return processor
-
-
-def load_model(model_dir: str, fp16: bool, device):
-    """
-    Create token classification model
-    """
-    print(f"TokenClassification dir : {model_dir}")
-    labels, _, _ = get_label_info()
-    model = AutoModelForTokenClassification.from_pretrained(
-        model_dir, num_labels=len(labels)
-    )
-
-    model.to(device)
-    return model
-
-
-def get_label_info():
-    labels = [
-        "O",
-        "B-MEMBER_NAME",
-        "I-MEMBER_NAME",
-        "B-MEMBER_NUMBER",
-        "I-MEMBER_NUMBER",
-        "B-PAN",
-        "I-PAN",
-        "B-PATIENT_NAME",
-        "I-PATIENT_NAME",
-        "B-DOS",
-        "I-DOS",
-        "B-DOS_ANSWER",
-        "I-DOS_ANSWER",
-        "B-PATIENT_NAME_ANSWER",
-        "I-PATIENT_NAME_ANSWER",
-        "B-MEMBER_NAME_ANSWER",
-        "I-MEMBER_NAME_ANSWER",
-        "B-MEMBER_NUMBER_ANSWER",
-        "I-MEMBER_NUMBER_ANSWER",
-        "B-PAN_ANSWER",
-        "I-PAN_ANSWER",
-        "B-ADDRESS",
-        "I-ADDRESS",
-        "B-GREETING",
-        "I-GREETING",
-        "B-HEADER",
-        "I-HEADER",
-        "B-LETTER_DATE",
-        "I-LETTER_DATE",
-        "B-PARAGRAPH",
-        "I-PARAGRAPH",
-        "B-QUESTION",
-        "I-QUESTION",
-        "B-ANSWER",
-        "I-ANSWER",
-        "B-DOCUMENT_CONTROL",
-        "I-DOCUMENT_CONTROL",
-        "B-PHONE",
-        "I-PHONE",
-        "B-URL",
-        "I-URL",
-        "B-CLAIM_NUMBER",
-        "I-CLAIM_NUMBER",
-        "B-CLAIM_NUMBER_ANSWER",
-        "I-CLAIM_NUMBER_ANSWER",
-        "B-BIRTHDATE",
-        "I-BIRTHDATE",
-        "B-BIRTHDATE_ANSWER",
-        "I-BIRTHDATE_ANSWER",
-        "B-BILLED_AMT",
-        "I-BILLED_AMT",
-        "B-BILLED_AMT_ANSWER",
-        "I-BILLED_AMT_ANSWER",
-        "B-PAID_AMT",
-        "I-PAID_AMT",
-        "B-PAID_AMT_ANSWER",
-        "I-PAID_AMT_ANSWER",
-        "B-CHECK_AMT",
-        "I-CHECK_AMT",
-        "B-CHECK_AMT_ANSWER",
-        "I-CHECK_AMT_ANSWER",
-        "B-CHECK_NUMBER",
-        "I-CHECK_NUMBER",
-        "B-CHECK_NUMBER_ANSWER",
-        "I-CHECK_NUMBER_ANSWER",
-    ]
-
-    logger.info(f"Labels : {labels}")
-
-    id2label = {v: k for v, k in enumerate(labels)}
-    label2id = {k: v for v, k in enumerate(labels)}
-
-    return labels, id2label, label2id
-
-
-def get_label_colors():
-    return {
-        "pan": "blue",
-        "pan_answer": "green",
-        "dos": "orange",
-        "dos_answer": "violet",
-        "member": "blue",
-        "member_answer": "green",
-        "member_number": "blue",
-        "member_number_answer": "green",
-        "member_name": "blue",
-        "member_name_answer": "green",
-        "patient_name": "blue",
-        "patient_name_answer": "green",
-        "paragraph": "purple",
-        "greeting": "blue",
-        "address": "orange",
-        "question": "blue",
-        "answer": "aqua",
-        "document_control": "grey",
-        "header": "brown",
-        "letter_date": "deeppink",
-        "url": "darkorange",
-        "phone": "darkmagenta",
-        "other": "red",
-        "claim_number": "darkmagenta",
-        "claim_number_answer": "green",
-        "birthdate": "green",
-        "birthdate_answer": "red",
-        "billed_amt": "green",
-        "billed_amt_answer": "orange",
-        "paid_amt": "green",
-        "paid_amt_answer": "blue",
-        "check_amt": "orange",
-        "check_amt_answer": "darkmagenta",
-        "check_number": "orange",
-        "check_number_answer": "blue",
-    }
-
-
-@Timer(text="OCR Line in {:.4f} seconds")
-def get_ocr_line_bbox(bbox, frame, text_executor):
-    show_time = True
-    t0 = time.time()
-
-    box = np.array(bbox).astype(np.int32)
-    x, y, w, h = box
-    img = frame
-    if isinstance(frame, Image.Image):
-        img = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
-
-    snippet = img[y : y + h, x : x + w :]
-    docs = docs_from_image(snippet)
-    kwa = {"payload": {"output": "json", "mode": "raw_line"}}
-    results = text_executor.extract(docs, **kwa)
-
-    t1 = time.time()
-    if show_time:
-        print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
-
-    if len(results) > 0:
-        words = results[0]["words"]
-        if len(words) > 0:
-            word = words[0]
-            return word["text"], word["confidence"]
-    return "", 0.0
-
-
 class NerExtractionExecutor(Executor):
     """
     Executor for extracting text.
@@ -297,15 +122,64 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors/json")
 
         pretrained_model_name_or_path = str(pretrained_model_name_or_path)
-        init_configuration = {}
 
         if os.path.isfile(pretrained_model_name_or_path):
             warnings.warn("Expected model directory")
 
-        self.debug_visuals = False
-        self.model = load_model(pretrained_model_name_or_path, True, self.device)
-        self.processor = create_processor()
+        config_path = os.path.join(pretrained_model_name_or_path, "config.ner.json")
+        if not os.path.exists(config_path):
+            raise FileNotFoundError("Expected config.ner.json not found")
+
+        self.init_configuration = load_json_file(config_path)
+
+        self.debug_visuals = self.init_configuration["debug"]["visualize"]["enabled"]
+        self.debug_visuals_overlay = self.init_configuration["debug"]["visualize"]["overlay"]
+        self.debug_visuals_icr = self.init_configuration["debug"]["visualize"]["icr"]
+        self.debug_visuals_ner = self.init_configuration["debug"]["visualize"]["ner"]
+        self.debug_visuals_prediction = self.init_configuration["debug"]["visualize"]["prediction"]
+
+        self.debug_scores = self.init_configuration["debug"]["scores"]
+        self.debug_colors = self.init_configuration["debug"]["colors"]
+
+        self.model = self.__load_model(pretrained_model_name_or_path, self.device)
+        self.processor = self.__create_processor()
         self.text_executor: Optional[TextExtractionExecutor] = TextExtractionExecutor()
+
+    def __create_processor(self):
+        """prepare for the model"""
+        # Method:2 Create Layout processor with custom future extractor
+        # Max model size is 512, so we will need to handle any documents larger than that
+        feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
+            "microsoft/layoutlmv3-large"
+            # only_label_first_subword = True
+        )
+        processor = LayoutLMv3Processor(
+            feature_extractor=feature_extractor, tokenizer=tokenizer
+        )
+
+        return processor
+
+    def __load_model(self, model_dir: str, device: str):
+        """
+        Create token classification model
+        """
+        labels, _, _ = self.get_label_info()
+        model = AutoModelForTokenClassification.from_pretrained(
+            model_dir, num_labels=len(labels)
+        )
+
+        model.to(device)
+        return model
+
+    def get_label_info(self):
+        labels = self.init_configuration["labels"]
+        logger.info(f"Labels : {labels}")
+
+        id2label = {v: k for v, k in enumerate(labels)}
+        label2id = {k: v for v, k in enumerate(labels)}
+
+        return labels, id2label, label2id
 
     def info(self, **kwargs):
         logger.info(f"Self : {self}")
@@ -338,11 +212,8 @@ class NerExtractionExecutor(Executor):
             f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
         )
 
-        # image = # Image.open(eg["path"]).convert("RGB")
         width, height = image.size
-        # https://huggingface.co/docs/transformers/model_doc/layoutlmv2#transformers.LayoutLMv2ForTokenClassification
         # Encode the image
-
         encoding = processor(
             # fmt: off
             image,
@@ -357,7 +228,7 @@ class NerExtractionExecutor(Executor):
         offset_mapping = encoding.pop("offset_mapping")
 
         # Debug tensor info
-        if False:
+        if self.debug_visuals:
             # img_tensor = encoded_inputs["image"] # v2
             img_tensor = encoding["pixel_values"]  # v3
             img = Image.fromarray(
@@ -394,6 +265,7 @@ class NerExtractionExecutor(Executor):
             for idx, pred in enumerate(predictions)
             if not is_subword[idx]
         ]
+
         true_boxes = [
             unnormalize_box(box, width, height)
             for idx, box in enumerate(token_boxes)
@@ -406,21 +278,17 @@ class NerExtractionExecutor(Executor):
             if not is_subword[idx]
         ]
 
-        all_predictions = []
-        all_boxes = []
-        all_scores = []
-
-        all_predictions.append(true_predictions)
-        all_boxes.append(true_boxes)
-        all_scores.append(true_scores)
-
         assert len(true_predictions) == len(true_boxes) == len(true_scores)
-        return all_predictions, all_boxes, all_scores
 
-    def postprocess(self, frames, annotation_results, ocr_results, file_hash):
+        predictions = [true_predictions]
+        boxes = [true_boxes]
+        scores = [true_scores]
+
+        return predictions, boxes, scores
+
+    def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
-
-        assert len(annotation_results) == len(ocr_results) == len(frames)
+        assert len(annotations) == len(ocr_results) == len(frames)
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
         logger.info("Changing coordinate format from xyxy->xyhw")
@@ -431,76 +299,39 @@ class NerExtractionExecutor(Executor):
                     word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
                 )
 
-        for data in annotation_results:
+        for data in annotations:
             for i, box in enumerate(data["boxes"]):
                 box = CoordinateFormat.convert(
                     box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
                 )
                 data["boxes"][i] = box
 
+        aggregated_ner = []
         aggregated_kv = []
         aggregated_meta = []
 
-        expected_keys = [
-            "PAN",
-            "PAN_ANSWER",
-            "PATIENT_NAME",
-            "PATIENT_NAME_ANSWER",
-            "DOS",
-            "DOS_ANSWER",
-            "MEMBER_NAME",
-            "MEMBER_NAME_ANSWER",
-            "MEMBER_NUMBER",
-            "MEMBER_NUMBER_ANSWER",
-            "QUESTION",
-            "ANSWER",  # Only collect ANSWERs for now
-            "LETTER_DATE",
-            "PHONE",
-            "URL",
-            "CLAIM_NUMBER",
-            "CLAIM_NUMBER_ANSWER",
-            "BIRTHDATE",
-            "BIRTHDATE_ANSWER",
-            "BILLED_AMT",
-            "BILLED_AMT_ANSWER",
-            "PAID_AMT",
-            "PAID_AMT_ANSWER",
-            # "ADDRESS",
-        ]
+        # expected NER and key/value pairs
+        expected_ner = self.init_configuration["expected_ner"]
+        expected_keys = self.init_configuration["expected_keys"]
+        expected_pair = self.init_configuration["expected_pair"]
 
-        # expected_keys = ["PAN", "PAN_ANSWER"]
-
-        # expected KV pairs
-        expected_pair = [
-            ["PAN", ["PAN_ANSWER", "ANSWER"]],
-            ["CLAIM_NUMBER", ["CLAIM_NUMBER_ANSWER", "ANSWER"]],
-            ["BIRTHDATE", ["BIRTHDATE_ANSWER", "ANSWER"]],
-            ["PATIENT_NAME", ["PATIENT_NAME_ANSWER", "ANSWER"]],
-            ["DOS", ["DOS_ANSWER", "ANSWER"]],
-            ["MEMBER_NAME", ["MEMBER_NAME_ANSWER", "ANSWER"]],
-            ["MEMBER_NUMBER", ["MEMBER_NUMBER_ANSWER", "ANSWER"]],
-            ["BILLED_AMT", ["BILLED_AMT_ANSWER"]],
-            ["PAID_AMT", ["PAID_AMT_ANSWER"]],
-            ["QUESTION", ["ANSWER"]],
-        ]
-
-        for i, (ocr, ann, frame) in enumerate(
-            zip(ocr_results, annotation_results, frames)
+        for i, (ocr, annotation, frame) in enumerate(
+            zip(ocr_results, annotations, frames)
         ):
-            print(f"Processing page # {i}")
             logger.info(f"Processing page # {i}")
             # lines and boxes are already in the right reading order TOP->BOTTOM, LEFT-TO-RIGHT so no need to sort
             lines_bboxes = np.array(ocr["meta"]["lines_bboxes"])
-            true_predictions = ann["predictions"]
-            true_boxes = ann["boxes"]
-            true_scores = ann["scores"]
+            true_predictions = annotation["predictions"]
+            true_boxes = annotation["boxes"]
+            true_scores = annotation["scores"]
 
             viz_img = frame.copy()
             draw = ImageDraw.Draw(viz_img, "RGBA")
             font = get_font(14)
-            # aggregate boxes into their lines
+            # aggregate prediction by their line numbers
+
             groups = {}
-            for j, (prediction, pred_box, pred_score) in enumerate(
+            for pred_idx, (prediction, pred_box, pred_score) in enumerate(
                 zip(true_predictions, true_boxes, true_scores)
             ):
                 # discard 'O' other
@@ -509,16 +340,15 @@ class NerExtractionExecutor(Executor):
                     continue
                 # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
                 if (
-                    pred_box == [0.0, 0.0, 0.0, 0.0]
-                    or pred_box[2] == 0
-                    or pred_box[3] == 0
+                    np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or
+                    (pred_box[2] == 0 and pred_box[3] == 0)
                 ):
                     continue
 
                 line_number = find_line_number(lines_bboxes, pred_box)
                 if line_number not in groups:
                     groups[line_number] = []
-                groups[line_number].append(j)
+                groups[line_number].append(pred_idx)
 
             # aggregate boxes into key/value pairs via simple state machine for each line
             aggregated_keys = {}
@@ -532,10 +362,9 @@ class NerExtractionExecutor(Executor):
 
                 prediction_indexes = np.array(groups[line_idx])
                 line_aggregator = []
-                color_map = {"ADDRESS": get_random_color()}
 
                 for key in expected_keys:
-                    aggregated = []
+                    spans = []
                     skip_to = -1
                     for m in range(0, len(prediction_indexes)):
                         if skip_to != -1 and m <= skip_to:
@@ -556,10 +385,10 @@ class NerExtractionExecutor(Executor):
                                 skip_to = n
 
                         if len(aggregator) > 0:
-                            aggregated.append(aggregator)
+                            spans.append(aggregator)
 
-                    if len(aggregated) > 0:
-                        line_aggregator.append({"key": key, "groups": aggregated})
+                    if len(spans) > 0:
+                        line_aggregator.append({"key": key, "groups": spans})
 
                 true_predictions = np.array(true_predictions)
                 true_boxes = np.array(true_boxes)
@@ -587,77 +416,71 @@ class NerExtractionExecutor(Executor):
                             aggregated_keys[line_idx] = []
                         aggregated_keys[line_idx].append(key_result)
 
-                        color = (
-                            color_map[field]
-                            if field in color_map
-                            else get_random_color()
-                        )
+                        if self.debug_visuals:
+                            color_map = self.init_configuration["debug"]["colors"]
+                            color = (
+                                color_map[field]
+                                if field in color_map
+                                else get_random_color()
+                            )
 
-                        draw_box(
-                            draw,
-                            group_bbox,
-                            None,
-                            color,
-                            font,
-                        )
+                            draw_box(
+                                draw,
+                                group_bbox,
+                                None,
+                                color,
+                                font,
+                            )
 
             # check if we have possible overlaps when there is a mislabeled token, this could be a flag
+            # Strategy used here is a horizontal overlap, if we have it then we will aggregate them
             # B-PAN I-PAN I-PAN B-PAN-ANS I-PAN
+            if self.init_configuration["mislabeled_token_strategy"] == "aggregate":
+                for key in expected_keys:
+                    for ag_key in aggregated_keys.keys():
+                        row_items = aggregated_keys[ag_key]
+                        bboxes = [row["bbox"] for row in row_items if row["key"] == key]
+                        visited = [False for _ in range(0, len(bboxes))]
+                        to_merge = {}
 
-            for key in expected_keys:
-                for ag_key in aggregated_keys.keys():
-                    row_items = aggregated_keys[ag_key]
-                    bboxes = [row["bbox"] for row in row_items if row["key"] == key]
-                    visited = [False for _ in range(0, len(bboxes))]
-                    to_merge = {}
+                        for idx in range(0, len(bboxes)):
+                            if visited[idx]:
+                                continue
+                            visited[idx] = True
+                            box = bboxes[idx]
+                            overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
+                            to_merge[ag_key] = [idx]
 
-                    for idx in range(0, len(bboxes)):
-                        if visited[idx]:
-                            continue
-                        visited[idx] = True
-                        box = bboxes[idx]
-                        overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
-                        to_merge[ag_key] = [idx]
+                            for _, overlap_idx in zip(overlaps, indexes):
+                                visited[overlap_idx] = True
+                                to_merge[ag_key].append(overlap_idx)
 
-                        for _, overlap_idx in zip(overlaps, indexes):
-                            visited[overlap_idx] = True
-                            to_merge[ag_key].append(overlap_idx)
+                        for _k, idxs in to_merge.items():
+                            items = aggregated_keys[_k]
+                            items = np.array(items)
+                            # there is nothing to merge, except the original block
+                            if len(idxs) == 1:
+                                continue
 
-                    for _k, idxs in to_merge.items():
-                        items = aggregated_keys[_k]
-                        items = np.array(items)
-                        # there is nothing to merge, except the original block
-                        if len(idxs) == 1:
-                            continue
+                            idxs = np.array(idxs)
+                            picks = items[idxs]
+                            remaining = np.delete(items, idxs)
 
-                        idxs = np.array(idxs)
-                        picks = items[idxs]
-                        remaining = np.delete(items, idxs)
+                            score_avg = round(
+                                np.average([item["score"] for item in picks]), 6
+                            )
+                            block = merge_bboxes_as_block([item["bbox"] for item in picks])
 
-                        score_avg = round(
-                            np.average([item["score"] for item in picks]), 6
-                        )
-                        block = merge_bboxes_as_block([item["bbox"] for item in picks])
+                            new_item = picks[0]
+                            new_item["score"] = score_avg
+                            new_item["bbox"] = block
 
-                        new_item = picks[0]
-                        new_item["score"] = score_avg
-                        new_item["bbox"] = block
+                            aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
-                        aggregated_keys[_k] = np.concatenate(([new_item], remaining))
+            # expected fields groups that indicate that the field could have been present
+            # but it might not have been associated with KV pair mapping, does not apply to NER
 
-            # expected fields groups that indicate that the field could have been present but there was not associated
-            possible_fields = {
-                "PAN": ["PAN", "PAN_ANSWER"],
-                "PATIENT_NAME": ["PATIENT_NAME", "PATIENT_NAME_ANSWER"],
-                "DOS": ["DOS", "DOS_ANSWER"],
-                "MEMBER_NAME": ["MEMBER_NAME", "MEMBER_NAME_ANSWER"],
-                "MEMBER_NUMBER": ["MEMBER_NUMBER", "MEMBER_NUMBER_ANSWER"],
-                "CLAIM_NUMBER": ["CLAIM_NUMBER", "CLAIM_NUMBER_ANSWER"],
-                "BIRTHDATE": ["BIRTHDATE", "BIRTHDATE_ANSWER"],
-                "BILLED_AMT": ["BILLED_AMT", "BILLED_AMT_ANSWER"],
-                "PAID_AMT": ["PAID_AMT", "PAID_AMT_ANSWER"],
-            }
-
+            possible_fields = self.init_configuration["possible_fields"]
             possible_field_meta = {}
 
             for field in possible_fields.keys():
@@ -673,6 +496,7 @@ class NerExtractionExecutor(Executor):
 
             aggregated_meta.append({"page": i, "fields": possible_field_meta})
 
+            # Aggregate KV pairs, this can overlap with NER tags so caution need to be taken
             for pair in expected_pair:
                 expected_question = pair[0]
                 expected_answer = pair[1]
@@ -680,25 +504,25 @@ class NerExtractionExecutor(Executor):
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
 
-                    found_question = None
-                    found_answer = None
+                    found_key = None
+                    found_val = None
 
                     for ner_key in ner_keys:
                         key = ner_key["key"]
                         if expected_question == key:
-                            found_question = ner_key
+                            found_key = ner_key
                             continue
                         # find the first match
-                        if found_question is not None and found_answer is None:
+                        if found_key is not None and found_val is None:
                             # find the first match
                             for exp_key in expected_answer:
                                 if key in exp_key:
-                                    found_answer = ner_key
+                                    found_val = ner_key
                                     break
 
-                            if found_answer is not None:
-                                bbox_q = found_question["bbox"]
-                                bbox_a = found_answer["bbox"]
+                            if found_val is not None:
+                                bbox_q = found_key["bbox"]
+                                bbox_a = found_val["bbox"]
 
                                 if bbox_a[0] < bbox_q[0]:
                                     logger.warning(
@@ -706,34 +530,55 @@ class NerExtractionExecutor(Executor):
                                     )
                                     continue
 
-                                category = found_question["key"]
+                                category = found_key["key"]
                                 kv_result = {
                                     "page": i,
                                     "category": category,
                                     "value": {
-                                        "question": found_question,
-                                        "answer": found_answer,
+                                        "question": found_key,
+                                        "answer": found_val,
                                     },
                                 }
 
                                 aggregated_kv.append(kv_result)
 
-            viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
+            # Collect NER tags
+            for tag in expected_ner:
+                for k in aggregated_keys.keys():
+                    ner_keys = aggregated_keys[k]
+                    for ner_key in ner_keys:
+                        key = ner_key["key"]
+                        if key == tag:
+                            ner_result = {
+                                "page": i,
+                                "category": tag,
+                                "value": {
+                                    "answer": ner_key,
+                                },
+                            }
+                            aggregated_ner.append(ner_result)
 
-        self.decorate_kv_with_text(aggregated_kv, frames)
+            if self.debug_visuals and self.debug_visuals_overlay:
+                viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
+
+        self.decorate_aggregates_with_text(aggregated_ner, frames)
+        self.decorate_aggregates_with_text(aggregated_kv, frames)
+
         # visualize results per page
-        if self.debug_visuals:
+        if self.debug_visuals and self.debug_visuals_ner:
             for k in range(0, len(frames)):
-                output_filename = f"/tmp/tensors/kv_{file_hash}_{k}.png"
-                items = [row for row in aggregated_kv if int(row["page"]) == k]
+                output_filename = f"/tmp/tensors/ner_{file_hash}_{k}.png"
+                items = []
+                items.extend([row for row in aggregated_kv if int(row["page"]) == k])
+                items.extend([row for row in aggregated_ner if int(row["page"]) == k])
                 visualize_extract_kv(output_filename, frames[k], items)
 
-        logger.info(f"aggregated_kv : {aggregated_kv}")
-        results = {"meta": aggregated_meta, "kv": aggregated_kv}
+        results = {"meta": aggregated_meta, "kv": aggregated_kv, "ner": aggregated_ner}
 
+        print(results)
         return results
 
-    def decorate_kv_with_text(self, aggregated_kv, frames):
+    def decorate_aggregates_with_text(self, aggregated_kv, frames):
         """Decorate our answers with proper TEXT"""
         regions = []
 
@@ -749,27 +594,30 @@ class NerExtractionExecutor(Executor):
                 "h": h,
             }
 
-        # performing secondary OCR yields much better results as we are using
-        # RAW-LINE as our segmentation method
+        # performing secondary OCR yields much better results as we are using RAW-LINE as our segmentation method
         # aggregate results for OCR extraction
         for k, agg_result in enumerate(aggregated_kv):
             page_index = int(agg_result["page"])
             category = agg_result["category"]
 
-            regions.append(
-                create_region(
-                    f"{category}_{k}_k",
-                    page_index,
-                    agg_result["value"]["question"]["bbox"],
+            if "question" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_k",
+                        page_index,
+                        agg_result["value"]["question"]["bbox"],
+                    )
                 )
-            )
-            regions.append(
-                create_region(
-                    f"{category}_{k}_v",
-                    page_index,
-                    agg_result["value"]["answer"]["bbox"],
+
+            if "answer" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_v",
+                        page_index,
+                        agg_result["value"]["answer"]["bbox"],
+                    )
                 )
-            )
+
         kwa = {
             "payload": {
                 "output": "json",
@@ -779,8 +627,18 @@ class NerExtractionExecutor(Executor):
                 "regions": regions,
             }
         }
+
+        # nothing to decorate
+        if len(regions) == 0:
+            return
+
         region_results = self.text_executor.extract(docs_from_image(frames), **kwa)
+        # possible failure in extracting data for region
+        if "regions" not in region_results:
+            logger.warning("No regions returned")
+            return
         region_results = region_results["regions"]
+
         # merge results
         for k, agg_result in enumerate(aggregated_kv):
             category = agg_result["category"]
@@ -826,7 +684,7 @@ class NerExtractionExecutor(Executor):
         loaded, frames = load_image(src_image, img_format="pil")
         if not loaded:
             raise Exception(f"Unable to load image file: {src_image}")
-
+        ocr_results = {}
         if os.path.exists(ocr_json_path):
             ocr_results = load_json_file(ocr_json_path)
             if "error" in ocr_results:
@@ -840,10 +698,10 @@ class NerExtractionExecutor(Executor):
             frames = convert_frames(frames, img_format="pil")
             store_json_object(ocr_results, ocr_json_path)
 
-        if ocr_results is None or "error" in ocr_results:
+        if "error" in ocr_results:
             return False, frames, [], [], ocr_results, file_hash
 
-        if self.debug_visuals:
+        if self.debug_visuals and self.debug_visuals_icr:
             visualize_icr(frames, ocr_results, file_hash)
 
         assert len(ocr_results) == len(frames)
@@ -874,7 +732,7 @@ class NerExtractionExecutor(Executor):
         """process NER extraction"""
 
         annotations = []
-        labels, id2label, label2id = get_label_info()
+        labels, id2label, label2id = self.get_label_info()
 
         for k, (_image, _boxes, _words) in enumerate(zip(frames, boxes, words)):
             if not isinstance(_image, Image.Image):
@@ -896,10 +754,10 @@ class NerExtractionExecutor(Executor):
             true_scores = all_scores[0]
 
             # show detail scores
-            if False:
-                for i, val in enumerate(predictions):
+            if self.debug_scores:
+                for i, val in enumerate(true_predictions):
                     tp = true_predictions[i]
-                    score = normalized_logits[i][val]
+                    score = true_scores[i]
                     print(f" >> {tp} : {score}")
 
             annotation = {
@@ -910,7 +768,7 @@ class NerExtractionExecutor(Executor):
             }
             annotations.append(annotation)
 
-            if self.debug_visuals:
+            if self.debug_visuals and self.debug_visuals_prediction:
                 output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
                 visualize_prediction(
                     output_filename,
@@ -918,15 +776,15 @@ class NerExtractionExecutor(Executor):
                     true_predictions,
                     true_boxes,
                     true_scores,
-                    label2color=get_label_colors(),
+                    label2color=self.debug_colors
                 )
 
         annotation_json_path = os.path.join(
             __marie_home__, "annotation", f"{file_hash}.json"
         )
         ensure_exists(os.path.join(__marie_home__, "annotation"))
-
         store_json_object(annotations, annotation_json_path)
+
         return annotations
 
     # @requests()
