@@ -134,7 +134,7 @@ def load_pdf_frames(pdf_file_path):
         return True, frames
 
 
-def __convert_frames(frames, img_format):
+def convert_frames(frames, img_format):
     # each frame needs to be converted to RGB format
     converted = []
     for frame in frames:
@@ -178,7 +178,7 @@ def load_image(img_path, img_format: str = "cv"):
 
     # each frame needs to be converted to RGB format to keep proper shape [x,y,c]
     if loaded:
-        converted = __convert_frames(frames, img_format)
+        converted = convert_frames(frames, img_format)
         return loaded, converted
 
 
