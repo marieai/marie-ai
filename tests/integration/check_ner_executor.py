@@ -43,7 +43,6 @@ def process_file(executor: NerExtractionExecutor, img_path: str):
     docs = None
     kwa = {"checksum": checksum, "img_path": img_path}
     results = executor.extract(docs, **kwa)
-
     print(results)
     store_json_object(results, f"/tmp/tensors/json/{filename}.json")
     return results
@@ -79,13 +78,14 @@ if __name__ == "__main__":
 
     img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
-    # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-    # ensure_exists("/tmp/tensors/json")
-    # # check_layoutlmv3(img_path)
+    # models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
+    # models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
 
-    # p1 = load_image("/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637188.tif")
+    models_dir = (
+        "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
+    )
 
-    executor = NerExtractionExecutor()
+    executor = NerExtractionExecutor(models_dir)
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, "/home/gbugaj/tmp/medrx")
 
@@ -95,18 +95,6 @@ if __name__ == "__main__":
 
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
-
-        docs = docs_from_file(img_path)
-        frames = array_from_docs(docs)
-
-        time_nanosec = time.time_ns()
-        src = []
-        for i, frame in enumerate(frames):
-            src = np.append(src, np.ravel(frame))
-        checksum = hash_bytes(src)
-        print(checksum)
-        time_nanosec = (time.time_ns() - time_nanosec) / 1000000000
-        print(time_nanosec)
 
         process_file(executor, img_path)
 

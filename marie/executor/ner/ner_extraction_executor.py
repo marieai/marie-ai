@@ -1,5 +1,6 @@
 import os
 import time
+import warnings
 
 import cv2
 import torch
@@ -9,7 +10,7 @@ from docarray import DocumentArray
 from torch.backends import cudnn
 import torch.nn.functional as nn
 
-from marie import Executor, requests, __model_path__
+from marie import Executor, requests, __model_path__, __marie_home__
 from marie.executor.ner.utils import (
     normalize_bbox,
     unnormalize_box,
@@ -30,7 +31,7 @@ from marie.utils.overlap import merge_bboxes_as_block
 
 from PIL import Image, ImageDraw, ImageFont
 import logging
-from typing import Optional, List, Any, Tuple, Dict
+from typing import Optional, List, Any, Tuple, Dict, Union
 
 import numpy as np
 
@@ -68,10 +69,6 @@ from detectron2.config import get_cfg
 
 check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
-
-
-def get_marie_home():
-    return os.path.join(str(Path.home()), ".marie")
 
 
 def obtain_ocr(src_image: str, text_executor: TextExtractionExecutor):
@@ -232,7 +229,8 @@ def get_label_colors():
         "check_number_answer": "blue",
     }
 
-# @Timer(text="OCR Line in {:.4f} seconds")
+
+@Timer(text="OCR Line in {:.4f} seconds")
 def get_ocr_line_bbox(bbox, frame, text_executor):
     show_time = True
     t0 = time.time()
@@ -267,14 +265,16 @@ class NerExtractionExecutor(Executor):
     aka bounding boxes.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs
+    ):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
 
-        self.logger.info("NER Extraction Executor")
+        self.logger.info(f"NER Extraction Executor : {pretrained_model_name_or_path}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -284,19 +284,26 @@ class NerExtractionExecutor(Executor):
             self.device = "cpu"
 
         if use_cuda:
-            cudnn.benchmark = False
-            cudnn.deterministic = False
+            try:
+                from torch._C import _cudnn
+
+                # It seems good practice to turn off cudnn.benchmark when turning on cudnn.deterministic
+                cudnn.benchmark = True
+                cudnn.deterministic = False
+            except ImportError:
+                pass
 
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
+        pretrained_model_name_or_path = str(pretrained_model_name_or_path)
+        init_configuration = {}
 
-        models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
-        models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
+        if os.path.isfile(pretrained_model_name_or_path):
+            warnings.warn("Expected model directory")
 
         self.debug_visuals = False
-        self.model = load_model(models_dir, True, self.device)
+        self.model = load_model(pretrained_model_name_or_path, True, self.device)
         self.processor = create_processor()
         self.text_executor: Optional[TextExtractionExecutor] = TextExtractionExecutor()
 
@@ -651,23 +658,19 @@ class NerExtractionExecutor(Executor):
                 "PAID_AMT": ["PAID_AMT", "PAID_AMT_ANSWER"],
             }
 
-            print(">>>>>>>>>>>")
             possible_field_meta = {}
 
             for field in possible_fields.keys():
                 fields = possible_fields[field]
                 possible_field_meta[field] = {"page": i, "found": False, "fields": []}
-
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:
                         key = ner_key["key"]
                         if key in fields:
-                            print(f"found : {field} > {key}")
                             possible_field_meta[field]["found"] = True
                             possible_field_meta[field]["fields"].append(key)
 
-            print(possible_field_meta)
             aggregated_meta.append({"page": i, "fields": possible_field_meta})
 
             for pair in expected_pair:
@@ -717,27 +720,7 @@ class NerExtractionExecutor(Executor):
 
             viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
-        # Decorate our answers with proper TEXT
-        text_executor: Optional[TextExtractionExecutor] = self.text_executor
-        kv_indexed = {}
-
-        for agg_result in aggregated_kv:
-            page_index = int(agg_result["page"])
-            frame = frames[page_index]
-            question = agg_result["value"]["question"]
-            answer = agg_result["value"]["answer"]
-
-            w1, c1 = get_ocr_line_bbox(question["bbox"], frame, text_executor)
-            w2, c2 = get_ocr_line_bbox(answer["bbox"], frame, text_executor)
-
-            question["text"] = {"text": w1, "confidence": c1}
-            answer["text"] = {"text": w2, "confidence": c2}
-
-            if page_index not in kv_indexed:
-                kv_indexed[page_index] = []
-
-            kv_indexed[page_index].append(agg_result)
-
+        self.decorate_kv_with_text(aggregated_kv, frames)
         # visualize results per page
         if self.debug_visuals:
             for k in range(0, len(frames)):
@@ -750,6 +733,70 @@ class NerExtractionExecutor(Executor):
 
         return results
 
+    def decorate_kv_with_text(self, aggregated_kv, frames):
+        """Decorate our answers with proper TEXT"""
+        regions = []
+
+        def create_region(field_id, page_index, bbox):
+            box = np.array(bbox).astype(np.int32)
+            x, y, w, h = box
+            return {
+                "id": field_id,
+                "pageIndex": page_index,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            }
+
+        # performing secondary OCR yields much better results as we are using
+        # RAW-LINE as our segmentation method
+        # aggregate results for OCR extraction
+        for k, agg_result in enumerate(aggregated_kv):
+            page_index = int(agg_result["page"])
+            category = agg_result["category"]
+
+            regions.append(
+                create_region(
+                    f"{category}_{k}_k",
+                    page_index,
+                    agg_result["value"]["question"]["bbox"],
+                )
+            )
+            regions.append(
+                create_region(
+                    f"{category}_{k}_v",
+                    page_index,
+                    agg_result["value"]["answer"]["bbox"],
+                )
+            )
+        kwa = {
+            "payload": {
+                "output": "json",
+                "mode": "raw_line",
+                "format": "xywh",
+                "filter_snippets": True,
+                "regions": regions,
+            }
+        }
+        region_results = self.text_executor.extract(docs_from_image(frames), **kwa)
+        region_results = region_results["regions"]
+        # merge results
+        for k, agg_result in enumerate(aggregated_kv):
+            category = agg_result["category"]
+            for region in region_results:
+                rid = region["id"]
+                if rid == f"{category}_{k}_k":
+                    agg_result["value"]["question"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
+                if rid == f"{category}_{k}_v":
+                    agg_result["value"]["answer"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
+
     def preprocess(self, src_image: str):
         """Pre-process src image for NER extraction"""
 
@@ -759,7 +806,7 @@ class NerExtractionExecutor(Executor):
 
         # Obtain OCR results
         file_hash = hash_file(src_image)
-        root_dir = get_marie_home()
+        root_dir = __marie_home__
 
         ensure_exists(os.path.join(root_dir, "ocr"))
         ensure_exists(os.path.join(root_dir, "annotation"))
@@ -780,7 +827,6 @@ class NerExtractionExecutor(Executor):
         if not loaded:
             raise Exception(f"Unable to load image file: {src_image}")
 
-        retry = False
         if os.path.exists(ocr_json_path):
             ocr_results = load_json_file(ocr_json_path)
             if "error" in ocr_results:
@@ -788,7 +834,7 @@ class NerExtractionExecutor(Executor):
                 logger.info(f"Retrying document > {file_hash} due to : {msg}")
                 os.remove(ocr_json_path)
 
-        if not os.path.exists(ocr_json_path)
+        if not os.path.exists(ocr_json_path):
             ocr_results, frames = obtain_ocr(src_image, self.text_executor)
             # convert CV frames to PIL frame
             frames = convert_frames(frames, img_format="pil")
@@ -875,9 +921,10 @@ class NerExtractionExecutor(Executor):
                     label2color=get_label_colors(),
                 )
 
-        root_dir = get_marie_home()
-        annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
-        ensure_exists(os.path.join(root_dir, "annotation"))
+        annotation_json_path = os.path.join(
+            __marie_home__, "annotation", f"{file_hash}.json"
+        )
+        ensure_exists(os.path.join(__marie_home__, "annotation"))
 
         store_json_object(annotations, annotation_json_path)
         return annotations
@@ -896,7 +943,9 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             print("The value of {} is {}".format(key, value))
 
-        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(image_src)
+        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
+            image_src
+        )
         annotations = self.process(frames, boxes, words, file_hash)
         ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
 
