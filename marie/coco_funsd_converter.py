@@ -1345,7 +1345,7 @@ if __name__ == "__main__":
     # name = "test"
     # src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
 
-    name = "train"
+    name = "test"
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
 
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
@@ -1360,19 +1360,19 @@ if __name__ == "__main__":
     # TEST  -> 1, 2, 3
 
     # STEP 1 : Convert COCO to FUNSD like format
-    convert_coco_to_funsd(src_dir, dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    decorate_funsd(dst_path)
+    # decorate_funsd(dst_path)
 
     # STEP 3
-    augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=50, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-    visualize_funsd(aug_dest_dir)
+    # visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
