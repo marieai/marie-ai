@@ -1,6 +1,4 @@
-import PIL.ImageQt
 import gradio as gr
-import numpy as np
 from PIL import Image
 
 from marie.executor import NerExtractionExecutor
