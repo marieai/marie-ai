@@ -41,7 +41,8 @@ def interface():
     article = "<p style='text-align: center'><a href='https://arxiv.org/abs/2204.08387' target='_blank'>" \
               "LayoutLMv3: Multi-modal Pre-training for Visually-Rich Document Understanding</a> " \
               "</p>"
-    examples = [['sample-01.png']]
+    # examples = [['sample-01.png']]
+    examples = []
 
     iface = gr.Interface(fn=process_image,
                          inputs=[
