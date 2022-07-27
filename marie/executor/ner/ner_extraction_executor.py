@@ -133,10 +133,14 @@ class NerExtractionExecutor(Executor):
         self.init_configuration = load_json_file(config_path)
 
         self.debug_visuals = self.init_configuration["debug"]["visualize"]["enabled"]
-        self.debug_visuals_overlay = self.init_configuration["debug"]["visualize"]["overlay"]
+        self.debug_visuals_overlay = self.init_configuration["debug"]["visualize"][
+            "overlay"
+        ]
         self.debug_visuals_icr = self.init_configuration["debug"]["visualize"]["icr"]
         self.debug_visuals_ner = self.init_configuration["debug"]["visualize"]["ner"]
-        self.debug_visuals_prediction = self.init_configuration["debug"]["visualize"]["prediction"]
+        self.debug_visuals_prediction = self.init_configuration["debug"]["visualize"][
+            "prediction"
+        ]
 
         self.debug_scores = self.init_configuration["debug"]["scores"]
         self.debug_colors = self.init_configuration["debug"]["colors"]
@@ -339,9 +343,8 @@ class NerExtractionExecutor(Executor):
                 if not label:
                     continue
                 # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
-                if (
-                    np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or
-                    (pred_box[2] == 0 and pred_box[3] == 0)
+                if np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or (
+                    pred_box[2] == 0 and pred_box[3] == 0
                 ):
                     continue
 
@@ -448,7 +451,9 @@ class NerExtractionExecutor(Executor):
                                 continue
                             visited[idx] = True
                             box = bboxes[idx]
-                            overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
+                            overlaps, indexes, scores = find_overlap_horizontal(
+                                box, bboxes
+                            )
                             to_merge[ag_key] = [idx]
 
                             for _, overlap_idx in zip(overlaps, indexes):
@@ -469,13 +474,17 @@ class NerExtractionExecutor(Executor):
                             score_avg = round(
                                 np.average([item["score"] for item in picks]), 6
                             )
-                            block = merge_bboxes_as_block([item["bbox"] for item in picks])
+                            block = merge_bboxes_as_block(
+                                [item["bbox"] for item in picks]
+                            )
 
                             new_item = picks[0]
                             new_item["score"] = score_avg
                             new_item["bbox"] = block
 
-                            aggregated_keys[_k] = np.concatenate(([new_item], remaining))
+                            aggregated_keys[_k] = np.concatenate(
+                                ([new_item], remaining)
+                            )
 
             # expected fields groups that indicate that the field could have been present
             # but it might not have been associated with KV pair mapping, does not apply to NER
@@ -776,7 +785,7 @@ class NerExtractionExecutor(Executor):
                     true_predictions,
                     true_boxes,
                     true_scores,
-                    label2color=self.debug_colors
+                    label2color=self.debug_colors,
                 )
 
         annotation_json_path = os.path.join(
