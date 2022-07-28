@@ -3,8 +3,10 @@ __license__ = "Apache-2.0"
 
 import datetime
 import hashlib
-from typing import Generator, List, Optional, Tuple
+import json
+from typing import Generator, List, Optional, Tuple, Any
 
+import jsons
 import numpy as np
 import psycopg2
 import psycopg2.extras
@@ -12,14 +14,27 @@ from marie import Document, DocumentArray
 from marie.logging.logger import MarieLogger
 from psycopg2 import pool  # noqa: F401
 
+from marie.numpyencoder import NumpyEncoder
+
 
 def doc_without_embedding(d: Document):
     new_doc = Document(d, copy=True)
-    new_doc.ClearField('embedding')
-    return new_doc.SerializeToString()
+    serialized = json.dumps(
+        new_doc.content, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+    )
+    return serialized
+    # new_doc.ClearField('embedding')
+    # return new_doc.SerializeToString()
 
 
-SCHEMA_VERSION = 3
+def serialize_to_json(content: Any):
+    print(content)
+    serialized = json.dumps(
+        content, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+    )
+    return serialized
+
+SCHEMA_VERSION = 4
 META_TABLE_NAME = 'index_metas'
 MODEL_TABLE_NAME = 'index_models'
 
@@ -136,6 +151,7 @@ class PostgreSQLHandler:
             f'''CREATE TABLE IF NOT EXISTS {self.table} (
                 doc_id VARCHAR PRIMARY KEY,
                 embedding BYTEA,
+                content JSONB,
                 doc BYTEA,
                 shard int,
                 created_at timestamp with time zone default current_timestamp,
@@ -199,13 +215,16 @@ class PostgreSQLHandler:
             psycopg2.extras.execute_batch(
                 cursor,
                 f'INSERT INTO {self.table} '
-                f'(doc_id, embedding, doc, shard, created_at, updated_at) '
-                f'VALUES (%s, %s, %s, %s, current_timestamp, current_timestamp)',
+                f'(doc_id, embedding, content, doc, shard, created_at, updated_at) '
+                f'VALUES (%s, %s, %s, %s, %s, current_timestamp, current_timestamp)',
                 [
                     (
                         doc.id,
                         doc.embedding.astype(self.dump_dtype).tobytes()
                         if doc.embedding is not None
+                        else None,
+                        serialize_to_json(doc.content)
+                        if doc.content is not None
                         else None,
                         doc_without_embedding(doc),
                         self._get_next_shard(doc.id),
