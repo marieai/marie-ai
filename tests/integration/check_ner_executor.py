@@ -82,7 +82,7 @@ if __name__ == "__main__":
     # models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
 
     models_dir = (
-        "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
+        "/mnt/data/models/layoutlmv3-large-finetuned-small/checkpoint-4250"
     )
 
     executor = NerExtractionExecutor(models_dir)
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
+        # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
 
         process_file(executor, img_path)
 
