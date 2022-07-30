@@ -35,7 +35,6 @@ import concurrent.futures
 import time
 from multiprocessing import Pool
 
-
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
 
@@ -43,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 # setup data aug
 fake = Faker()
+
+
 # create new provider class
 
 
@@ -522,10 +523,10 @@ def decorate_funsd(src_dir: str):
             results.pop("meta", None)
 
             if (
-                results is None
-                or len(results) == 0
-                or results["lines"] is None
-                or len(results["lines"]) == 0
+                    results is None
+                    or len(results) == 0
+                    or results["lines"] is None
+                    or len(results["lines"]) == 0
             ):
                 print(f"No results for : {guid}-{i}")
                 continue
@@ -723,9 +724,9 @@ def generate_text(label, width, height, fontPath):
             space_w, _ = draw.textsize(" ", font=font)
 
         if (
-            label == "dos_answer"
-            or label == "birthdate_answer"
-            or label == "letter_date"
+                label == "dos_answer"
+                or label == "birthdate_answer"
+                or label == "letter_date"
         ):
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
             patterns = [
@@ -777,9 +778,9 @@ def generate_text(label, width, height, fontPath):
                 label_text = fake.company_email()
 
         if (
-            label == "check_amt_answer"
-            or label == "paid_amt_answer"
-            or label == "billed_amt_answer"
+                label == "check_amt_answer"
+                or label == "paid_amt_answer"
+                or label == "billed_amt_answer"
         ):
             label_text = fake.pricetag()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
@@ -828,7 +829,7 @@ def generate_text(label, width, height, fontPath):
 
 # @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(
-    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
+        guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
 ):
     Faker.seed(0)
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
@@ -869,21 +870,21 @@ def __augment_decorated_process(
         data_copy["form"] = []
 
         masked_fields = [
-            # "member_number_answer",
-            # "pan_answer",
-            # "member_name_answer",
-            # "patient_name_answer",
-            # "dos_answer",
-            # "check_amt_answer",
-            # "paid_amt_answer",
-            # "billed_amt_answer",
-            # "birthdate_answer",
-            # "check_number_answer",
-            # "claim_number_answer",
-            # "letter_date",
-            # "phone",
-            # "url",
-            "address",
+            "member_number_answer",
+            "pan_answer",
+            "member_name_answer",
+            "patient_name_answer",
+            "dos_answer",
+            "check_amt_answer",
+            "paid_amt_answer",
+            "billed_amt_answer",
+            "birthdate_answer",
+            "check_number_answer",
+            "claim_number_answer",
+            "letter_date",
+            "phone",
+            "url",
+            # "address",
         ]
 
         image_masked, size = load_image_pil(image_path)
@@ -975,7 +976,6 @@ def __augment_decorated_process(
 
 
 def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
-
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
@@ -988,7 +988,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     if False:
         futures = []
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=int(mp.cpu_count() * 0.75)
+                max_workers=int(mp.cpu_count() * 0.75)
         ) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
@@ -1026,7 +1026,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
         print("\nPool Executor:")
         print("Time elapsed: %s" % (time.time() - start))
 
-        pool = Pool(processes=int(mp.cpu_count() * 0.9))
+        pool = Pool(processes=int(mp.cpu_count() * 0.95))
         pool_results = pool.starmap(__augment_decorated_process, args)
 
         pool.close()
@@ -1183,7 +1183,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
 
 
 def __rescale_annotate_frames(
-    ann_dir_dest, img_dir_dest, filename, json_path, image_path
+        ann_dir_dest, img_dir_dest, filename, json_path, image_path
 ):
     if False and filename != "152618378_2":
         return
@@ -1219,7 +1219,6 @@ def __rescale_annotate_frames(
 
 
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
-
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
 
@@ -1330,7 +1329,7 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if False:
+    if True:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1356,13 +1355,19 @@ if __name__ == "__main__":
 
     # cat 152611418_2_2_8.json
 
-    # TRAIN -> 1, 2, 3
-    # TEST  -> 1, 2, 3
     # STEP 1 : Convert COCO to FUNSD like format
-    convert_coco_to_funsd(src_dir, dst_path)
+    # convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
+
+    # STEP 3
+    augment_decorated_annotation(count=800, src_dir=dst_path, dest_dir=aug_dest_dir)
+
+    # Step 4
+    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+
+    # Step 5
     #
     # # STEP 3
     # augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
@@ -1371,6 +1376,7 @@ if __name__ == "__main__":
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
     #
     # # Step 5
+
     # visualize_funsd(aug_dest_dir)
 
     # split data set from
