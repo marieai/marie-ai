@@ -49,7 +49,7 @@ def test_storage(tmpdir):
             "xyz":"Greg"
     }
 
-    dd = DocumentArray([Document(id=str(_), content=payload) for _ in range(10)])
+    dd = DocumentArray([Document(id=str(f"lbxid:{_}"), content=payload) for _ in range(10)])
 
     print(dd[2].content)
     handler.add(dd)
