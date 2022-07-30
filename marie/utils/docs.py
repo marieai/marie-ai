@@ -1,5 +1,6 @@
 import io
 import os
+from typing import Any, List, Union
 
 import cv2
 import numpy as np
@@ -134,7 +135,7 @@ def load_pdf_frames(pdf_file_path):
         return True, frames
 
 
-def __convert_frames(frames, img_format):
+def convert_frames(frames, img_format):
     # each frame needs to be converted to RGB format
     converted = []
     for frame in frames:
@@ -178,10 +179,13 @@ def load_image(img_path, img_format: str = "cv"):
 
     # each frame needs to be converted to RGB format to keep proper shape [x,y,c]
     if loaded:
-        converted = __convert_frames(frames, img_format)
+        converted = convert_frames(frames, img_format)
         return loaded, converted
 
     img = skio.imread(img_path)  # RGB order
+    # img = Image.open(img_path).convert('RGB')
+    # return True, [img]
+
     if img.shape[0] == 2:
         img = img[0]
     if len(img.shape) == 2:
@@ -227,16 +231,25 @@ def docs_from_file(img_path: str) -> DocumentArray:
     return docs
 
 
-def docs_from_image(img) -> DocumentArray:
-    """Create DocumentArray from image
+def is_array_like(obj):
+    if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
+        return True
+    return False
+
+
+def docs_from_image(src: Union[Any, List]) -> DocumentArray:
+    """Create DocumentArray from image or array like object
     Numpy ndarray or PIl Image ar supported
     """
-
-    if isinstance(img, Image.Image):
-        img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    arr = src
+    if not is_array_like(src):
+        arr = [src]
 
     docs = DocumentArray()
-    document = Document(tensor=img)
-    docs.append(document)
+    for img in arr:
+        if isinstance(img, Image.Image):
+            img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        document = Document(tensor=img)
+        docs.append(document)
 
     return docs

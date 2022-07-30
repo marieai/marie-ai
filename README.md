@@ -275,10 +275,14 @@ https://github.com/ibm-aur-nlp/PubLayNet
 
 DocFormer: End-to-End Transformer for Document Understanding
 
-
 ## Credits
 
 This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. 
 We acknowledge and are grateful to these developers for their contributions to open source.
 
- 
+
+https://github.com/alibaba/EasyNLP?ref=stackshare
+https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
+https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
+https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
+https://github.com/NielsRogge/Transformers-Tutorials/blob/master/LayoutLMv2/FUNSD/True_inference_with_LayoutLMv2ForTokenClassification_%2B_Gradio_demo.ipynb

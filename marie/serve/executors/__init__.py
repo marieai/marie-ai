@@ -116,7 +116,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 if callable(_func):
                     # the target function is not decorated with `@requests` yet
                     self.requests[endpoint] = _func
-                elif typename(_func) == "jina.executors.decorators.FunctionMapper":
+                elif typename(_func) == "marie.executors.decorators.FunctionMapper":
                     # the target function is already decorated with `@requests`, need unwrap with `.fn`
                     self.requests[endpoint] = _func.fn
                 else:
