@@ -209,7 +209,7 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
             img = frames[page_index]
             img = img[y : y + h, x : x + w].copy()
             # allow for small padding around the component
-            padding = 4
+            padding =4
             overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
             overlay[padding : h + padding, padding : w + padding] = img
 
