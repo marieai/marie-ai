@@ -8,10 +8,13 @@ import transformers
 from PIL import Image, ImageDraw, ImageFont
 
 from marie.executor import NerExtractionExecutor
+from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
+from marie.logging.profile import TimeContext
 from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
+from marie import Document, DocumentArray, Executor, Flow, requests
 
 
 from transformers import (
@@ -38,14 +41,26 @@ def create_processor():
 
 
 def process_file(executor: NerExtractionExecutor, img_path: str):
-    filename = img_path.split("/")[-1].replace(".png", "")
-    checksum = hash_file(img_path)
-    docs = None
-    kwa = {"checksum": checksum, "img_path": img_path}
-    results = executor.extract(docs, **kwa)
-    print(results)
-    store_json_object(results, f"/tmp/tensors/json/{filename}.json")
-    return results
+
+    with TimeContext(f'### extraction info'):
+        filename = img_path.split("/")[-1].replace(".png", "")
+        checksum = hash_file(img_path)
+        docs = None
+        kwa = {"checksum": checksum, "img_path": img_path}
+        payload = executor.extract(docs, **kwa)
+        print(payload)
+        store_json_object(payload, f"/tmp/tensors/json/{filename}.json")
+
+        storage = PostgreSQLStorage()
+        handler = storage.handler
+        print(storage)
+        print(handler)
+
+        storage.
+        dd = DocumentArray([Document(id=str(f"lbxid:{filename}"), content=payload)])
+        handler.add(dd)
+
+        return payload
 
 
 def process_dir(executor: NerExtractionExecutor, image_dir: str):
@@ -82,19 +97,22 @@ if __name__ == "__main__":
     # models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
 
     models_dir = (
-        "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-6000"
+        # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-6000"
+        # "/mnt/data/models/layoutlmv3-large-finetuned-small/checkpoint-7500"
+        # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-21000"
+        "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-33000"
     )
 
     executor = NerExtractionExecutor(models_dir)
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
-    # process_dir(executor, "/home/gbugaj/tmp/medrx")
+    # process_dir(executor, "/home/gbugaj/tmp/medrx-missing-corr/")
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
-        img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
+        img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
 
         process_file(executor, img_path)
 
