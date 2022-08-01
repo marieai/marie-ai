@@ -51,13 +51,14 @@ def process_file(executor: NerExtractionExecutor, img_path: str):
         print(payload)
         store_json_object(payload, f"/tmp/tensors/json/{filename}.json")
 
-        storage = PostgreSQLStorage()
-        handler = storage.handler
-        print(storage)
-        print(handler)
-        #
-        # dd = DocumentArray([Document(id=str(f"lbxid:{filename}"), content=payload)])
-        # handler.add(dd)
+        if False:
+            storage = PostgreSQLStorage()
+            handler = storage.handler
+            print(storage)
+            print(handler)
+            #
+            dd = DocumentArray([Document(id=str(f"lbxid:{filename}"), content=payload)])
+            handler.add(dd)
 
         return payload
 
