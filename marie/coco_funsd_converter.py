@@ -42,10 +42,8 @@ logger = logging.getLogger(__name__)
 
 # setup data aug
 fake = Faker()
-
-
+fake_names_only = Faker(['it_IT', 'en_US', 'es_MX', 'en_IN']) # 'de_DE',
 # create new provider class
-
 
 class MemberProvider(BaseProvider):
     def __init__(self, generator):
@@ -175,7 +173,9 @@ def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
 
 
 def load_image(image_path):
-    print(image_path)
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(image_path)
+
     image = cv2.imread(image_path)
     h, w = image.shape[0], image.shape[1]
     return image, (w, h)
@@ -265,6 +265,15 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         "check_amt_answer": [-1],
         "check_number": [-1],
         "check_number_answer": [-1],
+        "list": [-1],
+        "footer": [-1],
+        "date": [-1],
+        "identifier": [-1],
+        "proc_code": [-1],
+        "proc_code_answer": [-1],
+        "provider": [-1],
+        "provider_answer": [-1],
+        "money": [-1],
     }
 
     for category in categories:
@@ -576,7 +585,7 @@ def decorate_funsd(src_dir: str):
             )
             index = i + 1
 
-        if True:
+        if False:
             file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
@@ -727,6 +736,7 @@ def generate_text(label, width, height, fontPath):
                 label == "dos_answer"
                 or label == "birthdate_answer"
                 or label == "letter_date"
+                or label == "date"
         ):
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
             patterns = [
@@ -754,7 +764,7 @@ def generate_text(label, width, height, fontPath):
                     label_text = f"{d1}{sel_reg}{d2}"
                 else:
                     label_text = fake.date(pattern=random.choice(patterns))
-            elif label == "birthdate_answer" or label == "letter_date":
+            elif label == "birthdate_answer" or label == "letter_date" or label == "date":
                 label_text = fake.date(pattern=random.choice(patterns))
 
         if label == "pan_answer":
@@ -764,13 +774,20 @@ def generate_text(label, width, height, fontPath):
         if label == "claim_number_answer":
             label_text = fake.member_id()
 
-        if label == "member_name_answer" or label == "patient_name_answer":
-            label_text = fake.name()
+        if label == "member_name_answer" or label == "patient_name_answer" or label == "provider_answer":
+            label_text = fake_names_only.name()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.upper()
 
         if label == "phone":
-            label_text = fake.phone_number()
+            label_text = fake_names_only.phone_number()
+
+        if label == "identifier":
+            N = random.choice([4, 6, 8, 10, 12])
+            if np.random.choice([0, 1], p=[0.5, 0.5]):
+                label_text = "".join(random.choices(string.digits, k=N))
+            else:
+                label_text = "".join(random.choices(string.ascii_letters, k=N))
 
         if label == "url":
             label_text = fake.domain_name()
@@ -781,6 +798,7 @@ def generate_text(label, width, height, fontPath):
                 label == "check_amt_answer"
                 or label == "paid_amt_answer"
                 or label == "billed_amt_answer"
+                or label == "money"
         ):
             label_text = fake.pricetag()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
@@ -870,20 +888,24 @@ def __augment_decorated_process(
         data_copy["form"] = []
 
         masked_fields = [
-            "member_number_answer",
-            "pan_answer",
-            "member_name_answer",
-            "patient_name_answer",
-            "dos_answer",
-            "check_amt_answer",
-            "paid_amt_answer",
-            "billed_amt_answer",
-            "birthdate_answer",
-            "check_number_answer",
-            "claim_number_answer",
-            "letter_date",
-            "phone",
-            "url",
+            # "member_number_answer",
+            # "pan_answer",
+            # "member_name_answer",
+            # "patient_name_answer",
+            # "dos_answer",
+            # "check_amt_answer",
+            # "paid_amt_answer",
+            # "billed_amt_answer",
+            # "birthdate_answer",
+            # "check_number_answer",
+            # "claim_number_answer",
+            # "letter_date",
+            # "phone",
+            # "url",
+            # "date",
+            # "money",
+            # "provider_answer",
+            # "identifier",
             # "address",
         ]
 
@@ -1103,6 +1125,17 @@ def visualize_funsd(src_dir: str):
             "check_amt_answer": "darkmagenta",
             "check_number": "orange",
             "check_number_answer": "blue",
+
+            "list": "darkmagenta",
+            "footer": "orange",
+            "date": "blue",
+            "identifier": "green",
+            "proc_code": "red",
+            "proc_code_answer": "deeppink",
+            "provider": "brown",
+            "provider_answer": "grey",
+            "money": "aqua",
+
         }
 
         for i, item in enumerate(data["form"]):
@@ -1329,7 +1362,7 @@ if __name__ == "__main__":
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
 
     # GPU-001
-    if True:
+    if False:
         root_dir = "/data/dataset/private/corr-indexer"
         root_dir_converted = "/data/dataset/private/corr-indexer-converted"
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
@@ -1356,35 +1389,27 @@ if __name__ == "__main__":
     # cat 152611418_2_2_8.json
 
     # STEP 1 : Convert COCO to FUNSD like format
-    # convert_coco_to_funsd(src_dir, dst_path)
+    convert_coco_to_funsd(src_dir, dst_path)
 
     # STEP 2
-    # decorate_funsd(dst_path)
+    decorate_funsd(dst_path)
 
-    # STEP 3
-<<<<<<< HEAD
-    augment_decorated_annotation(count=50, src_dir=dst_path, dest_dir=aug_dest_dir)
-=======
-    augment_decorated_annotation(count=800, src_dir=dst_path, dest_dir=aug_dest_dir)
->>>>>>> bb505520d13688b1ab5f621b7f4ffa0526e07828
+    # STEP 3 > 800
+    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
 
     # Step 4
     rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
     # Step 5
-<<<<<<< HEAD
-=======
     #
     # # STEP 3
-    # augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
+    augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
     #
     # # Step 4
     # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-    #
-    # # Step 5
 
->>>>>>> bb505520d13688b1ab5f621b7f4ffa0526e07828
-    # visualize_funsd(aug_dest_dir)
+    # # Step 5
+    visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
