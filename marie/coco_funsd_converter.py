@@ -274,6 +274,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         "provider": [-1],
         "provider_answer": [-1],
         "money": [-1],
+        "company": [-1],
     }
 
     for category in categories:
@@ -688,6 +689,7 @@ def get_cached_font(font_path, font_size):
 
 
 def generate_text(label, width, height, fontPath):
+    """generate text for specific label"""
     # if label != "member_name_answer":
     #     return "", 0
 
@@ -813,27 +815,35 @@ def generate_text(label, width, height, fontPath):
             else:
                 label_text = f"{fake.company()}\n{fake.address()}"
 
-        # partition data into boxes splitting on blank spaces
-        text_chunks = label_text.split(" ")
-        text_width, text_height = draw.textsize(label_text, font=font)
-
-        start_x = 0
+        lines = label_text.split("\n")
         segments = []
-        padding_x = space_w // 2
+        text_width = 0
 
-        if len(text_chunks) == 1:
-            box = [start_x, 0, width, text_height]
-            segments.append({"text": label_text, "box": box})
-        else:
-            for i, chunk in enumerate(text_chunks):
-                chunk_width, chunk_height = draw.textsize(chunk, font=font)
-                # x0, y0, x1, y1
-                end_x = min(start_x + chunk_width + padding_x, width)
-                box = [start_x, 0, end_x, text_height]
-                segments.append({"text": chunk, "box": box})
-                start_x += chunk_width
-                if i < len(text_chunks):
-                    start_x += space_w
+        for k, local_text in enumerate(lines):
+            print(f"{k}  >> {local_text}")
+            # partition data into boxes splitting on blank spaces
+            text_chunks = local_text.split(" ")
+            _text_width, text_height = draw.textsize(local_text, font=font)
+
+            if _text_width > text_width:
+                text_width = _text_width
+
+            start_x = 0
+            padding_x = space_w // 2
+
+            if len(text_chunks) == 1:
+                box = [start_x, 0, width, text_height]
+                segments.append({"text": local_text, "box": box})
+            else:
+                for i, chunk in enumerate(text_chunks):
+                    chunk_width, chunk_height = draw.textsize(chunk, font=font)
+                    # x0, y0, x1, y1
+                    end_x = min(start_x + chunk_width + padding_x, width)
+                    box = [start_x, text_height*k-1, end_x, text_height]
+                    segments.append({"text": chunk, "box": box})
+                    start_x += chunk_width
+                    if i < len(text_chunks):
+                        start_x += space_w
 
         if text_width < width:
             # print(
@@ -842,6 +852,7 @@ def generate_text(label, width, height, fontPath):
             break
         index = index + 1
 
+    print(segments)
     return font_size, label_text, segments
 
 
@@ -850,6 +861,7 @@ def __augment_decorated_process(
         guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
 ):
     Faker.seed(0)
+
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
 
@@ -906,7 +918,7 @@ def __augment_decorated_process(
             # "money",
             # "provider_answer",
             # "identifier",
-            # "address",
+            "address",
         ]
 
         image_masked, size = load_image_pil(image_path)
@@ -933,9 +945,10 @@ def __augment_decorated_process(
 
             # x0, y0, x1, y1 = xy
             # Yellow with outline for debug
-            # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
+
             # clear region
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+            # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
             dup_item = item  # copy.copy(item)
             dup_item["text"] = label_text
@@ -948,10 +961,11 @@ def __augment_decorated_process(
                 seg_text = seg["text"]
                 sx0, sy0, sx1, sy1 = seg["box"]
                 sw = sx1 - sx0
-                adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y1]
+                sh = sy1 - sy0
+                adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y0 + sh]
                 word = {"text": seg_text, "box": adj_box}
                 words.append(word)
-                # draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
+                draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
 
             dup_item["words"] = words
             draw.text(
@@ -961,7 +975,7 @@ def __augment_decorated_process(
                 font=font,
                 stroke_fill=1,
             )
-            # draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
+            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
             index = i + 1
             # print("-" * 20)
             # print(item)
@@ -1001,7 +1015,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if False:
+    if True:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -1032,7 +1046,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if True:
+    if False:
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
@@ -1042,6 +1056,8 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
             print(file)
             __args = (guid, count, file_path, src_dir, dest_dir)
             args.append(__args)
+            break
+
 
         results = []
         start = time.time()
@@ -1135,6 +1151,7 @@ def visualize_funsd(src_dir: str):
             "provider": "brown",
             "provider_answer": "grey",
             "money": "aqua",
+            "company": "grey",
 
         }
 
@@ -1269,7 +1286,6 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
 
     if True:
         args = []
-
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             json_path = os.path.join(ann_dir, file)
             filename = file.split("/")[-1].split(".")[0]
@@ -1277,12 +1293,14 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             __args = (ann_dir_dest, img_dir_dest, filename, json_path, image_path)
             args.append(__args)
 
+
         results = []
         start = time.time()
         print("\nPool Executor:")
         print("Time elapsed: %s" % (time.time() - start))
 
         pool = Pool(processes=mp.cpu_count())
+        # pool = Pool(processes=1)
         pool_results = pool.starmap(__rescale_annotate_frames, args)
 
         pool.close()
@@ -1368,7 +1386,7 @@ if __name__ == "__main__":
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
 
     # LP-01
-    if False:
+    if True:
         root_dir = "/home/gbugaj/dataset/private/corr-indexer"
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
@@ -1388,28 +1406,21 @@ if __name__ == "__main__":
 
     # cat 152611418_2_2_8.json
 
-    # STEP 1 : Convert COCO to FUNSD like format
-    convert_coco_to_funsd(src_dir, dst_path)
+    if True:
+        # STEP 1 : Convert COCO to FUNSD like format
+        # convert_coco_to_funsd(src_dir, dst_path)
 
-    # STEP 2
-    decorate_funsd(dst_path)
+        # STEP 2
+        # decorate_funsd(dst_path)
 
-    # STEP 3 > 800
-    augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
+        # STEP 3 > 800
+        augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
 
-    # Step 4
-    rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+        # Step 4
+        rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
 
-    # Step 5
-    #
-    # # STEP 3
-    augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
-    #
-    # # Step 4
-    # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-
-    # # Step 5
-    visualize_funsd(aug_dest_dir)
+        # # Step 5
+        visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
@@ -1429,3 +1440,19 @@ if __name__ == "__main__":
     # # STEP 2 : No Augmentation
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
+
+
+    if False:
+        import nlpaug.augmenter.sentence as nas
+        import nlpaug.flow as nafc
+        from nlpaug.util import Action
+        from tqdm import tqdm
+        import nlpaug.augmenter.word as naw
+        import nlpaug.model.lang_models as nml
+
+        text= "Please make the ncessary revision"
+        aug = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="substitute")
+        augmented_text = aug.augment(text)
+
+        print(text)
+        print(augmented_text)
