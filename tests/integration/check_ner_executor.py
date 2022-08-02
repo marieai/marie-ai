@@ -99,7 +99,8 @@ if __name__ == "__main__":
     models_dir = (
         # "/mnt/data/models/layoutlmv3-large-finetuned-small/checkpoint-7500"
         # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-21000"
-        "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-4000"
+        # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-4000"
+        "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-3000"
     )
 
     executor = NerExtractionExecutor(models_dir)
