@@ -42,8 +42,9 @@ logger = logging.getLogger(__name__)
 
 # setup data aug
 fake = Faker()
-fake_names_only = Faker(['it_IT', 'en_US', 'es_MX', 'en_IN']) # 'de_DE',
+fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 # create new provider class
+
 
 class MemberProvider(BaseProvider):
     def __init__(self, generator):
@@ -533,10 +534,10 @@ def decorate_funsd(src_dir: str):
             results.pop("meta", None)
 
             if (
-                    results is None
-                    or len(results) == 0
-                    or results["lines"] is None
-                    or len(results["lines"]) == 0
+                results is None
+                or len(results) == 0
+                or results["lines"] is None
+                or len(results["lines"]) == 0
             ):
                 print(f"No results for : {guid}-{i}")
                 continue
@@ -682,27 +683,20 @@ def generate_pan(num_char):
 
 @lru_cache(maxsize=20)
 def get_cached_font(font_path, font_size):
-    # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMono.ttf", font_size, layout_engine=ImageFont.Layout.BASIC)
-    # return ImageFont.truetype("/home/gbugaj/dev/marie-ai/assets/fonts/FreeMonoBold.ttf", font_size)
     # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
     return ImageFont.truetype(font_path, font_size)
 
 
-def generate_text(label, width, height, fontPath):
+def generate_text(label, width, height, font_path):
     """generate text for specific label"""
-    # if label != "member_name_answer":
-    #     return "", 0
 
     avg_line_height = 40
     est_line_count = max(1, height // avg_line_height)
-
     height = min(height, 50)
-    # Generate text inside image
     font_size = int(height * 1)
 
-    # print(f":: {font_size} : {fontPath}")
-    # font = ImageFont.truetype(fontPath, font_size)
-    font = get_cached_font(fontPath, font_size)
+    # Generate text inside image
+    font = get_cached_font(font_path, font_size)
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     space_w, _ = draw.textsize(" ", font=font)
@@ -730,15 +724,15 @@ def generate_text(label, width, height, fontPath):
     while True:
         if index > 5:
             font_size = font_size - dec
-            font = get_cached_font(fontPath, font_size)
+            font = get_cached_font(font_path, font_size)
             index = 0
             space_w, _ = draw.textsize(" ", font=font)
 
         if (
-                label == "dos_answer"
-                or label == "birthdate_answer"
-                or label == "letter_date"
-                or label == "date"
+            label == "dos_answer"
+            or label == "birthdate_answer"
+            or label == "letter_date"
+            or label == "date"
         ):
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
             patterns = [
@@ -766,7 +760,9 @@ def generate_text(label, width, height, fontPath):
                     label_text = f"{d1}{sel_reg}{d2}"
                 else:
                     label_text = fake.date(pattern=random.choice(patterns))
-            elif label == "birthdate_answer" or label == "letter_date" or label == "date":
+            elif (
+                label == "birthdate_answer" or label == "letter_date" or label == "date"
+            ):
                 label_text = fake.date(pattern=random.choice(patterns))
 
         if label == "pan_answer":
@@ -776,7 +772,11 @@ def generate_text(label, width, height, fontPath):
         if label == "claim_number_answer":
             label_text = fake.member_id()
 
-        if label == "member_name_answer" or label == "patient_name_answer" or label == "provider_answer":
+        if (
+            label == "member_name_answer"
+            or label == "patient_name_answer"
+            or label == "provider_answer"
+        ):
             label_text = fake_names_only.name()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.upper()
@@ -797,17 +797,16 @@ def generate_text(label, width, height, fontPath):
                 label_text = fake.company_email()
 
         if (
-                label == "check_amt_answer"
-                or label == "paid_amt_answer"
-                or label == "billed_amt_answer"
-                or label == "money"
+            label == "check_amt_answer"
+            or label == "paid_amt_answer"
+            or label == "billed_amt_answer"
+            or label == "money"
         ):
             label_text = fake.pricetag()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.replace("$", "")
 
         if label == "address":
-            # print(f"Address height : {est_line_count} > {height}")
             if est_line_count == 1:
                 label_text = fake.address().replace("\n", " ")
             elif est_line_count == 2:
@@ -816,14 +815,16 @@ def generate_text(label, width, height, fontPath):
                 label_text = f"{fake.company()}\n{fake.address()}"
 
         lines = label_text.split("\n")
-        segments = []
+        line_segments = []
+        line_heights = [0 for _ in lines]
         text_width = 0
 
         for k, local_text in enumerate(lines):
-            print(f"{k}  >> {local_text}")
+            segments = []
             # partition data into boxes splitting on blank spaces
             text_chunks = local_text.split(" ")
             _text_width, text_height = draw.textsize(local_text, font=font)
+            line_heights[k] = text_height
 
             if _text_width > text_width:
                 text_width = _text_width
@@ -839,12 +840,13 @@ def generate_text(label, width, height, fontPath):
                     chunk_width, chunk_height = draw.textsize(chunk, font=font)
                     # x0, y0, x1, y1
                     end_x = min(start_x + chunk_width + padding_x, width)
-                    box = [start_x, text_height*k-1, end_x, text_height]
+                    box = [start_x, 0, end_x, text_height]
                     segments.append({"text": chunk, "box": box})
                     start_x += chunk_width
                     if i < len(text_chunks):
                         start_x += space_w
 
+            line_segments.append(segments)
         if text_width < width:
             # print(
             #     f"GEN [{label}, {font_size}, {est_line_count} : {text_height} :  {round(rat, 2)}] : {width} , {height} :  [{text_width}, {text_height} ] >   {label_text}"
@@ -852,16 +854,14 @@ def generate_text(label, width, height, fontPath):
             break
         index = index + 1
 
-    print(segments)
-    return font_size, label_text, segments
+    return font_size, label_text, line_segments, line_heights
 
 
 # @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(
-        guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
+    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
 ):
-    Faker.seed(0)
-
+    # Faker.seed(0)
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
 
@@ -900,24 +900,24 @@ def __augment_decorated_process(
         data_copy["form"] = []
 
         masked_fields = [
-            # "member_number_answer",
-            # "pan_answer",
-            # "member_name_answer",
-            # "patient_name_answer",
-            # "dos_answer",
-            # "check_amt_answer",
-            # "paid_amt_answer",
-            # "billed_amt_answer",
-            # "birthdate_answer",
-            # "check_number_answer",
-            # "claim_number_answer",
-            # "letter_date",
-            # "phone",
-            # "url",
-            # "date",
-            # "money",
-            # "provider_answer",
-            # "identifier",
+            "member_number_answer",
+            "pan_answer",
+            "member_name_answer",
+            "patient_name_answer",
+            "dos_answer",
+            "check_amt_answer",
+            "paid_amt_answer",
+            "billed_amt_answer",
+            "birthdate_answer",
+            "check_number_answer",
+            "claim_number_answer",
+            "letter_date",
+            "phone",
+            "url",
+            "date",
+            "money",
+            "provider_answer",
+            "identifier",
             "address",
         ]
 
@@ -940,15 +940,21 @@ def __augment_decorated_process(
             yoffset = 0
 
             # Generate text inside image
-            font_size, label_text, segments = generate_text(label, w, h, font_path)
+            font_size, label_text, segments_lines, line_heights = generate_text(
+                label, w, h, font_path
+            )
+
+            assert len(line_heights) != 0
             font = get_cached_font(font_path, font_size)
 
             # x0, y0, x1, y1 = xy
             # Yellow with outline for debug
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1)
+            # draw.rectangle(
+            #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+            # )
 
             # clear region
-            # draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
             dup_item = item  # copy.copy(item)
             dup_item["text"] = label_text
@@ -957,29 +963,49 @@ def __augment_decorated_process(
             dup_item["linking"] = []
             words = []
 
-            for seg in segments:
-                seg_text = seg["text"]
-                sx0, sy0, sx1, sy1 = seg["box"]
-                sw = sx1 - sx0
-                sh = sy1 - sy0
-                adj_box = [x0 + sx0, y0, x0 + sx0 + sw, y0 + sh]
-                word = {"text": seg_text, "box": adj_box}
-                words.append(word)
-                draw.rectangle(((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])), outline="#00FF00", width=1)
+            total_text_height = 0
+            for th in line_heights:
+                total_text_height += th
+
+            space = h - total_text_height
+            line_offset = 0
+            baseline_spacing = max(4, space // len(line_heights))
+
+            for line_idx, segments in enumerate(segments_lines):
+                for seg in segments:
+                    seg_text = seg["text"]
+                    sx0, sy0, sx1, sy1 = seg["box"]
+                    sw = sx1 - sx0
+                    sh = sy1 - sy0
+                    adj_box = [
+                        x0 + sx0,
+                        y0 + line_offset,
+                        x0 + sx0 + sw,
+                        y0 + sh + line_offset,
+                    ]
+                    word = {"text": seg_text, "box": adj_box}
+                    words.append(word)
+                    # debug box
+                    # draw.rectangle(
+                    #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+                    #     outline="#FF0000",
+                    #     width=1,
+                    # )
+                line_offset += line_heights[line_idx] + baseline_spacing
 
             dup_item["words"] = words
-            draw.text(
-                (x0 + xoffset, y0 + yoffset),
-                text=label_text,
-                fill="#000000",
-                font=font,
-                stroke_fill=1,
-            )
-            draw.text((x0 + xoffset, y0 + yoffset), text=label_text, fill="#FF0000", font=font, stroke_fill=1)
-            index = i + 1
-            # print("-" * 20)
-            # print(item)
-            # print(dup_item)
+
+            line_offset = 0
+
+            for line_idx, text_line in enumerate(label_text.split("\n")):
+                draw.text(
+                    (x0 + xoffset, y0 + line_offset),
+                    text=text_line,
+                    fill="#000000",
+                    font=font,
+                    stroke_fill=1,
+                )
+                line_offset += line_heights[line_idx] + baseline_spacing
             data_copy["form"].append(dup_item)
 
         # Save items
@@ -1015,7 +1041,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     ann_dir = os.path.join(src_dir, "annotations")
     # mp.cpu_count()
 
-    if True:
+    if False:
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
             __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
@@ -1024,7 +1050,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     if False:
         futures = []
         with concurrent.futures.ThreadPoolExecutor(
-                max_workers=int(mp.cpu_count() * 0.75)
+            max_workers=int(mp.cpu_count() * 0.75)
         ) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
@@ -1046,18 +1072,12 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
 
             print("All tasks has been finished")
 
-    if False:
+    if True:
         args = []
         for guid, file in enumerate(sorted(os.listdir(ann_dir))):
             file_path = os.path.join(ann_dir, file)
-            if False and file != "152611418_2.json":
-                continue
-
-            print(file)
             __args = (guid, count, file_path, src_dir, dest_dir)
             args.append(__args)
-            break
-
 
         results = []
         start = time.time()
@@ -1141,7 +1161,6 @@ def visualize_funsd(src_dir: str):
             "check_amt_answer": "darkmagenta",
             "check_number": "orange",
             "check_number_answer": "blue",
-
             "list": "darkmagenta",
             "footer": "orange",
             "date": "blue",
@@ -1152,7 +1171,6 @@ def visualize_funsd(src_dir: str):
             "provider_answer": "grey",
             "money": "aqua",
             "company": "grey",
-
         }
 
         for i, item in enumerate(data["form"]):
@@ -1233,7 +1251,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
 
 
 def __rescale_annotate_frames(
-        ann_dir_dest, img_dir_dest, filename, json_path, image_path
+    ann_dir_dest, img_dir_dest, filename, json_path, image_path
 ):
     if False and filename != "152618378_2":
         return
@@ -1292,7 +1310,6 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             image_path = os.path.join(img_dir, file).replace("json", "png")
             __args = (ann_dir_dest, img_dir_dest, filename, json_path, image_path)
             args.append(__args)
-
 
         results = []
         start = time.time()
@@ -1386,16 +1403,15 @@ if __name__ == "__main__":
         root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
 
     # LP-01
-    if True:
+    if False:
         root_dir = "/home/gbugaj/dataset/private/corr-indexer"
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
-    #
     # name = "test"
     # src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
 
-    name = "test"
+    name = "train"
     src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
 
     dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
@@ -1409,12 +1425,12 @@ if __name__ == "__main__":
     if True:
         # STEP 1 : Convert COCO to FUNSD like format
         # convert_coco_to_funsd(src_dir, dst_path)
-
-        # STEP 2
+        #
+        # # STEP 2
         # decorate_funsd(dst_path)
 
         # STEP 3 > 800
-        augment_decorated_annotation(count=1, src_dir=dst_path, dest_dir=aug_dest_dir)
+        augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
 
         # Step 4
         rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
@@ -1441,7 +1457,6 @@ if __name__ == "__main__":
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
 
-
     if False:
         import nlpaug.augmenter.sentence as nas
         import nlpaug.flow as nafc
@@ -1450,8 +1465,10 @@ if __name__ == "__main__":
         import nlpaug.augmenter.word as naw
         import nlpaug.model.lang_models as nml
 
-        text= "Please make the ncessary revision"
-        aug = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="substitute")
+        text = "Please make the ncessary revision"
+        aug = naw.ContextualWordEmbsAug(
+            model_path="bert-base-uncased", action="substitute"
+        )
         augmented_text = aug.augment(text)
 
         print(text)
