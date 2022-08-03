@@ -72,7 +72,7 @@ class NERRouter:
 
             reply = self.executor.extract(docs, **args)
             logger.info("Raw reply")
-            logger.info(logger)
+            logger.info(reply)
 
             return jsonify(reply), 200
         except BaseException as error:

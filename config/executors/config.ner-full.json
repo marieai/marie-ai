@@ -105,9 +105,11 @@
     "BILLED_AMT_ANSWER",
     "PAID_AMT",
     "PAID_AMT_ANSWER",
-    "DOCUMENT_CONTROL"
+    "DOCUMENT_CONTROL",
+    "PROVIDER",
+    "PROVIDER_ANSWER"
   ],
-  
+
 
   "expected_ner": [
     "DOCUMENT_CONTROL",
@@ -182,8 +184,15 @@
       [
         "ANSWER"
       ]
+    ],
+    [
+      "PROVIDER",
+      [
+        "PROVIDER_ANSWER"
+      ]
     ]
   ],
+
   "possible_fields": {
     "PAN": [
       "PAN",

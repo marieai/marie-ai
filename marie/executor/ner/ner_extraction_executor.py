@@ -126,7 +126,7 @@ class NerExtractionExecutor(Executor):
         if os.path.isfile(pretrained_model_name_or_path):
             warnings.warn("Expected model directory")
 
-        config_path = os.path.join(pretrained_model_name_or_path, "config.ner.json")
+        config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
         if not os.path.exists(config_path):
             raise FileNotFoundError("Expected config.ner.json not found")
 
