@@ -100,7 +100,8 @@ if __name__ == "__main__":
         # "/mnt/data/models/layoutlmv3-large-finetuned-small/checkpoint-7500"
         # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-21000"
         # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-4000"
-        "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-3000"
+        # "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-2000"
+        "/mnt/data/models/layoutlmv3-large-fullyannotated-dropout/checkpoint-22000"
     )
 
     executor = NerExtractionExecutor(models_dir)
@@ -109,7 +110,7 @@ if __name__ == "__main__":
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
-        img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
+        # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
 
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
         # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
