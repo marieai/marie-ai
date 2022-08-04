@@ -14,8 +14,7 @@ from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
-from marie import Document, DocumentArray, Executor, Flow, requests
-
+from marie import Document, DocumentArray, Executor, Flow, requests, __model_path__
 
 from transformers import (
     LayoutLMv3Processor,
@@ -94,10 +93,8 @@ if __name__ == "__main__":
     img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
     # models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
-    # models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500/checkpoint-24500"
 
     models_dir = (
-        # "/mnt/data/models/layoutlmv3-large-finetuned-small-250/checkpoint-4000"
         "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-best"
     )
 
