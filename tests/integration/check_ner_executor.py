@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
+from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
@@ -93,6 +94,10 @@ if __name__ == "__main__":
     img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
 
     # models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
+    model_zoo_dir = ""
+    kwargs = {"__model_path__": model_zoo_dir}
+    config = ModelRegistry.get_local_path("rms", **kwargs)
+
 
     models_dir = (
         "/mnt/data/models/layoutlmv3-large-fullyannotated-dropout/checkpoint-22000"

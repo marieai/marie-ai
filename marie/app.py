@@ -5,11 +5,13 @@ import os
 import traceback
 
 import torch
+from werkzeug.exceptions import HTTPException
 
 import conf
 from api import api
 from flask import Flask, url_for
-
+from functools import wraps
+from flask import Flask, redirect, jsonify
 from arg_parser import ArgParser
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
@@ -40,23 +42,45 @@ def create_app():
     # Register VFS handlers
     base_dir = FileSystem.get_share_directory()
     PathManager.register_handler(VolumeHandler(volume_base_dir=base_dir))
-    # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
-    # PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/shares/medrxprovdata/"))
-    # PathManager.register_handler(VolumeHandler(volume_base_dir="/opt/prodshare/"))
 
     app = Flask(__name__)
     app.config.from_object(conf)
     app.config["APPLICATION_ROOT"] = "/api"
 
+    @app.errorhandler(Exception)
+    def error_500(exception):
+        """
+        Override exception handler to return JSON.
+        """
+        code = 500
+        name = str(type(exception).__name__)
+        description = str(exception)
+
+        if isinstance(exception, HTTPException):
+            code = exception.code
+            name = exception.name
+            description = exception.description
+
+        # we have critical status and not able to recover
+        # let the monitoring service know so we can unregister the service
+        ipc_send_status(False)
+
+        return (
+            jsonify(
+                {"error": {"code": code, "name": name, "description": description,}}
+            ),
+            code,
+            {"Content-Type": "application/json"},
+        )
+
     api.init_app(app)
 
     @app.route("/")
     def index():
-        return {"version": __version__}
+        return {"version": __version__}, 200
 
     with app.app_context():
-        # RouteHandler.register_route(SampleRouter(app))
-        RouteHandler.register_route(ICRRouter(app))
+        # RouteHandler.register_route(ICRRouter(app))
         RouteHandler.register_route(NERRouter(app))
 
     return app
@@ -79,6 +103,25 @@ def list_routes(app):
         print(line)
 
     return output
+
+
+def ipc_send_status(online_status: bool):
+    """
+    Send IPC status message indicating status of the service
+    """
+    from multiprocessing.connection import Client
+
+    conn = None
+    address = ("localhost", 6500)
+    try:
+        conn = Client(address, authkey=b"redfox")
+        conn.send({"command": "status", "online": online_status})
+        conn.send("CLOSE")
+    except ConnectionRefusedError:
+        logger.warning(f"Unable to connect to monitoring client : {address}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":
@@ -105,11 +148,11 @@ if __name__ == "__main__":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
         logger.info(
             "GPU Memory Allocated: %d GB",
-            round(torch.cuda.memory_allocated(0) / 1024**3, 1),
+            round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
         )
         logger.info(
             "GPU Memory Cached: %d GB",
-            round(torch.cuda.memory_reserved(0) / 1024**3, 1),
+            round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1),
         )
 
     # Setting use_reloader to false prevents application from initializing twice
