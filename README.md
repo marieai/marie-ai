@@ -293,4 +293,5 @@ https://github.com/allenai/datastore
 
 ## IPC
 https://docs.python.org/3.6/library/ipc.html
+https://stackoverflow.com/questions/6920858/interprocess-communication-in-python
 https://levelup.gitconnected.com/inter-process-communication-between-node-js-and-python-2e9c4fda928d
