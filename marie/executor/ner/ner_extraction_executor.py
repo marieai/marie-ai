@@ -128,7 +128,7 @@ class NerExtractionExecutor(Executor):
 
         config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
         if not os.path.exists(config_path):
-            raise FileNotFoundError("Expected config.ner.json not found")
+            raise FileNotFoundError("Expected config 'marie.json' not found")
 
         self.init_configuration = load_json_file(config_path)
 

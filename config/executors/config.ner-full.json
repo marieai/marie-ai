@@ -1,5 +1,5 @@
 {
-  "_name_or_path": "rns/layoutlmv3-large-corr",
+  "_name_or_path": "rms/layoutlmv3-large-corr",
   "threshold": 0.5,
   "mislabeled_token_strategy": "aggregate",
   "labels": [
