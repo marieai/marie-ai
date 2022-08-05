@@ -1,4 +1,5 @@
 {
+  "_name_or_path": "rns/layoutlmv3-large-corr",
   "threshold": 0.5,
   "mislabeled_token_strategy": "aggregate",
   "labels": [
@@ -105,9 +106,11 @@
     "BILLED_AMT_ANSWER",
     "PAID_AMT",
     "PAID_AMT_ANSWER",
-    "DOCUMENT_CONTROL"
+    "DOCUMENT_CONTROL",
+    "PROVIDER",
+    "PROVIDER_ANSWER"
   ],
-  
+
 
   "expected_ner": [
     "DOCUMENT_CONTROL",
@@ -180,10 +183,20 @@
     [
       "QUESTION",
       [
-        "ANSWER"
+        "ANSWER",
+        "IDENTIFIER",
+        "MONEY",
+        "DATE"
+      ]
+    ],
+    [
+      "PROVIDER",
+      [
+        "PROVIDER_ANSWER"
       ]
     ]
   ],
+
   "possible_fields": {
     "PAN": [
       "PAN",

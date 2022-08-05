@@ -55,8 +55,6 @@ def create_app():
         return {"version": __version__}
 
     with app.app_context():
-        # app.register_blueprint(IcrAPIRoutes.blueprint)
-        # app.register_blueprint(WorkflowRoutes.blueprint)
         # RouteHandler.register_route(SampleRouter(app))
         RouteHandler.register_route(ICRRouter(app))
         RouteHandler.register_route(NERRouter(app))
@@ -95,7 +93,7 @@ if __name__ == "__main__":
 
     args = ArgParser.server_parser()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Initializing 🦊-Marie (X002): %s", __version__)
+    logger.info("Initializing 🦊-Marie (X004): %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
     logger.info("Python runtime: %s", sys.version.replace("\n", ""))
     logger.info("Environment : %s", conf.APP_ENV)
