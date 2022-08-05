@@ -1,6 +1,6 @@
 RegistryEnabled: True
 DebugWebserver: True
-WatchdogInterval: 60
+WatchdogInterval: 5
 
 ConsulEndpoint:
   Host: 127.0.0.1
