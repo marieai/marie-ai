@@ -1,4 +1,5 @@
 import argparse
+import json
 import threading
 import time
 
@@ -10,10 +11,10 @@ import consul
 import yaml
 from consul.base import Check
 from logger import setup_logger
+from marie.utils.types import strtobool
 from utils.network import find_open_port, get_ip_address
 
-
-logger = setup_logger("registry", "registry.log")
+logger = setup_logger(__name__, "registry.log")
 config = None
 current_service_id = None
 
@@ -97,8 +98,8 @@ def verify_connection(cfg: EndpointConfig) -> bool:
         client = consul.Consul(host=host, port=port)
         client.agent.self()
         return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Unable to verify connection : {msg}".format(msg=e))
 
     return False
 
@@ -151,11 +152,6 @@ def register(service_host, service_port, service_id=None) -> Union[None, str]:
     """
     logger.info("Registering ServiceHost: %s Port: %s ", service_host, service_port)
 
-    c, online = createClient(config, True)
-    if not online:
-        logger.debug("Consul service is offline")
-        return None
-
     service_name = "traefik-system-ingress"
     service_url = f"http://{service_host}:{service_port}/api"
 
@@ -165,10 +161,14 @@ def register(service_host, service_port, service_id=None) -> Union[None, str]:
         # service_id = f'{service_name}@{service_port}#{uuid.uuid4()}'
         host = get_ip_address()
         service_id = f"{service_name}@{host}:{service_port}"
-        # service_id = f'{service_name}@{service_port}'
 
     logger.info("Service url: %s", service_url)
     logger.info("Service id: %s", service_id)
+
+    c, online = createClient(config, True)
+    if not online:
+        logger.debug("Consul service is offline")
+        return service_id
 
     # TODO: De-registration needs to be configurable
 
@@ -221,6 +221,55 @@ def start_watchdog(interval, service_host, service_port):
     rt = RepeatedTimer(interval, _register, service_host, service_port)
 
 
+def _dispatch_command(msg):
+    logger.info(f"ipc:dispatching : {msg}")
+
+    if "command" in msg:
+        command = msg["command"]
+        if "status" == command:
+            online = bool(strtobool(msg["online"])) if "online" in msg else False
+            logger.info(f"online = {online}")
+            sid = current_service_id
+            if not online:
+                c, _online = createClient(config, True)
+                if not _online:
+                    logger.debug("Consul service is offline")
+                    return None
+
+                c.agent.service.deregister(sid)
+                logger.info("ipc:de-registered service: %s", sid)
+
+
+def ipc_listener():
+    from multiprocessing.connection import Listener
+
+    running = True
+    address = ("localhost", 6500)  # family is deduced to be 'AF_INET'
+    listener = Listener(address, family="AF_INET", authkey=b"redfox")
+    logger.info(f"ipc:starting listener on : {address}")
+
+    while running:
+        conn = listener.accept()
+        logger.info(f"ipc:connection accepted from : {listener.last_accepted}")
+        while conn.poll():
+            msg = conn.recv()
+            logger.info(f"ipc:message = {msg}")
+            if msg == "CLOSE":
+                conn.close()
+                break
+            elif msg == "EXIT":
+                running = False
+                conn.close()
+                break
+            else:
+                print(f"Processing msg : {msg}")
+                if not isinstance(msg, dict):
+                    raise ValueError(f"Command expected to be a 'dict' not {type(msg)}")
+                _dispatch_command(msg)
+
+    listener.close()
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -271,14 +320,18 @@ if __name__ == "__main__":
     current_service_id = register(
         service_host=hostName, service_port=serverPort, service_id=None
     )
-    logger.info("Registered service: %s", current_service_id)
+    logger.info("Registration service: %s", current_service_id)
 
-    def _target():
+    def _watchdog_target():
         return start_watchdog(
             watchdog_interval, service_host=hostName, service_port=serverPort
         )
 
-    watchdog_task = threading.Thread(target=_target, daemon=debug_server).start()
+    # watchdog_task = threading.Thread(
+    #     target=_watchdog_target, daemon=debug_server
+    # ).start()
+
+    ipc_task = threading.Thread(target=ipc_listener, daemon=debug_server).start()
 
     if debug_server:
         start_webserver(hostName, serverPort)

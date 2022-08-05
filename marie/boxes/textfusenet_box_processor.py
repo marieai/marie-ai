@@ -16,7 +16,7 @@ from PIL import Image
 
 from marie.boxes.box_processor import BoxProcessor, PSMode
 from marie.utils.image_utils import paste_fragment, imwrite
-from marie.utils.utils import "ists
+from marie.utils.utils import ensure_exists
 
 logger = setup_logger(__name__)
 

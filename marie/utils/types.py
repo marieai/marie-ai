@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import distutils
+from distutils import util
 
 
 def strtobool(val: [bool | str]) -> bool:
@@ -9,4 +9,5 @@ def strtobool(val: [bool | str]) -> bool:
     """
     if isinstance(val, bool):
         return val
-    return distutils.util.strtobool(val)
+
+    return util.strtobool(val)

@@ -1,5 +1,5 @@
 RegistryEnabled: True
-DebugWebserver: True
+DebugWebserver: False
 WatchdogInterval: 5
 
 ConsulEndpoint:
