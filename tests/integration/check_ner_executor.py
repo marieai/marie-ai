@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
     models_dir = (
         "/mnt/data/models/layoutlmv3-large-fullyannotated-dropout/checkpoint-22000"
-        "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-best"
+        # "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-best"
     )
 
     executor = NerExtractionExecutor(models_dir)
@@ -106,10 +106,6 @@ if __name__ == "__main__":
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
-
-        # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
-        # img_path = f"/home/gbugaj/tmp/medrx/PID_1864_9100_0_157637194.tif"
-        # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation_multipage/PID_631_7267_0_156693862.tif"
         # img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
 
         process_file(executor, img_path)
