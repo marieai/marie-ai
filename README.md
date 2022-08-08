@@ -170,6 +170,13 @@ Cleanup containers
 5000 -- Traefik - Entrypoint
 7777 -- Traefik - Dashboard
 
+
+# 
+```sh
+# tests/integration/psql_storage
+docker-compose -f docker-compose.yml --project-directory . up  --build  --remove-orphans
+```
+
 # Setup Redis
 https://hub.docker.com/_/redis
 https://redis.io/docs/stack/get-started/install/docker/
@@ -291,7 +298,5 @@ https://github.com/NielsRogge/Transformers-Tutorials/blob/master/LayoutLMv2/FUNS
 ## Datastore
 https://github.com/allenai/datastore
 
-## IPC
-https://docs.python.org/3.6/library/ipc.html
-https://stackoverflow.com/questions/6920858/interprocess-communication-in-python
-https://levelup.gitconnected.com/inter-process-communication-between-node-js-and-python-2e9c4fda928d
+# GRPC
+https://docs.microsoft.com/en-us/aspnet/core/grpc/test-tools?view=aspnetcore-6.0

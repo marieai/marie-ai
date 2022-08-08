@@ -1,7 +1,4 @@
 import os
-import time
-import warnings
-
 import cv2
 import torch
 from builtins import print
@@ -24,6 +21,7 @@ from marie.executor.ner.utils import (
 )
 
 from marie.logging.logger import MarieLogger
+from marie.registry.model_registry import ModelRegistry
 from marie.timer import Timer
 from marie.utils.utils import ensure_exists
 from marie.utils.overlap import find_overlap_horizontal
@@ -121,10 +119,9 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        pretrained_model_name_or_path = str(pretrained_model_name_or_path)
-
-        if os.path.isfile(pretrained_model_name_or_path):
-            warnings.warn("Expected model directory")
+        pretrained_model_name_or_path = str(ModelRegistry.get_local_path(pretrained_model_name_or_path))
+        if not os.path.isdir(pretrained_model_name_or_path):
+            raise Exception(f"Expected model directory but got : {pretrained_model_name_or_path}")
 
         config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
         if not os.path.exists(config_path):

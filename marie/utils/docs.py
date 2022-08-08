@@ -110,7 +110,6 @@ def load_pdf_frames(pdf_file_path):
         Producer: {information.producer}
         Number of pages: {number_of_pages}
         """
-
         print(txt)
         frames = []
         for page_index in range(number_of_pages):

@@ -206,8 +206,6 @@ class PostgreSQLHandler:
         :param docs: list of Documents
         :param args: other arguments
         :param kwargs: other keyword arguments
-        :param args: other arguments
-        :param kwargs: other keyword arguments
         :return record: List of Document's id added
         """
         cursor = self.connection.cursor()
