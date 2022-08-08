@@ -1,12 +1,14 @@
 import glob
 import os
 import time
+from typing import Dict
 
 import cv2.cv2
 import numpy as np
 import transformers
-from PIL import Image, ImageDraw, ImageFont
+import yaml
 
+from marie.conf.helper import storage_provider_config, load_yaml
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
@@ -15,34 +17,22 @@ from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
-from marie import Document, DocumentArray, Executor, Flow, requests, __model_path__
-
-from transformers import (
-    LayoutLMv3Processor,
-    LayoutLMv3FeatureExtractor,
-    LayoutLMv3ForTokenClassification,
-    LayoutLMv3TokenizerFast,
+from marie import (
+    Document,
+    DocumentArray,
+    Executor,
+    Flow,
+    requests,
+    __model_path__,
+    __config_dir__,
 )
 
 
-def create_processor():
-    """prepare for the model"""
-    # Method:2 Create Layout processor with custom future extractor
-    # Max model size is 512, so we will need to handle any documents larger than that
-    feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
-    tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
-        "microsoft/layoutlmv3-large", only_label_first_subword=False
-    )
-    processor = LayoutLMv3Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
+def process_file(
+    executor: NerExtractionExecutor, img_path: str, storage_conf: Dict[str, str]
+):
 
-    return processor
-
-
-def process_file(executor: NerExtractionExecutor, img_path: str):
-
-    with TimeContext(f'### extraction info'):
+    with TimeContext(f"### extraction info"):
         filename = img_path.split("/")[-1].replace(".png", "")
         checksum = hash_file(img_path)
         docs = None
@@ -51,14 +41,26 @@ def process_file(executor: NerExtractionExecutor, img_path: str):
         print(payload)
         store_json_object(payload, f"/tmp/tensors/json/{filename}.json")
 
-        if False:
-            storage = PostgreSQLStorage()
-            handler = storage.handler
-            print(storage)
-            print(handler)
-            #
-            dd = DocumentArray([Document(id=str(f"lbxid:{filename}"), content=payload)])
-            handler.add(dd)
+        if True:
+            storage = PostgreSQLStorage(
+                hostname=storage_conf["hostname"],
+                port=int(storage_conf["port"]),
+                username=storage_conf["username"],
+                password=storage_conf["password"],
+                database=storage_conf["database"],
+                table="ner_indexer",
+            )
+
+            dd1 = DocumentArray(
+                [
+                    Document(id=str(f"lbxid:{filename}-00"), content=payload),
+                    Document(id=str(f"lbxid:{filename}-01"), content=payload),
+                ]
+            )
+            dd2 = DocumentArray([Document(content=payload)])
+
+            storage.add(dd1, {})
+            storage.add(dd2, {})
 
         return payload
 
@@ -71,47 +73,29 @@ def process_dir(executor: NerExtractionExecutor, image_dir: str):
             print(e)
             # raise e
 
-def encoding_test():
-    processor = create_processor()
-    image = Image.open(img_path).convert("RGB")
-    words = ["hello", "world"]
-    boxes = [[1, 2, 3, 4], [5, 6, 7, 8]]  # make sure to normalize your bounding boxes
-    word_labels = [1, 2]
-    encoding = processor(
-        image, words, boxes=boxes, word_labels=word_labels, return_tensors="pt"
-    )
-    print(encoding.keys())
-
-    print(encoding["input_ids"])
-
 
 if __name__ == "__main__":
 
     # pip install git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
+    _name_or_path = "rms/layoutlmv3-large-corr-ner"
+    kwargs = {"__model_path__": __model_path__}
+    _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 
-    img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_631_7267_0_156693952.png"
+    print(__config_dir__)
+    # Load config
+    config_data = load_yaml(os.path.join(__config_dir__, "marie-debug.yml"))
+    storage_conf = storage_provider_config("postgresql", config_data)
 
-    # models_dir = os.path.join(__model_path__, "ner-rms-corr", "checkpoint-best")
-    model_zoo_dir = ""
-    kwargs = {"__model_path__": model_zoo_dir}
-    config = ModelRegistry.get_local_path("rms", **kwargs)
+    executor = NerExtractionExecutor(_name_or_path)
 
-
-    models_dir = (
-        "/mnt/data/models/layoutlmv3-large-fullyannotated-dropout/checkpoint-22000"
-        # "/mnt/data/models/layoutlmv3-large-fullyannotated/checkpoint-best"
-    )
-
-    executor = NerExtractionExecutor(models_dir)
-    process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
+    # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, "/home/gbugaj/tmp/medrx-missing-corr/")
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
-        # img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
+        img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
 
-        process_file(executor, img_path)
-
+        process_file(executor, img_path, storage_conf)

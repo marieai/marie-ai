@@ -88,7 +88,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
     Exceptions throw such as ConnectionError will be captured
     """
     if cfg is None:
-        raise Exception("Configuration is required")
+        raise Exception("Configuration is required but None provided.")
     port = cfg.Port
     host = cfg.Host
 
@@ -96,7 +96,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
 
     try:
         client = consul.Consul(host=host, port=port)
-        client.agent.self()
+        discard = client.agent.self()
         return True
     except Exception as e:
         logger.warning("Unable to verify connection : {msg}".format(msg=e))
@@ -106,7 +106,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
 
 def createClient(
     cfg: EndpointConfig, verify: bool = True
-) -> Tuple[consul.Consul, bool]:
+) -> Tuple[Union[consul.Consul, None], bool]:
     """
     Create new consul client
     """
@@ -262,7 +262,7 @@ def ipc_listener():
                 conn.close()
                 break
             else:
-                print(f"Processing msg : {msg}")
+                logger.info(f"Processing msg : {msg}")
                 if not isinstance(msg, dict):
                     raise ValueError(f"Command expected to be a 'dict' not {type(msg)}")
                 _dispatch_command(msg)
@@ -290,7 +290,6 @@ if __name__ == "__main__":
     with open(opt.config, "r") as yamlfile:
         data = yaml.load(yamlfile, Loader=yaml.FullLoader)
         logger.info(f"Config read successfully : {opt.config}")
-    print(data)
 
     enabled = bool(data["RegistryEnabled"])
     if not enabled:
@@ -315,7 +314,7 @@ if __name__ == "__main__":
 
     with open("port.dat", "r", encoding="utf-8") as fsrc:
         serverPort = int(fsrc.read())
-        print(f"port = {serverPort}")
+        logger.info(f"port = {serverPort}")
 
     current_service_id = register(
         service_host=hostName, service_port=serverPort, service_id=None

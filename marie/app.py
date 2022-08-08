@@ -5,6 +5,7 @@ import os
 import traceback
 
 import torch
+import yaml
 from werkzeug.exceptions import HTTPException
 
 import conf
@@ -22,6 +23,7 @@ from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
 
 from marie.common.volume_handler import VolumeHandler
+from marie.executor import NerExtractionExecutor
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.utils.network import find_open_port
@@ -36,7 +38,7 @@ from marie.utils.utils import ensure_exists, FileSystem
 logger = default_logger
 
 
-def create_app():
+def create_app(config_data):
     logger.info(f"Starting app in {conf.APP_ENV} environment")
     ensure_exists(f"/tmp/marie")
     # Register VFS handlers
@@ -63,7 +65,7 @@ def create_app():
 
         # we have critical status and not able to recover
         # let the monitoring service know so we can unregister the service
-        ipc_send_status(False)
+        ipc_send_status(online_status=False)
 
         return (
             jsonify(
@@ -75,13 +77,27 @@ def create_app():
 
     api.init_app(app)
 
+    def __executor_conf(config, executor_name):
+        if "executors" not in config_data:
+            return {}
+
+        for executor in config_data["executors"]:
+            if "uses" in executor:
+                if executor["uses"] == executor_name:
+                    return executor
+        return {}
+
     @app.route("/")
     def index():
         return {"version": __version__}, 200
 
     with app.app_context():
         # RouteHandler.register_route(ICRRouter(app))
-        RouteHandler.register_route(NERRouter(app))
+        RouteHandler.register_route(
+            NERRouter(
+                app, **__executor_conf(config_data, NerExtractionExecutor.__name__)
+            )
+        )
 
     return app
 
@@ -100,7 +116,7 @@ def list_routes(app):
         output.append(line)
 
     for line in sorted(output):
-        print(line)
+        logger.info(line)
 
     return output
 
@@ -134,7 +150,12 @@ if __name__ == "__main__":
 
     # os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
 
-    args = ArgParser.server_parser()
+    opt = ArgParser.extract_args()
+    # Load config
+    with open(opt.config, "r") as yamlfile:
+        config_data = yaml.load(yamlfile, Loader=yaml.FullLoader)
+        logger.info(f"Config read successfully : {opt.config}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Initializing 🦊-Marie (X004): %s", __version__)
     logger.info("[PID]%d [UID]%d", os.getpid(), os.getuid())
@@ -176,7 +197,7 @@ if __name__ == "__main__":
 
     with open("port.dat", "w", encoding="utf-8") as fsrc:
         fsrc.write(f"{server_port}")
-        print(f"server_port = {server_port}")
+        logger.info(f"server_port = {server_port}")
 
-    service = create_app()
+    service = create_app(config_data)
     service.run(host="0.0.0.0", port=server_port, debug=False, use_reloader=False)

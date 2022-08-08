@@ -20,14 +20,11 @@ from flask_restful import Resource, reqparse, request
 from marie.api import extract_payload
 from marie.executor import TextExtractionExecutor, NerExtractionExecutor
 from marie.logging.logger import MarieLogger
+from marie.logging.predefined import default_logger
 from marie.utils.image_utils import hash_file
-from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
-from marie.utils.base64 import base64StringToBytes, encodeToBase64
 from marie.utils.docs import docs_from_file
 
-from datetime import datetime
-
-logger = MarieLogger("")
+logger = default_logger
 
 
 class NERRouter:
@@ -36,11 +33,14 @@ class NERRouter:
     """
 
     def __init__(self, app, **kwargs):
-        super().__init__(**kwargs)
         if app is None:
             raise RuntimeError("Expected app arguments is null")
 
-        self.executor = NerExtractionExecutor()
+        if "_name_or_path" not in kwargs:
+            raise RuntimeError("Missing attribute : _name_or_path")
+        _name_or_path = kwargs.pop("_name_or_path")
+
+        self.executor = NerExtractionExecutor(_name_or_path)
         prefix = "/api"
 
         app.add_url_rule(
@@ -65,16 +65,15 @@ class NERRouter:
                 return {"error": "empty payload"}, 200
 
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
-            img_path = tmp_file
-            checksum = hash_file(img_path)
-            docs = None  # docs_from_file(img_path)
-            args = {"queue_id": queue_id, "checksum": checksum, "img_path": img_path}
+            checksum = hash_file(tmp_file)
+            docs = docs_from_file(tmp_file)
+            kwargs = {"queue_id": queue_id, "checksum": checksum, "img_path": tmp_file}
 
-            reply = self.executor.extract(docs, **args)
+            results = self.executor.extract(docs, **kwargs)
             logger.info("Raw reply")
-            logger.info(reply)
+            logger.info(results)
 
-            return jsonify(reply), 200
+            return jsonify(results), 200
         except BaseException as error:
             logger.error("Extract error", error)
             return {"error": error}, 200

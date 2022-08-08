@@ -182,10 +182,12 @@ class ModelRegistry:
     A class for users to access models from specific providers
 
         Handlers:
-            zoo  : Local model zoo(native file access)
-            git  : Git
-            S3   : Amazon S3
-            mflow: Mflow support
+            zoo    : Local model zoo(native file access)
+            git    : Git
+            S3     : Amazon S3
+            gdrive : Google Drive
+            dvc    : Data Version Control
+            mflow  : Mflow support
             transformers: Transformers model
     """
 
