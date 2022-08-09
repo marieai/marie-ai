@@ -1,28 +1,19 @@
 import glob
 import os
-import time
 from typing import Dict
 
-import cv2.cv2
-import numpy as np
 import transformers
-import yaml
 
 from marie.conf.helper import storage_provider_config, load_yaml
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
-from marie.utils.docs import load_image, docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
-from marie.utils.utils import ensure_exists
 from marie import (
     Document,
     DocumentArray,
-    Executor,
-    Flow,
-    requests,
     __model_path__,
     __config_dir__,
 )
@@ -48,27 +39,20 @@ def process_file(
                 username=storage_conf["username"],
                 password=storage_conf["password"],
                 database=storage_conf["database"],
-                table="ner_indexer",
+                table="check_ner_executor",
             )
 
-            dd1 = DocumentArray(
-                [
-                    Document(id=str(f"lbxid:{filename}-00"), content=payload),
-                    Document(id=str(f"lbxid:{filename}-01"), content=payload),
-                ]
-            )
             dd2 = DocumentArray([Document(content=payload)])
 
-            storage.add(dd1, {})
-            storage.add(dd2, {})
+            storage.add(dd2, {"ref_id": filename, "ref_type": "filename"})
 
         return payload
 
 
-def process_dir(executor: NerExtractionExecutor, image_dir: str):
+def process_dir(executor: NerExtractionExecutor, conf: Dict[str, str], image_dir: str):
     for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
         try:
-            process_file(executor, img_path)
+            process_file(executor, img_path, conf)
         except Exception as e:
             print(e)
             # raise e
@@ -91,11 +75,12 @@ if __name__ == "__main__":
     executor = NerExtractionExecutor(_name_or_path)
 
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
-    # process_dir(executor, "/home/gbugaj/tmp/medrx-missing-corr/")
+    # process_dir(executor, storage_conf, "/home/gbugaj/tmp/medrx-missing-corr/")
+    process_dir(executor, storage_conf, "/home/gbugaj/tmp/2022-08-09")
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
         img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
 
-        process_file(executor, img_path, storage_conf)
+        # process_file(executor, img_path, storage_conf)

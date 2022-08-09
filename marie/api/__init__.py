@@ -65,7 +65,7 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     # Possible keys
     # data, srcData, srcFile, srcUrl
 
-    # This indicates that the contents are a file contentstens and need to stored as they appear
+    # This indicates that the contents are a file contents and need to stored as they appear
 
     store_raw = False
     if "data" in payload:

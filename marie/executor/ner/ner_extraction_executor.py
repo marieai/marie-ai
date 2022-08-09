@@ -43,7 +43,6 @@ from transformers import (
     LayoutLMv3TokenizerFast,
 )
 
-
 from transformers.utils import check_min_version
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.

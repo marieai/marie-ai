@@ -23,6 +23,7 @@ from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
 
 from marie.common.volume_handler import VolumeHandler
+from marie.conf.helper import load_yaml, executor_config
 from marie.executor import NerExtractionExecutor
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
@@ -38,7 +39,7 @@ from marie.utils.utils import ensure_exists, FileSystem
 logger = default_logger
 
 
-def create_app(config_data):
+def create_app(marie_conf):
     logger.info(f"Starting app in {conf.APP_ENV} environment")
     ensure_exists(f"/tmp/marie")
     # Register VFS handlers
@@ -77,27 +78,13 @@ def create_app(config_data):
 
     api.init_app(app)
 
-    def __executor_conf(config, executor_name):
-        if "executors" not in config_data:
-            return {}
-
-        for executor in config_data["executors"]:
-            if "uses" in executor:
-                if executor["uses"] == executor_name:
-                    return executor
-        return {}
-
     @app.route("/")
     def index():
         return {"version": __version__}, 200
 
     with app.app_context():
         # RouteHandler.register_route(ICRRouter(app))
-        RouteHandler.register_route(
-            NERRouter(
-                app, **__executor_conf(config_data, NerExtractionExecutor.__name__)
-            )
-        )
+        RouteHandler.register_route(NERRouter(app, marie_conf))
 
     return app
 
@@ -151,10 +138,7 @@ if __name__ == "__main__":
     # os.environ["MARIE_DEFAULT_SHARE_PATH"] = "/opt/shares/medrxprovdata"
 
     opt = ArgParser.extract_args()
-    # Load config
-    with open(opt.config, "r") as yamlfile:
-        config_data = yaml.load(yamlfile, Loader=yaml.FullLoader)
-        logger.info(f"Config read successfully : {opt.config}")
+    config_data = load_yaml(os.path.join(opt.config))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Initializing 🦊-Marie (X004): %s", __version__)
@@ -164,7 +148,8 @@ if __name__ == "__main__":
     logger.info("Torch version : %s", torch.__version__)
     logger.info("Using device: %s", device)
 
-    # Additional Info when using cuda
+    # Additional Info when using cuda, most of the time this will be 0, however when there are other processes running
+    # this will give us usefull info
     if device.type == "cuda":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
         logger.info(
