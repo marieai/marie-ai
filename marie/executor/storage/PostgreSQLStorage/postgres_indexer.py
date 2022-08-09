@@ -21,7 +21,7 @@ class PostgreSQLStorage(Executor):
         database: str = "postgres",
         table: str = "default_table",
         max_connections=5,
-        traversal_paths: str = '@r',
+        traversal_paths: str = "@r",
         return_embeddings: bool = True,
         dry_run: bool = False,
         virtual_shards: int = 128,
@@ -91,23 +91,18 @@ class PostgreSQLStorage(Executor):
     def add(self, docs: DocumentArray, parameters: Dict, **kwargs):
         """Add Documents to Postgres
         :param docs: list of Documents
-        :param parameters: parameters to the request
+        :param parameters: parameters to the request,
         """
         if docs is None:
             return
         traversal_paths = parameters.get(
             "traversal_paths", self.default_traversal_paths
         )
-        self.handler.add(docs[traversal_paths])
 
-    def add(self, docs: DocumentArray, parameters: Dict, **kwargs):
-        """Add Documents to Postgres
-        :param docs: list of Documents
-        :param parameters: parameters to the request
-        """
-        if docs is None:
-            return
-        traversal_paths = parameters.get(
-            "traversal_paths", self.default_traversal_paths
+        self.handler.add(
+            docs[traversal_paths],
+            **{
+                "ref_id": parameters.get("ref_id"),
+                "ref_type": parameters.get("ref_type"),
+            },
         )
-        self.handler.add(docs[traversal_paths])

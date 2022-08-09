@@ -10,6 +10,17 @@ def load_yaml(config_file):
         return config_data
 
 
+def executor_config(config_data, executor_name):
+    if "executors" not in config_data:
+        return {}
+
+    for executor in config_data["executors"]:
+        if "uses" in executor:
+            if executor["uses"] == executor_name:
+                return executor
+    return {}
+
+
 def storage_provider_config(provider_name, config_data) -> Dict[str, str]:
     if "storage" not in config_data:
         raise Exception("Storage config not present")

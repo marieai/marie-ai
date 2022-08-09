@@ -20,7 +20,12 @@ from marie.numpyencoder import NumpyEncoder
 def doc_without_embedding(d: Document):
     new_doc = Document(d, copy=True)
     serialized = json.dumps(
-        new_doc.content, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+        new_doc.content,
+        sort_keys=True,
+        separators=(",", ": "),
+        ensure_ascii=False,
+        indent=2,
+        cls=NumpyEncoder,
     )
     return serialized
     # new_doc.ClearField('embedding')
@@ -30,13 +35,19 @@ def doc_without_embedding(d: Document):
 def serialize_to_json(content: Any):
     print(content)
     serialized = json.dumps(
-        content, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+        content,
+        sort_keys=True,
+        separators=(",", ": "),
+        ensure_ascii=False,
+        indent=2,
+        cls=NumpyEncoder,
     )
     return serialized
 
+
 SCHEMA_VERSION = 4
-META_TABLE_NAME = 'index_metas'
-MODEL_TABLE_NAME = 'index_models'
+META_TABLE_NAME = "index_metas"
+MODEL_TABLE_NAME = "index_models"
 
 
 class PostgreSQLHandler:
@@ -59,12 +70,12 @@ class PostgreSQLHandler:
 
     def __init__(
         self,
-        hostname: str = '127.0.0.1',
+        hostname: str = "127.0.0.1",
         port: int = 5432,
-        username: str = 'default_name',
-        password: str = 'default_pwd',
-        database: str = 'postgres',
-        table: Optional[str] = 'default_table',
+        username: str = "default_name",
+        password: str = "default_pwd",
+        database: str = "postgres",
+        table: Optional[str] = "default_table",
         max_connections: int = 5,
         dump_dtype: type = np.float64,
         dry_run: bool = False,
@@ -73,11 +84,11 @@ class PostgreSQLHandler:
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.logger = MarieLogger('psq_handler')
+        self.logger = MarieLogger("psq_handler")
         self.table = table
         self.dump_dtype = dump_dtype
         self.virtual_shards = virtual_shards
-        self.snapshot_table = f'snapshot_{table}'
+        self.snapshot_table = f"snapshot_{table}"
 
         if not dry_run:
             self.postgreSQL_pool = psycopg2.pool.SimpleConnectionPool(
@@ -111,7 +122,7 @@ class PostgreSQLHandler:
 
             if self._table_exists():
                 self._assert_table_schema_version()
-                self.logger.info('Using existing table')
+                self.logger.info("Using existing table")
             else:
                 self._create_table()
 
@@ -123,33 +134,35 @@ class PostgreSQLHandler:
             else:
                 cursor.execute(statement)
         except psycopg2.errors.UniqueViolation as error:
-            self.logger.debug(f'Error while executing {statement}: {error}.')
+            self.logger.debug(f"Error while executing {statement}: {error}.")
 
         self.connection.commit()
         return cursor
 
     def _create_meta_table(self):
         self._execute_sql_gracefully(
-            f'''CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (
+            f"""CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (
                 table_name varchar,
                 schema_version integer
-            );'''
+            );"""
         )
 
     def _create_model_table(self):
         self._execute_sql_gracefully(
-            f'''CREATE TABLE IF NOT EXISTS {MODEL_TABLE_NAME} (
+            f"""CREATE TABLE IF NOT EXISTS {MODEL_TABLE_NAME} (
                 table_name varchar,
                 model_blob BYTEA,
                 model_checksum varchar,
                 updated_at timestamp with time zone default current_timestamp
-            );'''
+            );"""
         )
 
     def _create_table(self):
         self._execute_sql_gracefully(
-            f'''CREATE TABLE IF NOT EXISTS {self.table} (
+            f"""CREATE TABLE IF NOT EXISTS {self.table} (
                 doc_id VARCHAR PRIMARY KEY,
+                ref_id VARCHAR(64) not null,
+                ref_type VARCHAR(32) not null,
                 embedding BYTEA,
                 content JSONB,
                 doc BYTEA,
@@ -159,45 +172,45 @@ class PostgreSQLHandler:
                 is_deleted BOOL DEFAULT FALSE
             );
             INSERT INTO {META_TABLE_NAME} (table_name, schema_version) VALUES (%s, %s);
-            INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES (%s);''',
+            INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES (%s);""",
             (self.table, SCHEMA_VERSION, self.table),
         )
 
     def _table_exists(self):
         return self._execute_sql_gracefully(
-            'SELECT EXISTS'
-            '('
-            'SELECT * FROM information_schema.tables '
-            'WHERE table_name=%s'
-            ')',
+            "SELECT EXISTS"
+            "("
+            "SELECT * FROM information_schema.tables "
+            "WHERE table_name=%s"
+            ")",
             (self.table,),
         ).fetchall()[0][0]
 
     def _assert_table_schema_version(self):
         cursor = self.connection.cursor()
         cursor.execute(
-            f'SELECT schema_version FROM '
-            f'{META_TABLE_NAME} '
-            f'WHERE table_name=%s;',
+            f"SELECT schema_version FROM "
+            f"{META_TABLE_NAME} "
+            f"WHERE table_name=%s;",
             (self.table,),
         )
         result = cursor.fetchone()
         if result:
             if result[0] != SCHEMA_VERSION:
                 raise RuntimeError(
-                    f'The schema versions of the database '
-                    f'(version {result[0]}) and the Executor '
-                    f'(version {SCHEMA_VERSION}) do not match. '
-                    f'Please migrate your data to the latest '
-                    f'version or use an Executor version with a '
-                    f'matching schema version.'
+                    f"The schema versions of the database "
+                    f"(version {result[0]}) and the Executor "
+                    f"(version {SCHEMA_VERSION}) do not match. "
+                    f"Please migrate your data to the latest "
+                    f"version or use an Executor version with a "
+                    f"matching schema version."
                 )
         else:
             raise RuntimeError(
-                f'The schema versions of the database '
-                f'(NO version number) and the Executor '
-                f'(version {SCHEMA_VERSION}) do not match.'
-                f'Please migrate your data to the latest version.'
+                f"The schema versions of the database "
+                f"(NO version number) and the Executor "
+                f"(version {SCHEMA_VERSION}) do not match."
+                f"Please migrate your data to the latest version."
             )
 
     def add(self, docs: DocumentArray, *args, **kwargs):
@@ -208,16 +221,21 @@ class PostgreSQLHandler:
         :param kwargs: other keyword arguments
         :return record: List of Document's id added
         """
+
+        ref_id = kwargs.pop("ref_id")
+        ref_type = kwargs.pop("ref_type")
         cursor = self.connection.cursor()
         try:
             psycopg2.extras.execute_batch(
                 cursor,
-                f'INSERT INTO {self.table} '
-                f'(doc_id, embedding, content, doc, shard, created_at, updated_at) '
-                f'VALUES (%s, %s, %s, %s, %s, current_timestamp, current_timestamp)',
+                f"INSERT INTO {self.table} "
+                f"(doc_id, ref_id, ref_type, embedding, content, doc, shard, created_at, updated_at) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, current_timestamp, current_timestamp)",
                 [
                     (
                         doc.id,
+                        ref_id,
+                        ref_type,
                         doc.embedding.astype(self.dump_dtype).tobytes()
                         if doc.embedding is not None
                         else None,
@@ -232,8 +250,8 @@ class PostgreSQLHandler:
             )
         except psycopg2.errors.UniqueViolation as e:
             self.logger.warning(
-                f'Document already exists in PSQL database.'
-                f' {e}. Skipping entire transaction...'
+                f"Document already exists in PSQL database."
+                f" {e}. Skipping entire transaction..."
             )
             self.connection.rollback()
         self.connection.commit()
@@ -249,12 +267,12 @@ class PostgreSQLHandler:
         cursor = self.connection.cursor()
         psycopg2.extras.execute_batch(
             cursor,
-            f'UPDATE {self.table}\
+            f"UPDATE {self.table}\
              SET embedding = %s,\
              doc = %s,\
              is_deleted = false, \
              updated_at = current_timestamp \
-            WHERE doc_id = %s',
+            WHERE doc_id = %s",
             [
                 (
                     doc.embedding.astype(self.dump_dtype).tobytes(),
@@ -273,8 +291,7 @@ class PostgreSQLHandler:
         """
         cursor = self.connection.cursor()
         psycopg2.extras.execute_batch(
-            cursor,
-            f'DELETE FROM {self.table} ' f'WHERE is_deleted = true',
+            cursor, f"DELETE FROM {self.table} " f"WHERE is_deleted = true",
         )
         self.connection.commit()
         return
@@ -285,7 +302,7 @@ class PostgreSQLHandler:
         :return:
         """
         cursor = self.connection.cursor()
-        cursor.execute(f'DELETE FROM {self.table}')
+        cursor.execute(f"DELETE FROM {self.table}")
         self.connection.commit()
         return
 
@@ -312,16 +329,16 @@ class PostgreSQLHandler:
             # )
             psycopg2.extras.execute_batch(
                 cursor,
-                f'UPDATE {self.table} '
-                f'SET is_deleted = true, '
-                f'updated_at = current_timestamp '
-                f'WHERE doc_id = %s;',
+                f"UPDATE {self.table} "
+                f"SET is_deleted = true, "
+                f"updated_at = current_timestamp "
+                f"WHERE doc_id = %s;",
                 [(doc.id,) for doc in docs],
             )
         else:
             psycopg2.extras.execute_batch(
                 cursor,
-                f'DELETE FROM {self.table} WHERE doc_id = %s;',
+                f"DELETE FROM {self.table} WHERE doc_id = %s;",
                 [(doc.id,) for doc in docs],
             )
         self.connection.commit()
@@ -334,14 +351,14 @@ class PostgreSQLHandler:
         """Use the Postgres db as a key-value engine,
         returning the metadata of a document id"""
         if return_embeddings:
-            embeddings_field = ', embedding '
+            embeddings_field = ", embedding "
         else:
-            embeddings_field = ''
+            embeddings_field = ""
         cursor = self.connection.cursor()
         for doc in docs:
             # retrieve metadata
             cursor.execute(
-                f'SELECT doc {embeddings_field} FROM {self.table} WHERE doc_id = %s and is_deleted = false;',
+                f"SELECT doc {embeddings_field} FROM {self.table} WHERE doc_id = %s and is_deleted = false;",
                 (doc.id,),
             )
             result = cursor.fetchone()
@@ -363,9 +380,9 @@ class PostgreSQLHandler:
         """
         cursor = self.connection.cursor()
         cursor.execute(
-            f'SELECT model_blob, model_checksum FROM '
-            f'{MODEL_TABLE_NAME} '
-            f'WHERE table_name=%s;',
+            f"SELECT model_blob, model_checksum FROM "
+            f"{MODEL_TABLE_NAME} "
+            f"WHERE table_name=%s;",
             (self.table,),
         )
 
@@ -382,15 +399,15 @@ class PostgreSQLHandler:
         """
         cursor = self.connection.cursor()
         cursor.execute(
-            f'UPDATE {MODEL_TABLE_NAME} '
-            f'SET model_blob = %s, '
-            f'model_checksum = %s, '
-            f'updated_at = current_timestamp '
-            f'where table_name = %s',
+            f"UPDATE {MODEL_TABLE_NAME} "
+            f"SET model_blob = %s, "
+            f"model_checksum = %s, "
+            f"updated_at = current_timestamp "
+            f"where table_name = %s",
             (model, checksum, self.table),
         )
         self.connection.commit()
-        self.logger.info('Successfully save model')
+        self.logger.info("Successfully save model")
 
     def _close_connection(self, connection):
         # restore it to the pool
@@ -406,13 +423,13 @@ class PostgreSQLHandler:
 
     def get_size(self):
         cursor = self.connection.cursor()
-        cursor.execute(f'SELECT COUNT(*) FROM {self.table} WHERE is_deleted = false')
+        cursor.execute(f"SELECT COUNT(*) FROM {self.table} WHERE is_deleted = false")
         records = cursor.fetchall()
         return records[0][0]
 
     def _get_next_shard(self, doc_id: str):
         sha = hashlib.sha256()
-        sha.update(bytes(doc_id, 'utf-8'))
+        sha.update(bytes(doc_id, "utf-8"))
         return int(sha.hexdigest(), 16) % self.virtual_shards
 
     def snapshot(self):
@@ -426,19 +443,19 @@ class PostgreSQLHandler:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                f'drop table if exists {self.snapshot_table}; '
-                f'create table {self.snapshot_table} '
-                f'(like {self.table} including all);'
+                f"drop table if exists {self.snapshot_table}; "
+                f"create table {self.snapshot_table} "
+                f"(like {self.table} including all);"
             )
             self.connection.commit()
             cursor = self.connection.cursor()
             cursor.execute(
-                f'insert into {self.snapshot_table} (select * from {self.table});'
+                f"insert into {self.snapshot_table} (select * from {self.table});"
             )
             self.connection.commit()
-            self.logger.info('Successfully created snapshot')
+            self.logger.info("Successfully created snapshot")
         except (Exception, psycopg2.Error) as error:
-            self.logger.error(f'Error snapshotting: {error}')
+            self.logger.error(f"Error snapshotting: {error}")
             self.connection.rollback()
 
     def get_snapshot(
@@ -471,11 +488,11 @@ class PostgreSQLHandler:
         :return:
         """
         try:
-            cursor = self.connection.cursor('doc_iterator')
+            cursor = self.connection.cursor("doc_iterator")
             cursor.itersize = 10000
             cursor.execute(
-                f'SELECT doc_id, doc, embedding from {self.table} '
-                f'WHERE is_deleted = false' + (f' limit = {limit}' if limit > 0 else '')
+                f"SELECT doc_id, doc, embedding from {self.table} "
+                f"WHERE is_deleted = false" + (f" limit = {limit}" if limit > 0 else "")
             )
             for sample in cursor:
                 doc_id = sample[0]
@@ -493,7 +510,7 @@ class PostgreSQLHandler:
                     yield doc
 
         except (Exception, psycopg2.Error) as error:
-            self.logger.error(f'Error importing snapshot: {error}')
+            self.logger.error(f"Error importing snapshot: {error}")
             self.connection.rollback()
         self.connection.commit()
 
@@ -513,7 +530,7 @@ class PostgreSQLHandler:
         :return:
         """
         connection = self._get_connection()
-        cursor = connection.cursor('dump_iterator')  # server-side cursor
+        cursor = connection.cursor("dump_iterator")  # server-side cursor
         cursor.itersize = 10000
 
         try:
@@ -521,19 +538,19 @@ class PostgreSQLHandler:
                 shards_quoted = tuple(int(shard) for shard in shards_to_get)
 
                 cursor.execute(
-                    'SELECT doc_id, embedding'
-                    + (', doc ' if include_metas else ' ')
-                    + f'FROM {table_name or self.table} WHERE '
-                    + 'shard in %s '
-                    + ('and is_deleted = false ' if filter_deleted else ''),
+                    "SELECT doc_id, embedding"
+                    + (", doc " if include_metas else " ")
+                    + f"FROM {table_name or self.table} WHERE "
+                    + "shard in %s "
+                    + ("and is_deleted = false " if filter_deleted else ""),
                     (shards_quoted,),
                 )
             else:
                 cursor.execute(
-                    'SELECT doc_id, embedding'
-                    + (', doc ' if include_metas else ' ')
-                    + f'FROM {table_name or self.table} '
-                    + ('WHERE is_deleted = false ' if filter_deleted else ' ')
+                    "SELECT doc_id, embedding"
+                    + (", doc " if include_metas else " ")
+                    + f"FROM {table_name or self.table} "
+                    + ("WHERE is_deleted = false " if filter_deleted else " ")
                 )
 
             for record in cursor:
@@ -543,7 +560,7 @@ class PostgreSQLHandler:
                     2
                 ] if include_metas else None
         except (Exception, psycopg2.Error) as error:
-            self.logger.error(f'Error executing sql statement: {error}')
+            self.logger.error(f"Error executing sql statement: {error}")
 
         self._close_connection(connection)
 
@@ -552,11 +569,11 @@ class PostgreSQLHandler:
         connection = self._get_connection()
         cursor = connection.cursor()
         try:
-            cursor.execute(f'SELECT MAX(updated_at) FROM {self.snapshot_table}')
+            cursor.execute(f"SELECT MAX(updated_at) FROM {self.snapshot_table}")
             for rec in cursor:
                 return rec[0]
         except Exception as e:
-            self.logger.error(f'Could not obtain timestamp from snapshot: {e}')
+            self.logger.error(f"Could not obtain timestamp from snapshot: {e}")
 
     def get_delta_updates(
         self, shards_to_get, timestamp, filter_deleted: bool = False
@@ -569,15 +586,15 @@ class PostgreSQLHandler:
         :param filter_deleted: whether to filter out the data which has been marked as soft-delete
         """
         connection = self._get_connection()
-        cursor = connection.cursor('delta_generator')  # server-side cursor
+        cursor = connection.cursor("delta_generator")  # server-side cursor
         cursor.itersize = 10000
         shards_quoted = tuple(int(shard) for shard in shards_to_get)
         cursor.execute(
-            f'SELECT doc_id, embedding, updated_at, is_deleted '
-            f'from {self.table} '
-            f'WHERE shard in %s '
-            f'and updated_at > %s'
-            + (' and is_deleted = false' if filter_deleted else ''),
+            f"SELECT doc_id, embedding, updated_at, is_deleted "
+            f"from {self.table} "
+            f"WHERE shard in %s "
+            f"and updated_at > %s"
+            + (" and is_deleted = false" if filter_deleted else ""),
             (shards_quoted, timestamp),
         )
 
@@ -598,10 +615,10 @@ class PostgreSQLHandler:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                f'SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false'
+                f"SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false"
             )
             records = cursor.fetchall()
             return records[0][0]
         except Exception as e:
-            self.logger.warning(f'Could not get size of snapshot: {e}')
+            self.logger.warning(f"Could not get size of snapshot: {e}")
         return 0

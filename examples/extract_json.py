@@ -1,11 +1,15 @@
 import base64
+import glob
 import os
 import time
+import uuid
+from typing import Dict
 
 import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+from marie.helper import random_uuid
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:5000/api"
@@ -15,7 +19,7 @@ api_base_url = "http://127.0.0.1:5000/api"
 # api_base_url = "http://184.105.180.25:6000/api"  # marie-007
 # api_base_url = "http://172.83.13.210:6000/api"  # marie-004
 # api_base_url = "http://184.105.180.15:6000/api"  # marie-003
-api_base_url = "http://184.105.180.6:6000/api"  # marie-0
+# api_base_url = "http://184.105.180.6:6000/api"  # marie-0
 #
 
 # api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
@@ -64,7 +68,13 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         # output['json']=> json,text,pdf
 
         json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-        json_payload = {"data": base64_str, "mode": mode, "output": "json"}
+        json_payload = {
+            "data": base64_str,
+            "mode": mode,
+            "output": "json",
+            "doc_id": str(uuid.uuid4()),
+            "doc_type": "example_ner",
+        }
 
         # print(json_payload)
         # Upload file to api
@@ -132,10 +142,26 @@ def visualize_icr(image, icr_data):
                 fill=(0, 180, 0, 125),
                 width=1,
             )
-            draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
+            draw.text(
+                (box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0
+            )
 
         viz_img.show()
         viz_img.save("/tmp/snippet/extract.png")
+
+
+def process_dir(image_dir: str):
+    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
+        try:
+            icr_data = process_extract(
+                queue_id=default_queue_id, mode="multiline", file_location=src
+            )
+            print(icr_data)
+            image = Image.open(src).convert("RGB")
+            visualize_icr(image, icr_data)
+        except Exception as e:
+            print(e)
+            # raise e
 
 
 if __name__ == "__main__":
@@ -144,21 +170,18 @@ if __name__ == "__main__":
     # Specify the path to the file you would like to process
     src = "./set-001/test/fragment-003.png"
     # src = "./set-001/test/fragment-002.png"
-    # src = "/home/gbugaj/dev/sk-snippet-dump/hashed/AARON_JANES/38585416cc1f22103336f3419390c9ce.tif"
-    # src = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658540_0.png"
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
-    src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
-    src = "/home/gbugaj/tmp/PID_886_7652_0_157518994.tif"
-    src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-    # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-25.tif" # {'error': 'Invalid line number : -1, this looks like a bug/vertical line : [147, 882, 75, 12]'}
-    # src = "/home/gbugaj/Downloads/tiffs/Pages from 433142 - SVB 06.14.2022 Correspondence 0.pdf - RP-28.tif"
-    icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
-    print(icr_data)
-    image = Image.open(src).convert("RGB")
-    visualize_icr(image, icr_data)
 
+    if False:
+        process_dir("/home/gbugaj/tmp/")
 
-# Model load elapsed: 102.28931069374084
-# OCR file  : /home/app-svc/.marie/ocr/0ff60be73d3a16058e62fd859db644eb47039d8a.json
-# NER file  : /home/app-svc/.marie/annotation/0ff60be73d3a16058e62fd859db644eb47039d8a.json
+    if False:
+        src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        icr_data = process_extract(
+            queue_id=default_queue_id, mode="multiline", file_location=src
+        )
+
+        print(icr_data)
+        image = Image.open(src).convert("RGB")
+        visualize_icr(image, icr_data)
