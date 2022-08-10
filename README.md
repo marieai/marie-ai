@@ -76,6 +76,13 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
     source  ~/environments/pytorch/bin/activate
 ```
 
+
+Starting the control plane
+```sh
+docker compose --env-file ./config/.env.dev up
+```
+ 
+
 ## Docker 
 
 ### CPU
@@ -192,6 +199,7 @@ docker run --name marie_redis -p 6379:6379 -d redis
 docker run --rm --name marie_redis -p 6379:6379 redis 
 ```
 
+
 ```sh
 docker exe -it marie_redis sh
 ```
@@ -199,7 +207,7 @@ docker exe -it marie_redis sh
 ## Codestyle / Formatting
 
 ```sh
-
+black
 ```
 ## Issues
 
@@ -216,7 +224,8 @@ pip install opencv-python==4.5.4.60
 [gradio](https://gradio.app/)
 [deepdoctection](https://github.com/deepdoctection/deepdoctection)
 [Consul / Traefik configuration](https://devonhubner.org/using_traefik_with_consul/)
-https://github.com/Lightning-AI
+[Lightning-AI](https://github.com/Lightning-AI)
+
 
 ## Implement models
 
@@ -298,5 +307,9 @@ https://github.com/NielsRogge/Transformers-Tutorials/blob/master/LayoutLMv2/FUNS
 ## Datastore
 https://github.com/allenai/datastore
 
-# GRPC
+## GRPC
 https://docs.microsoft.com/en-us/aspnet/core/grpc/test-tools?view=aspnetcore-6.0
+
+## Grafana
+
+https://medium.com/swlh/easy-grafana-and-docker-compose-setup-d0f6f9fcec13

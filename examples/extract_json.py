@@ -154,7 +154,7 @@ def process_dir(image_dir: str):
     for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
         try:
             icr_data = process_extract(
-                queue_id=default_queue_id, mode="multiline", file_location=src
+                queue_id=default_queue_id, mode="multiline", file_location=img_path
             )
             print(icr_data)
             image = Image.open(src).convert("RGB")
@@ -173,8 +173,9 @@ if __name__ == "__main__":
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
 
-    if False:
-        process_dir("/home/gbugaj/tmp/")
+    if True:
+        # process_dir("/home/gbugaj/tmp/")
+        process_dir("/home/greg/dataset/assets-private/corr-indexer/validation")
 
     if False:
         src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"

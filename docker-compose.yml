@@ -37,7 +37,27 @@ services:
     volumes:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"  
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+  psql:
+    image: postgres:${POSTGRES_VERSION}
+    restart: always
+#    network_mode: host
+    ports:
+      - "5432:5432"
+    expose:
+      - 10000-60000
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - db:/var/lib/postgresql/data
+#      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
+
+volumes:
+  db:
+    driver: local
+
 # ############### Networks ###############
 # networks:
 #   delvnet:  # Used by Traefik to get the client REAL IP
