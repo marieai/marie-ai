@@ -326,11 +326,11 @@ if __name__ == "__main__":
             watchdog_interval, service_host=hostName, service_port=serverPort
         )
 
-    # watchdog_task = threading.Thread(
-    #     target=_watchdog_target, daemon=debug_server
-    # ).start()
+    watchdog_task = threading.Thread(
+        target=_watchdog_target, daemon=debug_server
+    ).start()
 
-    ipc_task = threading.Thread(target=ipc_listener, daemon=debug_server).start()
+    # ipc_task = threading.Thread(target=ipc_listener, daemon=debug_server).start()
 
     if debug_server:
         start_webserver(hostName, serverPort)
