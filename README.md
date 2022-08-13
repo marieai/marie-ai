@@ -29,13 +29,13 @@ DOCKER_BUILDKIT=1 docker build . -t marie-icr:1.3
 ```
 
 ```sh
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
+DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.4-cuda --no-cache  && docker push gregbugaj/marie-icr:2.4-cuda
 docker push gregbugaj/marie-icr:2.3-cuda
 
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.3-cuda --no-cache  && docker push gregbugaj/marie-icr:2.3-cuda
 docker push gregbugaj/marie-icr:2.3-cuda
 ```
-
+docker.io/
 
 docker stop $(docker ps -q)
 docker rmi -f $(docker images -aq)
@@ -78,10 +78,16 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
 
 
 Starting the control plane
+
 ```sh
 docker compose --env-file ./config/.env.dev up
+
+docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose --env-file ./config/.env.dev up -d 
 ```
- 
+ WARN[0000] The "POSTGRES_USER" variable is not set. Defaulting to a blank string. 
+WARN[0000] The "POSTGRES_PASSWORD" variable is not set. Defaulting to a blank string. 
+WARN[0000] The "POSTGRES_VERSION" variable is not set. Defaulting to a blank string. 
+
 
 ## Docker 
 
@@ -140,7 +146,6 @@ docker run -it --rm  --gpus all --entrypoint /bin/bash marie-icr:2.0
 
 
 
-
 Remove dangling containers
 
 ```sh
@@ -148,21 +153,15 @@ docker rmi -f $(docker images -f "dangling=true" -q)
 ```
 
 ### Docker compose
-
-Install docker-compose https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-compose-on-ubuntu-20-04
-
-```shell
-sudo curl -L "https://github.com/docker/compose/releases/download/v2.6.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/bin/docker-compose
-sudo chmod +x /usr/bin/docker-compose
-docker-compose --version
-```
+Install new version of `docker compose cli plugin`
+https://docs.docker.com/compose/install/compose-plugin/#installing-compose-on-linux-systems
 
 Start docker compose
 
 ```sh
 DOCKER_BUILDKIT=1 docker-compose up
 
-docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose up -d
+source .env.prod && docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose --env-file .env.prod up -d
 ```
 
 Cleanup containers
@@ -313,3 +312,9 @@ https://docs.microsoft.com/en-us/aspnet/core/grpc/test-tools?view=aspnetcore-6.0
 ## Grafana
 
 https://medium.com/swlh/easy-grafana-and-docker-compose-setup-d0f6f9fcec13
+
+
+## TODO:
+- Create volumes for
+  - Torch /home/app-svc/.cache/ 
+  - Marie /opt/marie-icr/.cache/

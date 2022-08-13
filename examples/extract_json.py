@@ -21,7 +21,7 @@ api_base_url = "http://127.0.0.1:5000/api"
 # api_base_url = "http://184.105.180.15:6000/api"  # marie-003
 # api_base_url = "http://184.105.180.6:6000/api"  # marie-0
 #
-
+api_base_url = "http://184.105.3.112:6000/api"  # marie-0
 # api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
 
 default_queue_id = "0000-0000-0000-0000"
@@ -173,11 +173,11 @@ if __name__ == "__main__":
     # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
     # src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
 
-    if True:
+    if False:
         # process_dir("/home/gbugaj/tmp/")
         process_dir("/home/greg/dataset/assets-private/corr-indexer/validation")
 
-    if False:
+    if True:
         src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         icr_data = process_extract(
             queue_id=default_queue_id, mode="multiline", file_location=src

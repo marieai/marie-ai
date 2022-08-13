@@ -58,7 +58,8 @@ class ArgParser(object):
         parser.add_argument(
             "--config",
             type=str,
-            default="./config/marie-debug.yml",
+            # default="./config/marie-debug.yml",
+            default="/etc/marie/marie.yml",
             help="Configuration file",
         )
 
