@@ -100,12 +100,12 @@ def get_fastapi_app(
 
         @app.get(
             path="/",
-            summary="Get the health of Marie service",
+            summary="Get the healthchecks of Marie service",
             response_model=JinaHealthModel,
         )
         async def _health():
             """
-            Get the health of this Marie service.
+            Get the healthchecks of this Marie service.
             .. # noqa: DAR201
 
             """

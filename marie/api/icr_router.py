@@ -33,67 +33,11 @@ class ICRRouter:
             methods=["GET"],
         )
 
-        # app.add_url_rule(rule="/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
-        app.add_url_rule(
-            rule=f"/{prefix}",
-            endpoint="status",
-            view_func=self.status,
-            methods=["GET"],
-        )
-
         app.add_url_rule(
             rule=f"{prefix}/extract/<queue_id>",
             endpoint="extract",
             view_func=self.extract,
             methods=["POST"],
-        )
-
-    def list_routes(self):
-        import urllib
-
-        output = []
-        app = self.app
-        for rule in app.url_map.iter_rules():
-
-            options = {}
-            for arg in rule.arguments:
-                options[arg] = "[{0}]".format(arg)
-
-            methods = ",".join(rule.methods)
-            url = url_for(rule.endpoint, **options)
-            line = "{:50s} {:20s} {}".format(rule.endpoint, methods, url)
-            output.append(line)
-
-        for line in sorted(output):
-            print(line)
-
-        return output
-
-    def status(self):
-        """Get application status"""
-        import os
-
-        build = {}
-        if os.path.exists(".build"):
-            with open(".build", "r") as fp:
-                build = json.load(fp)
-        host = get_ip_address()
-        routes = self.list_routes()
-
-        return (
-            jsonify(
-                {
-                    "name": "marie-icr",
-                    "host": host,
-                    "component": [
-                        {"name": "craft", "version": "1.0.0"},
-                        {"name": "craft-benchmark", "version": "1.0.0"},
-                    ],
-                    "build": build,
-                    "routes": routes,
-                }
-            ),
-            200,
         )
 
     def extract(self, queue_id: str):

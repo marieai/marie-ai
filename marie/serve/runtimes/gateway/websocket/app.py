@@ -1,5 +1,4 @@
 import argparse
-import json
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
 from marie.clients.request import request_generator
@@ -12,8 +11,8 @@ from marie.types.request.data import DataRequest
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
 
-    from jina.serve.networking import GrpcConnectionPool
-    from jina.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
+    from marie.serve.networking import GrpcConnectionPool
+    from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 
 
 def _fits_ws_close_msg(msg: str):
@@ -27,7 +26,7 @@ def get_fastapi_app(
     args: 'argparse.Namespace',
     topology_graph: 'TopologyGraph',
     connection_pool: 'GrpcConnectionPool',
-    logger: 'JinaLogger',
+    logger: 'MarieLogger',
     metrics_registry: Optional['CollectorRegistry'] = None,
 ):
     """
