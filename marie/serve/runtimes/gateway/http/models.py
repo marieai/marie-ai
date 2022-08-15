@@ -24,7 +24,7 @@ def _to_camel_case(snake_str: str) -> str:
 
 
 class JinaHealthModel(BaseModel):
-    """Pydantic BaseModel for 🦊-Marie health check, used as the response model in REST app."""
+    """Pydantic BaseModel for 🦊-Marie healthchecks check, used as the response model in REST app."""
 
     ...
 

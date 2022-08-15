@@ -25,6 +25,7 @@ from marie.api.sample_route import SampleRouter
 from marie.common.volume_handler import VolumeHandler
 from marie.conf.helper import load_yaml, executor_config
 from marie.executor import NerExtractionExecutor
+from marie.healthchecks.health_check_router import HealthCheckRouter
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.utils.network import find_open_port
@@ -83,8 +84,9 @@ def create_app(marie_conf):
         return {"version": __version__}, 200
 
     with app.app_context():
-        RouteHandler.register_route(ICRRouter(app))
-        RouteHandler.register_route(NERRouter(app, marie_conf))
+        RouteHandler.register_route(HealthCheckRouter(app))
+        # RouteHandler.register_route(ICRRouter(app))
+        # RouteHandler.register_route(NERRouter(app, marie_conf))
 
     return app
 

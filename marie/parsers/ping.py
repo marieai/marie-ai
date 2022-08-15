@@ -30,6 +30,6 @@ Timeout in millisecond of one check
         '--retries',
         type=int,
         default=3,
-        help='The max number of tried health checks before exit with exit code 1',
+        help='The max number of tried healthchecks checks before exit with exit code 1',
     )
     return parser
