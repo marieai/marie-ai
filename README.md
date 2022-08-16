@@ -313,8 +313,11 @@ https://docs.microsoft.com/en-us/aspnet/core/grpc/test-tools?view=aspnetcore-6.0
 
 https://medium.com/swlh/easy-grafana-and-docker-compose-setup-d0f6f9fcec13
 
+## Spark
+https://data-flair.training/blogs/spark-rdd-tutorial/
 
 ## TODO:
 - Create volumes for
   - Torch /home/app-svc/.cache/ 
   - Marie /opt/marie-icr/.cache/
+- 
