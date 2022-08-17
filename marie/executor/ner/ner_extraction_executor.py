@@ -763,7 +763,7 @@ class NerExtractionExecutor(Executor):
                 for i, val in enumerate(true_predictions):
                     tp = true_predictions[i]
                     score = true_scores[i]
-                    print(f" >> {tp} : {score}")
+                    logger.debug(f" >> {tp} : {score}")
 
             annotation = {
                 "meta": {"imageSize": {"width": width, "height": height}, "page": k},
