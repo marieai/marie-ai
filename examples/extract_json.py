@@ -22,7 +22,7 @@ api_base_url = "http://127.0.0.1:5000/api"
 # api_base_url = "http://184.105.180.6:6000/api"  # marie-0
 #
 api_base_url = "http://184.105.3.112:6000/api"  # marie-0
-# api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
+api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -179,6 +179,7 @@ if __name__ == "__main__":
 
     if True:
         src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
+        src = "/home/greg/tmp/image5839050414130576656-0.tif"
         icr_data = process_extract(
             queue_id=default_queue_id, mode="multiline", file_location=src
         )

@@ -76,11 +76,13 @@ if __name__ == "__main__":
 
     # process_dir(executor, "/home/greg/dataset/assets-private/corr-indexer/validation/")
     # process_dir(executor, storage_conf, "/home/gbugaj/tmp/medrx-missing-corr/")
-    process_dir(executor, storage_conf, "/home/gbugaj/tmp/2022-08-09")
+    # process_dir(executor, storage_conf, "/home/gbugaj/tmp/2022-08-09")
 
     if True:
         img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_162_6505_0_156695212.png"
         # img_path = f"/home/greg/dataset/assets-private/corr-indexer/validation/PID_1898_9200_0_156692336.png"
         img_path = f"/home/gbugaj/tmp/medrx-missing-corr/PID_1055_7854_0_158147069.tif"
+        img_path = f"/home/greg/tmp/image5839050414130576656.pdf"
+        img_path = f"/home/greg/tmp/image5839050414130576656-0.tif"
 
-        # process_file(executor, img_path, storage_conf)
+        process_file(executor, img_path, storage_conf)
