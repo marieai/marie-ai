@@ -316,8 +316,12 @@ https://medium.com/swlh/easy-grafana-and-docker-compose-setup-d0f6f9fcec13
 ## Spark
 https://data-flair.training/blogs/spark-rdd-tutorial/
 
+## Docs 
+https://outerbounds.com/
+https://docs.dyte.io/guides/integrating-with-webhooks
+
+
 ## TODO:
 - Create volumes for
   - Torch /home/app-svc/.cache/ 
   - Marie /opt/marie-icr/.cache/
-- 
