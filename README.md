@@ -325,3 +325,7 @@ https://docs.dyte.io/guides/integrating-with-webhooks
 - Create volumes for
   - Torch /home/app-svc/.cache/ 
   - Marie /opt/marie-icr/.cache/
+
+
+## Kafka - Proritization
+https://www.confluent.io/blog/prioritize-messages-in-kafka/
