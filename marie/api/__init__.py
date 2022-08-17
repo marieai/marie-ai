@@ -109,3 +109,13 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
     logger.info(f"File info: {file_type}, {tmp_file}")
 
     return tmp_file, checksum, file_type
+
+
+def value_from_payload_or_args(payload, key, default=None):
+    """Get value from payload or from payloads args"""
+    ret_type = default
+    if key in payload:
+        ret_type = payload[key]
+    elif key in payload["args"]:
+        ret_type = payload["args"][key]
+    return ret_type
