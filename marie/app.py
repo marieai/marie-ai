@@ -84,7 +84,7 @@ def create_app(marie_conf):
         return {"version": __version__}, 200
 
     with app.app_context():
-        # RouteHandler.register_route(HealthCheckRouter(app))
+        RouteHandler.register_route(HealthCheckRouter(app))
         RouteHandler.register_route(ICRRouter(app))
         RouteHandler.register_route(NERRouter(app, marie_conf))
 
