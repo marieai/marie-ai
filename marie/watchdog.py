@@ -49,9 +49,8 @@ async def main_single():
     )
 
     # call_later() only supports callbacks (regular functions); you  can’t pass in a coroutine.
-    loop.call_later(3, asyncio.create_task, cancel_callback(t1))
+    asyncio.get_event_loop().call_later(3, asyncio.create_task, cancel_callback(t1))
 
-    t1.start()
     await t1.task
 
 
@@ -63,7 +62,8 @@ async def main_delay():
 
     await t1.start()
     print(t1.task)
-    loop.call_later(3, cancel_callback, t1)
+
+    asyncio.get_event_loop().call_later(3, cancel_callback, t1)
 
     await t1.task
 
@@ -71,9 +71,14 @@ async def main_delay():
 if __name__ == "__main__":
     print("Main")
 
-    loop = asyncio.get_event_loop()
-
     try:
-        loop.run_until_complete(main_single())
+        asyncio.run(main_single())
     except asyncio.CancelledError:
         pass
+
+    if False:
+        loop = asyncio.get_event_loop()
+        try:
+            loop.run_until_complete(main_single())
+        except asyncio.CancelledError:
+            pass
