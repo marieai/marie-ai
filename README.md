@@ -327,5 +327,5 @@ https://docs.dyte.io/guides/integrating-with-webhooks
   - Marie /opt/marie-icr/.cache/
 
 
-## Kafka - Proritization
+## Kafka - Prioritization
 https://www.confluent.io/blog/prioritize-messages-in-kafka/

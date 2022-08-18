@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 import signal
 import threading
@@ -7,7 +8,7 @@ from contextlib import suppress
 from enum import Enum
 from typing import Callable, Any, List
 
-from marie.helper import iscoroutinefunction
+from marie.helper import iscoroutinefunction, run_async
 
 
 class TimeUnit(Enum):
@@ -157,6 +158,18 @@ class ScheduledTask:
         # return repeat(self.interval, self.func, *self.args, **self.kwargs)
 
 
+async def shutdown(sig, loop):
+    print("caught {0}".format(sig.name))
+    tasks = [
+        task
+        for task in asyncio.Task.all_tasks()
+        if task is not asyncio.tasks.Task.current_task()
+    ]
+    list(map(lambda task: task.cancel(), tasks))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    print("finished awaiting cancelled tasks, results: {0}".format(results))
+
+
 class ScheduledAsyncioExecutorService(ScheduledExecutorService):
     """This scheduler will create a new Thread with new event loop"""
 
@@ -175,9 +188,15 @@ class ScheduledAsyncioExecutorService(ScheduledExecutorService):
         self.is_cancel = asyncio.Event()
         try:
             for signame in {"SIGINT", "SIGTERM"}:
+                # self._loop.add_signal_handler(
+                #     getattr(signal, signame),
+                #     lambda *args, **kwargs: self.is_cancel.set(),
+                # )
                 self._loop.add_signal_handler(
                     getattr(signal, signame),
-                    lambda *args, **kwargs: self.is_cancel.set(),
+                    functools.partial(
+                        asyncio.ensure_future, shutdown(signal.SIGTERM, self._loop)
+                    ),
                 )
         except (ValueError, RuntimeError) as exc:
             self.logger.warning(
@@ -192,6 +211,7 @@ class ScheduledAsyncioExecutorService(ScheduledExecutorService):
         # https://stackoverflow.com/questions/31623194/asyncio-two-loops-for-different-i-o-tasks
         # This will not work as asyncio does not allow nested event loops
         # RuntimeError: This event loop is already running
+        kwargs = {"any_event_loop": True}
         # self._loop.run_until_complete(self._loop_body())
 
     async def _loop_body(self):
@@ -243,6 +263,8 @@ class ScheduledAsyncioExecutorService(ScheduledExecutorService):
         scheduled_task = ScheduledTask(
             interval, func, f"scheduled-task-{len(self.tasks)}", *args, **kwargs
         )
+
+        scheduled_task.start()
 
         self.tasks.append(scheduled_task)
         return scheduled_task
