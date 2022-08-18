@@ -70,6 +70,18 @@ async def main_delay():
 
 if __name__ == "__main__":
     print("Main")
+    loop = asyncio.get_event_loop()
+    try:
+        asyncio.ensure_future(main_single())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("Closing Loop")
+        loop.close()
+
+if __name__ == "__main__XX":
+    print("Main")
 
     try:
         asyncio.run(main_single())
