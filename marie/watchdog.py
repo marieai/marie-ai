@@ -22,6 +22,7 @@ async def cancel_callback(task):
 
 async def main():
     scheduler = ScheduledExecutorService.new_scheduled_asyncio_pool()
+
     t1 = scheduler.schedule_at_fixed_rate(
         async_task, 1, TimeUnit.MILLISECONDS, name="T1"
     )
@@ -30,16 +31,7 @@ async def main():
         async_task, 2, TimeUnit.MILLISECONDS, name="T2"
     )
 
-    t1.start()
-    t2.start()
-
-    print(t1)
-    print(t2)
-
-    loop.call_later(3, asyncio.create_task, cancel_callback(t1))
-
-    await t1.task
-    await t2.task
+    asyncio.get_event_loop().call_later(3, asyncio.create_task, cancel_callback(t1))
 
 
 async def main_single():
@@ -50,8 +42,7 @@ async def main_single():
 
     # call_later() only supports callbacks (regular functions); you  can’t pass in a coroutine.
     asyncio.get_event_loop().call_later(3, asyncio.create_task, cancel_callback(t1))
-
-    await t1.task
+    # await t1.task
 
 
 async def main_delay():
@@ -72,7 +63,8 @@ if __name__ == "__main__":
     print("Main")
     loop = asyncio.get_event_loop()
     try:
-        asyncio.ensure_future(main_single())
+        # asyncio.ensure_future(main_single())
+        asyncio.ensure_future(main())
         loop.run_forever()
     except KeyboardInterrupt:
         pass
