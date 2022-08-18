@@ -67,8 +67,8 @@ def _docker_run(
     # this prevent setting containerPod twice
     from pathlib import Path
 
-    from jina.helper import ArgNamespace
-    from jina.parsers import set_pod_parser
+    from marie.helper import ArgNamespace
+    from marie.parsers import set_pod_parser
 
     args.native = True
 
