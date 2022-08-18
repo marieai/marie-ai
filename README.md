@@ -77,16 +77,24 @@ Activate the environment as we used `PIP` to install `docker-compose` (python -m
 ```
 
 
-Starting the control plane
+## Starting the Control Plane
+
+### Setting up the new `docker compose` 
 
 ```sh
-docker compose --env-file ./config/.env.dev up
+COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | jq -r '.tag_name')
 
-docker-compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker-compose --env-file ./config/.env.dev up -d 
+DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+mkdir -p $DOCKER_CONFIG/cli-plugins
+curl -SL https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64 -o $DOCKER_CONFIG/cli-plugins/docker-compose
+chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
 ```
- WARN[0000] The "POSTGRES_USER" variable is not set. Defaulting to a blank string. 
-WARN[0000] The "POSTGRES_PASSWORD" variable is not set. Defaulting to a blank string. 
-WARN[0000] The "POSTGRES_VERSION" variable is not set. Defaulting to a blank string. 
+
+
+```sh
+ln -s ./config/.env.dev ./.env
+docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml  --project-directory . up --build --remove-orphans
+```
 
 
 ## Docker 
@@ -180,7 +188,7 @@ Cleanup containers
 # 
 ```sh
 # tests/integration/psql_storage
-docker-compose -f docker-compose.yml --project-directory . up  --build  --remove-orphans
+docker-compose -f docker-compose.yml --project-directory . up  --build --remove-orphans --env-file .env.prod 
 ```
 
 # Setup Redis
