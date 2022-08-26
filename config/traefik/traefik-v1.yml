@@ -30,11 +30,6 @@ api:
   insecure: false
   debug: false
 
-
-metrics:
-  enabled: true
-
-
 entryPoints:
   traefik:
     address: ":7777"
