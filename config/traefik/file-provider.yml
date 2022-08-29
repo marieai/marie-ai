@@ -1,0 +1,26 @@
+http:
+  routers:
+    http-catchall:
+#      rule: "HostRegexp(`{host:.+}`)"
+      rule: "Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      priority: 1000
+      entryPoints:
+        - traefik
+      middlewares:
+        - auth
+#        - redirect-to-https
+      service: api@internal
+
+  # Setup the `auth` middleware to be basicauth that takes a file for users
+  middlewares:
+    auth:
+      basicAuth:
+        removeHeader: true
+        usersFile: /user-credentials
+        # password should be generated using `htpasswd` (md5, sha1 or bcrypt)
+        # htpasswd -nb admin secure_password  >>  htpasswd -nb dashboard RevSecret12345!
+#        users:
+#          - "dashboard:$apr1$2TgJEKkl$.fyRx.XI5l0AIm/bef4Rw."
+#    redirect-to-https:
+#      redirectScheme:
+#        scheme:

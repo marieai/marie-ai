@@ -153,7 +153,7 @@ def register(service_host, service_port, service_id=None) -> Union[None, str]:
     logger.info("Registering ServiceHost: %s Port: %s ", service_host, service_port)
 
     service_name = "traefik-system-ingress"
-    service_url = f"http://{service_host}:{service_port}/api"
+    service_url = f"http://{service_host}:{service_port}/health/status"
 
     # TODO : Service ID generation needs to be configurable
     # Create new service id, otherwise we will re-register same id
