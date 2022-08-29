@@ -13,15 +13,21 @@ from marie.helper import random_uuid
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:5000/api"
-# api_base_url = "http://172.83.15.97:6000/api"  # marie-009
-# api_base_url = "http://184.105.180.27:6000/api"  # marie-008
-# api_base_url = "http://184.105.180.21:6000/api"  # marie-006
-# api_base_url = "http://184.105.180.25:6000/api"  # marie-007
-# api_base_url = "http://172.83.13.210:6000/api"  # marie-004
-# api_base_url = "http://184.105.180.15:6000/api"  # marie-003
-# api_base_url = "http://184.105.180.6:6000/api"  # marie-0
 #
-api_base_url = "http://184.105.3.112:6000/api"  # marie-0
+api_base_url = "http://184.105.3.112:6000/api"  # marie-017
+api_base_url = "http://172.83.14.129:6000/api"  # marie-016
+api_base_url = "http://184.105.180.186:6001/api"  # marie-015
+api_base_url = "http://184.105.3.109:6000/api"  # marie-014 - Failing
+api_base_url = "http://184.105.180.179:6001/api"  # marie-013
+api_base_url = "http://74.82.31.171:6000/api"  # marie-010
+api_base_url = "http://172.83.15.97:6000/api"  # marie-009  FAILING
+api_base_url = "http://184.105.180.27:6000/api"  # marie-008
+api_base_url = "http://184.105.180.25:6000/api"  # marie-007
+api_base_url = "http://184.105.180.21:6000/api"  # marie-006
+api_base_url = "http://172.83.13.210:6000/api"  # marie-004
+# api_base_url = "http://184.105.180.15:6000/api"  # marie-003
+api_base_url = "http://184.105.180.6:6000/api"  # marie-002 NEEDS UPDATE
+
 api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
 
 default_queue_id = "0000-0000-0000-0000"
@@ -43,6 +49,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/ner/{queue_id}"
 
+    print(api_base_url)
     if False and not online(api_base_url):
         raise Exception(f"API server is not online : {api_base_url}")
 
@@ -94,6 +101,8 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
 
 
 def visualize_icr(image, icr_data):
+
+    return
     viz_img = image.copy()
     size = 18
     draw = ImageDraw.Draw(viz_img, "RGBA")
@@ -179,7 +188,7 @@ if __name__ == "__main__":
 
     if True:
         src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        src = "/home/greg/tmp/image5839050414130576656-0.tif"
+        src = "/home/gbugaj/tmp/PID_1956_9362_0_157647046_page_0001.tif"
         icr_data = process_extract(
             queue_id=default_queue_id, mode="multiline", file_location=src
         )
