@@ -70,15 +70,15 @@ class DebugWebServer(BaseHTTPRequestHandler):
         self.wfile.write(bytes("</body></html>", "utf-8"))
 
 
-def start_webserver(hostName, serverPort):
-    webServer = HTTPServer((hostName, serverPort), DebugWebServer)
-    logger.info("Server started http://%s:%s" % (hostName, serverPort))
+def start_webserver(hostname, server_port):
+    server = HTTPServer((hostname, server_port), DebugWebServer)
+    logger.info("Server started http://%s:%s" % (hostname, server_port))
     try:
-        webServer.serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
         pass
 
-    webServer.server_close()
+    server.server_close()
     logger.info("Server stopped.")
 
 
@@ -96,7 +96,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
 
     try:
         client = consul.Consul(host=host, port=port)
-        discard = client.agent.self()
+        client.agent.self()
         return True
     except Exception as e:
         logger.warning("Unable to verify connection : {msg}".format(msg=e))
@@ -104,7 +104,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
     return False
 
 
-def createClient(
+def create_client(
     cfg: EndpointConfig, verify: bool = True
 ) -> Tuple[Union[consul.Consul, None], bool]:
     """
@@ -135,7 +135,7 @@ def driver_version():
 
 
 def getServiceByNameAndId(service_name, service_id):
-    c, online = createClient(config, True)
+    c, online = create_client(config, True)
     if not online:
         return None
     index, nodes = c.health.service(service_name)
@@ -165,7 +165,7 @@ def register(service_host, service_port, service_id=None) -> Union[None, str]:
     logger.info("Service url: %s", service_url)
     logger.info("Service id: %s", service_id)
 
-    c, online = createClient(config, True)
+    c, online = create_client(config, True)
     if not online:
         logger.debug("Consul service is offline")
         return service_id
@@ -231,7 +231,7 @@ def _dispatch_command(msg):
             logger.info(f"online = {online}")
             sid = current_service_id
             if not online:
-                c, _online = createClient(config, True)
+                c, _online = create_client(config, True)
                 if not _online:
                     logger.debug("Consul service is offline")
                     return None
@@ -301,36 +301,34 @@ if __name__ == "__main__":
     config.Port = int(data["ConsulEndpoint"]["Port"])
     config.Scheme = data["ConsulEndpoint"]["Scheme"]
 
-    hostName = data["ServiceEndpoint"]["Host"]
-    serverPort = int(data["ServiceEndpoint"]["Port"])
+    host_name = data["ServiceEndpoint"]["Host"]
+    server_port = int(data["ServiceEndpoint"]["Port"])
     watchdog_interval = int(data["WatchdogInterval"])
     debug_server = bool(data["DebugWebserver"])
 
-    if hostName is None or hostName == "":
-        hostName = get_ip_address()
+    if host_name is None or host_name == "":
+        host_name = get_ip_address()
 
-    if serverPort == -1:
-        serverPort = find_open_port()
+    if server_port == -1:
+        server_port = find_open_port()
 
     with open("port.dat", "r", encoding="utf-8") as fsrc:
-        serverPort = int(fsrc.read())
-        logger.info(f"port = {serverPort}")
+        server_port = int(fsrc.read())
+        logger.info(f"port = {server_port}")
 
     current_service_id = register(
-        service_host=hostName, service_port=serverPort, service_id=None
+        service_host=host_name, service_port=server_port, service_id=None
     )
     logger.info("Registration service: %s", current_service_id)
 
     def _watchdog_target():
         return start_watchdog(
-            watchdog_interval, service_host=hostName, service_port=serverPort
+            watchdog_interval, service_host=host_name, service_port=server_port
         )
 
-    watchdog_task = threading.Thread(
-        target=_watchdog_target, daemon=debug_server
-    ).start()
+    threading.Thread(target=_watchdog_target, daemon=debug_server).start()
 
     # ipc_task = threading.Thread(target=ipc_listener, daemon=debug_server).start()
 
     if debug_server:
-        start_webserver(hostName, serverPort)
+        start_webserver(host_name, server_port)
