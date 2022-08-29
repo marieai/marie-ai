@@ -21,22 +21,30 @@ services:
 
   # Dashboard accessible via `http://localhost:7777/dashboard/#/'
   traefik:
-    image: traefik:v2.5.1
+    image: traefik:v2.8.3
     container_name: "traefik"
     restart: always
-    network_mode: host
+    command: --api --api.statistics --docker
+#    network_mode: host
+    networks:
+      - public
+    ports:
+      - "7777:7777"
+      - "5000:5000"
     depends_on:
       - consul-server
-    # command:
     labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.dashboard.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)"
+        - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
         - "traefik.http.routers.dashboard.entrypoints=traefik"
         - "traefik.http.routers.dashboard.service=api@internal"
-        
+        - "metrics.prometheus=true"
+
     volumes:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
+      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
+      - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
 
   psql:
@@ -54,11 +62,24 @@ services:
       - db:/var/lib/postgresql/data
 #      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
 
+
 volumes:
   db:
     driver: local
 
 # ############### Networks ###############
+networks:
+  public:
+    external: true
+
+# ############### Networks ###############
 # networks:
 #   delvnet:  # Used by Traefik to get the client REAL IP
 #     driver: host
+
+# Container networking setup
+# docker network create --driver=bridge public
+# sysctl net.ipv4.conf.all.forwarding=1
+
+# Reverse proxy
+# ssh -L 5000:localhost:5000 7777:localhost:7777 gbugaj@192.168.102.65

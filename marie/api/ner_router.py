@@ -5,7 +5,7 @@ from flask import jsonify
 
 from flask_restful import Resource, reqparse, request
 
-from marie.api import extract_payload
+from marie.api import extract_payload, value_from_payload_or_args
 from marie.conf.helper import storage_provider_config, executor_config
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
@@ -64,6 +64,9 @@ class NERRouter:
             methods=["POST"],
         )
 
+        self.__setup_storage(config)
+
+    def __setup_storage(self, config):
         try:
             storage_conf = storage_provider_config("postgresql", config)
             self.storage = PostgreSQLStorage(
@@ -84,8 +87,8 @@ class NERRouter:
                 dd = DocumentArray([Document(content=results)])
                 self.storage.add(dd, {"ref_id": ref_id, "ref_type": ref_type})
         except Exception as e:
-            print(e)
             logger.error("Unable to store document")
+            print(e)
 
     def extract(self, queue_id: str):
         """Extract based on the supplied payload"""
@@ -103,10 +106,10 @@ class NERRouter:
             logger.info("Raw reply")
             logger.info(results)
 
-            ref_id = str(payload["doc_id"]) if "doc_id" in payload else checksum
-            ref_type = str(payload["doc_type"]) if "doc_type" in payload else ""
+            doc_id = value_from_payload_or_args(payload, "doc_id", default=checksum)
+            doc_type = value_from_payload_or_args(payload, "doc_type", default="")
 
-            self.__store(ref_id, ref_type, results)
+            self.__store(doc_id, doc_type, results)
             return jsonify(results), 200
         except BaseException as error:
             logger.error("Extract error", error)

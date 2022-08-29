@@ -62,7 +62,7 @@ class HealthCheckRouter:
         super().__init__(**kwargs)
         if app is None:
             raise RuntimeError("Expected app arguments is null")
-
+        self.app = app
         prefix = "health"
         app.add_url_rule(
             rule=f"/{prefix}",

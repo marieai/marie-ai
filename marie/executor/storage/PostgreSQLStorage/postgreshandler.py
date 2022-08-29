@@ -224,37 +224,39 @@ class PostgreSQLHandler:
 
         ref_id = kwargs.pop("ref_id")
         ref_type = kwargs.pop("ref_type")
-        cursor = self.connection.cursor()
-        try:
-            psycopg2.extras.execute_batch(
-                cursor,
-                f"INSERT INTO {self.table} "
-                f"(doc_id, ref_id, ref_type, embedding, content, doc, shard, created_at, updated_at) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, current_timestamp, current_timestamp)",
-                [
-                    (
-                        doc.id,
-                        ref_id,
-                        ref_type,
-                        doc.embedding.astype(self.dump_dtype).tobytes()
-                        if doc.embedding is not None
-                        else None,
-                        serialize_to_json(doc.content)
-                        if doc.content is not None
-                        else None,
-                        doc_without_embedding(doc),
-                        self._get_next_shard(doc.id),
-                    )
-                    for doc in docs
-                ],
-            )
-        except psycopg2.errors.UniqueViolation as e:
-            self.logger.warning(
-                f"Document already exists in PSQL database."
-                f" {e}. Skipping entire transaction..."
-            )
-            self.connection.rollback()
-        self.connection.commit()
+
+        with self:
+            cursor = self.connection.cursor()
+            try:
+                psycopg2.extras.execute_batch(
+                    cursor,
+                    f"INSERT INTO {self.table} "
+                    f"(doc_id, ref_id, ref_type, embedding, content, doc, shard, created_at, updated_at) "
+                    f"VALUES (%s, %s, %s, %s, %s, %s, %s, current_timestamp, current_timestamp)",
+                    [
+                        (
+                            doc.id,
+                            ref_id,
+                            ref_type,
+                            doc.embedding.astype(self.dump_dtype).tobytes()
+                            if doc.embedding is not None
+                            else None,
+                            serialize_to_json(doc.content)
+                            if doc.content is not None
+                            else None,
+                            doc_without_embedding(doc),
+                            self._get_next_shard(doc.id),
+                        )
+                        for doc in docs
+                    ],
+                )
+            except psycopg2.errors.UniqueViolation as e:
+                self.logger.warning(
+                    f"Document already exists in PSQL database."
+                    f" {e}. Skipping entire transaction..."
+                )
+                self.connection.rollback()
+            self.connection.commit()
 
     def update(self, docs: DocumentArray, *args, **kwargs):
         """Updated documents from the database.
