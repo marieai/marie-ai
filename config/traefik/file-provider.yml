@@ -17,8 +17,6 @@ http:
       basicAuth:
         removeHeader: true
         usersFile: /user-credentials
-        # password should be generated using `htpasswd` (md5, sha1 or bcrypt)
-        # htpasswd -nb admin secure_password  >>  htpasswd -nb dashboard RevSecret12345!
 #        users:
 #          - "dashboard:$apr1$2TgJEKkl$.fyRx.XI5l0AIm/bef4Rw."
 #    redirect-to-https:

@@ -23,9 +23,11 @@ services:
   traefik:
     image: traefik:v2.8.3
     container_name: "traefik"
-    restart: always
-    command: --api --api.statistics --docker
-#    network_mode: host
+    restart: unless-stopped
+    command:
+      - --api
+      - --api.statistics
+      - --docker
     networks:
       - public
     ports:
@@ -34,11 +36,9 @@ services:
     depends_on:
       - consul-server
     labels:
-        - "traefik.enable=true"
         - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
         - "traefik.http.routers.dashboard.entrypoints=traefik"
         - "traefik.http.routers.dashboard.service=api@internal"
-        - "metrics.prometheus=true"
 
     volumes:
       - ./config/traefik:/etc/traefik
@@ -49,8 +49,7 @@ services:
 
   psql:
     image: postgres:${POSTGRES_VERSION}
-    restart: always
-#    network_mode: host
+    restart: unless-stopped
     ports:
       - "5432:5432"
     expose:
@@ -59,12 +58,12 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - db:/var/lib/postgresql/data
+      - psql_data:/var/lib/postgresql/data
 #      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
 
 
 volumes:
-  db:
+  psql_data:
     driver: local
 
 # ############### Networks ###############
@@ -73,9 +72,6 @@ networks:
     external: true
 
 # ############### Networks ###############
-# networks:
-#   delvnet:  # Used by Traefik to get the client REAL IP
-#     driver: host
 
 # Container networking setup
 # docker network create --driver=bridge public
