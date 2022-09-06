@@ -1,6 +1,6 @@
 http:
   routers:
-    http-catchall:
+    dashboard:
 #      rule: "HostRegexp(`{host:.+}`)"
       rule: "Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
       priority: 1000
@@ -10,8 +10,13 @@ http:
         - auth
 #        - redirect-to-https
       service: api@internal
+  #  labels:
+  #    - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+  #    - "traefik.http.routers.dashboard.entrypoints=traefik"
+  #    - "traefik.http.routers.dashboard.service=api@internal"
 
-  # Setup the `auth` middleware to be basicauth that takes a file for users
+
+  # Set up the `auth` middleware to be basicauth that takes a file for users
   middlewares:
     auth:
       basicAuth:
