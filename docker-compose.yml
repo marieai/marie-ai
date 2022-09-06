@@ -1,8 +1,9 @@
 version: "3.9"
 
+# Dashboard accessible via `http://localhost:7777/dashboard/#/'
+# Consul accessible via `http://localhost:8500/`
+
 services:
-  
-  # Dashboard accessible via `http://localhost:8500/`
   consul-server:
     image: consul:1.11.0
     container_name: consul_marie_server
@@ -19,7 +20,6 @@ services:
     # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
     command: "agent -server -bootstrap-expect 1"
 
-  # Dashboard accessible via `http://localhost:7777/dashboard/#/'
   traefik:
     image: traefik:v2.8.3
     container_name: "traefik"
@@ -33,6 +33,7 @@ services:
     ports:
       - "7777:7777"
       - "5000:5000"
+      - "7000:7000"
     depends_on:
       - consul-server
     labels:
@@ -46,14 +47,13 @@ services:
       - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
       - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/etc/localtime:/etc/localtime:ro"
 
   psql:
     image: postgres:${POSTGRES_VERSION}
     restart: unless-stopped
     ports:
       - "5432:5432"
-    expose:
-      - 10000-60000
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -61,6 +61,25 @@ services:
       - psql_data:/var/lib/postgresql/data
 #      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
 
+  # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
+  whoami:
+    image: "traefik/whoami"
+    container_name: "whoami"
+    command:   # It tells whoami to start listening on 2001 instead of 80
+       - --port=2001
+       - --name=whoami
+    ports:
+      - "2001:2001"
+    depends_on:
+      - traefik
+    networks:
+      - public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=traefik-debug"
+      - "traefik.http.routers.whoami.service=whoami"
+      - "traefik.http.services.whoami.loadbalancer.server.port=2001"
 
 volumes:
   psql_data:
@@ -78,4 +97,4 @@ networks:
 # sysctl net.ipv4.conf.all.forwarding=1
 
 # Reverse proxy
-# ssh -L 5000:localhost:5000 7777:localhost:7777 gbugaj@192.168.102.65
+# ssh -L 5000:localhost:5000 7777:localhost:7777 greg@192.168.102.65

@@ -28,7 +28,7 @@ log:
 api:
   dashboard: true
   insecure: false
-  debug: false
+  debug: true
 
 
 metrics:
@@ -42,32 +42,24 @@ metrics:
       - 1.2
       - 5.0
 
-
 entryPoints:
   traefik:
     address: ":7777"
   marie:
     address: ":5000"
+  traefik-debug:
+    address: ":7000"
+
 
 providers:
   providersThrottleDuration: 2s
   file:
+#    directory: /etc/traefik/provider
     filename: /etc/traefik/file-provider.yml
     watch: true
     debugLogGeneratedTemplate: true
-#
-#  docker:
-#    exposedByDefault: false
-#    watch: true
-#
-#  consulcatalog:
-#    connectAware: false
-#    exposedByDefault: true
-#    connectByDefault: true
-#    cache: false
-#    prefix: traefik
-#    servicename: traefik-system-ingress
-#    endpoint:
-#      datacenter: "dc1"
-#      address: "http://localhost:8500"
+
+  docker:
+    exposedByDefault: false
+    swarmMode: false
 

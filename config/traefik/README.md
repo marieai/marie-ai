@@ -9,7 +9,7 @@ htpasswd -nb admin secure_password
 
 ### Sample config
 
-Setup the `auth` middleware to be basicauth that takes a file for users
+Set up the `auth` middleware to be basicauth that takes a file for users
 ```yaml
   middlewares:
     auth:
@@ -41,4 +41,13 @@ echo $(htpasswd -nB dashboard) | sed -e s/\\$/\\$\\$/g
           - "dashboard:$$2y$$05$$6zECIStqygUCGeKl/zog/up2Hu2vADiDJfw6SLd0cCSepU80czGS2"
 ```
 
+Bootstrap 
+```sh
+docker compose down && docker compose -f docker-compose.yml --project-directory . up  traefik whoami  --build  --remove-orphans
+```
+
+https://medium.com/javarevisited/monitoring-setup-with-docker-compose-part-1-prometheus-3d2c9089ee82
 https://github.com/vegasbrianc/docker-traefik-prometheus/blob/master/56k_Cloud_Traefik_Monitoring.pdf
+https://traefik.io/blog/capture-traefik-metrics-for-apps-on-kubernetes-with-prometheus/
+https://github.com/TheYkk/traefik-whoami/blob/master/docker-compose.yml
+https://github.com/nightmareze1/traefik-prometheus-metrics
