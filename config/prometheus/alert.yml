@@ -1,0 +1,6 @@
+groups:
+  - name: TraefikDownAlerts
+    rules:
+      - alert: InstanceDown
+        expr: up{job="traefik"} < 1
+        for: 5m

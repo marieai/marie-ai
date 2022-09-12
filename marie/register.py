@@ -138,11 +138,13 @@ def getServiceByNameAndId(service_name, service_id):
     c, online = create_client(config, True)
     if not online:
         return None
-    index, nodes = c.health.service(service_name)
-    for node in nodes:
-        if node["Service"]["ID"] == service_id:
-            return node
-
+    try:
+        index, nodes = c.health.service(service_name)
+        for node in nodes:
+            if node["Service"]["ID"] == service_id:
+                return node
+    except Exception as e:
+        pass
     return None
 
 

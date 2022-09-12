@@ -30,7 +30,6 @@ api:
   insecure: false
   debug: true
 
-
 metrics:
   prometheus:
     addEntryPointsLabels: true

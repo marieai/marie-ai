@@ -1,0 +1,22 @@
+---
+global:
+  scrape_interval: 10s
+  scrape_timeout: 10s
+scrape_configs:
+
+  - job_name: traefik
+    scheme: http
+    static_configs:
+      - targets:
+          - "traefik:7777"
+
+  - job_name: 'consul'
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    #https://grafana.com/docs/grafana-cloud/billing-and-usage/control-prometheus-metrics-usage/usage-reduction/
+
+    relabel_configs:
+      - source_labels: [  __meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
