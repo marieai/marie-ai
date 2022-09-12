@@ -85,8 +85,8 @@ def create_app(marie_conf):
 
     with app.app_context():
         RouteHandler.register_route(HealthCheckRouter(app))
-        RouteHandler.register_route(ICRRouter(app))
-        RouteHandler.register_route(NERRouter(app, marie_conf))
+        # RouteHandler.register_route(ICRRouter(app))
+        # RouteHandler.register_route(NERRouter(app, marie_conf))
 
     return app
 
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     # by default cache is located in '~/.cache' here we will map it under the runtime cache directory
     os.environ["TORCH_HOME"] = str(__cache_dir__)
 
-    # os.environ["MARIE_PORT"] = "-1"
+    os.environ["MARIE_PORT"] = "-1"
 
     logger.info(f"Environment variables")
     for k, v in os.environ.items():

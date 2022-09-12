@@ -5,20 +5,39 @@ version: "3.9"
 
 services:
   consul-server:
-    image: consul:1.11.0
+    image: consul:1.13.1
     container_name: consul_marie_server
-    restart: always
+#    restart: always
     volumes:
      - ./config/consul/server.json:/consul/config/server.json:ro
-    network_mode: host
+     - ./config/consul:/etc/consul.d
+#    network_mode: host
+    networks:
+      - public
     # networks:  -- THIS Will throw ERROR: only one instance of “host” network is allowed
     #   - delvnet
-    # ports:
-    #   - "8500:8500"
-    #   - "8600:8600/tcp"
-    #   - "8600:8600/udp"
+    ports:
+      - "8500:8500"
+      - "8300:8300"
+      - "8600:8600/tcp"
+      - "8600:8600/udp"
     # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
-    command: "agent -server -bootstrap-expect 1"
+    command: "agent -server -bootstrap-expect 1 -ui -client=0.0.0.0 -config-dir=/etc/consul.d/"
+
+#  consul-agent:
+#    image: consul:1.13.1
+#    container_name: consul_marie_agent
+#    depends_on:
+#      - consul-server
+##    restart: always
+#    volumes:
+#     - ./config/consul/agent:/etc/consul.d
+##    network_mode: host
+#    networks:
+#      - public
+#    command: "consul agent -join consul-server -bind=127.0.0.1 --config-file /etc/consul.d/default.json"
+#    links:
+#      - "consul-server"
 
   traefik:
     image: traefik:v2.8.3
@@ -61,6 +80,43 @@ services:
       - psql_data:/var/lib/postgresql/data
 #      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+     - ./config/prometheus:/etc/prometheus
+     - prometheus_data:/prometheus
+    command: "--web.enable-lifecycle --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus"
+    links:
+    - traefik
+    - consul-server
+    networks:
+      - public
+#    networks:
+#     traefik:
+#       ipv4_address: 172.40.0.90
+    ports:
+     - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    user: "472"
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana/provisioning/:/etc/grafana/provisioning/
+      - grafana_data:/var/lib/grafana
+    env_file:
+      - ./config/grafana/config.monitoring
+    links:
+      - prometheus
+    networks:
+      - public
+#      - back-tier
+#      - front-tier
+    restart: always
+
   # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
   whoami:
     image: "traefik/whoami"
@@ -84,6 +140,10 @@ services:
 volumes:
   psql_data:
     driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
 
 # ############### Networks ###############
 networks:
@@ -95,6 +155,3 @@ networks:
 # Container networking setup
 # docker network create --driver=bridge public
 # sysctl net.ipv4.conf.all.forwarding=1
-
-# Reverse proxy
-# ssh -L 5000:localhost:5000 7777:localhost:7777 greg@192.168.102.65
