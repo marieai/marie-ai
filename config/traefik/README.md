@@ -68,3 +68,9 @@ https://github.com/nightmareze1/traefik-prometheus-metrics
 https://medium.com/trendyol-tech/consul-prometheus-monitoring-service-discovery-7190bae50516
 https://github.com/rfmoz/grafana-dashboards/blob/master/prometheus/node-exporter-full.json
 https://yetiops.net/posts/prometheus-consul-node_exporter/
+
+
+https://github.com/jina-ai/clip-as-service/blob/main/server/setup.py
+Zabbix
+
+ sudo mount /mnt/data/marie-ai && docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q) && cd ~/dev/marie-ai/docker-util && ./run-all.sh
