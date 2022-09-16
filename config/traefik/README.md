@@ -71,6 +71,7 @@ https://yetiops.net/posts/prometheus-consul-node_exporter/
 
 
 https://github.com/jina-ai/clip-as-service/blob/main/server/setup.py
+https://dev.to/aleksk1ng/go-kafka-grpc-and-mongodb-microservice-with-metrics-and-tracing-448d
 Zabbix
 
  sudo mount /mnt/data/marie-ai && docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q) && cd ~/dev/marie-ai/docker-util && ./run-all.sh
