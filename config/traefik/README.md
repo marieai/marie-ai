@@ -44,6 +44,7 @@ echo $(htpasswd -nB dashboard) | sed -e s/\\$/\\$\\$/g
 Bootstrap 
 ```sh
 docker compose down && docker compose -f docker-compose.yml --project-directory . up  traefik whoami  --build  --remove-orphans
+docker compose down && docker compose -f docker-compose.yml --project-directory . up consul-server grafana prometheus traefik whoami --build  --remove-orphans
 ```
 
 ## Endpoints
@@ -54,6 +55,14 @@ http://traefik.localhost:7777/dashboard/#/http/routers
 http://localhost:7777/ping
 http://localhost:3000/?orgId=1
 http://localhost:9090/targets?search=
+
+http://localhost:8077/metrics
+http://localhost:9400/metrics
+http://localhost:9100/metrics
+
+# Grafana Dashboards
+https://grafana.com/grafana/dashboards/1860-node-exporter-full/
+
 
 
 ## Resources
