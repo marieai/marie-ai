@@ -14,9 +14,79 @@ scrape_configs:
     consul_sd_configs:
       - server: 'consul-server:8500'
 
-    #https://grafana.com/docs/grafana-cloud/billing-and-usage/control-prometheus-metrics-usage/usage-reduction/
-
     relabel_configs:
       - source_labels: [  __meta_consul_service]
         regex: traefik-system-ingress
         action: keep
+
+    # Job config for extracting nvidia metrics via dcgm-exporter
+  - job_name: 'consul-gpu-metrics'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:9400
+        target_label: __address__
+#        target_label: __meta_consul_service_port
+#        target_label: instance
+
+
+    # Job config for extracting nvidia metrics
+  - job_name: 'consul-cadvisor-metrics'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:8077
+        target_label: __address__
+#        target_label: __meta_consul_service_port
+#        target_label: instance
+
+
+    # Job config for extracting metrics via node-exporter
+  - job_name: 'consul-node-exporter'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:9100
+        target_label: __address__
+
+#alerting:
+#  alertmanagers:
+#  - scheme: https
+#    static_configs:
+#    - targets:
+#      - "1.2.3.4:9093"
+#      - "1.2.3.5:9093"
+#      - "1.2.3.6:9093"
