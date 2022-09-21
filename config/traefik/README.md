@@ -78,9 +78,13 @@ https://medium.com/trendyol-tech/consul-prometheus-monitoring-service-discovery-
 https://github.com/rfmoz/grafana-dashboards/blob/master/prometheus/node-exporter-full.json
 https://yetiops.net/posts/prometheus-consul-node_exporter/
 
+## Tracking
 
 https://github.com/jina-ai/clip-as-service/blob/main/server/setup.py
 https://dev.to/aleksk1ng/go-kafka-grpc-and-mongodb-microservice-with-metrics-and-tracing-448d
 Zabbix
+https://www.jaegertracing.io/
 
  sudo mount /mnt/data/marie-ai && docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q) && cd ~/dev/marie-ai/docker-util && ./run-all.sh
+
+
