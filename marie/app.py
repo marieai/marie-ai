@@ -59,6 +59,7 @@ def create_app(marie_conf):
         code = 500
         name = str(type(exception).__name__)
         description = str(exception)
+        logger.error(exception)
 
         if isinstance(exception, HTTPException):
             code = exception.code
@@ -66,7 +67,7 @@ def create_app(marie_conf):
             description = exception.description
 
         # we have critical status and not able to recover
-        # let the monitoring service know so we can unregister the service
+        # let the monitoring service know, so we can unregister the service
         ipc_send_status(online_status=False)
 
         return (
