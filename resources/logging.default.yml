@@ -1,10 +1,13 @@
 handlers:  # enabled handlers, order does not matter
   - StreamHandler
+  - FileHandler
+#  - RichHandler
 level: INFO  # set verbose level
 configs:
   FileHandler:
     format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-    output: 'marie-{uptime}.log'
+    output: 'marie.log'
+#    output: 'marie-{uptime}.log'
     formatter: JsonFormatter
   StreamHandler:
 #    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'

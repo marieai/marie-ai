@@ -102,6 +102,9 @@ class HealthCheckRouter:
         """Get application status"""
         import os
 
+        if True:
+            raise TypeError("This is a fake error")
+
         build = {}
         if os.path.exists(".build"):
             with open(".build", "r") as fp:
