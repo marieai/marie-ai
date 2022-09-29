@@ -82,11 +82,10 @@ scrape_configs:
         replacement: ${1}:9100
         target_label: __address__
 
-#alerting:
-#  alertmanagers:
-#  - scheme: https
-#    static_configs:
-#    - targets:
-#      - "1.2.3.4:9093"
-#      - "1.2.3.5:9093"
-#      - "1.2.3.6:9093"
+# Alerting setup
+alerting:
+  alertmanagers:
+    - scheme: http
+      static_configs:
+        - targets: [ 'alertmanager:9093' ]
+

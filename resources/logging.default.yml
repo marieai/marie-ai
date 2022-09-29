@@ -6,8 +6,8 @@ level: INFO  # set verbose level
 configs:
   FileHandler:
     format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-    output: 'marie.log'
-#    output: 'marie-{uptime}.log'
+#    output: 'marie.log'
+    output: '/var/log/marie/marie-{uptime}.log'
     formatter: JsonFormatter
   StreamHandler:
 #    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'

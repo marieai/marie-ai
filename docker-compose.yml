@@ -89,6 +89,7 @@ services:
     links:
     - traefik
     - consul-server
+    - alertmanager
     networks:
       - public
 #    networks:
@@ -96,6 +97,19 @@ services:
 #       ipv4_address: 172.40.0.90
     ports:
      - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.23.0
+    restart: unless-stopped
+    networks:
+      - public
+    ports:
+      - "9093:9093"
+    volumes:
+      - "./config/alertmanager:/config"
+      - alertmanager_data:/data
+    command: --config.file=/config/alertmanager.yml --log.level=debug
+
 
   grafana:
     image: grafana/grafana
@@ -107,6 +121,7 @@ services:
     volumes:
       - ./config/grafana/provisioning/:/etc/grafana/provisioning/
       - grafana_data:/var/lib/grafana
+#      - /var/lib/grafana:/var/lib/grafana
     env_file:
       - ./config/grafana/config.monitoring
     links:
@@ -116,6 +131,21 @@ services:
 #      - back-tier
 #      - front-tier
     restart: always
+
+  loki:
+    image: grafana/loki:2.6.1
+    volumes:
+      - ./config/grafana/loki:/etc/loki
+    ports:
+      - "3100:3100"
+    command: --config.file=/etc/loki/loki-config.yaml
+    links:
+      - prometheus
+      - grafana
+    networks:
+      - public
+#docker compose down && docker compose -f docker-compose.yml --project-directory . up loki consul-server  grafana   prometheus  traefik whoami  --build  --remove-orphans
+
 
   # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
   whoami:
@@ -143,6 +173,8 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  alertmanager_data:
     driver: local
 
 # ############### Networks ###############

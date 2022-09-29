@@ -56,14 +56,14 @@ http://localhost:7777/ping
 http://localhost:3000/?orgId=1
 http://localhost:9090/targets?search=
 
-http://localhost:8077/metrics
-http://localhost:9400/metrics
-http://localhost:9100/metrics
+### Metrics
+* [metrics - cadvisor](http://localhost:8077/metrics)  http://localhost:8077/metrics
+* [metrics - DCGM](http://localhost:9400/metrics)   http://localhost:9400/metrics
+* [metrics - node-exporter](http://localhost:9400/metrics) http://localhost:9400/metrics
 
-# Grafana Dashboards
-https://grafana.com/grafana/dashboards/1860-node-exporter-full/
-
-
+### Monitoring
+* [Promtail UI](http://localhost:9080/targets)
+* [Alertmanager UI](http://localhost:9093/#/status)
 
 ## Resources
 
@@ -77,6 +77,7 @@ https://github.com/nightmareze1/traefik-prometheus-metrics
 https://medium.com/trendyol-tech/consul-prometheus-monitoring-service-discovery-7190bae50516
 https://github.com/rfmoz/grafana-dashboards/blob/master/prometheus/node-exporter-full.json
 https://yetiops.net/posts/prometheus-consul-node_exporter/
+https://grafana.com/grafana/dashboards/1860-node-exporter-full/
 
 ## Tracking
 
@@ -85,6 +86,6 @@ https://dev.to/aleksk1ng/go-kafka-grpc-and-mongodb-microservice-with-metrics-and
 Zabbix
 https://www.jaegertracing.io/
 
- sudo mount /mnt/data/marie-ai && docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q) && cd ~/dev/marie-ai/docker-util && ./run-all.sh
+sudo mount /mnt/data/marie-ai && docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q) && cd ~/dev/marie-ai/docker-util && ./run-all.sh
 
 

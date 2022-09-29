@@ -18,7 +18,7 @@ sudo docker run \
 
 #  https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/dcgm-exporter.html
 
-http://localhost:9400/metrics
+# http://localhost:9400/metrics
 DCGM_EXPORTER_VERSION=2.4.6-2.6.10 && \
 docker run -d --rm \
    --gpus all \
@@ -34,3 +34,11 @@ docker run -d \
   -v "/:/host:ro,rslave" \
   quay.io/prometheus/node-exporter:latest \
   --path.rootfs=/host
+
+# Setup Grafana Loki and Promtail
+# http://localhost:3100/metrics
+docker run --rm --net host -v $(pwd)/../config/grafana/promtail:/mnt/config \
+  -v /var/log/marie/:/var/log/marie \
+  grafana/promtail:2.6.1 \
+  --config.file=/mnt/config/promtail-config.yaml
+
