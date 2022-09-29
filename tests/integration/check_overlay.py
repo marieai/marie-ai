@@ -3,15 +3,24 @@ import os
 
 import numpy as np
 
-from overlay.overlay import OverlayProcessor
-from utils.image_utils import imwrite
-from utils.utils import ensure_exists
+from marie.overlay.overlay import OverlayProcessor
+from marie.utils.image_utils import imwrite
+from marie.utils.tiff_ops import burst_tiff
+from marie.utils.utils import ensure_exists
 
-# Example script that showws how to clean document
+# Example script that shows how to clean document
 if __name__ == "__main__":
+
+    img_path= "/home/gbugaj/tmp/marie-cleaner/161970410/PID_1956_9362_0_161970410.tif"
+    burst_dir= "/home/gbugaj/tmp/marie-cleaner/161970410/burst"
+    # burst_tiff(img_path, burst_dir)
+
+    # os.exit()
     work_dir = ensure_exists("/tmp/form-segmentation")
     # this is the image working directory
     root_dir = "/home/greg/dataset/medprov/PID/150300431/"
+    root_dir = "/home/gbugaj/tmp/marie-cleaner/to-clean-001"
+    root_dir = "/home/gbugaj/tmp/marie-cleaner/161970410"
 
     burst_dir = ensure_exists(os.path.join(root_dir, "burst"))
     stack_dir = ensure_exists(os.path.join(root_dir, "stack"))
@@ -35,7 +44,7 @@ if __name__ == "__main__":
             real, fake, blended = overlay_processor.segment(docId, src_img_path)
 
             # debug image
-            if False:
+            if True:
                 stacked = np.hstack((real, fake, blended))
                 save_path = os.path.join(stack_dir, f"{docId}.png")
                 imwrite(save_path, stacked)
