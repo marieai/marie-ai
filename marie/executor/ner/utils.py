@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from marie.utils.utils import ensure_exists
+
 
 def unnormalize_box(bbox, width, height):
     return [
@@ -122,8 +124,9 @@ def get_font(size):
     return font
 
 
-def visualize_icr(frames, results, filename):
+def visualize_icr(frames, results, filename=None):
     assert len(frames) == len(results)
+    ensure_exists("/tmp/tensors/")
 
     for page_idx, (image, result) in enumerate(zip(frames, results)):
         # convert from numpy to PIL
