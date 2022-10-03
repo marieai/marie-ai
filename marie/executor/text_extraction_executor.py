@@ -1,5 +1,6 @@
 import json
 import os
+import cv2
 from datetime import datetime
 from distutils.util import strtobool as strtobool
 from enum import Enum
@@ -223,7 +224,9 @@ class TextExtractionExecutor(Executor):
                     np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 )
                 overlay[padding : h + padding, padding : w + padding] = img
-                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+
+                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+
                 (
                     boxes,
                     img_fragments,
@@ -238,7 +241,7 @@ class TextExtractionExecutor(Executor):
                     queue_id, checksum, overlay, boxes, img_fragments, lines
                 )
 
-                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image)
+                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image)
                 if not filter_snippets:
                     result["overlay_b64"] = encodeToBase64(overlay_image)
 

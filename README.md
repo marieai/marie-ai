@@ -304,6 +304,9 @@ This application uses Open Source components. You can find the source code of th
 We acknowledge and are grateful to these developers for their contributions to open source.
 
 
+
+## Resources
+https://mmocr.readthedocs.io/en/latest/datasets/det.html#funsd
 https://github.com/alibaba/EasyNLP?ref=stackshare
 https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
 https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py

@@ -92,13 +92,15 @@ if __name__ == "__main__":
     img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658545_2.png"
 
     img_path = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658618_6.png"
+    img_path = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658618_6.png"
+    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/clean/PID_1956_9362_0_161970410_page_0004.tif"
+    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/clean/PID_1956_9362_0_161970410_page_0006.tif"
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
 
     if True:
         key = img_path.split("/")[-1]
-        src_img = cv2.imread(img_path)
-        image = src_img
+        image = cv2.imread(img_path)
         # image = __scale_width(src_img, 2000, 1000)
         # cv2.imwrite("/tmp/resized-2048.png", image)
         box = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=True)
@@ -106,9 +108,16 @@ if __name__ == "__main__":
 
         # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
         # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-        boxes, fragments, lines, _ = box.extract_bounding_boxes(
+        (
+            boxes,
+            fragments,
+            lines,
+            _,
+            lines_bboxes,
+        ) = box.extract_bounding_boxes(
             key, "field", image, PSMode.SPARSE
         )
+
         print(lines)
         result, overlay_image = icr.recognize(
             key, "test", image, boxes, fragments, lines
