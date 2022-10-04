@@ -6,8 +6,10 @@ import tqdm
 import cv2
 
 from marie.document import TrOcrIcrProcessor
+from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.boxes.box_processor import PSMode
+from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
 
 
@@ -40,6 +42,9 @@ if __name__ == "__main__":
             models_dir="./model_zoo/unilm/dit/text_detection",
             cuda=True,
         )
+
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=True)
+
         (boxes, fragments, lines, _, lines_bboxes,) = box.extract_bounding_boxes(
             key, "field", image, PSMode.SPARSE
         )
@@ -53,13 +58,15 @@ if __name__ == "__main__":
             )
 
             print("Testing text render")
-
-            # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-            # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-
             cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
+
             print(result)
-            json_path = os.path.join("/tmp/fragments", "results.json")
+            store_json_object(result, os.path.join("/tmp/fragments", "results.json"))
+
+            renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+            renderer.render(
+                image, result, output_filename=os.path.join(work_dir_icr, "results.pdf")
+            )
 
             renderer = TextRenderer(config={"preserve_interword_spaces": True})
             renderer.render(
