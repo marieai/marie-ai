@@ -43,10 +43,10 @@ class TextRenderer(ResultRenderer):
         char_height = int(char_width * char_ratio)
         shape = image.shape
 
-        # print(f"Char ratio : {char_ratio}")
-        # print(f"Char width : {char_width}")
-        # print(f"Char height : {char_height}")
-        # print(f"Image size : {shape}")
+        print(f"Char ratio : {char_ratio}")
+        print(f"Char width : {char_width}")
+        print(f"Char height : {char_height}")
+        print(f"Image size : {shape}")
 
         h = shape[0]
         w = shape[1]
@@ -58,7 +58,6 @@ class TextRenderer(ResultRenderer):
         words = result["words"]
         lines = result["lines"]
 
-        print(words)
         # Ensure page is in xywh format
         # change from xywy -> xyxy
         if meta["format"] != "xywh":
@@ -94,8 +93,8 @@ class TextRenderer(ResultRenderer):
                 buffer += "\n"
 
             aligned_words = [w for w in words if w["id"] in wordids]
-            print(aligned_words)
-            if force_word_index_sort:
+
+            if True or force_word_index_sort:
                 word_index_picks = []
                 word_picks = []
                 for word in aligned_words:
@@ -104,9 +103,7 @@ class TextRenderer(ResultRenderer):
 
                 word_index_picks = np.array(word_index_picks)
                 word_picks = np.array(word_picks)
-
-                x1 = word_index_picks[:]
-                sort_index = np.argsort(x1)
+                sort_index = np.argsort(word_index_picks)
                 aligned_words = word_picks[sort_index]
 
             # TODO : This needs to be supplied from the box processor
