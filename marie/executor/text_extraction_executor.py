@@ -165,9 +165,9 @@ class TextExtractionExecutor(Executor):
             result, overlay_image = self.icr_processor.recognize(
                 queue_id, checksum, overlay, boxes, img_fragments, lines
             )
-            # change from xywy -> xyxy
+            # change from xywh -> xyxy
             if CoordinateFormat.XYXY == coordinate_format:
-                logger.info("Changing coordinate format from xyhw -> xyxy")
+                logger.info("Changing coordinate format from xywh -> xyxy")
                 for word in result["words"]:
                     x, y, w, h = word["box"]
                     w_box = [x, y, x + w, y + h]
@@ -241,7 +241,9 @@ class TextExtractionExecutor(Executor):
                     queue_id, checksum, overlay, boxes, img_fragments, lines
                 )
 
-                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image)
+                cv2.imwrite(
+                    f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image
+                )
                 if not filter_snippets:
                     result["overlay_b64"] = encodeToBase64(overlay_image)
 

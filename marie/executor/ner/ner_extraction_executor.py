@@ -291,7 +291,7 @@ class NerExtractionExecutor(Executor):
         assert len(annotations) == len(ocr_results) == len(frames)
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
-        logger.info("Changing coordinate format from xyxy->xyhw")
+        logger.info("Changing coordinate format from xyxy->xywh")
 
         for data in ocr_results:
             for word in data["words"]:

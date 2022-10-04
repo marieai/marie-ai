@@ -1,13 +1,18 @@
 import contextlib
 import io
+from os import PathLike
+from typing import Dict, Any, Union
 
 import cv2
+import numpy as np
 from PIL import Image
 from PyPDF4 import PdfFileWriter, PdfFileReader
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from marie.renderer.renderer import ResultRenderer
+from marie.utils.docs import is_array_like
+
 
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java
@@ -76,23 +81,28 @@ class PdfRenderer(ResultRenderer):
     def name(self):
         return "PdfRenderer"
 
-    def render(self, img, result, output_filename):
+    def render(
+        self,
+        frames: [np.array],
+        results: [Dict[str, Any]],
+        output_filename: Union[str, PathLike],
+    ) -> None:
+
         try:
             print("Rendering ...")
-            meta = result["meta"]
-            words = result["words"]
-            lines = result["lines"]
+            words = results["words"]
+            lines = results["lines"]
 
             word2line = dict()
             for line in lines:
                 for wid in line["wordids"]:
                     word2line[wid] = line
 
-            img_h = img.shape[0]
-            img_w = img.shape[1]
+            img_h = frame.shape[0]
+            img_w = frame.shape[1]
 
             # convert OpenCV to Pil
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img_bgr = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             im_pil = Image.fromarray(img_bgr)
 
             with contextlib.closing(io.BytesIO()) as packet:
@@ -148,5 +158,3 @@ class PdfRenderer(ResultRenderer):
 
         except Exception as ident:
             raise ident
-
-

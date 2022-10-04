@@ -80,7 +80,7 @@ class IcrProcessor(BaseHandler):
         Args:
             _id: Unique Image ID
             key: Unique image key/region for the extraction
-            img: Image to run recognition againts,
+            img: Image to run recognition against,
             boxes: Boxes to recognize
             fragments: Image fragments to extract, A pre-cropped image containing characters
             lines: Lines associates with the image fragment / boxes
@@ -103,6 +103,7 @@ class IcrProcessor(BaseHandler):
 
             meta = {
                 "imageSize": {"width": img.shape[1], "height": img.shape[0]},
+                "page": 0,
                 "lang": "en",
             }
 
@@ -132,7 +133,6 @@ class IcrProcessor(BaseHandler):
 
                 txt_label = extraction["text"]
                 confidence = extraction["confidence"]
-                conf_label = f"{confidence:0.4f}"
 
                 payload = {
                     "id": i,
@@ -213,6 +213,9 @@ class IcrProcessor(BaseHandler):
                     "confidence": round(np.average(_conf), 4),
                 }
 
+                print("-------")
+                print(line_results[i])
+            #
             # print("aligned_words")
             # print(aligned_words)
             # for i, word in enumerate(aligned_words):
