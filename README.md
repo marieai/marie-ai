@@ -247,8 +247,6 @@ pip install opencv-python==4.5.4.60
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 Implement secondary box detection method.
 [TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
 Implement DocFormer: End-to-End Transformer for Document Understanding
@@ -346,8 +344,4 @@ https://www.confluent.io/blog/prioritize-messages-in-kafka/
 
 
 # Funsd Dataset
-=======
-
-
-#Funsd Dataset
 https://huggingface.co/datasets/nielsr/funsd/blob/main/funsd.py
