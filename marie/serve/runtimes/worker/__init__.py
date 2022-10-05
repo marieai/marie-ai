@@ -1,0 +1,134 @@
+import argparse
+import contextlib
+from abc import ABC
+from typing import List
+
+from marie.importer import ImportExtensions
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.request_handlers.data_request_handler import DataRequestHandler
+from marie.types.request.control import ControlRequest
+from marie.types.request.data import DataRequest
+
+
+class WorkerRuntime(AsyncNewLoopRuntime, ABC):
+    """Runtime procedure leveraging :class:`Grpclet` for sending DataRequests"""
+
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        **kwargs,
+    ):
+        """Initialize grpc and data request handling.
+        :param args: args from CLI
+        :param kwargs: keyword args
+        """
+        super().__init__(args, **kwargs)
+
+    async def async_setup(self):
+        """
+        Start the DataRequestHandler and wait for the GRPC and Monitoring servers to start
+        """
+        await self._async_setup_server()
+
+        if self.metrics_registry:
+            with ImportExtensions(
+                required=True,
+                help_text="You need to install the `prometheus_client` to use the montitoring functionality of jina",
+            ):
+                from prometheus_client import Summary
+
+            self._summary_time = (
+                Summary(
+                    "receiving_request_seconds",
+                    "Time spent processing request",
+                    registry=self.metrics_registry,
+                    namespace="marie",
+                    labelnames=("runtime_name",),
+                )
+                .labels(self.args.name)
+                .time()
+            )
+        else:
+            self._summary_time = contextlib.nullcontext()
+
+    async def _async_setup_server(self):
+        """
+        Start the DataRequestHandler and wait for the GRPC server to start
+        """
+
+        # Keep this initialization order
+        # otherwise readiness check is not valid
+        # The DataRequestHandler needs to be started BEFORE the grpc server
+        self._data_request_handler = DataRequestHandler(self.args, self.logger, self.metrics_registry)
+
+    async def async_run_forever(self):
+        """Block until the server is terminated"""
+        raise NotImplemented
+
+    async def async_cancel(self):
+        """Stop the server"""
+        self.logger.debug("cancel WorkerRuntime")
+
+        raise NotImplemented
+
+    async def async_teardown(self):
+        """Close the data request handler"""
+        await self.async_cancel()
+        self._data_request_handler.close()
+
+    async def process_single_data(self, request: DataRequest, context) -> DataRequest:
+        """
+        Process the received requests and return the result as a new request
+
+        :param request: the data request to process
+        :param context: grpc context
+        :returns: the response request
+        """
+        return await self.process_data([request], context)
+
+    async def endpoint_discovery(self, empty, context) -> List[str]:
+        """
+        Process the the call requested and return the list of Endpoints exposed by the Executor wrapped inside this Runtime
+
+        :param empty: The service expects an empty protobuf message
+        :param context: grpc context
+        :returns: the response request
+        """
+        raise NotImplemented
+
+    async def process_data(self, requests: List[DataRequest], context) -> DataRequest:
+        """
+        Process the received requests and return the result as a new request
+
+        :param requests: the data requests to process
+        :param context: grpc context
+        :returns: the response request
+        """
+
+        with self._summary_time:
+            try:
+                if self.logger.debug_enabled:
+                    self._log_data_request(requests[0])
+
+                return await self._data_request_handler.handle(requests=requests)
+            except (RuntimeError, Exception) as ex:
+                self.logger.error(
+                    f"{ex!r}" + f'\n add "--quiet-error" to suppress the exception details'
+                    if not self.args.quiet_error
+                    else "",
+                    exc_info=not self.args.quiet_error,
+                )
+
+                requests[0].add_exception(ex, self._data_request_handler._executor)
+                context.set_trailing_metadata((("is-error", "true"),))
+                return requests[0]
+
+    async def process_control(self, request: ControlRequest, *args) -> ControlRequest:
+        """
+        Process the received control request and return the same request
+
+        :param request: the control request to process
+        :param args: additional arguments in the grpc call, ignored
+        :returns: the input request
+        """
+        raise NotImplemented

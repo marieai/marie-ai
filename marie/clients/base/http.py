@@ -1,0 +1,140 @@
+import asyncio
+from contextlib import AsyncExitStack
+from typing import TYPE_CHECKING, Optional
+
+from starlette import status
+
+from marie.clients.base import BaseClient
+from marie.clients.base.helper import HTTPClientlet
+from marie.clients.helper import callback_exec, callback_exec_on_error
+from marie.excepts import BadClient
+from marie.importer import ImportExtensions
+from marie.logging.profile import ProgressBar
+from marie.serve.stream import RequestStreamer
+from marie.types.request import Request
+from marie.types.request.data import DataRequest
+
+if TYPE_CHECKING:
+    from marie.clients.base import CallbackFnType, InputType
+
+
+class HTTPBaseClient(BaseClient):
+    """A MixIn for HTTP Client."""
+
+    async def _get_results(
+        self,
+        inputs: 'InputType',
+        on_done: 'CallbackFnType',
+        on_error: Optional['CallbackFnType'] = None,
+        on_always: Optional['CallbackFnType'] = None,
+        **kwargs,
+    ):
+        """
+        :param inputs: the callable
+        :param on_done: the callback for on_done
+        :param on_error: the callback for on_error
+        :param on_always: the callback for on_always
+        :param kwargs: kwargs for _get_task_name and _get_requests
+        :yields: generator over results
+        """
+        with ImportExtensions(required=True):
+            import aiohttp
+
+        self.inputs = inputs
+        request_iterator = self._get_requests(**kwargs)
+
+        async with AsyncExitStack() as stack:
+            try:
+                cm1 = ProgressBar(
+                    total_length=self._inputs_length, disable=not (self.show_progress)
+                )
+                p_bar = stack.enter_context(cm1)
+
+                proto = 'https' if self.args.tls else 'http'
+                url = f'{proto}://{self.args.host}:{self.args.port}/post'
+                iolet = await stack.enter_async_context(
+                    HTTPClientlet(url=url, logger=self.logger)
+                )
+
+                def _request_handler(request: 'Request') -> 'asyncio.Future':
+                    """
+                    For HTTP Client, for each request in the iterator, we `send_message` using
+                    http POST request and add it to the list of tasks which is awaited and yielded.
+                    :param request: current request in the iterator
+                    :return: asyncio Task for sending message
+                    """
+                    return asyncio.ensure_future(iolet.send_message(request=request))
+
+                def _result_handler(result):
+                    return result
+
+                streamer = RequestStreamer(
+                    self.args,
+                    request_handler=_request_handler,
+                    result_handler=_result_handler,
+                )
+                async for response in streamer.stream(request_iterator):
+                    r_status = response.status
+
+                    r_str = await response.json()
+                    if r_status == status.HTTP_404_NOT_FOUND:
+                        raise BadClient(f'no such endpoint {url}')
+                    elif r_status == status.HTTP_503_SERVICE_UNAVAILABLE:
+                        if (
+                            'header' in r_str
+                            and 'status' in r_str['header']
+                            and 'description' in r_str['header']['status']
+                        ):
+                            raise ConnectionError(
+                                r_str['header']['status']['description']
+                            )
+                        else:
+                            raise ValueError(r_str)
+                    elif (
+                        r_status < status.HTTP_200_OK
+                        or r_status > status.HTTP_300_MULTIPLE_CHOICES
+                    ):  # failure codes
+                        raise ValueError(r_str)
+
+                    da = None
+                    if 'data' in r_str and r_str['data'] is not None:
+                        from docarray import DocumentArray
+
+                        da = DocumentArray.from_dict(r_str['data'])
+                        del r_str['data']
+
+                    resp = DataRequest(r_str)
+                    if da is not None:
+                        resp.data.docs = da
+
+                    callback_exec(
+                        response=resp,
+                        on_error=on_error,
+                        on_done=on_done,
+                        on_always=on_always,
+                        continue_on_error=self.continue_on_error,
+                        logger=self.logger,
+                    )
+                    if self.show_progress:
+                        p_bar.update()
+                    yield resp
+
+            except (aiohttp.ClientError, ValueError, ConnectionError) as e:
+                self.logger.error(
+                    f'Error while fetching response from HTTP server {e!r}'
+                )
+
+                if on_error or on_always:
+                    if on_error:
+                        callback_exec_on_error(on_error, e, self.logger)
+                    if on_always:
+                        callback_exec(
+                            response=None,
+                            on_error=None,
+                            on_done=None,
+                            on_always=on_always,
+                            continue_on_error=self.continue_on_error,
+                            logger=self.logger,
+                        )
+                else:
+                    raise e

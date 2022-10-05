@@ -1,0 +1,104 @@
+"""Base argparser module for Pod and Deployment runtime"""
+import argparse
+import os
+
+from marie.helper import random_identity
+from marie.parsers.helper import _SHOW_ALL_ARGS, add_arg_group
+
+
+def mixin_essential_parser(parser):
+    """Mixing in arguments required by every module into the given parser.
+    :param parser: the parser instance to which we add arguments
+    """
+    gp = add_arg_group(parser, title='Essential')
+    gp.add_argument(
+        '--name',
+        type=str,
+        help='''
+    The name of this object.
+
+    This will be used in the following places:
+    - how you refer to this object in Python/YAML/CLI
+    - visualization
+    - log message header
+    - ...
+
+    When not given, then the default naming strategy will apply.
+                        ''',
+    )
+
+    gp.add_argument(
+        '--workspace',
+        type=str,
+        default=None,
+        help='The working directory for any IO operations in this object. '
+        'If not set, then derive from its parent `workspace`.',
+    )
+
+    gp.add_argument(
+        '--log-config',
+        type=str,
+        default='default',
+        help='The YAML config of the logger used in this object.',
+    )
+
+    gp.add_argument(
+        '--quiet',
+        action='store_true',
+        default=False,
+        help='If set, then no log will be emitted from this object.',
+    )
+
+    gp.add_argument(
+        '--quiet-error',
+        action='store_true',
+        default=False,
+        help='If set, then exception stack information will not be added to the log',
+    )
+
+    gp.add_argument(
+        '--workspace-id',
+        type=str,
+        default=random_identity(),
+        help='the UUID for identifying the workspace. When not given a random id will be assigned.'
+        'Multiple Pod/Deployment/Flow will work under the same workspace if they share the same '
+        '`workspace-id`.'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
+    )
+
+
+def mixin_base_ppr_parser(parser):
+    """Mixing in arguments required by pod/deployment/runtime module into the given parser.
+    :param parser: the parser instance to which we add arguments
+    """
+
+    mixin_essential_parser(parser)
+
+    gp = add_arg_group(parser, title='Base Deployment')
+
+    gp.add_argument(
+        '--extra-search-paths',
+        type=str,
+        default=[],
+        nargs='*',
+        help='Extra search paths to be used when loading modules and finding YAML config files.'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
+    )
+
+    gp.add_argument(
+        '--timeout-ctrl',
+        type=int,
+        default=int(os.getenv('MARIE_DEFAULT_TIMEOUT_CTRL', '60')),
+        help='The timeout in milliseconds of the control request, -1 for waiting forever',
+    )
+
+    parser.add_argument(
+        '--k8s-namespace',
+        type=str,
+        help='Name of the namespace where Kubernetes deployment should be deployed, to be filled by flow name'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
+    )
+

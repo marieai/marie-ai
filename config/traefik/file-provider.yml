@@ -1,0 +1,29 @@
+http:
+  routers:
+    dashboard:
+#      rule: "HostRegexp(`{host:.+}`)"
+      rule: "Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      priority: 1000
+      entryPoints:
+        - traefik
+      middlewares:
+        - auth
+#        - redirect-to-https
+      service: api@internal
+  #  labels:
+  #    - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+  #    - "traefik.http.routers.dashboard.entrypoints=traefik"
+  #    - "traefik.http.routers.dashboard.service=api@internal"
+
+
+  # Set up the `auth` middleware to be basicauth that takes a file for users
+  middlewares:
+    auth:
+      basicAuth:
+        removeHeader: true
+        usersFile: /user-credentials
+#        users:
+#          - "dashboard:$apr1$2TgJEKkl$.fyRx.XI5l0AIm/bef4Rw."
+#    redirect-to-https:
+#      redirectScheme:
+#        scheme:

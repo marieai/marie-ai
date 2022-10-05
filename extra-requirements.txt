@@ -1,0 +1,6 @@
+# MARIE PACKAGE DEPENDENCIES
+# AVAILABLE TAGS:
+# core < perf < standard < devel: these tags correspond to Docker image tag
+
+prometheus_client:          perf
+psutil:                     test

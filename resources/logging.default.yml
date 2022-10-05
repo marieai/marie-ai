@@ -1,0 +1,32 @@
+handlers:  # enabled handlers, order does not matter
+  - StreamHandler
+  - FileHandler
+#  - RichHandler
+level: INFO  # set verbose level
+configs:
+  FileHandler:
+    format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+#    output: 'marie.log'
+    output: '/var/log/marie/marie-{uptime}.log'
+    formatter: JsonFormatter
+  StreamHandler:
+#    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    format: '%(asctime)s, %(levelname)-8s [%(filename)s:%(module)s:%(funcName)s:%(lineno)d] %(message)s'
+    formatter: PlainFormatter
+  SysLogHandler:
+    ident: # this will be prepend to all messages
+    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    host: # when not given then record it locally, /dev/log on linux /var/run/syslog on mac
+    port: # when not given then record it locally,  /dev/log on linux /var/run/syslog on mac
+    formatter: PlainFormatter
+  RichHandler:
+#    format: '%(message)s'
+#    format: '[dim]{name}@%(process)2d[/dim] %(message)s'
+#    format: '[dim]{name}@%(process)2d[/dim]  %(levelname)s %(asctime)s [%(filename)s:%(funcName)s:%(lineno)d] %(message)s'
+    format: '[dim]{name}@%(process)2d [%(asctime)s][/dim] [%(filename)s:%(funcName)s:%(lineno)d] %(message)s'
+    markup: true
+    rich_tracebacks: true
+    show_path: true
+    show_level: true
+    enable_link_path: true
+    log_time_format: ''

@@ -1,0 +1,40 @@
+--extra-index-url https://download.pytorch.org/whl/cu113
+torch
+torchvision
+torchaudio
+# wheel
+# pybind11
+fastwer==0.1.3
+matplotlib
+albumentations
+dominate
+lmdb
+natsort
+celery
+flask 
+flask-restful
+flask_restful
+Werkzeug
+opencv-python~=4.5.4.60
+imagecodecs
+python-consul
+imutils
+PyPDF4
+reportlab
+# fairseq  # installed from source
+pycocotools
+onnx
+onnxruntime
+nltk
+timm
+segmentation-models-pytorch
+Wand
+docarray
+jsons
+grpcio
+transformers
+gradio
+psycopg2-binary==2.8.6
+pytest
+nlpaug
+psutil

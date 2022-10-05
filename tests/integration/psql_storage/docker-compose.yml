@@ -1,0 +1,10 @@
+version: "3.3"
+services:
+  psql:
+    image: postgres:14.4
+    ports:
+      - "5432:5432"
+    expose:
+      - 10000-60000
+    environment:
+      - POSTGRES_PASSWORD=123456

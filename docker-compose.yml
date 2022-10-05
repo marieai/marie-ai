@@ -1,0 +1,189 @@
+version: "3.9"
+
+# Dashboard accessible via `http://localhost:7777/dashboard/#/'
+# Consul accessible via `http://localhost:8500/`
+
+services:
+  consul-server:
+    image: consul:1.13.1
+    container_name: consul_marie_server
+#    restart: always
+    volumes:
+     - ./config/consul/server.json:/consul/config/server.json:ro
+     - ./config/consul:/etc/consul.d
+#    network_mode: host
+    networks:
+      - public
+    # networks:  -- THIS Will throw ERROR: only one instance of “host” network is allowed
+    #   - delvnet
+    ports:
+      - "8500:8500"
+      - "8300:8300"
+      - "8600:8600/tcp"
+      - "8600:8600/udp"
+    # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
+    command: "agent -server -bootstrap-expect 1 -ui -client=0.0.0.0 -config-dir=/etc/consul.d/"
+
+#  consul-agent:
+#    image: consul:1.13.1
+#    container_name: consul_marie_agent
+#    depends_on:
+#      - consul-server
+##    restart: always
+#    volumes:
+#     - ./config/consul/agent:/etc/consul.d
+##    network_mode: host
+#    networks:
+#      - public
+#    command: "consul agent -join consul-server -bind=127.0.0.1 --config-file /etc/consul.d/default.json"
+#    links:
+#      - "consul-server"
+
+  traefik:
+    image: traefik:v2.8.3
+    container_name: "traefik"
+    restart: unless-stopped
+    command:
+      - --api
+      - --api.statistics
+      - --docker
+    networks:
+      - public
+    ports:
+      - "7777:7777"
+      - "5000:5000"
+      - "7000:7000"
+    depends_on:
+      - consul-server
+    labels:
+        - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+        - "traefik.http.routers.dashboard.entrypoints=traefik"
+        - "traefik.http.routers.dashboard.service=api@internal"
+
+    volumes:
+      - ./config/traefik:/etc/traefik
+      - ./config/traefik/traefik.yml:/traefik.yml
+      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
+      - "./config/traefik/user-credentials:/user-credentials:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+
+  psql:
+    image: postgres:${POSTGRES_VERSION}
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - psql_data:/var/lib/postgresql/data
+#      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+     - ./config/prometheus:/etc/prometheus
+     - prometheus_data:/prometheus
+    command: "--web.enable-lifecycle --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus"
+    links:
+    - traefik
+    - consul-server
+    - alertmanager
+    networks:
+      - public
+#    networks:
+#     traefik:
+#       ipv4_address: 172.40.0.90
+    ports:
+     - "9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.23.0
+    restart: unless-stopped
+    networks:
+      - public
+    ports:
+      - "9093:9093"
+    volumes:
+      - "./config/alertmanager:/config"
+      - alertmanager_data:/data
+    command: --config.file=/config/alertmanager.yml --log.level=debug
+
+
+  grafana:
+    image: grafana/grafana
+    user: "472"
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana/provisioning/:/etc/grafana/provisioning/
+      - grafana_data:/var/lib/grafana
+#      - /var/lib/grafana:/var/lib/grafana
+    env_file:
+      - ./config/grafana/config.monitoring
+    links:
+      - prometheus
+    networks:
+      - public
+#      - back-tier
+#      - front-tier
+    restart: always
+
+  loki:
+    image: grafana/loki:2.6.1
+    volumes:
+      - ./config/grafana/loki:/etc/loki
+    ports:
+      - "3100:3100"
+    command: --config.file=/etc/loki/loki-config.yaml
+    links:
+      - prometheus
+      - grafana
+    networks:
+      - public
+#docker compose down && docker compose -f docker-compose.yml --project-directory . up loki consul-server  grafana   prometheus  traefik whoami  --build  --remove-orphans
+
+
+  # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
+  whoami:
+    image: "traefik/whoami"
+    container_name: "whoami"
+    command:   # It tells whoami to start listening on 2001 instead of 80
+       - --port=2001
+       - --name=whoami
+    ports:
+      - "2001:2001"
+    depends_on:
+      - traefik
+    networks:
+      - public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=traefik-debug"
+      - "traefik.http.routers.whoami.service=whoami"
+      - "traefik.http.services.whoami.loadbalancer.server.port=2001"
+
+volumes:
+  psql_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+
+# ############### Networks ###############
+networks:
+  public:
+    external: true
+
+# ############### Networks ###############
+
+# Container networking setup
+# docker network create --driver=bridge public
+# sysctl net.ipv4.conf.all.forwarding=1

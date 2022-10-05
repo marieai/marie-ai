@@ -1,0 +1,30 @@
+RegistryEnabled: True
+DebugWebserver: False
+WatchdogInterval: 5
+
+ConsulEndpoint:
+  Host: 127.0.0.1
+  Port: 8500
+  Scheme: http
+
+ServiceEndpoint: 
+  Port: 5100
+  Host: 
+
+executors:
+- uses: NerExtractionExecutor
+  _name_or_path: "rms/layoutlmv3-large-corr-ner"
+
+- uses: NerExtractionExecutor_X
+  _name_or_path: "rms/layoutlmv3-large-corr-ner"
+
+# Storage where the document will be stored
+storage:
+- provider: postgresql
+  hostname: 127.0.0.1
+  port: 5432
+  username: postgres
+  password: 123456
+  database: postgres
+  table: default_table
+

@@ -1,0 +1,9 @@
+
+Credits
+This application uses Open Source components. You can find the source code of their open source projects along with license information below. 
+We acknowledge and are grateful to these developers for their contributions to open source.
+
+This product bundles CRAFT which is available under a "MIT" license. For details, see craft/LICENSE.
+This product bundles CRAFT-TEXT-BENCHMARK, which is available under a "Apache License 2.0" license. For details, see icr/LICENSE.
+
+Jina AI https://github.com/jina-ai/jina

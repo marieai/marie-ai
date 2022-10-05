@@ -1,0 +1,15 @@
+global:
+    scrape_interval: 10s
+    scrape_timeout: 10s
+scrape_configs:
+    - job_name: 'pushgateway'
+      static_configs:
+              - targets: ['pushgateway:9091']
+      honor_labels: true
+    - job_name: 'traefik'
+      scheme: https
+      static_configs:
+              - targets: ['foo.bar']
+      basic_auth:
+              username: myusername
+              password: mypassword
