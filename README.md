@@ -246,6 +246,7 @@ pip install opencv-python==4.5.4.60
 [DocumentUnderstanding](https://github.com/bikash/DocumentUnderstanding)
 [DocumentAI] (https://www.microsoft.com/en-us/research/project/document-ai/)
 
+
 Implement secondary box detection method.
 [TextFuseNet](TextFuseNethttps://github.com/ying09/TextFuseNet)
 Implement DocFormer: End-to-End Transformer for Document Understanding
@@ -340,3 +341,5 @@ https://docs.dyte.io/guides/integrating-with-webhooks
 
 ## Kafka - Prioritization
 https://www.confluent.io/blog/prioritize-messages-in-kafka/
+=======
+
