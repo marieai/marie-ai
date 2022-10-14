@@ -22,7 +22,7 @@ if __name__ == "__main__":
     img_path = "./assets/english/Lines/002.png"
     # img_path = "/home/gbugaj/tmp/PID_1028_7826_0_157684456.tif"
     img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
-    # img_path = "./assets/psm/block/block-001.png"
+    # img_path = "./assets/psm/block/block-002.png"
 
     docs = docs_from_file(img_path)
     frames = array_from_docs(docs)
