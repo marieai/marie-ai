@@ -316,6 +316,7 @@ https://github.com/NielsRogge/Transformers-Tutorials/blob/master/LayoutLMv2/FUNS
 
 ## Datastore
 https://github.com/allenai/datastore
+https://truss.baseten.co/reference/structure
 
 ## GRPC
 https://docs.microsoft.com/en-us/aspnet/core/grpc/test-tools?view=aspnetcore-6.0
