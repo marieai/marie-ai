@@ -126,14 +126,14 @@ class TextRenderer(ResultRenderer):
                     if gap > estimate_character_width:
                         spaces = max(1, gap // estimate_character_width)
 
-                # print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
+                print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
                 text = word["text"]
                 confidence = word["confidence"]
                 box = word["box"]
                 x, y, w, h = box
                 cellx = x // char_width
                 cols = (x + w) // char_width
-                # print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
+                print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
                 buffer += " " * spaces
                 buffer += text
 
