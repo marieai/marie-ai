@@ -15,9 +15,6 @@ executors:
 - uses: NerExtractionExecutor
   _name_or_path: "rms/layoutlmv3-large-corr-ner"
 
-- uses: NerExtractionExecutor_X
-  _name_or_path: "rms/layoutlmv3-large-corr-ner"
-
 # Storage where the document will be stored
 storage:
 - provider: postgresql
