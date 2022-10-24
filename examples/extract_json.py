@@ -30,6 +30,7 @@ api_base_url = "http://184.105.180.6:6000/api"  # marie-002 NEEDS UPDATE
 api_base_url = "http://184.105.180.8:5000/api" # Traefic loadballancer
 
 api_base_url = "http://127.0.0.1:59235/api"
+api_base_url = "http://172.20.10.12:6000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -190,6 +191,8 @@ if __name__ == "__main__":
     if True:
         src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
         src = "/home/gbugaj/tmp/PID_1028_7826_0_157684456.tif"
+        src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6501_0_158095129.tif"
+        src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6503_0_158095036.tif"
         icr_data = process_extract(
             queue_id=default_queue_id, mode="multiline", file_location=src
         )
