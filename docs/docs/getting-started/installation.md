@@ -31,8 +31,17 @@ cd ~/marie-ai
 From inside this directory, create a virtual environment using the Python venv module:
 
 ```bash
+sudo apt install python3.10-venv
+
 python -m venv .env
 ```
+
+Alernativelly you can have shared virtual environment
+
+```bash
+python3 -m venv ~/environment/marie
+```
+This will require you to create a link a sympolic link `.env ` taht point to the real environment `~/environment/marie`
 
 
 You can jump in and out of your virtual environment with the activate and deactivate scripts:
@@ -45,6 +54,27 @@ source .env/bin/activate
 source .env/bin/deactivate
 ```
 
+
+## Using Conda
+
+TODO : conda is not currentl supported
+
+```bash
+conda create -n pytorch python=3.10
+```
+
+```bash
+conda activate pytorch
+```
+
+### Verify Pytorch Install
+
+```
+python -c "import torch; print(torch.__version__)"
+```
+
+
+
 ##  Installation Steps
 
 There are number of different ways that this project can be setup.
@@ -53,8 +83,7 @@ There are number of different ways that this project can be setup.
 
 If you wish to run and develop `Marie-AI` directly, install it from source:
 
-```
-
+```bash
 git clone https://github.com/gregbugaj/marie-ai.git
 cd marie-ai
 git checkout develop
@@ -67,6 +96,26 @@ pip install -r requirements.txt
 pip install -v -e .
 
 ```
+
+### Additional dependencies
+
+
+```bash
+sudo apt-get install libpq-dev python-dev-is-python3
+```
+
+```bash
+python3 -m pip install -U 'git+https://github.com/facebookresearch/fvcore'
+```
+
+
+```
+git clone https://github.com/pytorch/fairseq.git
+cd fairseq 
+python setup.py build install
+```
+
+
 
 ### If you use Marie-AI as a dependency or third-party package, install it with pip:
 
