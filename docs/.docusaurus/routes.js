@@ -44,7 +44,7 @@ export default [
   },
   {
     path: '/docs',
-    component: ComponentCreator('/docs', 'e4e'),
+    component: ComponentCreator('/docs', '0c1'),
     routes: [
       {
         path: '/docs/api',
@@ -101,8 +101,32 @@ export default [
         sidebar: "tutorialSidebar"
       },
       {
+        path: '/docs/getting-started/configuration/secrets',
+        component: ComponentCreator('/docs/getting-started/configuration/secrets', '508'),
+        exact: true,
+        sidebar: "tutorialSidebar"
+      },
+      {
+        path: '/docs/getting-started/configuration/traefik',
+        component: ComponentCreator('/docs/getting-started/configuration/traefik', 'fe1'),
+        exact: true,
+        sidebar: "tutorialSidebar"
+      },
+      {
+        path: '/docs/getting-started/deployment/control-plane',
+        component: ComponentCreator('/docs/getting-started/deployment/control-plane', 'fe8'),
+        exact: true,
+        sidebar: "tutorialSidebar"
+      },
+      {
         path: '/docs/getting-started/deployment/docker',
         component: ComponentCreator('/docs/getting-started/deployment/docker', 'b39'),
+        exact: true,
+        sidebar: "tutorialSidebar"
+      },
+      {
+        path: '/docs/getting-started/deployment/observability',
+        component: ComponentCreator('/docs/getting-started/deployment/observability', '594'),
         exact: true,
         sidebar: "tutorialSidebar"
       },

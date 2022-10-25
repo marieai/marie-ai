@@ -1,5 +1,11 @@
 version: "3.9"
 
+# ############### Networks ###############
+
+# Container networking setup
+# docker network create --driver=bridge public
+# sysctl net.ipv4.conf.all.forwarding=1
+
 # Dashboard accessible via `http://localhost:7777/dashboard/#/'
 # Consul accessible via `http://localhost:8500/`
 
@@ -14,30 +20,12 @@ services:
 #    network_mode: host
     networks:
       - public
-    # networks:  -- THIS Will throw ERROR: only one instance of “host” network is allowed
-    #   - delvnet
     ports:
       - "8500:8500"
       - "8300:8300"
       - "8600:8600/tcp"
       - "8600:8600/udp"
-    # command: "agent -server -bootstrap-expect 1 -ui -client 0.0.0.0"
     command: "agent -server -bootstrap-expect 1 -ui -client=0.0.0.0 -config-dir=/etc/consul.d/"
-
-#  consul-agent:
-#    image: consul:1.13.1
-#    container_name: consul_marie_agent
-#    depends_on:
-#      - consul-server
-##    restart: always
-#    volumes:
-#     - ./config/consul/agent:/etc/consul.d
-##    network_mode: host
-#    networks:
-#      - public
-#    command: "consul agent -join consul-server -bind=127.0.0.1 --config-file /etc/consul.d/default.json"
-#    links:
-#      - "consul-server"
 
   traefik:
     image: traefik:v2.8.3
@@ -68,18 +56,6 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
 
-  psql:
-    image: postgres:${POSTGRES_VERSION}
-    restart: unless-stopped
-    ports:
-      - "5432:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - psql_data:/var/lib/postgresql/data
-#      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
-
   prometheus:
     image: prom/prometheus:latest
     volumes:
@@ -92,9 +68,6 @@ services:
     - alertmanager
     networks:
       - public
-#    networks:
-#     traefik:
-#       ipv4_address: 172.40.0.90
     ports:
      - "9090:9090"
 
@@ -109,7 +82,6 @@ services:
       - "./config/alertmanager:/config"
       - alertmanager_data:/data
     command: --config.file=/config/alertmanager.yml --log.level=debug
-
 
   grafana:
     image: grafana/grafana
@@ -128,8 +100,6 @@ services:
       - prometheus
     networks:
       - public
-#      - back-tier
-#      - front-tier
     restart: always
 
   loki:
@@ -144,8 +114,6 @@ services:
       - grafana
     networks:
       - public
-#docker compose down && docker compose -f docker-compose.yml --project-directory . up loki consul-server  grafana   prometheus  traefik whoami  --build  --remove-orphans
-
 
   # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
   whoami:
@@ -168,8 +136,6 @@ services:
       - "traefik.http.services.whoami.loadbalancer.server.port=2001"
 
 volumes:
-  psql_data:
-    driver: local
   prometheus_data:
     driver: local
   grafana_data:
@@ -181,9 +147,3 @@ volumes:
 networks:
   public:
     external: true
-
-# ############### Networks ###############
-
-# Container networking setup
-# docker network create --driver=bridge public
-# sysctl net.ipv4.conf.all.forwarding=1
