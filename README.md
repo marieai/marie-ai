@@ -344,8 +344,6 @@ https://docs.dyte.io/guides/integrating-with-webhooks
 
 ## Kafka - Prioritization
 https://www.confluent.io/blog/prioritize-messages-in-kafka/
-<<<<<<< HEAD
-=======
 
 
 # Funsd Dataset

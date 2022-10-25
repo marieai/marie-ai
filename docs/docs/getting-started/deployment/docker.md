@@ -2,9 +2,8 @@
 sidebar_position: 1
 ---
 
-# Docker
-Deployment via docker container
-
+# Docker - Single node
+Deployment single node via docker container
 
 ## User and permission setup
 The container is setup with `app-svc` account so for that we will setup same account in the host system.
