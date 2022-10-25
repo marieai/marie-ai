@@ -23,6 +23,9 @@ Install required packages with `pip`
 $ pip install -r ./requirements/requirements.txt
 ```
 
+Install detectron2
+https://github.com/conansherry/detectron2/blob/master/INSTALL.md
+
 Build Docker Image
 
 ```sh
@@ -152,9 +155,7 @@ Overwrite the container `ENTRYPOINT` by using `--entrypoint` from command line a
 ```sh
 docker run -it --rm  --gpus all --entrypoint /bin/bash marie-icr:2.0
 ```
-
-
-
+ 
 Remove dangling containers
 
 ```sh
