@@ -115,8 +115,37 @@ cd fairseq
 python setup.py build install
 ```
 
+Detectron2 install 
+
+```
+python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+# Or, to install it from a local clone:
+git clone https://github.com/facebookresearch/detectron2.git
+python -m pip install -e detectron2
+
+```
 
 
+Common Installation Issues
+
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+fairseq 0.12.2 requires hydra-core<1.1,>=1.0.7, but you have hydra-core 1.2.0 which is incompatible.
+fairseq 0.12.2 requires omegaconf<2.1, but you have omegaconf 2.2.3 which is incompatible.
+
+```
+ pip uninstall hydra-core
+ pip uninstall omegacon
+ pip uninstall fairseq
+```
+
+Install `Detectron2` and then `fairseq`
+
+
+TODO: This needs better setup
+```
+sudo chown greg:greg /var/log/marie/
+sudo mkdir -p /var/log/marie
+```
 ### If you use Marie-AI as a dependency or third-party package, install it with pip:
 
 ```
