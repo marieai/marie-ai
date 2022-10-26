@@ -1,0 +1,27 @@
+{
+  "unversionedId": "getting-started/deployment/docker",
+  "id": "getting-started/deployment/docker",
+  "title": "Docker - Single node",
+  "description": "Deployment single node via docker container",
+  "source": "@site/docs/getting-started/deployment/docker.md",
+  "sourceDirName": "getting-started/deployment",
+  "slug": "/getting-started/deployment/docker",
+  "permalink": "/docs/getting-started/deployment/docker",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/getting-started/deployment/docker.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 1,
+  "frontMatter": {
+    "sidebar_position": 1
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Traefik",
+    "permalink": "/docs/getting-started/configuration/traefik"
+  },
+  "next": {
+    "title": "Control Plane",
+    "permalink": "/docs/getting-started/deployment/control-plane"
+  }
+}

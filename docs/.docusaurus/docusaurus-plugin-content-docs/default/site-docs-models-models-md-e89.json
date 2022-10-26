@@ -1,0 +1,27 @@
+{
+  "unversionedId": "models/models",
+  "id": "models/models",
+  "title": "Models",
+  "description": "",
+  "source": "@site/docs/models/models.md",
+  "sourceDirName": "models",
+  "slug": "/models/",
+  "permalink": "/docs/models/",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/models/models.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 1,
+  "frontMatter": {
+    "sidebar_position": 1
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Introducing Marie-AI (🦊)",
+    "permalink": "/docs/intro"
+  },
+  "next": {
+    "title": "API",
+    "permalink": "/docs/api"
+  }
+}
