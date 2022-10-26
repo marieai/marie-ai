@@ -1,0 +1,14 @@
+{
+   "datacenter": "dc1"
+  ,"data_dir":   "/tmp/data"
+  ,"server": false
+  ,"enable_script_checks": true
+  ,"primary_datacenter": "dc1"
+  ,"acl": {
+     "enabled": false
+    ,"default_policy": "deny"
+  }
+  ,"node_name":  "consul-agent-1"
+  ,"log_level":  "INFO"
+  ,"domain": "consul"
+}
