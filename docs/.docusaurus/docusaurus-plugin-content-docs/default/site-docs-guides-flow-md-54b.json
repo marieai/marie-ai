@@ -1,0 +1,23 @@
+{
+  "unversionedId": "guides/flow",
+  "id": "guides/flow",
+  "title": "Flow",
+  "description": "",
+  "source": "@site/docs/guides/flow.md",
+  "sourceDirName": "guides",
+  "slug": "/guides/flow",
+  "permalink": "/docs/guides/flow",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/guides/flow.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 1,
+  "frontMatter": {
+    "sidebar_position": 1
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Executor",
+    "permalink": "/docs/guides/executor"
+  }
+}

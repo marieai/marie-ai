@@ -1,0 +1,27 @@
+{
+  "unversionedId": "credits",
+  "id": "credits",
+  "title": "Credits",
+  "description": "This application uses Open Source components. You can find the source code of their open source projects along with license information in the NOTICE. We acknowledge and are grateful to these developers for their contributions to open source.",
+  "source": "@site/docs/credits.md",
+  "sourceDirName": ".",
+  "slug": "/credits",
+  "permalink": "/docs/credits",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/credits.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 3,
+  "frontMatter": {
+    "sidebar_position": 3
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Release notes",
+    "permalink": "/docs/changelog"
+  },
+  "next": {
+    "title": "Installation",
+    "permalink": "/docs/getting-started/installation"
+  }
+}

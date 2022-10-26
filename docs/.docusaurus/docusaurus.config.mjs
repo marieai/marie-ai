@@ -26,11 +26,11 @@ export default {
       "classic",
       {
         "docs": {
-          "sidebarPath": "/home/gbugaj/dev/marie-ai/docs/sidebars.js",
+          "sidebarPath": "/home/greg/dev/marie-ai/docs/sidebars.js",
           "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs"
         },
         "theme": {
-          "customCss": "/home/gbugaj/dev/marie-ai/docs/src/css/custom.css"
+          "customCss": "/home/greg/dev/marie-ai/docs/src/css/custom.css"
         }
       }
     ]

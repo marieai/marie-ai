@@ -1,0 +1,27 @@
+{
+  "unversionedId": "getting-started/configuration/traefik",
+  "id": "getting-started/configuration/traefik",
+  "title": "Traefik",
+  "description": "Configuration is located in  config/traefik",
+  "source": "@site/docs/getting-started/configuration/traefik.md",
+  "sourceDirName": "getting-started/configuration",
+  "slug": "/getting-started/configuration/traefik",
+  "permalink": "/docs/getting-started/configuration/traefik",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/getting-started/configuration/traefik.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 2,
+  "frontMatter": {
+    "sidebar_position": 2
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Secrets",
+    "permalink": "/docs/getting-started/configuration/secrets"
+  },
+  "next": {
+    "title": "Docker - Single node",
+    "permalink": "/docs/getting-started/deployment/docker"
+  }
+}

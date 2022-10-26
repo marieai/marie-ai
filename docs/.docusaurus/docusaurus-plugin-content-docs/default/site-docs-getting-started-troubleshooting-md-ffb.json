@@ -1,0 +1,27 @@
+{
+  "unversionedId": "getting-started/troubleshooting",
+  "id": "getting-started/troubleshooting",
+  "title": "Troubleshooting",
+  "description": "",
+  "source": "@site/docs/getting-started/troubleshooting.md",
+  "sourceDirName": "getting-started",
+  "slug": "/getting-started/troubleshooting",
+  "permalink": "/docs/getting-started/troubleshooting",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/getting-started/troubleshooting.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 1,
+  "frontMatter": {
+    "sidebar_position": 1
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Installation",
+    "permalink": "/docs/getting-started/installation"
+  },
+  "next": {
+    "title": "Basic Concepts - marie.yml",
+    "permalink": "/docs/getting-started/configuration/config"
+  }
+}

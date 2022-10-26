@@ -131,7 +131,7 @@ lib64
 .tox
 nosetests.xml
 *.mo
-*.json
+# *.json
 old/
 tmp/
 *.log

@@ -1,0 +1,108 @@
+{
+  "docusaurus-plugin-content-docs": {
+    "default": {
+      "path": "/docs",
+      "versions": [
+        {
+          "name": "current",
+          "label": "Next",
+          "isLast": true,
+          "path": "/docs",
+          "mainDocId": "intro",
+          "docs": [
+            {
+              "id": "api",
+              "path": "/docs/api",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "changelog",
+              "path": "/docs/changelog",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "credits",
+              "path": "/docs/credits",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/configuration/config",
+              "path": "/docs/getting-started/configuration/config",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/configuration/secrets",
+              "path": "/docs/getting-started/configuration/secrets",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/configuration/traefik",
+              "path": "/docs/getting-started/configuration/traefik",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/deployment/control-plane",
+              "path": "/docs/getting-started/deployment/control-plane",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/deployment/docker",
+              "path": "/docs/getting-started/deployment/docker",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/deployment/observability",
+              "path": "/docs/getting-started/deployment/observability",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/installation",
+              "path": "/docs/getting-started/installation",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "getting-started/troubleshooting",
+              "path": "/docs/getting-started/troubleshooting",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "guides/architecture-overview",
+              "path": "/docs/guides/architecture-overview",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "guides/executor",
+              "path": "/docs/guides/executor",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "guides/flow",
+              "path": "/docs/guides/flow",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "intro",
+              "path": "/docs/intro",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "models/models",
+              "path": "/docs/models/",
+              "sidebar": "tutorialSidebar"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "tutorialSidebar": {
+              "link": {
+                "path": "/docs/intro",
+                "label": "intro"
+              }
+            }
+          }
+        }
+      ],
+      "breadcrumbs": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "unversionedId": "getting-started/deployment/control-plane",
+  "id": "getting-started/deployment/control-plane",
+  "title": "Control Plane",
+  "description": "Control plane is responsible for orchestrating communication between nodes in the cluster.",
+  "source": "@site/docs/getting-started/deployment/control-plane.md",
+  "sourceDirName": "getting-started/deployment",
+  "slug": "/getting-started/deployment/control-plane",
+  "permalink": "/docs/getting-started/deployment/control-plane",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/getting-started/deployment/control-plane.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 2,
+  "frontMatter": {
+    "sidebar_position": 2
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Docker - Single node",
+    "permalink": "/docs/getting-started/deployment/docker"
+  },
+  "next": {
+    "title": "Observability",
+    "permalink": "/docs/getting-started/deployment/observability"
+  }
+}

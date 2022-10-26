@@ -68,7 +68,7 @@ fi
 # -p 5100:5100  ${CONTAINER_NAME}:${CONTAINER_VERSION}
 #--network=host  \
 #-v `pwd`/../config:/etc/marie:rw \
-# Currently using HOST for our networkin but we will change to use dedicated bridge network
+# Currently using HOST for our networking but we will change to use dedicated bridge network
 
 
 # shellcheck disable=SC2090

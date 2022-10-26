@@ -1,0 +1,27 @@
+{
+  "unversionedId": "changelog",
+  "id": "changelog",
+  "title": "Release notes",
+  "description": "Release notes for new versions of Marie-AI, in reverse chronological order.",
+  "source": "@site/docs/changelog.md",
+  "sourceDirName": ".",
+  "slug": "/changelog",
+  "permalink": "/docs/changelog",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/changelog.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 3,
+  "frontMatter": {
+    "sidebar_position": 3
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "API",
+    "permalink": "/docs/api"
+  },
+  "next": {
+    "title": "Credits",
+    "permalink": "/docs/credits"
+  }
+}

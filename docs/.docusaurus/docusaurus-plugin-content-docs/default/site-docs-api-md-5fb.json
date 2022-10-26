@@ -1,0 +1,27 @@
+{
+  "unversionedId": "api",
+  "id": "api",
+  "title": "API",
+  "description": "Redoc API documentation",
+  "source": "@site/docs/api.md",
+  "sourceDirName": ".",
+  "slug": "/api",
+  "permalink": "/docs/api",
+  "draft": false,
+  "editUrl": "https://github.com/gregbugaj/marie-ai/tree/develop/docs/docs/api.md",
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 3,
+  "frontMatter": {
+    "sidebar_position": 3
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Models",
+    "permalink": "/docs/models/"
+  },
+  "next": {
+    "title": "Release notes",
+    "permalink": "/docs/changelog"
+  }
+}
