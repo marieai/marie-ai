@@ -8,7 +8,6 @@ Deployment single node via docker container
 ## User and permission setup
 The container is setup with `app-svc` account so for that we will setup same account in the host system.
 
-
 Setting up user, for more info visit [Manage Docker as a non-root user](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user)
 
 ```
