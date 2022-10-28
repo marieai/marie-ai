@@ -79,7 +79,7 @@ Some admin service can only be accesses via `localhost` host. We will use SSH fo
 
 Replace `ops-001` with the name of the control plane server.
 ```shell
-ssh -N -L 8500:ops-001:8500 -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 ops-001
+ssh -N -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 -L 3100:ops-001:3100 -L 9093:ops-001:9093 ops-001
 ```
 
 [Explain](https://explainshell.com/explain?cmd=ssh+-N+-L+8500%3Aops-001%3A8500+-L+7777%3Aops-001%3A7777+-L+9090%3Aops-001%3A9090+-L+3000%3Aops-001%3A3000+ops-001)
@@ -87,28 +87,33 @@ ssh -N -L 8500:ops-001:8500 -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:op
 :::
 
 
-|Service|Endpoint|Description|
-|---|--|-----------------------------------------------------|
-|Consul|http://localhost:8500/ui/| Consul is a distributed, highly available, and data center aware solution to connect and configure applications across dynamic, distributed infrastructure.  |
-|Traefik| http://traefik.localhost:7777/dashboard http://traefik.localhost:7777/metrics| Traefik is a modern HTTP reverse proxy and load balancer that makes deploying microservices easy.  |
-|Grafana|#| The open and composable observability and data visualization platform.|
-|Prometheus|http://localhost:9090/| The Prometheus monitoring system and time series database.|
-|Loki|#| Loki is a horizontally scalable, highly available, multi-tenant log aggregation system inspired by Prometheus|
+| Service      | Endpoint                                                                              | Description                                                                                                                                                      |
+|--------------|---------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Consul       | http://localhost:8500/ui/                                                             | Consul is a distributed, highly available, and data center aware solution to connect and configure applications across dynamic, distributed infrastructure.      |
+| Traefik      | http://traefik.localhost:7777/dashboard/#/ http://traefik.localhost:7777/metrics      | Traefik is a modern HTTP reverse proxy and load balancer that makes deploying microservices easy.                                                                |
+| Grafana      | http://localhost:3000/                                                                | The open and composable observability and data visualization platform.                                                                                           |
+| Prometheus   | http://localhost:9090/                                                                | The Prometheus monitoring system and time series database.                                                                                                       |
+| Alertmanager | http://localhost:9093/                                                                | The Alertmanager handles alerts sent by client applications such as the Prometheus server.                                                                       |
+| Loki         | http://localhost:3100/ready                                                           | Loki is a horizontally scalable, highly available, multi-tenant log aggregation system inspired by Prometheus                                                    |
 
-```
-http://localhost:8500/ui/dc1/services
-http://traefik.localhost:7777/metrics
-http://traefik.localhost:7777/dashboard/#/http/routers
-http://localhost:7777/ping
-http://localhost:3000/?orgId=1
-http://localhost:9090/targets?search=
-```
 
-### Metrics
-* [metrics - cadvisor](http://localhost:8077/metrics)  http://localhost:8077/metrics
-* [metrics - DCGM](http://localhost:9400/metrics)   http://localhost:9400/metrics
-* [metrics - node-exporter](http://localhost:9400/metrics) http://localhost:9400/metrics
+Traefik - Service endpoints can be changed in the configs but by default they are as follow: 
 
-### Monitoring
-* [Promtail UI](http://localhost:9080/targets)
-* [Alertmanager UI](http://localhost:9093/#/status)
+| Traefik - Service | Endpoint                                   |
+|-------------------|--------------------------------------------|
+| Dashboard         | http://traefik.localhost:7777/dashboard/#/ |
+| traefik           | http://traefik.localhost:7777/             |
+| traefik-debug     | http://traefik.localhost:7000/             |
+| Service endpoint  | http://traefik.localhost:5000/             |
+
+
+
+:::warning Grafana Data Sources / Loki
+
+When configuring Grafana Loki Datasource make sure to use the public `IP` or `hostname` and not loopback ip(127.0.0.1/localhost)
+in the HTTP URL field.
+
+Example 
+`http://ops-001:3100`
+
+:::
