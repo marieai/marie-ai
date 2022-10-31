@@ -128,35 +128,12 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # Install and initialize MARIE-ICR, copy all necessary files
 
 # RUN python3 --version
-
 COPY --chown=${USER} ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
 # Copy app resources
 COPY --chown=${USER} ./marie/info.py ${HOME}/
 COPY --chown=${USER} ./ssh ${HOME}/.ssh
 # COPY --chown=${USER} supervisord.conf ${HOME}/
-
-#COPY --chown=${USER} ./src/api/ /opt/marie-icr/api
-#COPY --chown=${USER} ./src/boxes/ /opt/marie-icr/boxes
-#COPY --chown=${USER} ./src/conf/ /opt/marie-icr/conf
-#COPY --chown=${USER} ./src/document/ /opt/marie-icr/document
-#COPY --chown=${USER} ./src/models/ /opt/marie-icr/models
-#COPY --chown=${USER} ./src/overlay/ /opt/marie-icr/overlay
-#COPY --chown=${USER} ./src/renderer/ /opt/marie-icr/renderer
-#COPY --chown=${USER} ./src/processors/ /opt/marie-icr/processors
-#COPY --chown=${USER} ./src/tasks/ /opt/marie-icr/tasks
-#COPY --chown=${USER} ./src/utils/ /opt/marie-icr/utils
-#COPY --chown=${USER} ./src/common/ /opt/marie-icr/common
-
-#COPY --chown=${USER} ./src/timer.py /opt/marie-icr/
-#COPY --chown=${USER} ./src/wsgi.py /opt/marie-icr/
-#COPY --chown=${USER} ./src/app.py /opt/marie-icr/
-#COPY --chown=${USER} ./src/logger.py /opt/marie-icr/
-
-#COPY --chown=${USER} ./src/register.py /opt/marie-icr/
-#COPY --chown=${USER} ./src/numpycontainer.py /opt/marie-icr/
-#COPY --chown=${USER} ./src/numpyencoder.py /opt/marie-icr/
-#COPY --chown=${USER} ./.build /opt/marie-icr/
 
 COPY --chown=${USER} ./marie/ /opt/marie-icr/marie
 # FIXME : this should be mouted so it can be edited
@@ -177,7 +154,6 @@ COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
 
 # this is important otherwise we will get python error that module is not found
 RUN export PYTHONPATH="/opt/marie-icr/"
-
 
 # RUN all commands below as container user 
 USER ${USER}

@@ -154,6 +154,7 @@ networks:
 
 # docker volume create --driver local --name marie_logs --opt type=none --opt device=/var/log/marie-ai --opt o=uid=root,gid=root --opt o=bind
 
+
 # /var/cache/marie-ai/model_zoo
 # /var/log/marie-ai
 

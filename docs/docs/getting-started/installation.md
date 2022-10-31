@@ -36,7 +36,7 @@ sudo apt install python3.10-venv
 python -m venv .env
 ```
 
-Alernativelly you can have shared virtual environment
+Alternatively you can have shared virtual environment
 
 ```bash
 python3 -m venv ~/environment/marie
