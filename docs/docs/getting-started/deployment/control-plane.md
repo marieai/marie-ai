@@ -15,9 +15,21 @@ The container is setup with `app-svc` account so for that we will setup same acc
 
 Setting up user, for more info visit [Manage Docker as a non-root user](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user)
 
-```
-sudo useradd --comment 'app-svc' --create-home app-svc --shell /bin/bash
+`uid` is a number associated with a user account and `gid` is a number associated with a group
+Assigned ID that are mapped from within the container to outside world.
+
+`431` : UID
+`433` : GUI
+
+```shell
+sudo groupadd -r app-svc -g 433
+sudo useradd -u 431 --comment 'app-svc' --create-home app-svc --shell /bin/bash
 sudo usermod -aG docker app-svc
+```
+
+You can verify the user’s UID, using the id command:
+```shell
+$ id -u app-svc
 ```
 
 Directory structure, this is more of a convention than requirement.
@@ -29,7 +41,7 @@ sudo mkdir -p /opt/containers/config/marie-ai
 
 Change permissions to `app` and `config`
 
-```
+```shell
 cd /opt/containers
 sudo chown app-svc:app-svc apps/ -R
 sudo chown app-svc:app-svc config/ -R
@@ -38,16 +50,13 @@ sudo chown app-svc:app-svc config/ -R
 Now that we have our directory and permissions setup we can move on and setup the container.
 The easiest way to manage container is by checking out the [Marie-AI project](https://github.com/gregbugaj/marie-ai.git)
 
-```sh
+```shell
 sudo su app-svc
-
 git clone https://github.com/gregbugaj/marie-ai.git
 ```
 
-
 ### Networking setup
-
-The configuration uses custom bridge networks called `public` which we will create first
+The configuration uses custom bridge networks called `public` which we will create first.
 
 ```shell
 docker network create --driver=bridge public
@@ -56,8 +65,8 @@ docker network create --driver=bridge public
 # WARNING: IPv4 forwarding is disabled. Networking will not work.
 sysctl net.ipv4.conf.all.forwarding=1
 ```
-### Starting and stopping
 
+### Starting and stopping
 Starting and stopping specific services
 
 ```shell
@@ -117,3 +126,14 @@ Example
 `http://ops-001:3100`
 
 :::
+
+
+## Logging queries
+
+```sql
+{job="marie-ai"} |= `` | json | line_format `{{.msg}}`
+```
+
+```sql
+{job="marie-ai"} |= `` | json | levelname = `ERROR`   | line_format `{{.msg}}`
+```

@@ -1,3 +1,40 @@
+---
+sidebar_position: 1
+---
+
+# Named entity recognition
+Extracting Named Entity Recognition / Key Value pair extraction
+
+## Configuration
+
+## Examples
+
+### Executor setup
+Basic executor setup and inference.
+
+```python
+  from marie.executor import NerExtractionExecutor
+  from marie.utils.image_utils import hash_file
+
+  # setup executor
+  models_dir = ("/mnt/data/models/")
+  executor = NerExtractionExecutor(models_dir)
+
+  img_path = "/tmp/sample.png"
+  checksum = hash_file(img_path)
+
+  # invoke executor
+  docs = None
+  kwa = {"checksum": checksum, "img_path": img_path}
+  results = executor.extract(docs, **kwa)
+
+  print(results)
+```
+
+### Complete NER example
+Setup Named Entity Recognition executor `NerExtractionExecutor` and storage backend `PostgreSQLStorage`
+
+```python
 import glob
 import os
 from typing import Dict
@@ -12,10 +49,12 @@ from marie.registry.model_registry import ModelRegistry
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie import (
+    Document,
     DocumentArray,
     __model_path__,
     __config_dir__,
 )
+
 
 def process_file(
     executor: NerExtractionExecutor,
@@ -85,3 +124,20 @@ if __name__ == "__main__":
         process_file(executor, img_path, True, storage_conf)
     else:
         process_dir(executor, img_path, True, storage_conf)
+
+```
+
+## Fine-Tuning LayoutLM v3
+From annotation to training and inference
+ 
+### Setup Development Environment
+
+### Load and prepare dataset
+
+
+```shell
+
+```
+
+## Reference
+[LayoutLMv3: Multi-modal Pre-training for Visually-Rich Document Understanding](https://arxiv.org/abs/2204.08387)

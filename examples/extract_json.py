@@ -30,7 +30,7 @@ api_base_url = "http://184.105.180.6:6000/api"  # marie-002 NEEDS UPDATE
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 #
 # api_base_url = "http://127.0.0.1:59235/api"
-api_base_url = "http://172.20.10.12:6000/api"
+api_base_url = "http://asp-gpu002:6000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
