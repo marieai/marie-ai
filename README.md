@@ -346,5 +346,3 @@ https://docs.dyte.io/guides/integrating-with-webhooks
 https://www.confluent.io/blog/prioritize-messages-in-kafka/
 
 
-# Funsd Dataset
-https://huggingface.co/datasets/nielsr/funsd/blob/main/funsd.py
