@@ -135,5 +135,5 @@ Example
 ```
 
 ```sql
-{job="marie-ai"} |= `` | json | levelname = `ERROR`   | line_format `{{.msg}}`
+{job="marie-ai"} |= `` | json | levelname = `ERROR` | line_format `{{.msg}}`
 ```
