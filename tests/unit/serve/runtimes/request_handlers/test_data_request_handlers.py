@@ -54,7 +54,11 @@ def logger():
 async def test_data_request_handler_new_docs(logger):
     args = set_pod_parser().parse_args(["--uses", "NewDocsExecutor"])
     handler = DataRequestHandler(args, logger, executor=NewDocsExecutor())
-    req = list(request_generator("/", DocumentArray([Document(text="input document") for _ in range(10)])))[0]
+    req = list(
+        request_generator(
+            "/", DocumentArray([Document(text="input document") for _ in range(10)])
+        )
+    )[0]
 
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
