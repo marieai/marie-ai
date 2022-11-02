@@ -17,6 +17,7 @@ from marie import (
     __config_dir__,
 )
 
+
 def process_file(
     executor: NerExtractionExecutor,
     img_path: str,

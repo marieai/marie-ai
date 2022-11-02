@@ -14,17 +14,31 @@ from marie.timer import Timer
 
 def init(model_path, beam=5):
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-        [model_path], arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False}
+        [model_path],
+        arg_overrides={
+            "beam": beam,
+            "task": "text_recognition",
+            "data": "",
+            "fp16": False,
+        },
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model[0].to(device)
 
     img_transform = transforms.Compose(
-        [transforms.Resize((384, 384), interpolation=3), transforms.ToTensor(), transforms.Normalize(0.5, 0.5)]
+        [
+            transforms.Resize((384, 384), interpolation=3),
+            transforms.ToTensor(),
+            transforms.Normalize(0.5, 0.5),
+        ]
     )
 
-    generator = task.build_generator(model, cfg.generation, extra_gen_cls_kwargs={"lm_model": None, "lm_weight": None})
+    generator = task.build_generator(
+        model,
+        cfg.generation,
+        extra_gen_cls_kwargs={"lm_model": None, "lm_weight": None},
+    )
 
     bpe = task.build_bpe(cfg.bpe)
 
@@ -46,7 +60,9 @@ def preprocess(img_path, img_transform):
 @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, generator, model, sample, bpe):
     print(task)
-    decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
+    decoder_output = task.inference_step(
+        generator, model, sample, prefix_tokens=None, constraints=None
+    )
     decoder_output = decoder_output[0][0]  # top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
