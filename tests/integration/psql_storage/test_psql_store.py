@@ -16,6 +16,7 @@ compose_yml = os.path.join(cur_dir, 'docker-compose.yml')
 
 print(compose_yml)
 
+
 @pytest.fixture()
 def docker_compose(request):
     os.system(
@@ -28,6 +29,7 @@ def docker_compose(request):
         f'docker-compose -f {request.param} --project-directory . down '
         f'--remove-orphans'
     )
+
 
 #  docker-compose -f docker-compose.yml --project-directory . up  --build  --remove-orphans
 # @pytest.mark.parametrize('docker_compose', [compose_yml], indirect=['docker_compose'])
@@ -44,17 +46,15 @@ def test_storage(tmpdir):
     with TimeContext(f'### rolling insert {nr_docs} docs'):
         print("Testing insert")
 
-    payload = {
-            "test":"Test",
-            "xyz":"Greg"
-    }
+    payload = {"test": "Test", "xyz": "Greg"}
 
-    dd = DocumentArray([Document(id=str(f"lbxid:{_}"), content=payload) for _ in range(10)])
+    dd = DocumentArray(
+        [Document(id=str(f"lbxid:{_}"), content=payload) for _ in range(10)]
+    )
 
     print(dd[2].content)
     handler.add(dd)
 
     # handler.add([payload])
-
 
     assert 1 == 1

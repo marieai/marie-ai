@@ -114,9 +114,7 @@ if __name__ == "__main__":
             lines,
             _,
             lines_bboxes,
-        ) = box.extract_bounding_boxes(
-            key, "field", image, PSMode.SPARSE
-        )
+        ) = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
         print(lines)
         result, overlay_image = icr.recognize(

@@ -45,9 +45,13 @@ if __name__ == "__main__":
 
         box = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=True)
 
-        (boxes, fragments, lines, _, lines_bboxes,) = box.extract_bounding_boxes(
-            key, "field", image, PSMode.SPARSE
-        )
+        (
+            boxes,
+            fragments,
+            lines,
+            _,
+            lines_bboxes,
+        ) = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
         if True:
             # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)

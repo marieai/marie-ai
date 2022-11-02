@@ -37,12 +37,14 @@ def load_model(model_path: str, device="cpu") -> torch.nn.Module:
     model = torch.load(model_path, map_location=map_location)
     return model
 
-def print_size_of_model(model : torch.nn.Module, label : str = ""):
+
+def print_size_of_model(model: torch.nn.Module, label: str = ""):
     torch.save(model.state_dict(), "temp.p")
-    size=os.path.getsize("temp.p")
-    print("model: ",label,':','Size (MB):', size/1e6)
+    size = os.path.getsize("temp.p")
+    print("model: ", label, ':', 'Size (MB):', size / 1e6)
     os.remove('temp.p')
     return size
+
 
 if __name__ == "__main__":
     if not os.path.exists("models_optimized/"):
