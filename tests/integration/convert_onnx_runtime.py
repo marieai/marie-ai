@@ -58,8 +58,12 @@ def profile():
     plt.bar(frameworks[1], times[1])
     plt.show()
 
+
 def _generate_dummy_images(
-   batch_size: int = 2, num_channels: int = 3, image_height: int = 40, image_width: int = 40
+    batch_size: int = 2,
+    num_channels: int = 3,
+    image_height: int = 40,
+    image_width: int = 40,
 ):
     images = []
     for _ in range(batch_size):
@@ -110,7 +114,9 @@ def generate_dummy_inputs(
     # If dynamic axis (-1) we forward with a fixed dimension of 8 tokens to avoid optimizations made by ONNX
     token_to_add = processor.tokenizer.num_special_tokens_to_add(is_pair)
     seq_length = compute_effective_axis_dimension(
-        seq_length, fixed_dimension=OnnxConfig.default_fixed_sequence, num_token_to_add=token_to_add
+        seq_length,
+        fixed_dimension=OnnxConfig.default_fixed_sequence,
+        num_token_to_add=token_to_add,
     )
     # Generate dummy inputs according to compute batch and sequence
     dummy_text = [[" ".join([processor.tokenizer.unk_token]) * seq_length]] * batch_size
@@ -119,8 +125,12 @@ def generate_dummy_inputs(
     dummy_bboxes = [[[48, 84, 73, 128]]] * batch_size
 
     # If dynamic axis (-1) we forward with a fixed dimension of 2 samples to avoid optimizations made by ONNX
-    batch_size = compute_effective_axis_dimension(batch_size, fixed_dimension=OnnxConfig.default_fixed_batch)
-    dummy_image = _generate_dummy_images(batch_size, num_channels, image_height, image_width)
+    batch_size = compute_effective_axis_dimension(
+        batch_size, fixed_dimension=OnnxConfig.default_fixed_batch
+    )
+    dummy_image = _generate_dummy_images(
+        batch_size, num_channels, image_height, image_width
+    )
 
     inputs = dict(
         processor(
@@ -144,7 +154,9 @@ def export():
     # Max model size is 512, so we will need to handle any documents larger thjan ath
     feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
     tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
-    processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    processor = LayoutLMv3Processor(
+        feature_extractor=feature_extractor, tokenizer=tokenizer
+    )
     model = LayoutLMv3ForTokenClassification.from_pretrained(model_id)
 
     input_dict = generate_dummy_inputs(processor)
@@ -158,9 +170,11 @@ def export():
         f="/tmp/torch-model.onnx",
         input_names=['input_ids', 'attention_mask'],
         output_names=['logits'],
-        dynamic_axes={'input_ids': {0: 'batch_size', 1: 'sequence'},
-                      'attention_mask': {0: 'batch_size', 1: 'sequence'},
-                      'logits': {0: 'batch_size', 1: 'sequence'}},
+        dynamic_axes={
+            'input_ids': {0: 'batch_size', 1: 'sequence'},
+            'attention_mask': {0: 'batch_size', 1: 'sequence'},
+            'logits': {0: 'batch_size', 1: 'sequence'},
+        },
         do_constant_folding=True,
         opset_version=13,
     )

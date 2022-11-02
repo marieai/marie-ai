@@ -12,9 +12,7 @@ from marie.serve.runtimes.gateway.http import get_fastapi_app, HTTPGatewayRuntim
 
 @pytest.mark.parametrize('runtime_cls', [HTTPGatewayRuntime])
 def test_uvicorn_ssl_deprecated(runtime_cls):
-    args = set_gateway_parser().parse_args(
-        [ ]
-    )
+    args = set_gateway_parser().parse_args([])
     with runtime_cls(args):
         pass
 
@@ -34,4 +32,3 @@ async def test_app_bootstrap():
     gateway = HTTPGatewayRuntime(args)
 
     await gateway.async_run_forever()
-

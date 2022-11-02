@@ -118,9 +118,13 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        pretrained_model_name_or_path = str(ModelRegistry.get_local_path(pretrained_model_name_or_path))
+        pretrained_model_name_or_path = str(
+            ModelRegistry.get_local_path(pretrained_model_name_or_path)
+        )
         if not os.path.isdir(pretrained_model_name_or_path):
-            raise Exception(f"Expected model directory but got : {pretrained_model_name_or_path}")
+            raise Exception(
+                f"Expected model directory but got : {pretrained_model_name_or_path}"
+            )
 
         config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
         if not os.path.exists(config_path):
@@ -424,11 +428,7 @@ class NerExtractionExecutor(Executor):
                             )
 
                             draw_box(
-                                draw,
-                                group_bbox,
-                                None,
-                                color,
-                                font,
+                                draw, group_bbox, None, color, font,
                             )
 
             # check if we have possible overlaps when there is a mislabeled token, this could be a flag
@@ -557,9 +557,7 @@ class NerExtractionExecutor(Executor):
                             ner_result = {
                                 "page": i,
                                 "category": tag,
-                                "value": {
-                                    "answer": ner_key,
-                                },
+                                "value": {"answer": ner_key,},
                             }
                             aggregated_ner.append(ner_result)
 
@@ -747,11 +745,7 @@ class NerExtractionExecutor(Executor):
             height = _image.size[1]
 
             all_predictions, all_boxes, all_scores = self.inference(
-                _image,
-                _words,
-                _boxes,
-                labels,
-                0.1,
+                _image, _words, _boxes, labels, 0.1,
             )
 
             true_predictions = all_predictions[0]

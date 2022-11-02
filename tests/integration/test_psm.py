@@ -22,7 +22,8 @@ if __name__ == '__main__':
     icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
     boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
-        key, 'field', snippet, PSMode.WORD)
+        key, 'field', snippet, PSMode.WORD
+    )
 
     print(boxes)
     icr.recognize(key, 'test', snippet, boxes, img_fragments, lines)
