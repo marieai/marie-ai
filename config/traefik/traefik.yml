@@ -62,3 +62,13 @@ providers:
     exposedByDefault: false
     swarmMode: false
 
+  consulcatalog:
+    connectAware: false
+    exposedByDefault: true
+    connectByDefault: true
+    cache: false
+    prefix: traefik
+    servicename: traefik-system-ingress
+    endpoint:
+      datacenter: "dc1"
+      address: "http://consul-server:8500"

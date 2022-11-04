@@ -88,7 +88,7 @@ Some admin service can only be accesses via `localhost` host. We will use SSH fo
 
 Replace `ops-001` with the name of the control plane server.
 ```shell
-ssh -N -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 -L 3100:ops-001:3100 -L 9093:ops-001:9093 ops-001
+ssh -vnT -N -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 -L 3100:ops-001:3100 -L 9093:ops-001:9093 ops-001
 ```
 
 [Explain](https://explainshell.com/explain?cmd=ssh+-N+-L+8500%3Aops-001%3A8500+-L+7777%3Aops-001%3A7777+-L+9090%3Aops-001%3A9090+-L+3000%3Aops-001%3A3000+ops-001)
