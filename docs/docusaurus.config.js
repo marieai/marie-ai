@@ -7,7 +7,7 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Marie-AI',
-  tagline: 'Integrate AI-powered Document Analysis Pipelines',
+  tagline: 'Integrate AI-powered Analysis Pipelines',
   url: 'https://github.com/gregbugaj/marie-ai',
   baseUrl: '/',
   onBrokenLinks: 'throw',

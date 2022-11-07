@@ -53,8 +53,8 @@ entryPoints:
 providers:
   providersThrottleDuration: 2s
   file:
-#    directory: /etc/traefik/provider
-    filename: /etc/traefik/file-provider.yml
+    directory: /etc/traefik/provider
+#    filename: /etc/traefik/provider/file-provider.yml
     watch: true
     debugLogGeneratedTemplate: true
 

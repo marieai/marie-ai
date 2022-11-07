@@ -51,7 +51,8 @@ services:
     volumes:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
-      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
+#      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
+      - ./config/traefik/provider:/etc/traefik/config/provider
       - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
