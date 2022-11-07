@@ -72,4 +72,4 @@ providers:
     servicename: traefik-system-ingress
     endpoint:
       datacenter: "dc1"
-      address: consul-server:8500  
+      address: "http://consul-server:8500"

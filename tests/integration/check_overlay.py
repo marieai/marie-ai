@@ -11,8 +11,8 @@ from marie.utils.utils import ensure_exists
 # Example script that shows how to clean document
 if __name__ == "__main__":
 
-    img_path= "/home/gbugaj/tmp/marie-cleaner/161970410/PID_1956_9362_0_161970410.tif"
-    burst_dir= "/home/gbugaj/tmp/marie-cleaner/161970410/burst"
+    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/PID_1956_9362_0_161970410.tif"
+    burst_dir = "/home/gbugaj/tmp/marie-cleaner/161970410/burst"
     # burst_tiff(img_path, burst_dir)
 
     # os.exit()
@@ -49,7 +49,9 @@ if __name__ == "__main__":
                 save_path = os.path.join(stack_dir, f"{docId}.png")
                 imwrite(save_path, stacked)
 
-            save_path = os.path.join(clean_dir, f"{docId}.tif")  # This will have the .tif extension
+            save_path = os.path.join(
+                clean_dir, f"{docId}.tif"
+            )  # This will have the .tif extension
             imwrite(save_path, blended)
             print(f"Saving  document : {save_path}")
 

@@ -1,9 +1,9 @@
 .PHONY: modified_only_fixup quality style  test
 
 # make sure to test the local checkout in scripts and not the pre-installed one (don't use quotes!)
-export PYTHONPATH = src
+export PYTHONPATH = marie
 
-check_dirs := src
+check_dirs := marie
 
 modified_only_fixup:
 	$(eval modified_py_files := $(shell python utils/get_modified_files.py $(check_dirs)))
