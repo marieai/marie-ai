@@ -1,0 +1,12 @@
+http:
+  routers:
+    dashboard:
+#      rule: "HostRegexp(`{host:.+}`)"
+      rule: "Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      priority: 1000
+      entryPoints:
+        - traefik
+      middlewares:
+        - auth
+#        - redirect-to-https
+      service: api@internal

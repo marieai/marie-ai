@@ -53,8 +53,8 @@ entryPoints:
 providers:
   providersThrottleDuration: 2s
   file:
-#    directory: /etc/traefik/provider
-    filename: /etc/traefik/file-provider.yml
+    directory: /etc/traefik/provider
+    #filename: /etc/traefik/provider/file-provider.yml
     watch: true
     debugLogGeneratedTemplate: true
 
@@ -62,3 +62,14 @@ providers:
     exposedByDefault: false
     swarmMode: false
 
+  consulcatalog:
+    watch: true
+    connectAware: false
+    exposedByDefault: true
+    connectByDefault: true
+    cache: false
+    prefix: traefik
+    servicename: traefik-system-ingress
+    endpoint:
+      datacenter: "dc1"
+      address: consul-server:8500  
