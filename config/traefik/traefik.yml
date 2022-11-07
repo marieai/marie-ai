@@ -63,6 +63,7 @@ providers:
     swarmMode: false
 
   consulcatalog:
+    watch: true
     connectAware: false
     exposedByDefault: true
     connectByDefault: true

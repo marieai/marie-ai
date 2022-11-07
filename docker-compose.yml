@@ -148,31 +148,3 @@ volumes:
 networks:
   public:
     external: true
-
-# https://stackoverflow.com/questions/24288616/permission-denied-on-accessing-host-directory-in-docker
-# mkdir -p /var/cache/marie-ai/marie_cache
-# docker volume create --driver local --name marie_cache --opt type=none --opt device=/var/cache/marie-ai/marie_cache --opt o=uid=root,gid=root --opt o=bind
-
-# docker volume create --driver local --name marie_logs --opt type=none --opt device=/var/log/marie-ai --opt o=uid=root,gid=root --opt o=bind
-
-
-# /var/cache/marie-ai/model_zoo
-# /var/log/marie-ai
-
-# sudo mkdir -p /var/cache/marie-ai/model_zoo
-# sudo chown app-svc:app-svc /var/cache/marie-ai -R
-
-
-# sudo mkdir -p /var/log/marie-ai
-# sudo chown app-svc:app-svc /var/log/marie-ai -R
-
-#rsync -av --progress /mnt/data/marie-ai/model_zoo/ /var/cache/marie-ai/model_zoo
-
-# /home/app-svc/.cache/
-# /opt/marie-icr/.cache/
-# sudo docker volume ls
-# docker volume create marie_cache
-# docker volume inspect marie_cache
-
-# docker volume create model_zoo
-
