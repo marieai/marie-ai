@@ -8,7 +8,6 @@ Deployment single node via docker container
 ## User and permission setup
 The container is setup with `app-svc` account so for that we will setup same account in the host system.
 
-
 Setting up user, for more info visit [Manage Docker as a non-root user](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user)
 
 ```
@@ -54,11 +53,11 @@ Before we are able to start the container we need to configure few components.
 
 
 ### Directory layout
-This is the intial entrypoint for `models` and `config`, this can be changed by modifying `run.sh` Directories will be mapped as volumes when the container is created.
+This is the initial entrypoint for `models` and `config`, this can be changed by modifying `run.sh` Directories will be mapped as volumes when the container is created.
 
 ***TODO : this needs to be configurable via ENV variables***
 
-```
+```shell
 /mnt/data/marie-a
 /opt/logs/marie-icr
 ```
@@ -117,6 +116,119 @@ The easiest way to initialize the configs is by copying them from the project `c
 /mnt/data/marie-ai/config/marie.yml
 ```
 
+## Application Logs with Docker
+There are couple ways that we can log from within a container to outside world.
+
+### Named volumes
+First option(default) is to use a `docker volume` and create new named volume called `marie_logs`
+
+:::info
+
+This is preferred option for single node setups.
+
+:::
+
+```shell
+sudo mkdir -p /var/log/marie-ai
+sudo chown app-svc:app-svc /var/log/marie-ai -R
+
+docker volume create --driver local --name marie_logs --opt type=none --opt device=/var/log/marie-ai --opt o=uid=root,gid=root --opt o=bind
+```
+
+When we list the docker volumes we should see `marie_logs` in the output.
+
+```shell
+$ docker volume ls
+DRIVER    VOLUME NAME
+local     marie_cache
+local     marie_logs
+```
+
+After the volume is created it can be mapped in the docker with the docker `-v` flag.
+Application will log by default to `/home/app-svc/logs` directory, this can be changed by modifying `resources/logging.default.yml`
+
+```shell
+-v marie_logs:/home/app-svc/logs
+```
+
+We can inspect the volume and display the mount points via `docker volume inspect marie_logs`.
+
+```shell
+$ docker volume inspect marie_logs 
+[
+    {
+        "CreatedAt": "2022-10-28T23:11:05Z",
+        "Driver": "local",
+        "Labels": {},
+        "Mountpoint": "/var/lib/docker/volumes/marie_logs/_data",
+        "Name": "marie_logs",
+        "Options": {
+            "device": "/var/log/marie-ai",
+            "o": "bind",
+            "type": "none"
+        },
+        "Scope": "local"
+    }
+]
+
+```
+
+```shell
+$ ls -lt /var/log/marie-ai/*
+-rw------- 1 root root    66 Oct 31 16:22 /var/log/marie-ai/ssh-agent-stderr---supervisor-ee3f8v_8.log
+-rw-r--r-- 1  431  433 45654 Oct 31 16:22 /var/log/marie-ai/marie-2022-10-31T16:17:53.299405.log
+-rw------- 1 root root    75 Oct 31 16:17 /var/log/marie-ai/ssh-agent-stdout---supervisor-gann9r5z.log
+```
+
+### Bind Mount
+
+:::info
+
+Preferred method for multi-node setup. This allows for better log segregation by GPU.
+
+:::
+
+### Permission setup : UID/GID
+`uid` is a number associated with a user account and `gid` is a number associated with a group
+The log directory needs to have the UID/GID of `431:433`
+
+```shell
+$ id
+uid=431(app-svc) gid=433(app-svc) groups=433(app-svc),998(docker)
+```
+
+IDs are coming the user setup.
+
+`431` : User ID given to `app-svc` account
+`433` : Group ID given to `app-svc` account
+
+```shell
+sudo mkdir -p /var/log/marie-ai
+sudo chown app-svc:app-svc /var/log/marie-ai -R
+```
+
+On a 4 GPU system the log directory should look like following, this includes couple log files.
+
+```shell
+$ tree /var/log/marie-ai
+/var/log/marie-ai/
+├── 0
+│   ├── marie-2022-10-31T19:55:40.712174.log
+├── 1
+├── 2
+├── 3
+│   ├── marie-2022-10-31T19:59:40.286707.log
+└── all
+```
+
+After the directory s created it can be mapped in the docker with the docker `-v` flag.
+Application will log by default to `/home/app-svc/logs` directory, this can be changed by modifying `resources/logging.default.yml`
+
+The `$GPUS` variable will be set from shell script while executed.
+
+```shell
+-v /var/log/marie-ai/$GPUS:/home/app-svc/logs
+```
 
 ## Container management
 
@@ -141,14 +253,12 @@ localhost:5000/gregbugaj/marie-icr:2.4-cuda
 
 ### Update container to specific version
 
-```sh
+```shell
 cd marie-ai/docker-util
 ./update.sh
 ```
 
-
 ### Starting container
-
 
 Start single `marie-ai` container in interactive mode with **ALL GPUS** assigned to single instance
 
@@ -169,3 +279,6 @@ PORT           > 6000
 CONFIG_DIR     > /mnt/data/marie-ai/config
 ```
 
+### References
+[Docker volumes](https://docs.docker.com/storage/volumes/)
+[Bind Mounts](https://docs.docker.com/storage/bind-mounts/)

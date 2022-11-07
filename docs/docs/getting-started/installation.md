@@ -36,7 +36,7 @@ sudo apt install python3.10-venv
 python -m venv .env
 ```
 
-Alernativelly you can have shared virtual environment
+Alternatively you can have shared virtual environment
 
 ```bash
 python3 -m venv ~/environment/marie
@@ -356,3 +356,5 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 
 ### References
 [Docker overview](https://docs.docker.com/get-started/overview/)
+
+1216

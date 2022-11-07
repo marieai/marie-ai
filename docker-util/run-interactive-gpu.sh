@@ -83,3 +83,4 @@ docker run -u 0 --user root -it --rm  --gpus $DEVICES --shm-size=4g --ulimit mem
 --network=host \
 -p $PORT:5000  ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION}
 
+

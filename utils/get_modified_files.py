@@ -25,9 +25,17 @@ import subprocess
 import sys
 
 
-current_branch = subprocess.check_output("git branch --show-current".split()).decode("utf-8")
-fork_point_sha = subprocess.check_output(f"git merge-base {current_branch} HEAD".split()).decode("utf-8")
-modified_files = subprocess.check_output(f"git diff --name-only {fork_point_sha}".split()).decode("utf-8").split()
+current_branch = subprocess.check_output("git branch --show-current".split()).decode(
+    "utf-8"
+)
+fork_point_sha = subprocess.check_output(
+    f"git merge-base {current_branch} HEAD".split()
+).decode("utf-8")
+modified_files = (
+    subprocess.check_output(f"git diff --name-only {fork_point_sha}".split())
+    .decode("utf-8")
+    .split()
+)
 
 joined_dirs = "|".join(sys.argv[1:])
 regex = re.compile(rf"^({joined_dirs}).*?\.py$")

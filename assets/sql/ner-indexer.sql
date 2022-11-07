@@ -15,7 +15,6 @@ jsonb_array_elements(content->'kv')  pages
 --WHERE  pages->'value'->'answer' @> ANY (ARRAY ['[{"key":"ANSWER"}]', '[{"key":"PAN_ANSWER"}]']::jsonb[]);
 
 
-
 WITH PivotData AS (
     SELECT ref_id,
            pages->>'category' as "category",

@@ -2,7 +2,4 @@
 sidebar_position: 1
 ---
 
-# Models
-
-
-
+# How to add a model
