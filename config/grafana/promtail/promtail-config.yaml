@@ -1,8 +1,3 @@
-#https://gist.github.com/ruanbekker/c6fa9bc6882e6f324b4319c5e3622460
-server:
-  http_listen_address: 0.0.0.0
-  http_listen_port: 9080
-
 positions:
   filename: /tmp/positions.yaml
 
@@ -16,7 +11,8 @@ scrape_configs:
       - localhost
     labels:
       job: marie-ai-logs
-      __path__: /var/log/marie/*log
+      __path__: /opt/marie-icr/logs/*/*log
+      #      __path__: /var/log/marie/*log
 
 - job_name: containers
 
