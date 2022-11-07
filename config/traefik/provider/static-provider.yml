@@ -1,0 +1,15 @@
+http:
+  routers:
+    traefik-system-ingress:
+      service: traefik-system-ingress
+      rule: "HostRegexp(`{host:.+}`)"
+      entryPoints:
+        - "marie"
+
+
+  services:
+    traefik-system-ingress:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:80"
+  
