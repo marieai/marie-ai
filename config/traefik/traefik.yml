@@ -44,11 +44,24 @@ metrics:
 entryPoints:
   traefik:
     address: ":7777"
-  marie:
-    address: ":5000"
   traefik-debug:
     address: ":7000"
+  # HTTP entry point - does nothing but redirecting to HTTPS
+  marie:
+    address: ":5000"
+    http:
+      middlewares:
+        - http-redirect@file
+  # HTTPS entry point
+  websecure:
+    address: ":443"
 
+certificatesResolvers:
+  LetsEncrypt:
+    acme:
+      email: "admin@marie-ai.com"
+      storage: "/letsencrypt/acme.json"
+      tlschallenge: {}
 
 providers:
   providersThrottleDuration: 2s
