@@ -10,3 +10,16 @@ http:
         - auth
 #        - redirect-to-https
       service: api@internal
+
+  # Set up the `auth` middleware to be basicauth that takes a file for users
+  middlewares:
+    auth:
+      basicAuth:
+        removeHeader: true
+        usersFile: /user-credentials
+#        users:
+#          - "dashboard:$apr1$2TgJEKkl$.fyRx.XI5l0AIm/bef4Rw."
+#    redirect-to-https:
+#      redirectScheme:
+#        scheme:
+
