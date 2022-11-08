@@ -1,19 +1,8 @@
 http:
+  # Set up the `auth` middleware to be basicauth that takes a file for users
   middlewares:
-    # Basic auth. Traefik Dashboard needs it
-    # Username: Admin
-    # Password: qwer1234
-    user-auth:
+    auth:
       basicAuth:
-        users:
-          - "admin:$apr1$tm53ra6x$FntXd6jcvxYM/YH0P2hcc1"
-    # Redirect traffic from base domain to www
-    www-redirect:
-      redirectRegex:
-        regex: "^https://yourdomain/(.*)"
-        replacement: "https://www.yourdomain/${1}"
-        permanent: true
+        removeHeader: true
+        usersFile: /user-credentials
 
-
-
-~                                      

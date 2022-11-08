@@ -11,7 +11,7 @@ version: "3.9"
 
 services:
   consul-server:
-    image: consul:1.13.1
+    image: consul:1.13.3
     container_name: consul_marie_server
 #    restart: always
     volumes:
@@ -28,7 +28,7 @@ services:
     command: "agent -server -bootstrap-expect 1 -ui -client=0.0.0.0 -config-dir=/etc/consul.d/"
 
   traefik:
-    image: traefik:v2.8.3
+    image: traefik:v2.9.4
     container_name: "traefik"
     restart: unless-stopped
     command:
