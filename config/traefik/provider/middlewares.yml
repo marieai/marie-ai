@@ -6,3 +6,9 @@ http:
         removeHeader: true
         usersFile: /user-credentials
 
+    # Enforce HTTPS
+    http-redirect:
+      redirectScheme:
+        port: "443"
+        scheme: https
+        permanent: true

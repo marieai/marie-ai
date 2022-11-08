@@ -60,6 +60,10 @@ echo $(htpasswd -nB dashboard) | sed -e s/\\$/\\$\\$/g
           - "dashboard:$$2y$$05$$6zECIStqygUCGeKl/zog/up2Hu2vADiDJfw6SLd0cCSepU80czGS2"
 ```
 
+
+## Let's Encrypt
+
+
 ## Testing configuration
 
 ```sh
