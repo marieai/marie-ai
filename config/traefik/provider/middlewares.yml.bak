@@ -1,9 +1,0 @@
-http:
-  # Set up the `auth` middleware to be basicauth that takes a file for users
-  middlewares:
-    auth:
-      basicAuth:
-        removeHeader: true
-        usersFile: /user-credentials
-
-~                                      
