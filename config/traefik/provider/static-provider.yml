@@ -12,4 +12,12 @@ http:
       loadBalancer:
         servers:
           - url: "http://127.0.0.1:80"
-  
+
+
+# Dynamic configuration
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: path/to/cert.crt
+        keyFile: path/to/cert.key

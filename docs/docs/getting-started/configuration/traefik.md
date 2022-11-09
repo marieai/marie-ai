@@ -50,7 +50,6 @@ For password hardcoded in middlewares directly via `users` node.
 echo $(htpasswd -nB dashboard) | sed -e s/\\$/\\$\\$/g
 ```
 
-
 ```yaml
   middlewares:
     auth:
@@ -60,8 +59,25 @@ echo $(htpasswd -nB dashboard) | sed -e s/\\$/\\$\\$/g
           - "dashboard:$$2y$$05$$6zECIStqygUCGeKl/zog/up2Hu2vADiDJfw6SLd0cCSepU80czGS2"
 ```
 
+## Certificates for localhost
+For local development we follow a [guide](https://letsencrypt.org/docs/certificates-for-localhost/) created by [letsencrypt.org](letsencrypt.org) 
+
+#### Making and trusting your own certificates
+The simplest way to generate a private key and self-signed certificate for `localhost` is with this openssl command:
+
+```shell
+openssl req -x509 -out traefik.localhost.crt -keyout traefik.localhost.key \
+  -newkey rsa:2048 -nodes -sha256 \
+  -subj '/CN=localhost' -extensions EXT -config <( \
+   printf "[dn]\nCN=traefik.localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:traefik.localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
+```
+
 
 ## Let's Encrypt
+
+### Transport Layer Security (TLS)
+[Traefik TLS](https://doc.traefik.io/traefik/https/tls/)
+
 
 
 ## Testing configuration
