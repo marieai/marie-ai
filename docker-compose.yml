@@ -37,7 +37,7 @@ services:
       - --docker
       - --log.level=DEBUG
       # Optionally uncomment the following lines if you want to test/debug:
-      - --certificatesresolvers.LetsEncrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+#      - --certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
     networks:
       - public
     ports:
@@ -54,13 +54,12 @@ services:
     volumes:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
+      - ./config/traefik/letsencrypt:/letsencrypt
 #      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
 #      - ./config/traefik/provider:/etc/traefik/provider
       - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
-      - "./letsencrypt:/letsencrypt"
-      - letsencrypt_data:/letsencrypt
 
   prometheus:
     image: prom/prometheus:latest
@@ -138,8 +137,9 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
 #      - "traefik.http.routers.whoami.entrypoints=traefik-debug"
-      - "traefik.http.routers.whoami.service=whoami"
-      - "traefik.http.routers.whoami.entrypoints=websecure"
+#      - "traefik.http.routers.whoami.service=whoami"
+#      - "traefik.http.routers.whoami.entrypoints=websecure"
+
 volumes:
   prometheus_data:
     driver: local
@@ -147,8 +147,8 @@ volumes:
     driver: local
   alertmanager_data:
     driver: local
-  letsencrypt_data:
-    driver: local
+#  letsencrypt_data:
+#    driver: local
 
 # ############### Networks ###############
 networks:
