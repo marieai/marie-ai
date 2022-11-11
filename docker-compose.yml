@@ -54,12 +54,12 @@ services:
     volumes:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
-      - ./config/traefik/letsencrypt:/letsencrypt
-#      - ./config/traefik/file-provider.yml:/etc/traefik/file-provider.yml
-#      - ./config/traefik/provider:/etc/traefik/provider
+      - ./config/traefik/certs:/certs
+      - letsencrypt_data/letsencrypt
       - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
+
 
   prometheus:
     image: prom/prometheus:latest
@@ -135,10 +135,11 @@ services:
       - public
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
-#      - "traefik.http.routers.whoami.entrypoints=traefik-debug"
-#      - "traefik.http.routers.whoami.service=whoami"
-#      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)" # Apply a host rule specifying the domain the service will respond to
+      - "traefik.http.routers.whoami.tls=true"            # Force TLS
+      - "traefik.http.routers.whoami.entrypoints=https"   # Create a router called whoami listening on the 'https' entrypoint
+#      - "traefik.http.routers.whoami.service=whoami" # We use docker provider so this is registed twice
+      - "traefik.http.services.whoami-service.loadbalancer.server.port=8080" # Send traffic to the container via port 8080
 
 volumes:
   prometheus_data:
@@ -147,8 +148,8 @@ volumes:
     driver: local
   alertmanager_data:
     driver: local
-#  letsencrypt_data:
-#    driver: local
+  letsencrypt_data:
+    driver: local
 
 # ############### Networks ###############
 networks:
