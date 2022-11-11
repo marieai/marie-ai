@@ -5,19 +5,11 @@ http:
       rule: "HostRegexp(`{host:.+}`)"
       entryPoints:
         - "marie"
-
+      tls: True
 
   services:
     traefik-system-ingress:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:80"
+          - url: "http://192.168.102.65:80"
 
-
-# Dynamic configuration
-tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: path/to/cert.crt
-        keyFile: path/to/cert.key

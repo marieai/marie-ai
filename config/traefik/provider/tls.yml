@@ -1,0 +1,24 @@
+# Dynamic Transport Layer Security configuration
+# https://doc.traefik.io/traefik/https/tls/
+
+tls:
+  certificates:
+    - certFile: /certs/ops-001.marie-ai.com.crt
+      keyFile: /certs/ops-001.marie-ai.com.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /letsencrypt/traefik.localhost.crt
+        keyFile: /letsencrypt/traefik.localhost.key
+#      ENABLE TO Auto Generate CERT
+      defaultGeneratedCert:
+        resolver: http-resolver
+        domain:
+          main: marie-ai.com
+          sans:
+            - ops-001.marie-ai.com
+
+  # When testing certs, enable this so traefik doesn't use its own self-signed cert for unknown domains.
+  options:
+    default:
+      sniStrict: false
