@@ -1,0 +1,9 @@
+{
+    "question_answer_map" : {
+        "member_name": "member_name_answer",
+        "member_number": "member_number_answer",
+        "pan": "pan_answer",
+        "dos": "dos_answer",
+        "patient_name": "patient_name_answer"
+    }
+}

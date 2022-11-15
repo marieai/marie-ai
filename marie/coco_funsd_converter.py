@@ -1,4 +1,5 @@
 import copy
+import glob
 import hashlib
 import io
 import json
@@ -7,8 +8,10 @@ import os
 import random
 import shutil
 import string
+import sys
 import uuid
 from functools import lru_cache
+import distutils.util
 
 import cv2
 import numpy as np
@@ -34,6 +37,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 import concurrent.futures
 import time
 from multiprocessing import Pool
+import argparse
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
@@ -43,6 +47,8 @@ logger = logging.getLogger(__name__)
 # setup data aug
 fake = Faker()
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
+
+
 # create new provider class
 
 
@@ -108,7 +114,7 @@ def from_json_file(filename):
         return data
 
 
-def __scale_height(img, target_size, method=Image.LANCZOS):
+def __scale_height(img, target_size, method=Image.Resampling.LANCZOS):
     ow, oh = img.size
     scale = oh / target_size
     w = ow / scale
@@ -117,7 +123,7 @@ def __scale_height(img, target_size, method=Image.LANCZOS):
     return resized, resized.size
 
 
-def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
+def __scale_heightXXXX(img, target_size=1000, method=Image.Resampling.LANCZOS):
     ow, oh = img.size
     old_size = (ow, oh)
 
@@ -145,7 +151,7 @@ def __scale_heightXXXX(img, target_size=1000, method=Image.LANCZOS):
     return resized, resized.size
 
 
-def __scale_heightZZZ(img, target_size=1000, method=Image.LANCZOS):
+def __scale_heightZZZ(img, target_size=1000, method=Image.Resampling.LANCZOS):
     ow, oh = img.size
     old_size = (ow, oh)
 
@@ -182,33 +188,45 @@ def load_image(image_path):
     return image, (w, h)
 
 
-def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
+def __convert_coco_to_funsd(
+    src_dir: str,
+    output_path: str,
+    annotations_filename: str,
+    config: object,
+    strip_file_name_path: bool,
+) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
-    src_file = os.path.join(src_dir, "annotations/instances_default.json")
-
-    print(f"src_dir : {src_dir}")
+    print("******* Conversion info ***********")
+    print(f"src_dir     : {src_dir}")
     print(f"output_path : {output_path}")
-    print(f"src_file : {src_file}")
+    print(f"annotations : {annotations_filename}")
+    print(f"strip_file_name_path : {strip_file_name_path}")
 
-    data = from_json_file(src_file)
+    debug_found_pair = False
+
+    data = from_json_file(annotations_filename)
     categories = data["categories"]
     images = data["images"]
     annotations = data["annotations"]
 
     images_by_id = {}
     for img in images:
+        if strip_file_name_path:
+            file_name = img["file_name"]
+            img["file_name"] = file_name.split("/")[-1]
         images_by_id[int(img["id"])] = img
 
-    print(categories)
-    print(annotations)
+    # return
+    # print(categories)
+    # print(annotations)
 
     cat_id_name = {}
     cat_name_id = {}
 
-    # Categories / Answers should be generalized
     # Expected group mapping that will get translated into specific linking
+    # If this validation fails we will stop processing  and report.
     question_answer_map = {
         "member_name": "member_name_answer",
         "member_number": "member_number_answer",
@@ -309,7 +327,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             )
             count = category_counts[cat_name]
             if False and count > 1:
-                msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}]"
+                msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}"
                 print(msg)
                 errors.append(msg)
 
@@ -319,11 +337,12 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             aid = cat_name_id[answer]
             # we only have question but no answer
             if qid in found_cat_id and aid not in found_cat_id:
-                msg = f"Pair notfound for image_id[{group_id}] : {question} [{qid}] MISSING -> {answer} [{aid}]"
+                msg = f"Pair not found for image_id[{group_id}] : {question} [{qid}] MISSING -> {answer} [{aid}]"
                 print(msg)
                 errors.append(msg)
             else:
-                print(f"Pair found : {question} [{qid}] -> {answer} [{aid}]")
+                if debug_found_pair:
+                    print(f"Pair found : {question} [{qid}] -> {answer} [{aid}]")
 
         if len(errors) > 0:
             payload = "\n".join(errors)
@@ -336,7 +355,7 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
         src_img_path = os.path.join(src_dir, "images", file_name)
         src_img, size = load_image(src_img_path)
 
-        print(f"Image size : {size}")
+        # print(f"Image size : {size}")
         form_dict = {"form": []}
 
         for ano in grouping:
@@ -345,8 +364,6 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
             bbox = [int(x) for x in ano["bbox"]]
             bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
             category_name = cat_id_name[category_id]
-
-            print(f"category_name => {category_name}")
             label = category_name
 
             gen_id = random.randint(0, 10000000)
@@ -378,7 +395,25 @@ def convert_coco_to_funsd(src_dir: str, output_path: str) -> None:
 
             # copy and resize to 1000 H
             shutil.copyfile(src_img_path, dst_img_path)
-            print(form_dict)
+
+
+def convert_coco_to_funsd(
+    src_dir: str, output_path: str, config: object, strip_file_name_path: bool
+) -> None:
+    """
+    Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
+    """
+    # instances_default.json
+
+    for idx, annotations_filename in enumerate(
+        glob.glob(os.path.join(src_dir, "annotations/*.json"))
+    ):
+        try:
+            __convert_coco_to_funsd(
+                src_dir, output_path, annotations_filename, config, strip_file_name_path
+            )
+        except Exception as e:
+            print(e)
 
 
 def normalize_bbox(bbox, size):
@@ -1388,10 +1423,81 @@ def splitDataset(src_dir, output_path, split_percentage):
         os.remove(img)
 
 
+def extract_args(args=None) -> object:
+    """
+    Argument parser
+    """
+    parser = argparse.ArgumentParser(
+        prog="coco_funsd_converter", description="COCO to FUNSD conversion utility"
+    )
+
+    parser.add_argument(
+        "--config",
+        required=True,
+        type=str,
+        default='./config.json',
+        help="Configuration file used for conversion",
+    )
+
+    parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        default="train",
+        help="Conversion mode : train/test/validate",
+    )
+
+    parser.add_argument(
+        "--strip_file_name_path",
+        required=True,
+        # type=bool,
+        # action='store_true',
+        type=lambda x: bool(distutils.util.strtobool(x)),
+        default=False,
+        help="Should full image paths be striped from annotations file",
+    )
+
+    parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        default="~/dataset/ds-001/indexer",
+        help="Data directory",
+    )
+
+    parser.add_argument(
+        "--dir_converted",
+        required=False,
+        type=str,
+        default="./converted",
+        help="Converted data directory",
+    )
+
+    parser.add_argument(
+        "--dir_augmented",
+        required=False,
+        type=str,
+        default="./augmented",
+        help="Augmented data directory",
+    )
+
+    try:
+        return parser.parse_args(args) if args else parser.parse_args()
+    except:
+        parser.print_help()
+        sys.exit(0)
+
+
 if __name__ == "__main__":
 
-    # Home
     if True:
+        args = extract_args()
+        print(args)
+
+    # sys.exit(0)
+
+    # Home
+    if False:
         root_dir = "/home/greg/dataset/assets-private/corr-indexer"
         root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
         root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
@@ -1408,35 +1514,53 @@ if __name__ == "__main__":
         root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
-    # name = "test"
-    # src_dir = os.path.join(root_dir, f"{name}deck-raw-02")
+    mode = "train"
+    strip_file_name_path = False
 
-    name = "train"
-    src_dir = os.path.join(root_dir, f"{name}deck-raw-01")
+    if True:
+        mode = args.mode
+        strip_file_name_path = args.strip_file_name_path
 
-    dst_path = os.path.join(root_dir, "dataset", f"{name}ing_data")
-    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{name}ing_data")
+        root_dir = args.dir
+        root_dir_converted = (
+            args.dir_converted
+            if args.dir_converted != "./converted"
+            else os.path.abspath(os.path.join(args.dir, args.dir_converted))
+        )
+        root_dir_aug = (
+            args.dir_augmented
+            if args.dir_augmented != "./augmented"
+            else os.path.abspath(os.path.join(args.dir, args.dir_augmented))
+        )
 
-    aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{name}ing_data")
-    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{name}ing_data")
+        # load config file
+        config = from_json_file(args.config)
 
-    # cat 152611418_2_2_8.json
+    src_dir = os.path.join(root_dir, f"{mode}-deck-raw")
+    dst_path = os.path.join(root_dir, "dataset", f"{mode}ing_data")
+    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{mode}ing_data")
+    aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{mode}ing_data")
+    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{mode}ing_data")
+
+    print(mode)
+    print(strip_file_name_path)
+    print(src_dir)
+    print(dst_path)
+    print(aligned_dst_path)
+    print(aug_aligned_dst_path)
+    print(config)
 
     if True:
         # STEP 1 : Convert COCO to FUNSD like format
-        # convert_coco_to_funsd(src_dir, dst_path)
-        #
-        # # STEP 2
+        convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
+        # STEP 2 : Decorate
         # decorate_funsd(dst_path)
-
-        # STEP 3 > 800
-        augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
-
-        # Step 4
-        rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-
-        # # Step 5
-        visualize_funsd(aug_dest_dir)
+        # # STEP 3 : Augment Data
+        # augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
+        # # STEP 4 : Rescale
+        # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+        # # STEP 5 : Visualize augmented data
+        # visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
