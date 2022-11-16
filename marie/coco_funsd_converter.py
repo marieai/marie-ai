@@ -210,91 +210,31 @@ def __convert_coco_to_funsd(
     categories = data["categories"]
     images = data["images"]
     annotations = data["annotations"]
-
     images_by_id = {}
+
     for img in images:
         if strip_file_name_path:
             file_name = img["file_name"]
             img["file_name"] = file_name.split("/")[-1]
         images_by_id[int(img["id"])] = img
 
-    # return
-    # print(categories)
-    # print(annotations)
-
     cat_id_name = {}
     cat_name_id = {}
 
+    if "question_answer_map" not in config:
+        raise Exception(f"Expected key missing : question_answer_map")
+
+    if "id_map" not in config:
+        raise Exception(f"Expected key missing : id_map")
+
+    if "link_map" not in config:
+        raise Exception(f"Expected key missing : link_map")
+
     # Expected group mapping that will get translated into specific linking
     # If this validation fails we will stop processing  and report.
-    question_answer_map = {
-        "member_name": "member_name_answer",
-        "member_number": "member_number_answer",
-        "pan": "pan_answer",
-        "dos": "dos_answer",
-        "patient_name": "patient_name_answer",
-    }
-
-    id_map = {
-        "member_name": 0,
-        "member_name_answer": 1,
-        "member_number": 2,
-        "member_number_answer": 3,
-        "pan": 4,
-        "pan_answer": 5,
-        "dos": 6,
-        "dos_answer": 7,
-        "patient_name": 8,
-        "patient_name_answer": 9,
-    }
-
-    link_map = {
-        "member_name": [id_map["member_name"], id_map["member_name_answer"]],
-        "member_name_answer": [id_map["member_name"], id_map["member_name_answer"]],
-        "member_number": [id_map["member_number"], id_map["member_number_answer"]],
-        "member_number_answer": [
-            id_map["member_number"],
-            id_map["member_number_answer"],
-        ],
-        "pan": [id_map["pan"], id_map["pan_answer"]],
-        "pan_answer": [id_map["pan"], id_map["pan_answer"]],
-        "dos": [id_map["dos"], id_map["dos_answer"]],
-        "dos_answer": [id_map["dos"], id_map["dos_answer"]],
-        "patient_name": [id_map["patient_name"], id_map["patient_name_answer"]],
-        "patient_name_answer": [id_map["patient_name"], id_map["patient_name_answer"]],
-        "paragraph": [-1],
-        "greeting": [-1],
-        "address": [-1],
-        "question": [-1],
-        "answer": [-1],
-        "document_control": [-1],
-        "header": [-1],
-        "letter_date": [-1],
-        "url": [-1],
-        "phone": [-1],
-        "claim_number": [-1],
-        "claim_number_answer": [-1],
-        "birthdate": [-1],
-        "birthdate_answer": [-1],
-        "billed_amt": [-1],
-        "billed_amt_answer": [-1],
-        "paid_amt": [-1],
-        "paid_amt_answer": [-1],
-        "check_amt": [-1],
-        "check_amt_answer": [-1],
-        "check_number": [-1],
-        "check_number_answer": [-1],
-        "list": [-1],
-        "footer": [-1],
-        "date": [-1],
-        "identifier": [-1],
-        "proc_code": [-1],
-        "proc_code_answer": [-1],
-        "provider": [-1],
-        "provider_answer": [-1],
-        "money": [-1],
-        "company": [-1],
-    }
+    question_answer_map = config["question_answer_map"]
+    id_map = config["id_map"]
+    link_map = config["link_map"]
 
     for category in categories:
         cat_id_name[category["id"]] = category["name"]
@@ -355,7 +295,6 @@ def __convert_coco_to_funsd(
         src_img_path = os.path.join(src_dir, "images", file_name)
         src_img, size = load_image(src_img_path)
 
-        # print(f"Image size : {size}")
         form_dict = {"form": []}
 
         for ano in grouping:
@@ -393,7 +332,6 @@ def __convert_coco_to_funsd(
             with open(json_path, "w") as json_file:
                 json.dump(form_dict, json_file, indent=4)
 
-            # copy and resize to 1000 H
             shutil.copyfile(src_img_path, dst_img_path)
 
 
@@ -534,13 +472,6 @@ def decorate_funsd(src_dir: str):
         if not found:
             print(f"Skipping document : {guid} : {file}")
             continue
-
-        # "paragraph": [-1],
-        # "": [-1],
-        # "answer": [-1],
-        # "document_control": [-1],
-        # "header": [-1],
-        # "letter_date": [-1],
 
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
@@ -1481,6 +1412,22 @@ def extract_args(args=None) -> object:
         help="Augmented data directory",
     )
 
+    parser.add_argument(
+        "--step",
+        required=True,
+        nargs='+',
+        default=["all"],
+        choices=['convert', 'decorate', 'augment', 'rescale', 'visualize'],
+        help="Steps to perform [all, convert, decorate, augment, rescale, visualize]",
+    )
+
+    parser.add_argument(
+        "--aug-count",
+        type=int,
+        default=5,
+        help="Number of augmentations",
+    )
+
     try:
         return parser.parse_args(args) if args else parser.parse_args()
     except:
@@ -1493,8 +1440,6 @@ if __name__ == "__main__":
     if True:
         args = extract_args()
         print(args)
-
-    # sys.exit(0)
 
     # Home
     if False:
@@ -1515,10 +1460,14 @@ if __name__ == "__main__":
         root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
 
     mode = "train"
+    step = ""
     strip_file_name_path = False
+    aug_count = 0
 
     if True:
         mode = args.mode
+        steps = args.step
+        aug_count = args.aug_count
         strip_file_name_path = args.strip_file_name_path
 
         root_dir = args.dir
@@ -1548,19 +1497,36 @@ if __name__ == "__main__":
     print(dst_path)
     print(aligned_dst_path)
     print(aug_aligned_dst_path)
-    print(config)
+    print(steps)
+    print(len(steps))
+    print(aug_count)
 
     if True:
         # STEP 1 : Convert COCO to FUNSD like format
-        convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
+        if "all" in steps or "convert" in steps:
+            print(f"STEP:  convert")
+            convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
+
         # STEP 2 : Decorate
-        # decorate_funsd(dst_path)
-        # # STEP 3 : Augment Data
-        # augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
-        # # STEP 4 : Rescale
-        # rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-        # # STEP 5 : Visualize augmented data
-        # visualize_funsd(aug_dest_dir)
+        if "all" in steps or "decorate" in steps:
+            print(f"STEP:  decorate")
+            decorate_funsd(dst_path)
+
+        # STEP 3 : Augment Data /  Rescale
+        if "all" in steps or "augment" in steps:
+            print(f"STEP:  augment")
+            augment_decorated_annotation(
+                count=aug_count, src_dir=dst_path, dest_dir=aug_dest_dir
+            )
+
+        if "all" in steps or "rescale" in steps:
+            print(f"STEP:  rescale")
+            rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+
+        # STEP 5 : Visualize augmented data
+        if "all" in steps or "visualize" in steps:
+            print(f"STEP:  visualize")
+            visualize_funsd(aug_dest_dir)
 
     # split data set from
     # splitDataset(
@@ -1580,20 +1546,3 @@ if __name__ == "__main__":
     # # STEP 2 : No Augmentation
     # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
     # visualize_funsd(aligned_dst_path)
-
-    if False:
-        import nlpaug.augmenter.sentence as nas
-        import nlpaug.flow as nafc
-        from nlpaug.util import Action
-        from tqdm import tqdm
-        import nlpaug.augmenter.word as naw
-        import nlpaug.model.lang_models as nml
-
-        text = "Please make the ncessary revision"
-        aug = naw.ContextualWordEmbsAug(
-            model_path="bert-base-uncased", action="substitute"
-        )
-        augmented_text = aug.augment(text)
-
-        print(text)
-        print(augmented_text)

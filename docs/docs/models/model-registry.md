@@ -28,7 +28,7 @@ There are number of different providers that can be used out of the box.
 
 Adding a new provider requires that we implement a `ModelRegistryHandler`.    
 `ModelRegistryHandler` is a base class that defines common functionality for a URI protocol.
-It routes I/O for a generic URI which may look like "protocol://*" or a canonical filepath "/foo/bar/baz".
+It routes I/O for a generic URI which may look like `protocol://*` or a canonical filepath `/foo/bar/baz.`
 
 
 ## Examples 
