@@ -204,6 +204,8 @@ optional arguments:
                         Converted data directory
   --dir_augmented DIR_AUGMENTED
                         Augmented data directory
+  --step STEP [STEP ...]
+                        Steps to perform [all, convert, decorate, augment, rescale, visualize]
 ```
 
 When we have datasets that don't line up with our annotations `file_image` we can use `strip_file_name_path` argument
@@ -213,7 +215,7 @@ to strip the image path and use the image file name only.
 ```shell
 source ~/environments/pytorch/bin/activate
 
-PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py --mode test \
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py --mode test --step convert \
 --strip_file_name_path true --dir ~/dataset/private/corr-indexer \
 --config ~/dataset/private/corr-indexer/config.json
 ```
@@ -246,7 +248,7 @@ values present on given image.
 `question_answer_map` this fields maps KEY => Value, and it is one-to-one mapping, this mapping can be any field that
 was defined in CVAT.
 
-```json
+```json title="Configuration fragment"
 {
     "question_answer_map" : {
         "member_name": "member_name_answer",
@@ -257,6 +259,7 @@ was defined in CVAT.
     }
 }
 ```
+
 When validation fails for above definition we will receive message:
 
 :::warning Missing mapping
@@ -270,7 +273,79 @@ This validation message tells us that CVAT image_id 25 (zero based) and field `m
 `member_name_answer` field.
 
 
-#### Training
+#### Linking Fields
+
+As we are following FUNSD dataset format we have a definition for linking fields from our COCO dataset.
+
+`id_map` config key maps arbitrary `key` to and `id`.  The `id` could be the same `id` as used in CVAT.  
+
+```json title="Configuration fragment"
+  {
+   "id_map" : {
+        "member_name": 0,
+        "member_name_answer": 1,
+        "member_number": 2,
+        "member_number_answer": 3,
+        "pan": 4,
+        "pan_answer": 5,
+        "dos": 6,
+        "dos_answer": 7,
+        "patient_name": 8,
+        "patient_name_answer": 9,
+    }
+}
+```
+
+`link_map` config key maps arbitrary `key` to `id` and links the two fields together.
+
+This tells us that `member_name` is linked to `[member_name, member_name_answer]` and vice versa as the mapping is
+bidirectional.
+
+```json
+  {
+    "member_name": [0,1],
+    "member_name_answer": [0,1]
+  }
+```
+
+To declare a field that is not linked to anything we give it a value of `-1` 
+
+```json
+  {
+    "paragraph": [-1]
+  }
+```
+
+```json title="Configuration fragment"
+"link_map" : {
+  "member_name": [
+    0,
+    1
+  ],
+  "member_name_answer": [
+    0,
+    1
+  ],
+  "member_number": [
+    2,
+    3
+  ],
+  "member_number_answer": [
+    2,
+    3
+  ],
+  "paragraph": [
+    -1
+  ],
+  "greeting": [
+    -1
+  ]
+}
+
+```
+
+### Training 
+
 Clone UniLM: Unified pre-training for language understanding (NLU) and generation (NLG) project from following repo [https://github.com/gregbugaj/unilm.git](https://github.com/gregbugaj/unilm.git) which is a fork of [https://github.com/microsoft/unilm.git](https://github.com/microsoft/unilm.git)
 Fork is kept in sync, but it does contain additional changes.  
 
