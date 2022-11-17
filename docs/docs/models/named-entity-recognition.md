@@ -140,11 +140,12 @@ Data prep is done from tools from `marie-ai`, to setup development environment f
 Data is labeled using [Computer Vision Annotation Tool (CVAT)](https://github.com/opencv/cvat) in [COCO Dataset format](https://cocodataset.org/#format-data).
 
 Convert CVAT annotated COCO dataset into [FUNSD](https://guillaumejaume.github.io/FUNSD/) compatible format for finetuning models. 
-We do this so we can check our tooling via a baseline FUNSD dataset.
 
 #### Directory structure
-There are two required directories `test_deck-raw-01` and `train_deck-raw-01`. Each directory should be in COCO segmentation 
-format when exporting from CVAT
+Each directory should be in COCO 1.0 format when exporting from CVAT.
+
+Example structure for `test` and `train` modes, by default the data suffix of `-deck-raw` will be added to the mode to 
+create a directory name.
 
 ```shell
 ~/dataset/indexer
@@ -165,60 +166,190 @@ format when exporting from CVAT
 └── validation
 ```
 
+Activate our marie-ai environment.
+```shell
+cd ~/dev/marie-ai
+source ./venv/bin/activate
+```
+
 The script performs few basic steps.
 
-* STEP 1 : Convert COCO to FUNSD like format 
-* STEP 2 : Text Box detection, ICR/OCR 
-* STEP 3 : Data augmentation
-* STEP 4 : Rescale
-* STEP 5 : Visualize augmented data
+* convert   : Convert COCO to FUNSD like format 
+* decorate  : Text Box detection, ICR/OCR 
+* augment   : Data augmentation
+* rescale   : Rescale/Normalize documents to be used by UNILM
+* visualize : Visualize documents
+* split     : Split COCO dataset into train/test
 
-```python
-# STEP 1 : Convert COCO to FUNSD like format
-convert_coco_to_funsd(src_dir, dst_path)
-# STEP 2 : Decorate
-decorate_funsd(dst_path)
-# STEP 3 : Augment Data
-augment_decorated_annotation(count=5, src_dir=dst_path, dest_dir=aug_dest_dir)
-# STEP 4 : Rescale
-rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
-# STEP 5 : Visualize augmented data
-visualize_funsd(aug_dest_dir)
+Each command can be invoked separately, but initially they need to be invoked in following order if you don't have already 
+generated intermediate assets.
+
+```text
+convert -> decorate -> augment -> rescale
 ```
 
 #### Utility usage
 
 ```shell
-usage: coco_funsd_converter [-h] --mode MODE --dir DIR --dir_converted DIR_CONVERTED --dir_augmented DIR_AUGMENTED
+usage: coco_funsd_converter [-h] {convert,decorate,augment,rescale,visualize,split} ...
 
 COCO to FUNSD conversion utility
 
+positional arguments:
+  {convert,decorate,augment,rescale,visualize,split}
+                        Commands to run
+    convert             Convert documents from COCO to FUNSD-Like intermediate format
+    decorate            Decorate documents(Box detection, ICR)
+    augment             Augment documents
+    rescale             Rescale/Normalize documents to be used by UNILM
+    visualize           Visualize documents
+    split               Split COCO dataset into train/test
+
 optional arguments:
   -h, --help            show this help message and exit
-  --config CONFIG       Configuration file used for conversion
-  --mode MODE           Conversion mode : train/test/validate
+
+```
+
+#### command : convert
+Convert documents from COCO to FUNSD-Like intermediate format
+
+```shell
+usage: coco_funsd_converter convert [-h] --mode MODE [--mode-suffix MODE_SUFFIX] --strip_file_name_path STRIP_FILE_NAME_PATH --dir DIR [--dir_converted DIR_CONVERTED] [--dir_augmented DIR_AUGMENTED]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --mode MODE           Conversion mode : train/test/validate/etc
+  --mode-suffix MODE_SUFFIX
+                        Suffix for the mode
   --strip_file_name_path STRIP_FILE_NAME_PATH
                         Should full image paths be striped from annotations file
-  --dir DIR             Data directory
-  --dir_converted DIR_CONVERTED
-                        Converted data directory
-  --dir_augmented DIR_AUGMENTED
-                        Augmented data directory
-  --step STEP [STEP ...]
-                        Steps to perform [all, convert, decorate, augment, rescale, visualize]
+  --dir DIR             Base data directory
+```
+
+**usage**
+
+```shell
+ PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py convert --mode test \
+ --strip_file_name_path true --dir ~/dataset/private/corr-indexer \
+ --config ~/dataset/private/corr-indexer/config.json
 ```
 
 When we have datasets that don't line up with our annotations `file_image` we can use `strip_file_name_path` argument
 to strip the image path and use the image file name only.
 
+Default generated folder structure will look as follows (using defaults):
+
+```text
+/indexer/output
+└── dataset
+    └── test
+        ├── annotations_tmp    
+        └── images
+```
+
+#### command : decorate
+This step post-processed the data that have been generated via `convert` command and will be created in `/indexer/output/dataset`
+
+**usage**
 
 ```shell
-source ~/environments/pytorch/bin/activate
-
-PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py --mode test --step convert \
---strip_file_name_path true --dir ~/dataset/private/corr-indexer \
---config ~/dataset/private/corr-indexer/config.json
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py decorate --mode test --dir ~/dataset/private/corr-indexer/output/dataset
 ```
+
+After the command finished output directory will have a new folder add called `annotations` which contain boxes and ICR.
+
+```text
+/indexer/output
+└── dataset
+    └── test
+        ├── annotations        <------------ 
+        ├── annotations_tmp
+        └── images
+```
+
+#### command : augment
+Augmentation is not necessary however it provides additional way to introduce variability into datasets that are small.
+
+**usage**
+
+```shell
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py augment --mode test \
+--dir ~/dataset/private/corr-indexer/output/dataset --count 1
+```
+
+After the script is run our directory structure will look as follows:
+
+```text
+/indexer/output
+└── dataset
+    ├── test
+    │   ├── annotations
+    │   ├── annotations_tmp
+    │   └── images
+    └── test-augmented              <------------ 
+        ├── annotations
+        └── images
+```
+
+#### command : rescale
+Augmentation is not necessary however it provides additional way to introduce variability into datasets that are small.
+
+**usage**
+
+```shell
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py rescale --mode test \
+--dir ~/dataset/private/corr-indexer/output/dataset
+```
+
+After the script is run our directory structure will look as follows:
+
+```text
+/indexer/output
+└── dataset
+    ├── test
+    │   ├── annotations
+    │   ├── annotations_tmp
+    │   └── images
+    ├── test-augmented
+    │   ├── annotations
+    │   └── images
+    └── test-rescaled             <------------ 
+        ├── annotations
+        └── images
+```
+
+
+#### command : visualize
+Command for visualizing FUNDS like datasets. 
+
+**usage**
+
+```shell
+ PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py visualize --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled \
+ --config ~/dataset/private/corr-indexer/visualize-config.json
+```
+
+Configuration is optional but if provided we will have constant label colors across images.
+
+```json
+{
+ "label2color": {
+  "pan": "blue",
+  "pan_answer": "green",
+  "dos": "orange"
+ }
+}
+```
+
+#### command : split
+Split COCO dataset for training and test.
+
+**usage**
+
+```shell
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py split --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled --ratio .8
+```
+
 
 #### Configuration  
 Configuration for the tool is defined via `--config` attribute and file is in JSON format.
