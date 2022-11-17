@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 fake = Faker()
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 
-
 # create new provider class
 
 
@@ -120,62 +119,6 @@ def __scale_height(img, target_size, method=Image.Resampling.LANCZOS):
     w = ow / scale
     h = target_size  # int(max(oh / scale, crop_size))
     resized = img.resize((int(w), int(h)), method)
-    return resized, resized.size
-
-
-def __scale_heightXXXX(img, target_size=1000, method=Image.Resampling.LANCZOS):
-    ow, oh = img.size
-    old_size = (ow, oh)
-
-    # paste the image if the width or height is smaller than the requested target size
-    if max((ow, oh)) < target_size:
-        new_im = Image.new(
-            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
-        )
-        new_im.paste(img)
-        return new_im, new_im.size
-
-    ratio = float(target_size) / max((ow, oh))
-    new_size = tuple([int(x * ratio) for x in old_size])
-    resized = img.resize(new_size, method)
-
-    # if resized height is less than target then we pad it
-    rw, rh = resized.size
-    if rh < target_size:
-        new_im = Image.new(
-            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
-        )
-        new_im.paste(resized)
-        return new_im, new_im.size
-
-    return resized, resized.size
-
-
-def __scale_heightZZZ(img, target_size=1000, method=Image.Resampling.LANCZOS):
-    ow, oh = img.size
-    old_size = (ow, oh)
-
-    # paste the image if the width or height is smaller than the requested target size
-    if max((ow, oh)) < target_size:
-        new_im = Image.new(
-            "RGB", (min(ow, target_size), target_size), color=(255, 255, 255)
-        )
-        new_im.paste(img)
-        return new_im, new_im.size
-
-    ratio = float(target_size) / max((ow, oh))
-    new_size = tuple([int(x * ratio) for x in old_size])
-    resized = img.resize(new_size, method)
-
-    # if resized height is less than target then we pad it
-    rw, rh = resized.size
-    if rh < target_size:
-        new_im = Image.new(
-            "RGB", (min(rw, target_size), target_size), color=(255, 255, 255)
-        )
-        new_im.paste(resized)
-        return new_im, new_im.size
-
     return resized, resized.size
 
 
@@ -437,7 +380,7 @@ def extract_icr(image, boxp, icrp):
     return boxes, result
 
 
-def decorate_funsd(src_dir: str):
+def decorate_funsd(src_dir: str, debug_fragments=False):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
@@ -492,7 +435,7 @@ def decorate_funsd(src_dir: str):
             # each snippet could be on multiple lines
             print(f"line_number = {line_number}")
             # export cropped region
-            if False:
+            if debug_fragments:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
@@ -508,7 +451,7 @@ def decorate_funsd(src_dir: str):
                 print(f"No results for : {guid}-{i}")
                 continue
 
-            if False:
+            if debug_fragments:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
@@ -553,7 +496,7 @@ def decorate_funsd(src_dir: str):
             )
             index = i + 1
 
-        if False:
+        if debug_fragments:
             file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
@@ -1069,9 +1012,11 @@ def load_image_pil(image_path):
     return image, (w, h)
 
 
-def visualize_funsd(src_dir: str):
+def visualize_funsd(src_dir: str, dst_dir: str, config: dict):
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
+
+    os.makedirs(dst_dir, exist_ok=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         file_path = os.path.join(ann_dir, file)
@@ -1091,53 +1036,7 @@ def visualize_funsd(src_dir: str):
         draw = ImageDraw.Draw(image, "RGBA")
         font = ImageFont.load_default()
         # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
-        label2color = {
-            "pan": "blue",
-            "pan_answer": "green",
-            "dos": "orange",
-            "dos_answer": "violet",
-            "member": "blue",
-            "member_answer": "green",
-            "member_number": "blue",
-            "member_number_answer": "green",
-            "member_name": "blue",
-            "member_name_answer": "green",
-            "patient_name": "blue",
-            "patient_name_answer": "green",
-            "paragraph": "purple",
-            "greeting": "blue",
-            "address": "orange",
-            "question": "blue",
-            "answer": "aqua",
-            "document_control": "grey",
-            "header": "brown",
-            "letter_date": "deeppink",
-            "url": "darkorange",
-            "phone": "darkmagenta",
-            "other": "red",
-            "claim_number": "darkmagenta",
-            "claim_number_answer": "green",
-            "birthdate": "green",
-            "birthdate_answer": "red",
-            "billed_amt": "green",
-            "billed_amt_answer": "orange",
-            "paid_amt": "green",
-            "paid_amt_answer": "blue",
-            "check_amt": "orange",
-            "check_amt_answer": "darkmagenta",
-            "check_number": "orange",
-            "check_number_answer": "blue",
-            "list": "darkmagenta",
-            "footer": "orange",
-            "date": "blue",
-            "identifier": "green",
-            "proc_code": "red",
-            "proc_code_answer": "deeppink",
-            "provider": "brown",
-            "provider_answer": "grey",
-            "money": "aqua",
-            "company": "grey",
-        }
+        label2color = config["label2color"]
 
         for i, item in enumerate(data["form"]):
             predicted_label = item["label"].lower()
@@ -1167,7 +1066,7 @@ def visualize_funsd(src_dir: str):
                 stroke_width=0,
             )
 
-        image.save(f"/tmp/snippet/viz_{filename}.png")
+        image.save(os.path.join(dst_dir, f"viz_{filename}.png"))
 
 
 @lru_cache(maxsize=10)
@@ -1295,24 +1194,29 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
         print("Time elapsed[all]: %s" % (time.time() - start))
 
 
-def splitDataset(src_dir, output_path, split_percentage):
+def split_dataset(src_dir, output_path, split_percentage):
     """
-    Split dataset for training and evaluation.
+    Split CODO dataset for training and test.
+
     ARGS:
-        src_dir  : input folder path where starts imagePath
-        outputPath : output folder where new train/test directory will be outputed
-        split      : split ration ex: .8-.2
+        src_dir  : input folder for COCO dataset, expected structure to have 'annotations' and 'image' folder
+        output_path : output folder where new train/test directory will be created
+        split_percentage      : split ration ex: .8  this will create 80/20 Train/Test split
     """
 
-    print("src_dir  = {}".format(src_dir))
-    print("output_path".format(output_path))
-    print("split      = {}".format(split_percentage))
+    print("Split dataset")
+    print("src_dir     = {}".format(src_dir))
+    print("output_path = {}".format(output_path))
+    print("split       = {}".format(split_percentage))
 
     ann_dir = os.path.join(src_dir, "annotations")
-    img_dir = os.path.join(
-        src_dir,
-        "images",
-    )
+    img_dir = os.path.join(src_dir, "images")
+
+    if not os.path.exists(ann_dir):
+        raise Exception("Source directory missing expected 'annotations' sub-directory")
+
+    if not os.path.exists(img_dir):
+        raise Exception("Source directory missing expected 'images' sub-directory")
 
     file_set = []
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
@@ -1322,184 +1226,189 @@ def splitDataset(src_dir, output_path, split_percentage):
         item = {"annotation": json_path, "image": image_path, "filename": filename}
         file_set.append(item)
 
-    nSamples = len(file_set)
-    sample_count = int(nSamples * split_percentage)
-    print(nSamples)
-    print(sample_count)
+    total_count = len(file_set)
+    sample_count = int(total_count * split_percentage)
+    print(f"split_percentage = {split_percentage}")
+    print(f"total_count      = {total_count}")
+    print(f"sample_count     = {sample_count}")
+    print(f"output_path      = {output_path}")
+
+    ann_dir_out_train = os.path.join(output_path, "train", "annotations")
+    img_dir_out_train = os.path.join(output_path, "train", "images")
+
+    ann_dir_out_test = os.path.join(output_path, "test", "annotations")
+    img_dir_out_test = os.path.join(output_path, "test", "images")
+
+    if os.path.exists(os.path.join(output_path, "train")) or os.path.exists(
+        os.path.join(output_path, "test")
+    ):
+        raise Exception(
+            "Output directory not empty, manually remove test/train directories."
+        )
+
+    os.makedirs(ann_dir_out_train, exist_ok=True)
+    os.makedirs(img_dir_out_train, exist_ok=True)
+    os.makedirs(ann_dir_out_test, exist_ok=True)
+    os.makedirs(img_dir_out_test, exist_ok=True)
 
     np.random.shuffle(file_set)
+    train_set = file_set[0:sample_count]
+    test_set = file_set[sample_count:-1]
 
-    ann_dir_out = os.path.join(output_path, "annotations")
-    img_dir_out = os.path.join(
-        output_path,
-        "images",
+    print(f"Train size : {len(train_set)}")
+    print(f"Test size : {len(test_set)}")
+
+    splits = [
+        {
+            "name": "train",
+            "files": train_set,
+            "ann_dir_out": ann_dir_out_train,
+            "img_dir_out": img_dir_out_train,
+        },
+        {
+            "name": "test",
+            "files": test_set,
+            "ann_dir_out": ann_dir_out_test,
+            "img_dir_out": img_dir_out_test,
+        },
+    ]
+
+    for split in splits:
+        fileset = split["files"]
+        ann_dir_out = split["ann_dir_out"]
+        img_dir_out = split["img_dir_out"]
+
+        for item in fileset:
+            ann = item["annotation"]
+            img = item["image"]
+            filename = item["filename"]
+            shutil.copyfile(ann, os.path.join(ann_dir_out, f"{filename}.json"))
+            shutil.copyfile(img, os.path.join(img_dir_out, f"{filename}.png"))
+
+
+def default_decorate(args: object):
+    print("Default decorate")
+    print(args)
+    print("*" * 180)
+
+    # This should be our dataset folder
+    mode = args.mode
+    src_dir = os.path.join(args.dir, f"{mode}")
+    decorate_funsd(src_dir, debug_fragments=False)
+
+
+def default_augment(args: object):
+    print("Default augment")
+    print(args)
+    print("*" * 180)
+
+    # This should be our dataset folder
+    mode = args.mode
+    aug_count = args.count
+    root_dir = args.dir
+    src_dir = os.path.join(args.dir, f"{mode}")
+    dst_dir = (
+        args.dir_output
+        if args.dir_output != "./augmented"
+        else os.path.abspath(os.path.join(root_dir, f"{mode}-augmented"))
     )
 
-    os.makedirs(output_path, exist_ok=True)
-    os.makedirs(ann_dir_out, exist_ok=True)
-    os.makedirs(img_dir_out, exist_ok=True)
+    print(f"mode      = {mode}")
+    print(f"aug_count = {aug_count}")
+    print(f"src_dir   = {src_dir}")
+    print(f"dst_dir   = {dst_dir}")
 
-    datalist = file_set[0:sample_count]
-
-    for item in datalist:
-        print(f"Splitting : {item}")
-        ann = item["annotation"]
-        img = item["image"]
-        filename = item["filename"]
-
-        shutil.copyfile(ann, os.path.join(ann_dir_out, f"{filename}.json"))
-        shutil.copyfile(img, os.path.join(img_dir_out, f"{filename}.png"))
-
-        os.remove(ann)
-        os.remove(img)
+    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
 
 
-def extract_args(args=None) -> object:
-    """
-    Argument parser
-    """
-    parser = argparse.ArgumentParser(
-        prog="coco_funsd_converter", description="COCO to FUNSD conversion utility"
+def default_rescale(args: object):
+    print("Default rescale")
+    print(args)
+    print("*" * 180)
+
+    # This should be our dataset folder
+    mode = args.mode
+    suffix = args.suffix
+    root_dir = args.dir
+    src_dir = os.path.join(args.dir, f"{mode}{suffix}")
+
+    dst_dir = (
+        args.dir_output
+        if args.dir_output != "./rescaled"
+        else os.path.abspath(os.path.join(root_dir, f"{mode}-rescaled"))
     )
 
-    parser.add_argument(
-        "--config",
-        required=True,
-        type=str,
-        default='./config.json',
-        help="Configuration file used for conversion",
+    print(f"mode    = {mode}")
+    print(f"suffix  = {suffix}")
+    print(f"src_dir = {src_dir}")
+    print(f"dst_dir = {dst_dir}")
+
+    rescale_annotate_frames(src_dir=src_dir, dest_dir=dst_dir)
+
+
+def default_visualize(args: object):
+    print("Default visualize")
+    print(args)
+    print("*" * 180)
+
+    src_dir = args.dir
+    dst_dir = args.dir_output
+
+    print(f"src_dir   = {src_dir}")
+    print(f"dst_dir   = {dst_dir}")
+    print(f"config    = {args.config}")
+    # load config file
+    config = from_json_file(args.config)
+
+    visualize_funsd(src_dir, dst_dir, config)
+
+
+def default_convert(args: object):
+    print("Default convert")
+    print(args)
+    print("*" * 180)
+
+    command = args.command
+    mode = args.mode
+    strip_file_name_path = args.strip_file_name_path
+
+    root_dir = args.dir
+    root_dir_converted = (
+        args.dir_converted
+        if args.dir_converted != "./converted"
+        else os.path.abspath(os.path.join(args.dir, "output", args.dir_converted))
     )
 
-    parser.add_argument(
-        "--mode",
-        required=True,
-        type=str,
-        default="train",
-        help="Conversion mode : train/test/validate",
-    )
+    root_dir_aug = "/tmp"
+    #
+    # root_dir_aug = (
+    #     args.dir_augmented
+    #     if args.dir_augmented != "./augmented"
+    #     else os.path.abspath(os.path.join(args.dir, "output", args.dir_augmented))
+    # )
 
-    parser.add_argument(
-        "--strip_file_name_path",
-        required=True,
-        # type=bool,
-        # action='store_true',
-        type=lambda x: bool(distutils.util.strtobool(x)),
-        default=False,
-        help="Should full image paths be striped from annotations file",
-    )
-
-    parser.add_argument(
-        "--dir",
-        required=True,
-        type=str,
-        default="~/dataset/ds-001/indexer",
-        help="Data directory",
-    )
-
-    parser.add_argument(
-        "--dir_converted",
-        required=False,
-        type=str,
-        default="./converted",
-        help="Converted data directory",
-    )
-
-    parser.add_argument(
-        "--dir_augmented",
-        required=False,
-        type=str,
-        default="./augmented",
-        help="Augmented data directory",
-    )
-
-    parser.add_argument(
-        "--step",
-        required=True,
-        nargs='+',
-        default=["all"],
-        choices=['convert', 'decorate', 'augment', 'rescale', 'visualize'],
-        help="Steps to perform [all, convert, decorate, augment, rescale, visualize]",
-    )
-
-    parser.add_argument(
-        "--aug-count",
-        type=int,
-        default=5,
-        help="Number of augmentations",
-    )
-
-    try:
-        return parser.parse_args(args) if args else parser.parse_args()
-    except:
-        parser.print_help()
-        sys.exit(0)
-
-
-if __name__ == "__main__":
-
-    if True:
-        args = extract_args()
-        print(args)
-
-    # Home
-    if False:
-        root_dir = "/home/greg/dataset/assets-private/corr-indexer"
-        root_dir_converted = "/home/greg/dataset/assets-private/corr-indexer-converted"
-        root_dir_aug = "/home/greg/dataset/assets-private/corr-indexer-augmented"
-
-    # GPU-001
-    if False:
-        root_dir = "/data/dataset/private/corr-indexer"
-        root_dir_converted = "/data/dataset/private/corr-indexer-converted"
-        root_dir_aug = "/data/dataset/private/corr-indexer-augmented"
-
-    # LP-01
-    if False:
-        root_dir = "/home/gbugaj/dataset/private/corr-indexer"
-        root_dir_converted = "/home/gbugaj/dataset/private/corr-indexer-converted"
-        root_dir_aug = "/home/gbugaj/dataset/private/corr-indexer-augmented"
-
-    mode = "train"
-    step = ""
-    strip_file_name_path = False
-    aug_count = 0
-
-    if True:
-        mode = args.mode
-        steps = args.step
-        aug_count = args.aug_count
-        strip_file_name_path = args.strip_file_name_path
-
-        root_dir = args.dir
-        root_dir_converted = (
-            args.dir_converted
-            if args.dir_converted != "./converted"
-            else os.path.abspath(os.path.join(args.dir, args.dir_converted))
-        )
-        root_dir_aug = (
-            args.dir_augmented
-            if args.dir_augmented != "./augmented"
-            else os.path.abspath(os.path.join(args.dir, args.dir_augmented))
-        )
-
-        # load config file
-        config = from_json_file(args.config)
+    # load config file
+    config = from_json_file(args.config)
 
     src_dir = os.path.join(root_dir, f"{mode}-deck-raw")
-    dst_path = os.path.join(root_dir, "dataset", f"{mode}ing_data")
-    aligned_dst_path = os.path.join(root_dir_converted, "dataset", f"{mode}ing_data")
-    aug_dest_dir = os.path.join(root_dir, "dataset-aug", f"{mode}ing_data")
-    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{mode}ing_data")
+    dst_path = os.path.join(root_dir, "output", "dataset", f"{mode}")
 
-    print(mode)
-    print(strip_file_name_path)
-    print(src_dir)
-    print(dst_path)
-    print(aligned_dst_path)
-    print(aug_aligned_dst_path)
-    print(steps)
-    print(len(steps))
-    print(aug_count)
+    aligned_dst_path = os.path.join(root_dir_converted, f"{mode}")
+
+    aug_dest_dir = os.path.join(
+        root_dir, "output", "dataset-augmented", f"{mode}ing_data"
+    )
+    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{mode}")
+
+    print(f"mode = {mode}")
+    print(f"src_dir              = {src_dir}")
+    print(f"dst_path             = {dst_path}")
+    print(f"aligned_dst_path     = {aligned_dst_path}")
+    print(f"aug_dest_dir         = {aug_dest_dir}")
+    print(f"aug_aligned_dst_path = {aug_aligned_dst_path}")
+    print(f"aug_count            = {aug_count}")
+
+    steps = ["ANY", command]
 
     if True:
         # STEP 1 : Convert COCO to FUNSD like format
@@ -1528,21 +1437,237 @@ if __name__ == "__main__":
             print(f"STEP:  visualize")
             visualize_funsd(aug_dest_dir)
 
-    # split data set from
-    # splitDataset(
-    #     "/home/greg/dataset/assets-private/corr-indexer-augmented/dataset/training_data/",
-    #     "/tmp/split",
-    #     0.10,
-    # )
 
-    # Debug INFO
-    # visualize_funsd("/home/gbugaj/dataset/private/corr-indexer/dataset/testing_data")
-    # visualize_funsd("/home/greg/dataset/assets-private/corr-indexer/dataset/training_data")
+def default_split(args: object):
+    print("Default split")
+    print(args)
+    print("*" * 180)
 
-    # visualize_funsd(aug_aligned_dst_path)
-    # visualize_funsd(dst_path)
+    src_dir = args.dir
+    dst_dir = args.dir_output
+    ratio = args.ratio
 
-    # /home/gbugaj/dataset/private/corr-indexer/dataset-aug/testing_data/images/152658536_0_2_9.png
-    # # STEP 2 : No Augmentation
-    # rescale_annotate_frames(src_dir=dst_path, dest_dir=aligned_dst_path)
-    # visualize_funsd(aligned_dst_path)
+    print(f"src_dir = {src_dir}")
+    print(f"dst_dir = {dst_dir}")
+    print(f"ratio   = {ratio}")
+
+    split_dataset(src_dir, dst_dir, ratio)
+
+
+def extract_args(args=None) -> object:
+    """
+    Argument parser
+
+    PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py --mode test --step augment --strip_file_name_path true --dir ~/dataset/private/corr-indexer --config ~/dataset/private/corr-indexer/config.json --aug-count 2
+    """
+    parser = argparse.ArgumentParser(
+        prog="coco_funsd_converter", description="COCO to FUNSD conversion utility"
+    )
+
+    subparsers = parser.add_subparsers(
+        dest='command', help='Commands to run', required=True
+    )
+
+    convert_parser = subparsers.add_parser(
+        "convert", help="Convert documents from COCO to FUNSD-Like intermediate format"
+    )
+    convert_parser.set_defaults(func=default_convert)
+
+    convert_parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        default="train",
+        help="Conversion mode : train/test/validate/etc",
+    )
+
+    convert_parser.add_argument(
+        "--mode-suffix",
+        required=False,
+        type=str,
+        default="-deck-raw",
+        help="Suffix for the mode",
+    )
+
+    convert_parser.add_argument(
+        "--strip_file_name_path",
+        required=True,
+        # type=bool,
+        # action='store_true',
+        type=lambda x: bool(distutils.util.strtobool(x)),
+        default=False,
+        help="Should full image paths be striped from annotations file",
+    )
+
+    convert_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        default="~/dataset/ds-001/indexer",
+        help="Base data directory",
+    )
+
+    convert_parser.add_argument(
+        "--dir_converted",
+        required=False,
+        type=str,
+        default="./converted",
+        help="Converted data directory",
+    )
+
+    convert_parser.add_argument(
+        "--config",
+        required=True,
+        type=str,
+        default='./config.json',
+        help="Configuration file used for conversion",
+    )
+
+    decorate_parser = subparsers.add_parser(
+        "decorate", help="Decorate documents(Box detection, ICR)"
+    )
+    decorate_parser.set_defaults(func=default_decorate)
+
+    decorate_parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        default="train",
+        help="Conversion mode : train/test/validate/etc",
+    )
+
+    decorate_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        help="Base dataset directory where the document for decorating resize",
+    )
+
+    augment_parser = subparsers.add_parser("augment", help="Augment documents")
+    augment_parser.set_defaults(func=default_augment)
+
+    augment_parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        help="Conversion mode : train/test/validate/etc",
+    )
+
+    augment_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        help="Source directory",
+    )
+
+    augment_parser.add_argument(
+        "--dir-output",
+        default="./augmented",
+        type=str,
+        help="Destination directory",
+    )
+
+    augment_parser.add_argument(
+        "--count",
+        required=True,
+        type=int,
+        help="Number of augmentations per annotation",
+    )
+
+    rescale_parser = subparsers.add_parser(
+        "rescale", help="Rescale/Normalize documents to be used by UNILM"
+    )
+    rescale_parser.set_defaults(func=default_rescale)
+
+    rescale_parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        help="Conversion mode : train/test/validate/etc",
+    )
+
+    rescale_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        help="Source directory",
+    )
+
+    rescale_parser.add_argument(
+        "--dir-output",
+        default="./rescaled",
+        type=str,
+        help="Destination directory",
+    )
+
+    rescale_parser.add_argument(
+        "--suffix",
+        default="-augmented",
+        type=str,
+        help="Suffix to append to the source directory",
+    )
+
+    visualize_parser = subparsers.add_parser("visualize", help="Visualize documents")
+    visualize_parser.set_defaults(func=default_visualize)
+
+    visualize_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        help="Source directory",
+    )
+
+    visualize_parser.add_argument(
+        "--dir-output",
+        default="/tmp/visualize",
+        type=str,
+        help="Destination directory",
+    )
+
+    visualize_parser.add_argument(
+        "--config",
+        type=str,
+        default='./visualize-config.json',
+        help="Configuration file used for conversion",
+    )
+
+    split_parser = subparsers.add_parser(
+        "split", help="Split COCO dataset into train/test"
+    )
+    split_parser.set_defaults(func=default_split)
+
+    split_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        help="Source directory",
+    )
+
+    split_parser.add_argument(
+        "--dir-output",
+        default="/tmp/split",
+        type=str,
+        help="Destination directory",
+    )
+
+    split_parser.add_argument(
+        "--ratio",
+        default=0.8,
+        type=float,
+        help="Destination directory",
+    )
+
+    try:
+        return parser.parse_args(args) if args else parser.parse_args()
+    except:
+        parser.print_help()
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    args = extract_args()
+    print("-" * 120)
+    print(args)
+    print("-" * 120)
+
+    args.func(args)
