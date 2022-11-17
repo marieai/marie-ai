@@ -285,16 +285,20 @@ def convert_coco_to_funsd(
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
     # instances_default.json
+    items = glob.glob(os.path.join(src_dir, "annotations/*.json"))
+    if len(items) == 0:
+        raise Exception(f"No annotations to process in : {src_dir}")
 
-    for idx, annotations_filename in enumerate(
-        glob.glob(os.path.join(src_dir, "annotations/*.json"))
-    ):
+    os.makedirs(output_path, exist_ok=True)
+
+    for idx, annotations_filename in enumerate(items):
         try:
+            print(f"Processing annotation : {annotations_filename}")
             __convert_coco_to_funsd(
                 src_dir, output_path, annotations_filename, config, strip_file_name_path
             )
         except Exception as e:
-            print(e)
+            raise e
 
 
 def normalize_bbox(bbox, size):
@@ -1367,75 +1371,72 @@ def default_convert(args: object):
     print("Default convert")
     print(args)
     print("*" * 180)
-
-    command = args.command
     mode = args.mode
+    suffix = args.mode_suffix
     strip_file_name_path = args.strip_file_name_path
+    src_dir = os.path.join(args.dir, f"{mode}{suffix}")
 
-    root_dir = args.dir
-    root_dir_converted = (
+    dst_path = (
         args.dir_converted
         if args.dir_converted != "./converted"
-        else os.path.abspath(os.path.join(args.dir, "output", args.dir_converted))
+        else os.path.join(args.dir, "output", "dataset", f"{mode}")
     )
 
-    root_dir_aug = "/tmp"
-    #
-    # root_dir_aug = (
-    #     args.dir_augmented
-    #     if args.dir_augmented != "./augmented"
-    #     else os.path.abspath(os.path.join(args.dir, "output", args.dir_augmented))
-    # )
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"File not found : {args.config}")
 
     # load config file
     config = from_json_file(args.config)
 
-    src_dir = os.path.join(root_dir, f"{mode}-deck-raw")
-    dst_path = os.path.join(root_dir, "output", "dataset", f"{mode}")
+    print(f"mode       = {mode}")
+    print(f"suffix     = {suffix}")
+    print(f"src_dir    = {src_dir}")
+    print(f"dst_path   = {dst_path}")
 
-    aligned_dst_path = os.path.join(root_dir_converted, f"{mode}")
+    convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
 
-    aug_dest_dir = os.path.join(
-        root_dir, "output", "dataset-augmented", f"{mode}ing_data"
-    )
-    aug_aligned_dst_path = os.path.join(root_dir_aug, "dataset", f"{mode}")
 
-    print(f"mode = {mode}")
-    print(f"src_dir              = {src_dir}")
-    print(f"dst_path             = {dst_path}")
-    print(f"aligned_dst_path     = {aligned_dst_path}")
-    print(f"aug_dest_dir         = {aug_dest_dir}")
-    print(f"aug_aligned_dst_path = {aug_aligned_dst_path}")
-    print(f"aug_count            = {aug_count}")
+def default_all_steps(args: object):
+    from argparse import Namespace
 
-    steps = ["ANY", command]
+    print("Default all_steps")
+    print(args)
+    print("*" * 180)
 
-    if True:
-        # STEP 1 : Convert COCO to FUNSD like format
-        if "all" in steps or "convert" in steps:
-            print(f"STEP:  convert")
-            convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
+    root_dir = args.dir
+    aug_count = args.aug_count
+    dataset_dir = os.path.join(root_dir, "output", "dataset")
 
-        # STEP 2 : Decorate
-        if "all" in steps or "decorate" in steps:
-            print(f"STEP:  decorate")
-            decorate_funsd(dst_path)
+    # clone and remove  unused values
+    args_1 = vars(args).copy()
+    args_1["func"] = None
+    args_1["command"] = "convert"
+    args_1["dir_converted"] = "./converted"
 
-        # STEP 3 : Augment Data /  Rescale
-        if "all" in steps or "augment" in steps:
-            print(f"STEP:  augment")
-            augment_decorated_annotation(
-                count=aug_count, src_dir=dst_path, dest_dir=aug_dest_dir
-            )
+    args_2 = vars(args).copy()
+    args_2["func"] = None
+    args_2["command"] = "decorate"
+    args_2["dir"] = dataset_dir
 
-        if "all" in steps or "rescale" in steps:
-            print(f"STEP:  rescale")
-            rescale_annotate_frames(src_dir=aug_dest_dir, dest_dir=aug_aligned_dst_path)
+    args_3 = vars(args).copy()
+    args_3["func"] = None
+    args_3["command"] = "augment"
+    args_3["dir"] = dataset_dir
+    args_3["count"] = aug_count
+    args_3["dir_output"] = "./augmented"
 
-        # STEP 5 : Visualize augmented data
-        if "all" in steps or "visualize" in steps:
-            print(f"STEP:  visualize")
-            visualize_funsd(aug_dest_dir)
+    args_4 = vars(args).copy()
+    args_4["func"] = None
+    args_4["command"] = "rescale"
+    args_4["dir"] = dataset_dir
+    args_4["dir_output"] = "./rescaled"
+    args_4["suffix"] = "-augmented"
+
+    # execute each step
+    default_convert(Namespace(**args_1))
+    default_decorate(Namespace(**args_2))
+    default_augment(Namespace(**args_3))
+    default_rescale(Namespace(**args_4))
 
 
 def default_split(args: object):
@@ -1471,6 +1472,7 @@ def extract_args(args=None) -> object:
     convert_parser = subparsers.add_parser(
         "convert", help="Convert documents from COCO to FUNSD-Like intermediate format"
     )
+
     convert_parser.set_defaults(func=default_convert)
 
     convert_parser.add_argument(
@@ -1508,7 +1510,7 @@ def extract_args(args=None) -> object:
     )
 
     convert_parser.add_argument(
-        "--dir_converted",
+        "--dir-converted",
         required=False,
         type=str,
         default="./converted",
@@ -1655,6 +1657,62 @@ def extract_args(args=None) -> object:
         default=0.8,
         type=float,
         help="Destination directory",
+    )
+
+    convert_all_parser = subparsers.add_parser(
+        "convert-all",
+        help="Run all conversion phases[convert,decorate,augment,rescale] using most defaults.",
+    )
+
+    convert_all_parser.set_defaults(func=default_all_steps)
+
+    convert_all_parser.add_argument(
+        "--mode",
+        required=True,
+        type=str,
+        default="train",
+        help="Conversion mode : train/test/validate/etc",
+    )
+
+    convert_all_parser.add_argument(
+        "--mode-suffix",
+        required=False,
+        type=str,
+        default="-deck-raw",
+        help="Suffix for the mode",
+    )
+
+    convert_all_parser.add_argument(
+        "--strip_file_name_path",
+        required=True,
+        # type=bool,
+        # action='store_true',
+        type=lambda x: bool(distutils.util.strtobool(x)),
+        default=False,
+        help="Should full image paths be striped from annotations file",
+    )
+
+    convert_all_parser.add_argument(
+        "--aug-count",
+        required=True,
+        type=int,
+        help="Number of augmentations per annotation",
+    )
+
+    convert_all_parser.add_argument(
+        "--dir",
+        required=True,
+        type=str,
+        default="~/dataset/ds-001/indexer",
+        help="Base data directory",
+    )
+
+    convert_all_parser.add_argument(
+        "--config",
+        required=True,
+        type=str,
+        default='./config.json',
+        help="Configuration file used for conversion",
     )
 
     try:
