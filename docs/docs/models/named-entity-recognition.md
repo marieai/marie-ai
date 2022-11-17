@@ -196,7 +196,7 @@ usage: coco_funsd_converter [-h] {convert,decorate,augment,rescale,visualize,spl
 COCO to FUNSD conversion utility
 
 positional arguments:
-  {convert,decorate,augment,rescale,visualize,split}
+  {convert,decorate,augment,rescale,visualize,split,convert-all}
                         Commands to run
     convert             Convert documents from COCO to FUNSD-Like intermediate format
     decorate            Decorate documents(Box detection, ICR)
@@ -204,6 +204,7 @@ positional arguments:
     rescale             Rescale/Normalize documents to be used by UNILM
     visualize           Visualize documents
     split               Split COCO dataset into train/test
+    convert-all         Run all conversion phases[convert,decorate,augment,rescale] using most defaults.
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -349,6 +350,16 @@ Split COCO dataset for training and test.
 ```shell
 PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py split --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled --ratio .8
 ```
+
+
+#### command : convert-all
+Run all conversion phases[convert,decorate,augment,rescale] using most defaults. This is the fastest way to test your
+model and make sure that everything is configured correctly.
+
+**usage**
+
+```shell
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/dataset/private/corr-indexer  --config ~/dataset/private/corr-indexer/config.json ```
 
 
 #### Configuration  
