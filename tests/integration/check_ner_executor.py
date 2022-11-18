@@ -69,7 +69,8 @@ if __name__ == "__main__":
     # pip install git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
-    _name_or_path = "rms/layoutlmv3-large-corr-ner"
+    # _name_or_path = "rms/layoutlmv3-large-corr-ner"
+    _name_or_path = "rms/layoutlmv3-large-20221118-001-8000"
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 
@@ -79,10 +80,12 @@ if __name__ == "__main__":
     storage_conf = storage_provider_config("postgresql", config_data)
     executor = NerExtractionExecutor(_name_or_path)
 
-    single_file = True
-    img_path = f"/home/greg/tmp/image5839050414130576656-0.tif"
+    single_file = False
+    storage_enabled = False
+    img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.png"
+    img_path = f"/home/gbugaj/Downloads/task_ci-train-04-2022_11_18_21_05_06-cvat for images 1.1/images/corr-indexing-10-12-2022"
 
     if single_file:
-        process_file(executor, img_path, True, storage_conf)
+        process_file(executor, img_path, storage_enabled, storage_conf)
     else:
-        process_dir(executor, img_path, True, storage_conf)
+        process_dir(executor, img_path, storage_enabled, storage_conf)

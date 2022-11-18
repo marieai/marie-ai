@@ -302,6 +302,8 @@ PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py rescale --mode test \
 --dir ~/dataset/private/corr-indexer/output/dataset
 ```
 
+[//]: # (41503)
+
 After the script is run our directory structure will look as follows:
 
 ```text
@@ -317,6 +319,16 @@ After the script is run our directory structure will look as follows:
     └── test-rescaled             <------------ 
         ├── annotations
         └── images
+```
+
+#### command : convert-all
+Run all conversion phases[convert,decorate,augment,rescale] using most defaults. This is the fastest way to test your
+model and make sure that everything is configured correctly.
+
+**usage**
+
+```shell
+PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/dataset/private/corr-indexer  --config ~/dataset/private/corr-indexer/config.json ```
 ```
 
 
@@ -350,18 +362,7 @@ Split COCO dataset for training and test.
 ```shell
 PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py split --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled --ratio .8
 ```
-
-
-#### command : convert-all
-Run all conversion phases[convert,decorate,augment,rescale] using most defaults. This is the fastest way to test your
-model and make sure that everything is configured correctly.
-
-**usage**
-
-```shell
-PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/dataset/private/corr-indexer  --config ~/dataset/private/corr-indexer/config.json ```
-
-
+ 
 #### Configuration  
 Configuration for the tool is defined via `--config` attribute and file is in JSON format.
 
@@ -503,6 +504,16 @@ conda env list
 conda activate layoutlmv3
 cd ~/dev/unilm/
 ```
+
+To start trainin we can use the following script 
+
+```shell
+screen
+CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=1 python ./train.py
+```
+
+
+
 
 ## Reference
 * [LayoutLMv3: Multi-modal Pre-training for Visually-Rich Document Understanding](https://arxiv.org/abs/2204.08387)

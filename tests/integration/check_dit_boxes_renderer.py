@@ -37,6 +37,7 @@ if __name__ == "__main__":
         mean, std = cv2.meanStdDev(image)
 
         # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
+
         box = BoxProcessorUlimDit(
             work_dir=work_dir_boxes,
             models_dir="./model_zoo/unilm/dit/text_detection",
@@ -69,10 +70,14 @@ if __name__ == "__main__":
 
             renderer = PdfRenderer(config={"preserve_interword_spaces": True})
             renderer.render(
-                image, result, output_filename=os.path.join(work_dir_icr, "results.pdf")
+                [image],
+                result,
+                output_filename=os.path.join(work_dir_icr, "results.pdf"),
             )
 
             renderer = TextRenderer(config={"preserve_interword_spaces": True})
             renderer.render(
-                image, result, output_filename=os.path.join(work_dir_icr, "results.txt")
+                [image],
+                result,
+                output_filename=os.path.join(work_dir_icr, "results.txt"),
             )

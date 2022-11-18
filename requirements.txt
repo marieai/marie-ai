@@ -42,3 +42,6 @@ psycopg2-binary==2.8.6
 pytest
 nlpaug
 psutil
+shapely
+munch
+anyconfig

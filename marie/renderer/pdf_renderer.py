@@ -90,6 +90,8 @@ class PdfRenderer(ResultRenderer):
 
         try:
             print("Rendering ...")
+            frame = frames[0]
+
             words = results["words"]
             lines = results["lines"]
 
