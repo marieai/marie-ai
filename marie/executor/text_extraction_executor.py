@@ -116,8 +116,10 @@ class TextExtractionExecutor(Executor):
             has_cuda = False
 
         if has_cuda:
+            # benchmark mode is good whenever your input sizes for your network do not vary
+            cudnn.enabled = True
             cudnn.benchmark = False
-            cudnn.deterministic = False
+            cudnn.deterministic = True
 
         self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=has_cuda)
         self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
@@ -162,6 +164,7 @@ class TextExtractionExecutor(Executor):
             ) = self.box_processor.extract_bounding_boxes(
                 queue_id, checksum, overlay, pms_mode
             )
+
             result, overlay_image = self.icr_processor.recognize(
                 queue_id, checksum, overlay, boxes, img_fragments, lines
             )
@@ -241,9 +244,6 @@ class TextExtractionExecutor(Executor):
                     queue_id, checksum, overlay, boxes, img_fragments, lines
                 )
 
-                cv2.imwrite(
-                    f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image
-                )
                 if not filter_snippets:
                     result["overlay_b64"] = encodeToBase64(overlay_image)
 
@@ -305,7 +305,7 @@ class TextExtractionExecutor(Executor):
         """
         queue_id: str = kwargs.get("queue_id", "0000-0000-0000-0000")
         for key, value in kwargs.items():
-            print("The value of {} is {}".format(key, value))
+            logger.info("The value of {} is {}".format(key, value))
 
         logger.info("Starting ICR processing request", extra={"session": queue_id})
 

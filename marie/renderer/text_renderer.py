@@ -3,12 +3,8 @@ from os import PathLike
 from typing import Dict, Any, Union
 
 import numpy as np
-
-from marie.logging.logger import MarieLogger
 from marie.renderer.renderer import ResultRenderer
 from marie.utils.types import strtobool
-
-logger = MarieLogger("")
 
 
 class TextRenderer(ResultRenderer):
@@ -16,9 +12,10 @@ class TextRenderer(ResultRenderer):
         super().__init__(config)
         if config is None:
             config = {}
-        print(f"TextRenderer base : {config}")
 
+        self.logger.info(f"TextRenderer base : {config}")
         self.preserve_interword_spaces = False
+
         if "preserve_interword_spaces" in config:
             self.preserve_interword_spaces = strtobool(
                 config["preserve_interword_spaces"]
@@ -37,16 +34,18 @@ class TextRenderer(ResultRenderer):
         if image is None:
             raise Exception("Image or list of images expected")
 
-        print(result)
+        self.check_format_xywh(result, True)
+
         char_ratio = 2.75
         char_width = 20  # 8
         char_height = int(char_width * char_ratio)
         shape = image.shape
 
-        print(f"Char ratio : {char_ratio}")
-        print(f"Char width : {char_width}")
-        print(f"Char height : {char_height}")
-        print(f"Image size : {shape}")
+        if False:
+            print(f"Char ratio : {char_ratio}")
+            print(f"Char width : {char_width}")
+            print(f"Char height : {char_height}")
+            print(f"Image size : {shape}")
 
         h = shape[0]
         w = shape[1]
@@ -54,22 +53,10 @@ class TextRenderer(ResultRenderer):
         xs = ceil(h / char_width)
         hs = ceil(w / char_height)
         # ['meta', 'words', 'lines']
+
         meta = result["meta"]
         words = result["words"]
         lines = result["lines"]
-
-        # Ensure page is in xywh format
-        # change from xywy -> xyxy
-        if meta["format"] != "xywh":
-            # logger.info("Changing coordinate format from xywh -> xyxy")
-            for word in result["words"]:
-                x, y, w, h = word["box"]
-                w_box = [x, y, x + w, y + h]
-                word["box"] = w_box
-                # FIXME:  BLOWS memory on GPU
-                # word["box"] = CoordinateFormat.convert(
-                #     word["box"], CoordinateFormat.XYWH, CoordinateFormat.XYXY
-                # )
 
         buffer = ""
         start_cell_y = 1
@@ -126,14 +113,14 @@ class TextRenderer(ResultRenderer):
                     if gap > estimate_character_width:
                         spaces = max(1, gap // estimate_character_width)
 
-                print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
+                # print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
                 text = word["text"]
                 confidence = word["confidence"]
                 box = word["box"]
                 x, y, w, h = box
                 cellx = x // char_width
                 cols = (x + w) // char_width
-                print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
+                # print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
                 buffer += " " * spaces
                 buffer += text
 
@@ -150,7 +137,7 @@ class TextRenderer(ResultRenderer):
         """Renders results into text output stream
         Results parameter "format" is expected to be in "XYWH" conversion will be performed to accommodate this
         """
-
+        self.logger.info(f"Render textfile : {output_filename}")
         # The form feed character is sometimes used in plain text files of source code as a delimiter for a page break
         page_seperator = "\f"  # or \x0c
         # page_seperator = "\n\n__SEP__\n\n"
@@ -161,8 +148,8 @@ class TextRenderer(ResultRenderer):
             try:
                 content = self.__render_page(image, result, page_index)
                 buffer += content
-            except Exception as ex:
-                print(ex)
+            except Exception as e:
+                self.logger.error(e, stack_info=True, exc_info=True)
 
             if len(frames) > 1:
                 if page_index < len(frames) - 1:

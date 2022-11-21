@@ -145,8 +145,8 @@ class BoxProcessorUlimDit(BoxProcessor):
             if classes[i] == 0:
                 snippet = img[y0 : y0 + h, x0 : x0 + w :]
                 # export cropped region
-                file_path = os.path.join("./result", "snippet_%s.jpg" % i)
-                cv2.imwrite(file_path, snippet)
+                # file_path = os.path.join("./result", "snippet_%s.jpg" % i)
+                # cv2.imwrite(file_path, snippet)
 
                 fragments.append(snippet)
                 rect_from_poly.append(box_adj)

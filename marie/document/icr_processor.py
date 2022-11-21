@@ -213,8 +213,9 @@ class IcrProcessor(BaseHandler):
                     "confidence": round(np.average(_conf), 4),
                 }
 
-                print("-------")
-                print(line_results[i])
+                if False:
+                    print("-------")
+                    print(line_results[i])
             #
             # print("aligned_words")
             # print(aligned_words)

@@ -1,7 +1,11 @@
+# import warnings
+#
+# warnings.simplefilter(action='ignore', category=FutureWarning)
+# warnings.simplefilter(action='ignore', category=UserWarning)
+
 import os
 import cv2
 import torch
-from builtins import print
 
 from docarray import DocumentArray
 from torch.backends import cudnn
@@ -110,8 +114,8 @@ class NerExtractionExecutor(Executor):
                 from torch._C import _cudnn
 
                 # It seems good practice to turn off cudnn.benchmark when turning on cudnn.deterministic
-                cudnn.benchmark = True
-                cudnn.deterministic = False
+                cudnn.benchmark = False
+                cudnn.deterministic = True
             except ImportError:
                 pass
 
@@ -578,7 +582,7 @@ class NerExtractionExecutor(Executor):
 
         results = {"meta": aggregated_meta, "kv": aggregated_kv, "ner": aggregated_ner}
 
-        print(results)
+        self.logger.debug(f" results : {results}")
         return results
 
     def decorate_aggregates_with_text(self, aggregated_kv, frames):
@@ -662,7 +666,7 @@ class NerExtractionExecutor(Executor):
         """Pre-process src image for NER extraction"""
 
         if not os.path.exists(src_image):
-            print(f"File not found : {src_image}")
+            self.logger.info(f"File not found : {src_image}")
             return
 
         # Obtain OCR results
@@ -675,11 +679,11 @@ class NerExtractionExecutor(Executor):
         ocr_json_path = os.path.join(root_dir, "ocr", f"{file_hash}.json")
         annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
 
-        print(f"Root      : {root_dir}")
-        print(f"SrcImg    : {src_image}")
-        print(f"Hash      : {file_hash}")
-        print(f"OCR file  : {ocr_json_path}")
-        print(f"NER file  : {annotation_json_path}")
+        self.logger.info(f"Root      : {root_dir}")
+        self.logger.info(f"SrcImg    : {src_image}")
+        self.logger.info(f"Hash      : {file_hash}")
+        self.logger.info(f"OCR file  : {ocr_json_path}")
+        self.logger.info(f"NER file  : {annotation_json_path}")
 
         if not os.path.exists(ocr_json_path) and self.text_executor is None:
             raise Exception(f"OCR File not found : {ocr_json_path}")
@@ -798,7 +802,7 @@ class NerExtractionExecutor(Executor):
         image_src: str = kwargs.get("img_path", None)
 
         for key, value in kwargs.items():
-            print("The value of {} is {}".format(key, value))
+            self.logger.info("The value of {} is {}".format(key, value))
 
         loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
             image_src
