@@ -12,6 +12,7 @@ from marie.registry.model_registry import ModelRegistry
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
 from marie import (
+    Document,
     DocumentArray,
     __model_path__,
     __config_dir__,
@@ -31,7 +32,7 @@ def process_file(
         docs = None
         kwa = {"checksum": checksum, "img_path": img_path}
         payload = executor.extract(docs, **kwa)
-        print(payload)
+        # print(payload)
         store_json_object(payload, f"/tmp/tensors/json/{filename}.json")
 
         if storage_enabled:
@@ -70,20 +71,19 @@ if __name__ == "__main__":
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
     # _name_or_path = "rms/layoutlmv3-large-corr-ner"
-    _name_or_path = "rms/layoutlmv3-large-20221118-001-8000"
+    _name_or_path = "rms/layoutlmv3-large-20221118-001-best"
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 
-    print(__config_dir__)
     # Load config
     config_data = load_yaml(os.path.join(__config_dir__, "marie-debug.yml"))
     storage_conf = storage_provider_config("postgresql", config_data)
     executor = NerExtractionExecutor(_name_or_path)
 
-    single_file = False
+    single_file = True
     storage_enabled = False
     img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.png"
-    img_path = f"/home/gbugaj/Downloads/task_ci-train-04-2022_11_18_21_05_06-cvat for images 1.1/images/corr-indexing-10-12-2022"
+    img_path = f"/home/gbugaj/Downloads/task_ci-train-04-2022_11_18_21_05_06-cvat for images 1.1/images/corr-indexing-10-12-2022/162402144_1.png"
 
     if single_file:
         process_file(executor, img_path, storage_enabled, storage_conf)

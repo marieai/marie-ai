@@ -6,7 +6,6 @@ import yaml
 def load_yaml(config_file):
     with open(config_file, "r") as yamlfile:
         config_data = yaml.load(yamlfile, Loader=yaml.FullLoader)
-        print(f"Config read successfully : {config_file}")
         return config_data
 
 

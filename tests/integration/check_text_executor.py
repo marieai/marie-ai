@@ -37,16 +37,16 @@ if __name__ == "__main__":
         print(results)
         store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
 
-    results = load_json_file(os.path.join("/tmp/fragments", "results.json"))
+    results = load_json_file(os.path.join("/tmp/fragments", "results-dit.json"))
     visualize_icr(frames, results)
-
-    if False:
-        renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(
-            frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf")
-        )
 
     renderer = TextRenderer(config={"preserve_interword_spaces": True})
     renderer.render(
         frames, results, output_filename=os.path.join(work_dir_icr, "results.txt")
     )
+
+    if True:
+        renderer = PdfRenderer(config={})
+        renderer.render(
+            frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf")
+        )

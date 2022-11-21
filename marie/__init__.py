@@ -6,25 +6,43 @@ import signal as _signal
 import sys as _sys
 import warnings as _warnings
 from pathlib import Path
+from distutils.util import strtobool as strtobool
 
 import docarray as _docarray
 
 
-if _sys.version_info < (3, 7, 0):
-    raise OSError(f"Marie requires Python >= 3.7, but yours is {_sys.version_info}")
+if _sys.version_info < (3, 8, 0):
+    raise OSError(f"Marie requires Python >= 3.8, but yours is {_sys.version_info}")
+
+if strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
+    import warnings
+
+    warnings.simplefilter(action='ignore', category=FutureWarning)
+    warnings.simplefilter(action='ignore', category=UserWarning)
+
 
 __windows__ = _sys.platform == "win32"
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
 __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
 # __resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
-__resources_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "resources")
-__model_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo")
-__config_dir__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "config")
-__cache_dir__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), ".cache")
+__resources_path__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), "resources"
+)
+__model_path__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo"
+)
+__config_dir__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), "config"
+)
+__cache_dir__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), ".cache"
+)
 __marie_home__ = _os.path.join(str(Path.home()), ".marie")
 
 
-__default_host__ = _os.environ.get("MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0")
+__default_host__ = _os.environ.get(
+    "MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0"
+)
 __default_port_monitoring__ = 9090
 __docker_host__ = 'host.docker.internal'
 __default_executor__ = "BaseExecutor"
@@ -64,10 +82,14 @@ __marie_env__ = (
 
 
 new_env_regex_str = r"\${{\sENV\.[a-zA-Z0-9_]*\s}}|\${{\senv\.[a-zA-Z0-9_]*\s}}"
-new_env_var_regex = re.compile(new_env_regex_str)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
+new_env_var_regex = re.compile(
+    new_env_regex_str
+)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
 
 env_var_deprecated_regex_str = r"\$[a-zA-Z0-9_]*"
-env_var_deprecated_regex = re.compile(r"\$[a-zA-Z0-9_]*")  # matches expressions of form '$var'
+env_var_deprecated_regex = re.compile(
+    r"\$[a-zA-Z0-9_]*"
+)  # matches expressions of form '$var'
 
 env_var_regex_str = env_var_deprecated_regex_str + "|" + new_env_regex_str
 env_var_regex = re.compile(env_var_regex_str)  # matches either of the above
@@ -88,4 +110,3 @@ from marie.orchestrate.flow.asyncio import AsyncFlow
 
 # Flow
 from marie.orchestrate.flow.base import Flow
-
