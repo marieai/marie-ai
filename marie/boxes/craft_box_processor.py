@@ -27,7 +27,13 @@ import marie.models.craft.file_utils
 import marie.models.craft.imgproc
 
 from PIL import Image, ImageDraw
-from marie.boxes.box_processor import PSMode, estimate_character_width, BoxProcessor, copyStateDict
+from marie.boxes.box_processor import (
+    PSMode,
+    estimate_character_width,
+    BoxProcessor,
+    copyStateDict,
+    create_dirs,
+)
 from marie.utils.utils import ensure_exists
 from marie import __model_path__
 
@@ -141,10 +147,6 @@ def get_prediction(
     if show_time:
         print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    # cv2.imwrite("/tmp/fragments/render_img.png", render_img)
-    # cv2.imwrite("/tmp/fragments/ret_score_text.png", ret_score_text)
-
-
     # DO LINE DETECTION
     # refine link
     lines_bboxes = []
@@ -162,15 +164,22 @@ def get_prediction(
         text_score_comb = link_score * 255
 
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
+        line_img = cv2.morphologyEx(
+            text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1
+        )
 
-        if False:
+        if True:
             cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
             cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
             cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
-            cv2.imwrite(os.path.join("/tmp/fragments/", "h-text_score_comb.png"), text_score_comb * 255)
+            cv2.imwrite(
+                os.path.join("/tmp/fragments/", "h-text_score_comb.png"),
+                text_score_comb * 255,
+            )
 
-        nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(line_img.astype(np.uint8), connectivity=4)
+        nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            line_img.astype(np.uint8), connectivity=4
+        )
 
         h, w = line_img.shape
         overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
@@ -188,7 +197,7 @@ def get_prediction(
             color = list(np.random.random(size=3) * 256)
             cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
 
-        # cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+        cv2.imwrite("/tmp/fragments/img_line.png", overlay)
         lines_bboxes = line_merge(overlay, line_bboxes)
 
         # coordinate adjustment
@@ -223,7 +232,9 @@ def get_prediction(
                 width=1,
             )
 
-        # viz_img.save(os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG")
+        viz_img.save(
+            os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG"
+        )
     # estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text, lines_bboxes
 
@@ -259,7 +270,9 @@ class BoxProcessorCraft(BoxProcessor):
         if cuda:
             net.load_state_dict(copyStateDict(torch.load(args.trained_model)))
         else:
-            net.load_state_dict(copyStateDict(torch.load(args.trained_model, map_location="cpu")))
+            net.load_state_dict(
+                copyStateDict(torch.load(args.trained_model, map_location="cpu"))
+            )
 
         if cuda:
             net = net.cuda()
@@ -275,13 +288,21 @@ class BoxProcessorCraft(BoxProcessor):
             from craft.refinenet import RefineNet
 
             refine_net = RefineNet()
-            print("Loading weights of refiner from checkpoint (" + args.refiner_model + ")")
+            print(
+                "Loading weights of refiner from checkpoint ("
+                + args.refiner_model
+                + ")"
+            )
             if cuda:
-                refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model)))
+                refine_net.load_state_dict(
+                    copyStateDict(torch.load(args.refiner_model))
+                )
                 refine_net = refine_net.cuda()
                 refine_net = torch.nn.DataParallel(refine_net)
             else:
-                refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model, map_location="cpu")))
+                refine_net.load_state_dict(
+                    copyStateDict(torch.load(args.refiner_model, map_location="cpu"))
+                )
 
             refine_net.eval()
             args.poly = True
@@ -410,29 +431,22 @@ class BoxProcessorCraft(BoxProcessor):
         if img is None:
             raise Exception("Input image can't be empty")
         try:
-            debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
-            crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
-            lines_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "lines"))
-            mask_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "mask"))
-
+            crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
+                self.work_dir, _id, key
+            )
             image = copy.deepcopy(img)
             w = image.shape[1]  # 1280
-
-            # Inverting the image makes box detection substantially better in many case, I think that this make sense
-            # to make this a configurable option
-            # Make this a configuration
-            image_norm = image
             lines_bboxes = []
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
-                bboxes, polys, score_text, lines_bboxes = self.psm_sparse(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_sparse(image)
             # elif psm == PSMode.WORD:
             #     bboxes, polys, score_text, lines_bboxes = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
-                bboxes, polys, score_text, lines_bboxes = self.psm_line(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_line(image)
             elif psm == PSMode.MULTI_LINE:
-                bboxes, polys, score_text, lines_bboxes = self.psm_multiline(image_norm)
+                bboxes, polys, score_text, lines_bboxes = self.psm_multiline(image)
             elif psm == PSMode.RAW_LINE or psm == PSMode.WORD:
                 # NOTE: Semantics have changed and now both RAW_LINE and WORD are same
                 # this needs to be handled better, there is no need to have the segmentation for RAW_LINES
@@ -444,13 +458,19 @@ class BoxProcessorCraft(BoxProcessor):
                 prediction_result = dict()
 
                 # x, y, w, h = box
-                w = image_norm.shape[1]
-                h = image_norm.shape[0]
+                w = image.shape[1]
+                h = image.shape[0]
                 rect_from_poly.append([0, 0, w, h])
-                fragments.append(image_norm)
+                fragments.append(image)
                 rect_line_numbers.append(0)
 
-                return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines_bboxes
+                return (
+                    rect_from_poly,
+                    fragments,
+                    rect_line_numbers,
+                    prediction_result,
+                    lines_bboxes,
+                )
             else:
                 raise Exception(f"PSM mode not supported : {psm}")
 
@@ -461,7 +481,9 @@ class BoxProcessorCraft(BoxProcessor):
 
             # deepcopy image so that original is not altered
             # image = copy.deepcopy(image)
-            pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0))
+            pil_image = Image.new(
+                "RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0)
+            )
 
             rect_from_poly = []
             rect_line_numbers = []
@@ -511,11 +533,19 @@ class BoxProcessorCraft(BoxProcessor):
 
                 paste_fragment(pil_image, snippet, (x, y))
                 # break
-            savepath = os.path.join(debug_dir, "%s.png" % ("txt_overlay"))
-            pil_image.save(savepath, format="PNG", subsampling=0, quality=100)
+            # FIXME : Add debug flags
+            if True:
+                savepath = os.path.join(debug_dir, "%s.png" % ("txt_overlay"))
+                pil_image.save(savepath, format="PNG", subsampling=0, quality=100)
 
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)
-            return rect_from_poly, fragments, rect_line_numbers, prediction_result, lines_bboxes
-        except Exception as ident:
-            raise ident
+            return (
+                rect_from_poly,
+                fragments,
+                rect_line_numbers,
+                prediction_result,
+                lines_bboxes,
+            )
+        except Exception as ex:
+            raise ex
