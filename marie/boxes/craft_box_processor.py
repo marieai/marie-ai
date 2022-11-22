@@ -169,11 +169,11 @@ def get_prediction(
         )
 
         if True:
-            cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
-            cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
-            cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap.png"), textmap * 255)
+            cv2.imwrite("/tmp/fragments/lines-morph-craft.png", line_img)
+            cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap-craft.png"), linkmap * 255)
+            cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap-craft.png"), textmap * 255)
             cv2.imwrite(
-                os.path.join("/tmp/fragments/", "h-text_score_comb.png"),
+                os.path.join("/tmp/fragments/", "h-text_score_comb-craft.png"),
                 text_score_comb * 255,
             )
 
@@ -197,7 +197,7 @@ def get_prediction(
             color = list(np.random.random(size=3) * 256)
             cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
 
-        cv2.imwrite("/tmp/fragments/img_line.png", overlay)
+        cv2.imwrite("/tmp/fragments/img_line-craft.png", overlay)
         lines_bboxes = line_merge(overlay, line_bboxes)
 
         # coordinate adjustment
@@ -233,7 +233,7 @@ def get_prediction(
             )
 
         viz_img.save(
-            os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG"
+            os.path.join("/tmp/fragments", f"overlay_refiner-final-craft.png"), format="PNG"
         )
     # estimate_character_width(render_img, boxes)
     return boxes, polys, ret_score_text, lines_bboxes
@@ -492,6 +492,9 @@ class BoxProcessorCraft(BoxProcessor):
 
             max_h = image.shape[0]
             max_w = image.shape[1]
+
+            print("lines_bboxes ***")
+            print(lines_bboxes)
 
             for idx, region in enumerate(bboxes):
                 region = np.array(region).astype(np.int32).reshape((-1))

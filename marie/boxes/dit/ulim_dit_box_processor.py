@@ -74,19 +74,32 @@ def _convert_boxes(boxes):
 
 
 def lines_from_bboxes(image, bboxes):
+    """Create lines out of bboxes for given image.
+    Args:
+        image(ndarray): numpy array of shape (H, W), where H is the image height and W is the image width.
+        bboxes: Bounding boxes for image (xmin,ymin,xmax,ymax)
+    """
 
-    # overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
+    print(image.shape)
+    _h = image.shape[0]
+    _w = image.shape[1]
+
+    overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
     img_line = copy.deepcopy(image)
     viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
     viz_img = Image.fromarray(viz_img)
     draw = ImageDraw.Draw(viz_img, "RGBA")
 
     for box in bboxes:
-        x, y, w, h = box
-        color = list(np.random.random(size=3) * 256)
-        # cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+        x1, y1, x2, y2 = box.astype(np.int32)
+        w = x2 - x1
+        h = (y2 - y1) // 2
+        y1_adj = y1 + h // 2
+
+        cv2.rectangle(overlay, (x1, y1_adj), (x1 + w, y1_adj + h), (0, 0, 0), -1)
+
         draw.rectangle(
-            [x, y, w, h],
+            [x1, y1, x2, y2],
             outline="#993300",
             fill=(
                 int(np.random.random() * 256),
@@ -98,36 +111,55 @@ def lines_from_bboxes(image, bboxes):
         )
 
     viz_img.save(
-        os.path.join("/tmp/fragments", f"overlay_refiner-XXX.png"), format="PNG"
+        os.path.join("/tmp/fragments", f"overlay_refiner_boxes.png"), format="PNG"
     )
 
-    return []
-    link_threshold = 127
-    ret, link_score = cv2.threshold(image, link_threshold, 1, 0)
+    cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.jpg"), overlay)
 
-    linkmap = link_score
-    # text_score_comb = np.clip(text_score + link_score, 0, 1) * 255
-    text_score_comb = link_score * 255
+    # ret, link_score = cv2.threshold(overlay, link_threshold, 1, 0)
+    overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2GRAY)
+    ret, link_score = cv2.threshold(overlay, 0, 255, cv2.THRESH_BINARY)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # [horiz]
+    # Specify size on horizontal axis
+    cols = link_score.shape[1]
+    horizontal_size = cols // 30
+    # Create structure element for extracting horizontal lines through morphology operations
+    horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
+
+    # Apply morphology operations
+    horizontal = np.copy(link_score)
+    horizontal = cv2.erode(horizontal, horizontal_struct)
+    horizontal = cv2.dilate(horizontal, horizontal_struct)
 
     if True:
-        cv2.imwrite("/tmp/fragments/lines-morph.png", line_img)
-        cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap.png"), linkmap * 255)
-        cv2.imwrite(
-            os.path.join("/tmp/fragments/", "h-text_score_comb.png"),
-            text_score_comb * 255,
-        )
+        cv2.imwrite("/tmp/fragments/horizontal.jpg", horizontal)
+        # cv2.imwrite("/tmp/fragments/lines-morph.jpg", line_img)
+        # cv2.imwrite("/tmp/fragments/lines-morph.jpg", line_img)
+        # cv2.imwrite(
+        #     os.path.join("/tmp/fragments/", "h-text_score_comb.jpg"),
+        #     text_score_comb,
+        # )
+
+    # create binary mask for the image
+    # cv2.connectedComponents_XXXXXX() considers only the white portion as a component.
+    # binary = cv2.bitwise_not(binary)
+
+    binary_mask = np.zeros(horizontal.shape)
+    binary_mask[horizontal == 255] = 0
+    binary_mask[horizontal != 255] = 255
+    binary_mask = binary_mask.astype(np.uint8)
+    connectivity = 4
 
     nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        line_img.astype(np.uint8), connectivity=4
+        binary_mask, connectivity, cv2.CV_32S
     )
 
-    h, w = line_img.shape
-    overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
+    h, w = link_score.shape
+    stat_overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
     line_bboxes = []
 
+    # 0 is background (useless)
     for k in range(1, nLabels):
         size = stats[k, cv2.CC_STAT_AREA]
         x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
@@ -137,24 +169,13 @@ def lines_from_bboxes(image, bboxes):
         #     continue
         box = x, y, w, h
         line_bboxes.append(box)
-        color = list(np.random.random(size=3) * 256)
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+        color = list(np.random.random(size=3) * 255)
+        cv2.rectangle(stat_overlay, (x, y), (x + w, y + h), color, 1)
 
-    cv2.imwrite("/tmp/fragments/img_line.png", overlay)
-    lines_bboxes = line_merge(overlay, line_bboxes)
+    cv2.imwrite("/tmp/fragments/stat_overlay.png", stat_overlay)
+    cv2.imwrite("/tmp/fragments/binary_mask.png", binary_mask)
 
-    # coordinate adjustment
-    ratio_net = 1
-    ratio_w = 1
-    ratio_h = 1
-
-    for k in range(len(lines_bboxes)):
-        lines_bboxes[k] = [
-            int(lines_bboxes[k][0] * ratio_w * ratio_net),
-            int(lines_bboxes[k][1] * ratio_h * ratio_net),
-            int(lines_bboxes[k][2] * ratio_w * ratio_net),
-            int(lines_bboxes[k][3] * ratio_h * ratio_net),
-        ]
+    lines_bboxes = line_merge(stat_overlay, line_bboxes)
 
     # overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
     img_line = copy.deepcopy(image)
@@ -224,6 +245,10 @@ class BoxProcessorUlimDit(BoxProcessor):
         classes = predictions.pred_classes if predictions.has("pred_classes") else None
 
         bboxes = _convert_boxes(boxes)
+
+        # sort by xy-coordinated
+        ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
+        bboxes = bboxes[ind]
         lines = lines_from_bboxes(image, bboxes)
 
         return bboxes, classes, scores, lines, classes
@@ -310,6 +335,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             print(lines_bboxes)
 
             for i in range(len(bboxes)):
+                # Adjust box from (xmin, ymin, xmax, ymax) -> (x, y, w, h)
                 box = np.array(bboxes[i]).astype(np.int32)
                 x0, y0, x1, y1 = box
                 w = x1 - x0
@@ -319,19 +345,16 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # Class 0 == Text
                 if classes[i] == 0:
                     snippet = img[y0 : y0 + h, x0 : x0 + w :]
-                    # export cropped region
-                    # file_path = os.path.join("./result", "snippet_%s.jpg" % i)
-                    # cv2.imwrite(file_path, snippet)
-
-                    line_number = find_line_number(lines_bboxes, box)
+                    line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)
-                    rect_line_numbers.append(0)
+                    rect_line_numbers.append(line_number)
 
                     # After normalization image is in 0-1 range
                     # snippet = (snippet * 255).astype(np.uint8)
                     paste_fragment(pil_image, snippet, (x0, y0))
 
+            debug_dir = "/tmp/fragments"
             savepath = os.path.join(debug_dir, "txt_overlay.jpg")
             pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
 
@@ -347,7 +370,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             # metrics.add_time('HandlerTime', round(
             #     (stop_time - start_time) * 1000, 2), None, 'ms')
 
-            lines_bboxes = []
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)
             return (

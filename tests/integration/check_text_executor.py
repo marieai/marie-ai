@@ -37,7 +37,7 @@ if __name__ == "__main__":
         print(results)
         store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
 
-    results = load_json_file(os.path.join("/tmp/fragments", "results-dit.json"))
+    results = load_json_file(os.path.join("/tmp/fragments", "results.json"))
     visualize_icr(frames, results)
 
     renderer = TextRenderer(config={"preserve_interword_spaces": True})
