@@ -182,6 +182,6 @@ def visualize_icr(frames, results, filename=None):
 
         del viz_img
         st = " ".join(words_all)
-        print(st)
+        # print(st)
 
     # viz_img.show()

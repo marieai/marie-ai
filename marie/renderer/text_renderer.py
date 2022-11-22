@@ -6,7 +6,6 @@ import numpy as np
 from marie.renderer.renderer import ResultRenderer
 from marie.utils.types import strtobool
 
-
 class TextRenderer(ResultRenderer):
     def __init__(self, config=None):
         super().__init__(config)
@@ -37,22 +36,22 @@ class TextRenderer(ResultRenderer):
         self.check_format_xywh(result, True)
 
         char_ratio = 2.75
-        char_width = 20  # 8
+        char_width = 24  # TODO : This needs to be supplied from the box processor
         char_height = int(char_width * char_ratio)
         shape = image.shape
-
-        if False:
-            print(f"Char ratio : {char_ratio}")
-            print(f"Char width : {char_width}")
-            print(f"Char height : {char_height}")
-            print(f"Image size : {shape}")
-
         h = shape[0]
         w = shape[1]
 
-        xs = ceil(h / char_width)
-        hs = ceil(w / char_height)
+        cols = ceil(h / char_width)
+        rows = ceil(w / char_height)
         # ['meta', 'words', 'lines']
+        if True:
+            print(f"Image size  : {shape}")
+            print(f"Char ratio  : {char_ratio}")
+            print(f"Char width  : {char_width}")
+            print(f"Char height : {char_height}")
+            print(f"Columns     : {cols}")
+            print(f"Rows        : {rows}")
 
         meta = result["meta"]
         words = result["words"]
@@ -72,9 +71,10 @@ class TextRenderer(ResultRenderer):
             delta_cell_y = cell_y - start_cell_y
             start_cell_y = cell_y
 
-            # print(
-            #     f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}"
-            # )
+            if False:
+                print(
+                    f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}"
+                )
 
             for j in range(1, delta_cell_y):
                 buffer += "\n"
@@ -93,9 +93,6 @@ class TextRenderer(ResultRenderer):
                 sort_index = np.argsort(word_index_picks)
                 aligned_words = word_picks[sort_index]
 
-            # TODO : This needs to be supplied from the box processor
-            estimate_character_width = 24
-
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
                 spaces = 0
@@ -110,17 +107,21 @@ class TextRenderer(ResultRenderer):
                     gap = x2
 
                 if self.preserve_interword_spaces:
-                    if gap > estimate_character_width:
-                        spaces = max(1, gap // estimate_character_width)
+                    if gap > char_width:
+                        spaces = max(1, gap // char_width)
 
-                # print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
                 text = word["text"]
                 confidence = word["confidence"]
                 box = word["box"]
                 x, y, w, h = box
+
                 cellx = x // char_width
                 cols = (x + w) // char_width
-                # print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
+
+                if text == 'R0260':
+                    print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
+                    print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
+
                 buffer += " " * spaces
                 buffer += text
 

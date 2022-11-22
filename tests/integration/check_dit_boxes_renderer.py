@@ -22,13 +22,12 @@ if True:
 
 
 if __name__ == "__main__":
-
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
     img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
-    img_path = "/home/greg/tmp/PID_1925_9289_0_157186264.tif"
+    # img_path = "/home/greg/tmp/PID_1925_9289_0_157186264.tif"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -36,8 +35,6 @@ if __name__ == "__main__":
     if True:
         key = img_path.split("/")[-1]
         image = cv2.imread(img_path)
-
-        # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
 
         box = BoxProcessorUlimDit(
             work_dir=work_dir_boxes,
@@ -73,7 +70,6 @@ if __name__ == "__main__":
             print("Testing text render")
             cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
 
-            print(result)
             store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
 
             if True:
