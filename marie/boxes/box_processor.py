@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from enum import Enum
@@ -7,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from marie.base_handler import BaseHandler
+from marie.utils.utils import ensure_exists
 
 
 def copyStateDict(state_dict):
@@ -91,7 +93,9 @@ def estimate_character_width(src_img, bounding_boxes):
     cv2.imwrite("/tmp/fragments/esw_points.png", points)
 
     # we should calculat this for each bouding_box separately
-    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(points.astype(np.uint8), connectivity=4)
+    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        points.astype(np.uint8), connectivity=4
+    )
     total_chars = n_labels - 1
     total_width = 0
     # convert the bounding boxes points (polys) into a box
@@ -146,6 +150,21 @@ class PSMode(Enum):
         return PSMode.SPARSE
 
 
+def create_dirs(work_dir, _id, key):
+    debug_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "debug")
+    )
+    crops_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "crop")
+    )
+    lines_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "lines")
+    )
+    mask_dir = ensure_exists(os.path.join(work_dir, _id, "bounding_boxes", key, "mask"))
+
+    return crops_dir, debug_dir, lines_dir, mask_dir
+
+
 class BoxProcessor(BaseHandler):
     """Box processor extract bounding boxes"""
 
@@ -180,3 +199,46 @@ class BoxProcessor(BaseHandler):
         Return:
             box array, fragment array, line_number array,  prediction results[bboxes, polys, heatmap]
         """
+
+    @abstractmethod
+    def psm_word(self, image):
+        """ Treat the image as a single word.
+        Args:
+            image: A pre-cropped image
+        Return:
+            bboxes array, polys array, score_text array,  lines
+        """
+
+    @abstractmethod
+    def psm_sparse(self, image):
+        """Find as much text as possible (default).
+        Args:
+            image: A pre-cropped image
+        Return:
+            bboxes array, polys array, score_text array,  lines
+        """
+
+    @abstractmethod
+    def psm_line(self, image):
+        """
+        Treat the image as a single text line.
+        """
+
+    @abstractmethod
+    def psm_raw_line(self, image):
+        """Treat the image as a single text line.
+        Args:
+            image: A pre-cropped image
+        Return:
+            bboxes array, polys array, score_text array,  lines
+        """
+
+    @abstractmethod
+    def psm_multiline(self, image):
+        """ Treat the image as a single word.
+        Args:
+            image: A pre-cropped image
+        Return:
+            bboxes array, polys array, score_text array,  lines
+        """
+
