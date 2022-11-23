@@ -11,7 +11,7 @@ from torch.autograd import Variable
 
 from marie.lang import Object
 from marie.timer import Timer
-from marie.utils.image_utils import paste_fragment, viewImage
+from marie.utils.image_utils import paste_fragment, viewImage, imwrite
 from .line_processor import line_merge
 from .line_processor import find_line_number
 
@@ -480,7 +480,7 @@ class BoxProcessorCraft(BoxProcessor):
             prediction_result["heatmap"] = score_text
 
             # deepcopy image so that original is not altered
-            # image = copy.deepcopy(image)
+            image = copy.deepcopy(image)
             pil_image = Image.new(
                 "RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0)
             )
@@ -492,9 +492,6 @@ class BoxProcessorCraft(BoxProcessor):
 
             max_h = image.shape[0]
             max_w = image.shape[1]
-
-            print("lines_bboxes ***")
-            print(lines_bboxes)
 
             for idx, region in enumerate(bboxes):
                 region = np.array(region).astype(np.int32).reshape((-1))
@@ -540,6 +537,14 @@ class BoxProcessorCraft(BoxProcessor):
             if True:
                 savepath = os.path.join(debug_dir, "%s.png" % ("txt_overlay"))
                 pil_image.save(savepath, format="PNG", subsampling=0, quality=100)
+
+            debug_dir = "/tmp/fragments"
+            savepath = os.path.join(debug_dir, "txt_overlay.jpg")
+            pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
+            cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            stacked = np.hstack((cv_img, img))
+            save_path = os.path.join(debug_dir, "stacked.png")
+            imwrite(save_path, stacked)
 
             # we can't return np.array here as t the 'fragments' will throw an error
             # ValueError: could not broadcast input array from shape (42,77,3) into shape (42,)

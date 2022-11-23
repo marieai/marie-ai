@@ -13,6 +13,7 @@ from torch.backends import cudnn
 
 from marie import Executor
 from marie.boxes import BoxProcessorCraft
+from marie.boxes import BoxProcessorUlimDit
 from marie.boxes import PSMode
 from marie.document import TrOcrIcrProcessor
 from marie.logging.logger import MarieLogger
@@ -121,7 +122,14 @@ class TextExtractionExecutor(Executor):
             cudnn.benchmark = False
             cudnn.deterministic = True
 
-        self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=has_cuda)
+        # self.box_processor = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=has_cuda)
+
+        if True:
+            self.box_processor = BoxProcessorUlimDit(
+                work_dir=work_dir_boxes,
+                models_dir="./model_zoo/unilm/dit/text_detection",
+                cuda=True,
+            )
         self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
 
     def info(self, **kwargs):
