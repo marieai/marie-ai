@@ -810,20 +810,11 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        self.logger.info("START 0")
         loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
             image_src
         )
-        self.logger.info("START 1")
+
         annotations = self.process(frames, boxes, words, file_hash)
-
-
-        import cProfile
-        with cProfile.Profile() as pr:
-            self.logger.info("START 2")
-            ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
-            self.logger.info("START 3")
-
-        pr.print_stats()
+        ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
 
         return ner_results

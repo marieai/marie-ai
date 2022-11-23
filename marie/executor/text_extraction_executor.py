@@ -217,6 +217,9 @@ class TextExtractionExecutor(Executor):
             ):
                 raise Exception(f"Required key missing in region : {region}")
 
+        # allow for small padding around the component
+        padding = 0
+
         for region in regions:
             try:
                 logger.info(f"Extracting box : {region}")
@@ -229,14 +232,16 @@ class TextExtractionExecutor(Executor):
 
                 img = frames[page_index]
                 img = img[y : y + h, x : x + w].copy()
-                # allow for small padding around the component
-                padding = 0
-                overlay = (
-                    np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
-                )
-                overlay[padding : h + padding, padding : w + padding] = img
+                overlay = img
 
-                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+                if padding != 0:
+                    overlay = (
+                        np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8)
+                        * 255
+                    )
+                    overlay[padding : h + padding, padding : w + padding] = img
+
+                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
 
                 (
                     boxes,

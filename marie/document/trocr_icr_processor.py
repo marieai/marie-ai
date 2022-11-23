@@ -2,6 +2,7 @@ import math
 import os
 import time
 import typing
+from timeit import timeit
 from typing import Tuple, Any, List, Dict
 
 from torchvision.transforms import Compose, InterpolationMode
@@ -180,7 +181,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 5
+        beam = 2
         (
             self.model,
             self.cfg,
@@ -197,6 +198,22 @@ class TrOcrIcrProcessor(IcrProcessor):
         self.opt = opt
 
     def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
+        if self.device == "cuda":
+            logger.debug("Device : %s", torch.cuda.get_device_name(0))
+            logger.debug(
+                "GPU Memory Allocated: %d GB",
+                round(torch.cuda.memory_allocated(0) / 1024**3, 1),
+            )
+            logger.debug(
+                "GPU Memory Cached: %d GB",
+                round(torch.cuda.memory_reserved(0) / 1024**3, 1),
+            )
+
+        return self.__recognize_from_fragments(src_images, 128, **kwargs)
+
+    def __recognize_from_fragments(
+        self, src_images, batch_size=32, **kwargs
+    ) -> List[Dict[str, any]]:
         """Recognize text from image fragments synchronously.
 
         Args:
@@ -204,14 +221,16 @@ class TrOcrIcrProcessor(IcrProcessor):
                 (H, W, 3).
         """
 
-        batch_size = 64  # 64 16GB
-        batch_size = 98  # 98 24GB
-        batch_size = 64  # 98 24GB
+        # batch_size = 64  # 64 16GB
+        # batch_size = 98  # 98 24GB
+        # batch_size = 128  # 98 24GB
 
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
 
-        logger.info(f"ICR processing : recognize_from_boxes via boxes [size, batches] : {size}, {total_batches} ")
+        logger.info(
+            f"ICR processing : recognize_from_boxes [items, batch_size, batches] :{size}, {batch_size}, {total_batches} "
+        )
 
         try:
             opt = self.opt
