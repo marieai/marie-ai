@@ -23,6 +23,11 @@ if __name__ == "__main__":
     # img_path = "/home/gbugaj/tmp/PID_1028_7826_0_157684456.tif"
     img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
     # img_path = "./assets/psm/block/block-002.png"
+    img_path = "/home/greg/tmp/PID_1925_9289_0_157186264.tif"
+    img_path = "/home/greg/tmp/snippet-002.png"
+    img_path = (
+        "/home/greg/datasets/dataset/funsd/dataset/training_data/images/00040534.png"
+    )
 
     docs = docs_from_file(img_path)
     frames = array_from_docs(docs)
@@ -30,7 +35,7 @@ if __name__ == "__main__":
     kwa = {"payload": {"output": "json", "mode": "sparse", "format": "xywh"}}
     # kwa = {"payload": {"output": "json", "mode": "line"}}
 
-    if False:
+    if True:
         executor = TextExtractionExecutor()
         results = executor.extract(docs, **kwa)
 

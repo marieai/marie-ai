@@ -245,7 +245,6 @@ class BoxProcessorUlimDit(BoxProcessor):
         classes = predictions.pred_classes if predictions.has("pred_classes") else None
 
         bboxes = _convert_boxes(boxes)
-
         # sort by xy-coordinated
         ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
         bboxes = bboxes[ind]
@@ -327,12 +326,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             rect_from_poly = []
             rect_line_numbers = []
             fragments = []
-
-            max_h = image.shape[0]
-            max_w = image.shape[1]
-
-            print("lines_bboxes ***")
-            print(lines_bboxes)
 
             for i in range(len(bboxes)):
                 # Adjust box from (xmin, ymin, xmax, ymax) -> (x, y, w, h)

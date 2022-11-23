@@ -2,9 +2,11 @@ from math import ceil
 from os import PathLike
 from typing import Dict, Any, Union
 
+import numpy
 import numpy as np
 from marie.renderer.renderer import ResultRenderer
 from marie.utils.types import strtobool
+
 
 class TextRenderer(ResultRenderer):
     def __init__(self, config=None):
@@ -35,15 +37,20 @@ class TextRenderer(ResultRenderer):
 
         self.check_format_xywh(result, True)
 
-        char_ratio = 2.75
-        char_width = 24  # TODO : This needs to be supplied from the box processor
-        char_height = int(char_width * char_ratio)
         shape = image.shape
         h = shape[0]
         w = shape[1]
+        char_ratio = 2.75
+        char_width = 4  # TODO : This needs to be supplied from the box processor
+        char_height = int(char_width * char_ratio)
+        cols = ceil(w // char_width)
+        rows = ceil(h // char_height)
 
-        cols = ceil(h / char_width)
-        rows = ceil(w / char_height)
+        x_space = np.arange(0, w, 1)
+        bins = np.linspace(0, w, cols)
+        bins = np.array(bins).astype(np.int32)
+        x_hist = np.digitize(x_space, bins, right=True)
+
         # ['meta', 'words', 'lines']
         if True:
             print(f"Image size  : {shape}")
@@ -60,6 +67,7 @@ class TextRenderer(ResultRenderer):
         buffer = ""
         start_cell_y = 1
         force_word_index_sort = False
+        min_spacing = 1000
 
         for i, line in enumerate(lines):
             bbox = line["bbox"]
@@ -93,40 +101,30 @@ class TextRenderer(ResultRenderer):
                 sort_index = np.argsort(word_index_picks)
                 aligned_words = word_picks[sort_index]
 
+            last_space = 0
+            line_buffer = " " * 180
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
                 spaces = 0
                 curr_box = aligned_words[idx]["box"]
-                x2, y2, w2, h2 = curr_box
-                if idx > 0:
-                    prev_box = aligned_words[idx - 1]["box"]
-                    x1, y1, w1, h1 = prev_box
-                    gap = abs(x1 + w1 - x2)
-                    spaces = 1
-                else:
-                    gap = x2
-
-                if self.preserve_interword_spaces:
-                    if gap > char_width:
-                        spaces = max(1, gap // char_width)
-
                 text = word["text"]
-                confidence = word["confidence"]
-                box = word["box"]
-                x, y, w, h = box
+                x2, y2, w2, h2 = curr_box
 
-                cellx = x // char_width
-                cols = (x + w) // char_width
+                grid_space = x_hist[x2]
+                spaces = grid_space - last_space
+                last_space = grid_space
+                if spaces < min_spacing:
+                    min_spacing = spaces
+                line_buffer = line_buffer[:grid_space] + text + line_buffer[grid_space:]
+                print(f"{grid_space} : {spaces}  > {text}")
 
-                if text == 'R0260':
-                    print(f"gap :  {idx} : >  {gap}, spaces = {spaces}")
-                    print(f"{cellx}, {cols} :: {cell_y}     >>   {box} :: {text}")
-
-                buffer += " " * spaces
-                buffer += text
-
+            print(line_buffer)
+            buffer += line_buffer
             if i < len(lines) - 1:
                 buffer += "\n"
+
+        # buffer = buffer.replace(" " * 8, " ")
+        # print(f"min_spacing = {min_spacing}")
         return buffer
 
     def render(

@@ -109,6 +109,8 @@ class PdfRenderer(ResultRenderer):
             img_h = image.shape[0]
             img_w = image.shape[1]
 
+            draw_image = False
+
             # convert OpenCV to Pil
             img_bgr = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             im_pil = Image.fromarray(img_bgr)
@@ -116,7 +118,9 @@ class PdfRenderer(ResultRenderer):
             packet = io.BytesIO()
             # with contextlib.closing(io.BytesIO()) as packet:
             can = canvas.Canvas(packet, pagesize=(img_w, img_h))
-            can.drawImage(ImageReader(im_pil), 0, 0)
+
+            if draw_image:
+                can.drawImage(ImageReader(im_pil), 0, 0)
 
             if len(words) == 0:
                 can.setFont("Helvetica", 0)
@@ -144,8 +148,10 @@ class PdfRenderer(ResultRenderer):
                         py0 = img_h - ly - lh * 0.70
                         # py0 = img_h - y # + (h / 2)
                     font_size = determine_font_size(box)
+
+                    print(font_size)
                     # print(can.getAvailableFonts())
-                    font_size = 14  # 24  # h * .75
+                    font_size = 12  # 24  # h * .75
                     # print(f'font_size = {font_size}  : {box}')
                     # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
                     can.setFont("Helvetica", font_size)
