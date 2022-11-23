@@ -1,8 +1,3 @@
-# import warnings
-#
-# warnings.simplefilter(action='ignore', category=FutureWarning)
-# warnings.simplefilter(action='ignore', category=UserWarning)
-
 import os
 import cv2
 import torch
@@ -177,12 +172,13 @@ class NerExtractionExecutor(Executor):
             model_dir, num_labels=len(labels)
         )
 
+        model.eval()
         model.to(device)
         return model
 
     def get_label_info(self):
         labels = self.init_configuration["labels"]
-        logger.info(f"Labels : {labels}")
+        logger.debug(f"Labels : {labels}")
 
         id2label = {v: k for v, k in enumerate(labels)}
         label2id = {k: v for v, k in enumerate(labels)}
@@ -432,7 +428,11 @@ class NerExtractionExecutor(Executor):
                             )
 
                             draw_box(
-                                draw, group_bbox, None, color, font,
+                                draw,
+                                group_bbox,
+                                None,
+                                color,
+                                font,
                             )
 
             # check if we have possible overlaps when there is a mislabeled token, this could be a flag
@@ -561,7 +561,9 @@ class NerExtractionExecutor(Executor):
                             ner_result = {
                                 "page": i,
                                 "category": tag,
-                                "value": {"answer": ner_key,},
+                                "value": {
+                                    "answer": ner_key,
+                                },
                             }
                             aggregated_ner.append(ner_result)
 
@@ -749,7 +751,11 @@ class NerExtractionExecutor(Executor):
             height = _image.size[1]
 
             all_predictions, all_boxes, all_scores = self.inference(
-                _image, _words, _boxes, labels, 0.1,
+                _image,
+                _words,
+                _boxes,
+                labels,
+                0.1,
             )
 
             true_predictions = all_predictions[0]
@@ -804,10 +810,20 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
+        self.logger.info("START 0")
         loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
             image_src
         )
+        self.logger.info("START 1")
         annotations = self.process(frames, boxes, words, file_hash)
-        ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
+
+
+        import cProfile
+        with cProfile.Profile() as pr:
+            self.logger.info("START 2")
+            ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
+            self.logger.info("START 3")
+
+        pr.print_stats()
 
         return ner_results

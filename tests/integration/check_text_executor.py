@@ -25,9 +25,9 @@ if __name__ == "__main__":
     # img_path = "./assets/psm/block/block-002.png"
     img_path = "/home/greg/tmp/PID_1925_9289_0_157186264.tif"
     img_path = "/home/greg/tmp/snippet-002.png"
-    img_path = (
-        "/home/greg/datasets/dataset/funsd/dataset/training_data/images/00040534.png"
-    )
+    img_path = "/home/gbugaj/dataset/funsd/dataset/training_data/images/00040534.png"
+
+    img_path = "/home/gbugaj/clean_medical/PID_1038_7836_0_149512505_page_0021.tif"
 
     docs = docs_from_file(img_path)
     frames = array_from_docs(docs)
