@@ -220,10 +220,10 @@ class BoxProcessorUlimDit(BoxProcessor):
         args = get_parser().parse_args(
             [
                 "--config-file",
-                "./config/zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                "./config/zoo/unilm/dit/text_detection/mask_rcnn_dit_large.yaml",
                 "--opts",
                 "MODEL.WEIGHTS",
-                os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
+                os.path.join(models_dir, "td-syn_dit-l_mrcnn.pth"),
             ]
         )
 

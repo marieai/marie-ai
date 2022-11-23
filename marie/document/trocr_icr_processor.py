@@ -204,14 +204,14 @@ class TrOcrIcrProcessor(IcrProcessor):
                 (H, W, 3).
         """
 
-        logger.debug("ICR processing : recognize_from_boxes via boxes")
-
         batch_size = 64  # 64 16GB
         batch_size = 98  # 98 24GB
         batch_size = 64  # 98 24GB
 
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
+
+        logger.info(f"ICR processing : recognize_from_boxes via boxes [size, batches] : {size}, {total_batches} ")
 
         try:
             opt = self.opt
@@ -234,18 +234,17 @@ class TrOcrIcrProcessor(IcrProcessor):
                 )
 
                 for k in range(len(predictions)):
-                    pred = predictions[k]
+                    text = predictions[k]
                     score = scores[k]
                     _, img_name = eval_data[k]
-                    text = pred
                     confidence = round(score, 4)
                     row = {"confidence": confidence, "id": img_name, "text": text}
                     results.append(row)
                     logger.debug(f"results : {row}")
 
-                logger.debug("Batch time : %s" % (time.time() - batch_start))
+                logger.info("Batch time : %s" % (time.time() - batch_start))
 
-            logger.debug("ICR Time elapsed: %s" % (time.time() - start))
+            logger.info("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex

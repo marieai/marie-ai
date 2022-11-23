@@ -1,50 +1,82 @@
+import psutil
 import torch
 import torchvision.models as models
+import onnx
 import onnxruntime
-
+import transformers
 from timeit import timeit
 import numpy as np
 
 # Optimizations :
 #  export LD_PRELOAD=/usr/local/lib/libjemalloc.so:$LD_PRELOAD &&  python ./check_onnx_runtime.py
+# Docs
+# https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/transformers/notebooks/PyTorch_Bert-Squad_OnnxRuntime_CPU.ipynb
+# https://onnx.ai/index.html
+
+print("pytorch:", torch.__version__)
+print("onnxruntime:", onnxruntime.__version__)
+print("onnx:", onnx.__version__)
+print("transformers:", transformers.__version__)
 
 
-def save_temp_models():
-    # import
+def save_temp_models(device):
     model = models.resnet50(pretrained=True)
+    model.eval()
+    model.to(device)
 
     # PyTorch model
     torch.save(model, "resnet.pth")
     # random input
-    data = torch.rand(1, 3, 224, 224)
+    data = torch.rand(1, 3, 512, 512)
+    data = data.cuda()
     # ONNX needs data example
     torch.onnx.export(model, data, "resnet.onnx")
 
 
 if __name__ == "__main__":
-    save_temp_models()
+    assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()
+    device_name = 'cuda'
+
+    save_temp_models(device_name)
     import os
 
     os.environ["OMP_NUM_THREADS"] = str(16)
 
+    sess_options = onnxruntime.SessionOptions()
+    # Please change the value according to best setting in Performance Test Tool result.
+    sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
+
     # PyTorch model
     torch_model = torch.load("resnet.pth")
-    # ONNX model
-    onnx_model = onnxruntime.InferenceSession("resnet.onnx")
+    torch_model.eval()
 
-    data = np.random.rand(1, 3, 224, 224).astype(np.float32)
+    # ONNX model
+    onnx_model = onnxruntime.InferenceSession(
+        "resnet.onnx",
+        sess_options,
+        providers=[
+            # 'TensorrtExecutionProvider',
+            'CUDAExecutionProvider',
+            # 'CPUExecutionProvider',
+        ],
+    )
+
+    data = np.random.rand(1, 3, 512, 512).astype(np.float32)
+
     torch_data = torch.from_numpy(data)
+    torch_data = torch_data.cuda()
 
     def torch_inf():
-        torch_model(torch_data)
+        torch_output = torch_model(torch_data)
 
     def onnx_inf():
-        onnx_model.run(None, {onnx_model.get_inputs()[0].name: data})
+        ort_outputs = onnx_model.run(None, {onnx_model.get_inputs()[0].name: data})
 
-    n = 20
+    n = 100
     torch_t = timeit(lambda: torch_inf(), number=n) / 100
     onnx_t = timeit(lambda: onnx_inf(), number=n) / 100
     rat = 1 - (onnx_t / torch_t)
+
     print(f"PyTorch {torch_t} VS ONNX {onnx_t}")
     print(f"Improvement {rat} ")
 
