@@ -348,4 +348,9 @@ https://www.confluent.io/blog/prioritize-messages-in-kafka/
 
 ## 
 https://engineeringfordatascience.com/posts/pre_commit_yaml/
-https://gis.stackexchange.com/questions/326444/how-to-create-a-grid-of-pixel-coordinates-from-the-corners-of-a-modis-tile
+
+## CVAT Resources
+Auto annotation tool
+
+https://github.com/opencv/cvat/projects/16
+https://github.com/opencv/cvat/issues/2280
