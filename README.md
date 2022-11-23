@@ -354,3 +354,5 @@ Auto annotation tool
 
 https://github.com/opencv/cvat/projects/16
 https://github.com/opencv/cvat/issues/2280
+
+https://deci.ai/platform/
