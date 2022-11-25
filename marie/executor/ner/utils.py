@@ -1,4 +1,6 @@
 import os
+
+import PIL
 import cv2
 
 import numpy as np
@@ -95,7 +97,9 @@ def visualize_extract_kv(output_filename, frame, kv_results):
     draw = ImageDraw.Draw(image, "RGBA")
     font = get_font(10)
 
-    def __draw(a_box,):
+    def __draw(
+        a_box,
+    ):
         draw_box(
             draw,
             a_box,
@@ -185,3 +189,5 @@ def visualize_icr(frames, results, filename=None):
         # print(st)
 
     # viz_img.show()
+
+

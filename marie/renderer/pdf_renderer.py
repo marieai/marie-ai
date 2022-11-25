@@ -148,8 +148,6 @@ class PdfRenderer(ResultRenderer):
                         py0 = img_h - ly - lh * 0.70
                         # py0 = img_h - y # + (h / 2)
                     font_size = determine_font_size(box)
-
-                    print(font_size)
                     # print(can.getAvailableFonts())
                     font_size = 12  # 24  # h * .75
                     # print(f'font_size = {font_size}  : {box}')

@@ -22,3 +22,15 @@ def load_json_file(filename):
     with io.open(filename, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
         return data
+
+
+def to_json(results):
+    """Convert object to a JSON object"""
+    return json.dumps(
+        results,
+        sort_keys=False,
+        separators=(",", ": "),
+        ensure_ascii=True,
+        indent=2,
+        cls=NumpyEncoder,
+    )
