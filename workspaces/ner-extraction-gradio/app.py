@@ -4,7 +4,7 @@ from PIL import Image
 from marie.executor import NerExtractionExecutor
 from marie.utils.image_utils import hash_file
 
-executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
+executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 
 
 def process_image(image):

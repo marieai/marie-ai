@@ -355,4 +355,9 @@ Auto annotation tool
 https://github.com/opencv/cvat/projects/16
 https://github.com/opencv/cvat/issues/2280
 
+Colab notebooks
+## https://mycourses.aalto.fi/pluginfile.php/1342135/mod_resource/content/4/Colab_instructions.pdf
+
+## platform
 https://deci.ai/platform/
+
