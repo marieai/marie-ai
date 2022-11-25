@@ -21,12 +21,6 @@ def process_image(image):
         lines_bboxes,
     ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
 
-    # ner_path = f"/tmp/tensors/ner_{checksum}_0.png"
-    # prediction_path = f"/tmp/tensors/prediction_{checksum}_0.png"
-    #
-    # ner_image = Image.open(ner_path).convert("RGB")
-    # pred_image = Image.open(prediction_path).convert("RGB")
-
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
     return bboxes_img, lines_img  # to_json(boxes)

@@ -27,7 +27,7 @@ if __name__ == "__main__":
     ensure_exists("/tmp/fragments")
 
     img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
-    img_path = "/home/greg/tmp/PID_576_7188_0_150300411_4.tif"
+    # img_path = "/home/greg/tmp/PID_576_7188_0_150300411_4.tif"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")

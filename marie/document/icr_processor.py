@@ -31,13 +31,12 @@ def encodeimg2b64(img: np.ndarray) -> str:
 class IcrProcessor(BaseHandler):
     def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
         super().__init__()
-        print("Base ICR processor [cuda={}]".format(cuda))
         self.cuda = cuda
         self.work_dir = work_dir
 
     def extract_text(self, _id, key, image):
         """Recognize text from a single image.
-           Process image via ICR, this is lowlever API, to get more usable results call extract_icr.
+           Process image via ICR, this is low lever API, to get more usable results call extract_icr.
 
         Args:
             _id: Unique Image ID

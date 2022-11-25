@@ -191,7 +191,7 @@ class BoxProcessor(BaseHandler):
     @abstractmethod
     def extract_bounding_boxes(
         self, _id, key, img, psm=PSMode.SPARSE
-    ) -> tuple[Any, Any, Any, Any, Any]:
+    ) -> Tuple[Any, Any, Any, Any, Any]:
         """Extract bounding boxes for specific image, try to predict line number representing each bounding box.
         Args:
             _id:  Unique Image ID

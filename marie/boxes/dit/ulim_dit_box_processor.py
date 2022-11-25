@@ -77,7 +77,7 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-    image: Union[np.ndarray | PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -86,7 +86,8 @@ def visualize_bboxes(
         format(xyxy|xywh): format of the bboxes, defaults to `xyxy`
     """
 
-    if type(image) == PIL.Image.Image:  # convert pil to OpenCV
+    # convert pil to OpenCV
+    if type(image) == PIL.Image.Image:
         image = np.array(image)
 
     viz_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -140,10 +141,12 @@ def lines_from_bboxes(image, bboxes):
 
     ret, link_score = cv2.threshold(overlay, 0, 255, cv2.THRESH_BINARY)
 
-    cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.PNG"), overlay)
-    cv2.imwrite(
-        os.path.join("/tmp/fragments", f"overlay_refiner-link_score.PNG"), link_score
-    )
+    if False:
+        cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.PNG"), overlay)
+        cv2.imwrite(
+            os.path.join("/tmp/fragments", f"overlay_refiner-link_score.PNG"),
+            link_score,
+        )
 
     # Create structure element for extracting horizontal lines through morphology operations
     cols = link_score.shape[1]
@@ -155,7 +158,7 @@ def lines_from_bboxes(image, bboxes):
     horizontal = cv2.erode(horizontal, horizontal_struct)
     horizontal = cv2.dilate(horizontal, horizontal_struct)
 
-    if True:
+    if False:
         cv2.imwrite("/tmp/fragments/horizontal.jpg", horizontal)
 
     if False:
@@ -254,7 +257,7 @@ class BoxProcessorUlimDit(BoxProcessor):
 
     def extract_bounding_boxes(
         self, _id, key, img, psm=PSMode.SPARSE
-    ) -> tuple[Any, Any, Any, Any, Any]:
+    ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
 
@@ -345,15 +348,15 @@ class BoxProcessorUlimDit(BoxProcessor):
                     # snippet = (snippet * 255).astype(np.uint8)
                     paste_fragment(pil_image, snippet, (x0, y0))
 
-            debug_dir = "/tmp/fragments"
-            savepath = os.path.join(debug_dir, "txt_overlay.jpg")
-            pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
+            if False:
+                debug_dir = "/tmp/fragments"
+                savepath = os.path.join(debug_dir, "txt_overlay.jpg")
+                pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
+                cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-            cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-
-            stacked = np.hstack((cv_img, img))
-            save_path = os.path.join(debug_dir, "stacked.png")
-            imwrite(save_path, stacked)
+                stacked = np.hstack((cv_img, img))
+                save_path = os.path.join(debug_dir, "stacked.png")
+                imwrite(save_path, stacked)
 
             stop_time = time.time()
             eval_time = round((stop_time - start_time) * 1000, 2)

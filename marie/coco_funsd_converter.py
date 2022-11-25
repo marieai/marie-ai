@@ -1,4 +1,3 @@
-import copy
 import glob
 import hashlib
 import io
@@ -19,6 +18,7 @@ from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
+from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
@@ -49,7 +49,6 @@ fake = Faker()
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 
 # create new provider class
-
 
 class MemberProvider(BaseProvider):
     def __init__(self, generator):
@@ -393,9 +392,17 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    boxp = BoxProcessorCraft(
-        work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    if False:
+        boxp = BoxProcessorCraft(
+            work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+        )
+
+    boxp = BoxProcessorUlimDit(
+        work_dir=work_dir_boxes,
+        models_dir="./model_zoo/unilm/dit/text_detection",
+        cuda=True,
     )
+
     icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
