@@ -2,6 +2,9 @@ import argparse
 import copy
 import os
 import time
+from typing import Any, Tuple, Union
+
+import PIL
 import cv2
 import numpy as np
 import torch
@@ -11,17 +14,17 @@ from marie.logger import setup_logger
 from PIL import Image
 
 from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
+from marie.logging.logger import MarieLogger
 from marie.utils.image_utils import paste_fragment, imwrite
 from marie.utils.utils import ensure_exists
 
 from ditod import add_vit_config
-from detectron2.utils.visualizer import ColorMode, Visualizer
+
+# from detectron2.utils.visualizer import ColorMode, Visualizer
 
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultPredictor
 from PIL import Image, ImageDraw
-
-logger = setup_logger(__name__)
 
 
 def setup_cfg(args, device):
@@ -73,33 +76,29 @@ def _convert_boxes(boxes):
         return np.asarray(boxes)
 
 
-def lines_from_bboxes(image, bboxes):
-    """Create lines out of bboxes for given image.
+def visualize_bboxes(
+    image: Union[np.ndarray | PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+) -> PIL.Image:
+    """Visualize bounding boxes on the image
     Args:
-        image(ndarray): numpy array of shape (H, W), where H is the image height and W is the image width.
-        bboxes: Bounding boxes for image (xmin,ymin,xmax,ymax)
+        image(Union[np.ndarray | PIL.Image.Image]): numpy array of shape (H, W), where H is the image height and W is the image width.
+        bboxes(np.ndarray): Bounding boxes for image (xmin,ymin,xmax,ymax)
+        format(xyxy|xywh): format of the bboxes, defaults to `xyxy`
     """
 
-    print(image.shape)
-    _h = image.shape[0]
-    _w = image.shape[1]
+    if type(image) == PIL.Image.Image:  # convert pil to OpenCV
+        image = np.array(image)
 
-    overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
-    img_line = copy.deepcopy(image)
-    viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
+    viz_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     viz_img = Image.fromarray(viz_img)
     draw = ImageDraw.Draw(viz_img, "RGBA")
 
     for box in bboxes:
-        x1, y1, x2, y2 = box.astype(np.int32)
-        w = x2 - x1
-        h = (y2 - y1) // 2
-        y1_adj = y1 + h // 2
-
-        cv2.rectangle(overlay, (x1, y1_adj), (x1 + w, y1_adj + h), (0, 0, 0), -1)
+        if format == "xywh":
+            box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
         draw.rectangle(
-            [x1, y1, x2, y2],
+            box,
             outline="#993300",
             fill=(
                 int(np.random.random() * 256),
@@ -110,21 +109,45 @@ def lines_from_bboxes(image, bboxes):
             width=1,
         )
 
-    viz_img.save(
-        os.path.join("/tmp/fragments", f"overlay_refiner_boxes.png"), format="PNG"
-    )
+    # viz_img.show()
+    return viz_img
 
-    cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.jpg"), overlay)
 
-    # ret, link_score = cv2.threshold(overlay, link_threshold, 1, 0)
-    overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2GRAY)
+def lines_from_bboxes(image, bboxes):
+    """Create lines out of bboxes for given image.
+    Args:
+        image(ndarray): numpy array of shape (H, W), where H is the image height and W is the image width.
+        bboxes: Bounding boxes for image (xmin,ymin,xmax,ymax)
+
+    Returns:
+        lines_bboxes: Bounding boxes for the lines in (x,y,w,h)
+    """
+
+    if False:
+        viz_img = visualize_bboxes(image, bboxes)
+        viz_img.save(
+            os.path.join("/tmp/fragments", f"line_refiner_initial.png"), format="PNG"
+        )
+
+    # create a box overlay with adjusted coordinates
+    overlay = np.ones((image.shape[0], image.shape[1], 1), dtype=np.uint8) * 100
+    for box in bboxes:
+        x1, y1, x2, y2 = box.astype(np.int32)
+        w = x2 - x1
+        h = (y2 - y1) // 2
+        y1_adj = y1 + h // 2
+        cv2.rectangle(overlay, (x1, y1_adj), (x1 + w, y1_adj + h), (0, 0, 0), -1)
+
     ret, link_score = cv2.threshold(overlay, 0, 255, cv2.THRESH_BINARY)
 
-    # [horiz]
-    # Specify size on horizontal axis
+    cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.PNG"), overlay)
+    cv2.imwrite(
+        os.path.join("/tmp/fragments", f"overlay_refiner-link_score.PNG"), link_score
+    )
+
+    # Create structure element for extracting horizontal lines through morphology operations
     cols = link_score.shape[1]
     horizontal_size = cols // 30
-    # Create structure element for extracting horizontal lines through morphology operations
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
@@ -134,29 +157,20 @@ def lines_from_bboxes(image, bboxes):
 
     if True:
         cv2.imwrite("/tmp/fragments/horizontal.jpg", horizontal)
-        # cv2.imwrite("/tmp/fragments/lines-morph.jpg", line_img)
-        # cv2.imwrite("/tmp/fragments/lines-morph.jpg", line_img)
-        # cv2.imwrite(
-        #     os.path.join("/tmp/fragments/", "h-text_score_comb.jpg"),
-        #     text_score_comb,
-        # )
 
-    # create binary mask for the image
-    # cv2.connectedComponents_XXXXXX() considers only the white portion as a component.
-    # binary = cv2.bitwise_not(binary)
+    if False:
+        binary_mask = np.zeros(horizontal.shape)
+        binary_mask[horizontal == 255] = 0
+        binary_mask[horizontal != 255] = 255
+        binary_mask = binary_mask.astype(np.uint8)
 
-    binary_mask = np.zeros(horizontal.shape)
-    binary_mask[horizontal == 255] = 0
-    binary_mask[horizontal != 255] = 255
-    binary_mask = binary_mask.astype(np.uint8)
+    binary_mask = cv2.bitwise_not(horizontal)
     connectivity = 4
 
     nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         binary_mask, connectivity, cv2.CV_32S
     )
 
-    h, w = link_score.shape
-    stat_overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
     line_bboxes = []
 
     # 0 is background (useless)
@@ -165,43 +179,18 @@ def lines_from_bboxes(image, bboxes):
         x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
         w, h = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
         # size filtering
-        # if h < 2:
-        #     continue
-        box = x, y, w, h
-        line_bboxes.append(box)
-        color = list(np.random.random(size=3) * 255)
-        cv2.rectangle(stat_overlay, (x, y), (x + w, y + h), color, 1)
+        if h < 2 or w < 4:
+            continue
+        line_bboxes.append([x, y, w, h])
 
-    cv2.imwrite("/tmp/fragments/stat_overlay.png", stat_overlay)
-    cv2.imwrite("/tmp/fragments/binary_mask.png", binary_mask)
+    # the format now will be in xywh
+    lines_bboxes = line_merge(binary_mask, line_bboxes)
 
-    lines_bboxes = line_merge(stat_overlay, line_bboxes)
-
-    # overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
-    img_line = copy.deepcopy(image)
-    viz_img = cv2.cvtColor(img_line, cv2.COLOR_BGR2RGB)
-    viz_img = Image.fromarray(viz_img)
-    draw = ImageDraw.Draw(viz_img, "RGBA")
-
-    for box in lines_bboxes:
-        x, y, w, h = box
-        color = list(np.random.random(size=3) * 256)
-        # cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
-        draw.rectangle(
-            [x, y, x + w, y + h],
-            outline="#993300",
-            fill=(
-                int(np.random.random() * 256),
-                int(np.random.random() * 256),
-                int(np.random.random() * 256),
-                125,
-            ),
-            width=1,
+    if False:
+        viz_img = visualize_bboxes(image, lines_bboxes, format="xywh")
+        viz_img.save(
+            os.path.join("/tmp/fragments", f"line_refiner-final.png"), format="PNG"
         )
-
-    viz_img.save(
-        os.path.join("/tmp/fragments", f"overlay_refiner-final.png"), format="PNG"
-    )
 
     return lines_bboxes
 
@@ -216,7 +205,9 @@ class BoxProcessorUlimDit(BoxProcessor):
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
-        logger.info("Box processor [dit, cuda={}]".format(cuda))
+        self.logger = MarieLogger(self.__class__.__name__)
+        self.logger.info("Box processor [dit, cuda={}]".format(cuda))
+
         args = get_parser().parse_args(
             [
                 "--config-file",
@@ -238,7 +229,7 @@ class BoxProcessorUlimDit(BoxProcessor):
     def psm_sparse(self, image):
         predictions = self.predictor(image)
         predictions = predictions["instances"].to(self.cpu_device)
-        logger.info(f"Number of prediction : {len(predictions)}")
+        self.logger.info(f"Number of prediction : {len(predictions)}")
 
         boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
         scores = predictions.scores if predictions.has("scores") else None
@@ -261,12 +252,20 @@ class BoxProcessorUlimDit(BoxProcessor):
     def psm_multiline(self, image):
         raise Exception("Not implemented")
 
-    def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE):
-
+    def extract_bounding_boxes(
+        self, _id, key, img, psm=PSMode.SPARSE
+    ) -> tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
-        try:
 
+        if type(img) == PIL.Image.Image:  # convert pil to OpenCV
+            img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            self.logger.warning("PIL image received converting to ndarray")
+
+        if not isinstance(img, np.ndarray):
+            raise Exception("Expected image in numpy format")
+
+        try:
             crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
                 self.work_dir, _id, key
             )
@@ -274,7 +273,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             start_time = time.time()
             # deepcopy image so that original is not altered
             image = copy.deepcopy(img)
-
             lines_bboxes = []
 
             # Page Segmentation Model

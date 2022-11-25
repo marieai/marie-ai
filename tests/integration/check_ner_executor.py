@@ -83,7 +83,6 @@ if __name__ == "__main__":
     single_file = True
     storage_enabled = False
     img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.png"
-    img_path = f"/home/gbugaj/Downloads/task_ci-train-04-2022_11_18_21_05_06-cvat for images 1.1/images/corr-indexing-10-12-2022/162402144_1.png"
 
     if single_file:
         process_file(executor, img_path, storage_enabled, storage_conf)

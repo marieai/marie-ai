@@ -4,12 +4,11 @@ from PIL import Image
 from marie.executor import NerExtractionExecutor
 from marie.utils.image_utils import hash_file
 
-models_dir = "/mnt/data/models/layoutlmv3-large-finetuned-splitlayout/checkpoint-24500"
-
-executor = NerExtractionExecutor(models_dir)
+executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
 
 
 def process_image(image):
+
     width, height = image.size
 
     img_path = "/tmp/gradio.png"
@@ -61,7 +60,7 @@ def interface():
         live=False,
     )
 
-    iface.launch(debug=True)
+    iface.launch(debug=True, share=True, server_name="0.0.0.0")
 
 
 if __name__ == "__main__":

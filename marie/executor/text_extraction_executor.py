@@ -12,7 +12,7 @@ from docarray import DocumentArray
 from torch.backends import cudnn
 
 from marie import Executor
-from marie.boxes import BoxProcessorCraft
+# from marie.boxes import BoxProcessorCraft
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes import PSMode
 from marie.document import TrOcrIcrProcessor
@@ -242,7 +242,6 @@ class TextExtractionExecutor(Executor):
                     overlay[padding : h + padding, padding : w + padding] = img
 
                 # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
-
                 (
                     boxes,
                     img_fragments,
@@ -261,7 +260,6 @@ class TextExtractionExecutor(Executor):
                     result["overlay_b64"] = encodeToBase64(overlay_image)
 
                 result["id"] = rid
-
                 extended.append(result)
 
                 # TODO : Implement rendering modes
