@@ -3,8 +3,6 @@ from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
-from marie.utils.image_utils import hash_file
-from marie.utils.json import to_json
 
 box = BoxProcessorUlimDit(
     models_dir="./model_zoo/unilm/dit/text_detection",
@@ -23,38 +21,31 @@ def process_image(image):
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
-    return bboxes_img, lines_img  # to_json(boxes)
+    return bboxes_img, lines_img
 
 
 def interface():
-    title = "DiT for Text Detection"
-    description = """<p></p>"""
+    article = """
+         # DiT for Text Detection
+         [DiT: Self-supervised Pre-training for Document Image Transformer](https://github.com/microsoft/unilm/tree/master/dit/text_detection)
+        """
 
-    article = (
-        "<p style='text-align: center'><a href='https://github.com/microsoft/unilm/tree/master/dit/text_detection' target='_blank'>"
-        "DiT: Self-supervised Pre-training for Document Image Transformer</a> "
-        "</p>"
-    )
-    examples = []
+    with gr.Blocks() as iface:
+        gr.Markdown(article)
+        with gr.Row():
+            src = gr.Image(type="pil", source="upload")
 
-    iface = gr.Interface(
-        fn=process_image,
-        inputs=[
-            gr.inputs.Image(type="pil"),
-        ],
-        outputs=[
-            gr.outputs.Image(type="pil", label="boxes"),
-            gr.outputs.Image(type="pil", label="lines"),
-            # gr.outputs.JSON(),
-        ],
-        title=title,
-        description=description,
-        article=article,
-        examples=examples,
-        theme="default",
-        # css=".footer{display:none !important}",
-        live=False,
-    )
+        with gr.Row():
+            btn_reset = gr.Button("Clear")
+            btn_submit = gr.Button("Submit", variant="primary")
+
+        with gr.Row():
+            with gr.Column():
+                boxes = gr.components.Image(type="pil", label="boxes")
+            with gr.Column():
+                lines = gr.components.Image(type="pil", label="lines")
+
+        btn_submit.click(process_image, inputs=[src], outputs=[boxes, lines])
 
     iface.launch(debug=True, share=True, server_name="0.0.0.0")
 

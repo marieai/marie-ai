@@ -62,7 +62,7 @@ class OverlayProcessor(BaseHandler):
 
         opt = TestOptions().parse(args)
         # hard-code parameters for test
-        opt.eval = False
+        opt.eval = True
         opt.num_threads = 0  # test code only supports num_threads = 0
         opt.batch_size = 1  # test code only supports batch_size = 1
         opt.serial_batches = True
@@ -72,6 +72,7 @@ class OverlayProcessor(BaseHandler):
 
         model = create_model(opt)
         model.setup(opt)
+        model.eval()
 
         print("Model setup complete")
         return opt, model
@@ -147,7 +148,7 @@ class OverlayProcessor(BaseHandler):
         return blended_img
 
     @Timer(text="Segmented in {:.2f} seconds")
-    def segment(self, documentid: str, img_path: str):
+    def segment(self, document_id: str, img_path: str):
         """
         Form overlay segmentation
         """
@@ -155,7 +156,7 @@ class OverlayProcessor(BaseHandler):
         if not os.path.exists(img_path):
             raise Exception("File not found : {}".format(img_path))
 
-        name = documentid
+        name = document_id
         work_dir = os.path.join(self.work_dir, name, "work")
         debug_dir = os.path.join(self.work_dir, name, "debug")
         dataroot_dir = os.path.join(self.work_dir, name, "dataroot_overlay")
@@ -166,9 +167,10 @@ class OverlayProcessor(BaseHandler):
         ensure_exists(dataroot_dir)
 
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
-        if not os.path.exists(dst_file_name):
+        if False and not os.path.exists(dst_file_name):
             copyfile(img_path, dst_file_name)
 
+        copyfile(img_path, dst_file_name)
         real_img = cv2.imread(dst_file_name)
         # viewImage(img, 'Source Image')
 
