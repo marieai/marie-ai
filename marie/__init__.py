@@ -96,6 +96,7 @@ env_var_regex = re.compile(env_var_regex_str)  # matches either of the above
 
 
 # ONLY FIRST CLASS CITIZENS ARE ALLOWED HERE, namely Document, Executor Flow
+from marie.version import __version__
 
 # Document
 from docarray import Document, DocumentArray

@@ -17,17 +17,6 @@ ac_table = {
         'export-api',
     ],
     'completions': {
-        'hello fashion': [
-            '--help',
-            '--workdir',
-            '--download-proxy',
-            '--index-data-url',
-            '--index-labels-url',
-            '--query-data-url',
-            '--query-labels-url',
-            '--num-query',
-            '--top-k',
-        ],
         'hello chatbot': [
             '--help',
             '--workdir',

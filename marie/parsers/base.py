@@ -15,7 +15,7 @@ def set_base_parser():
     # create the top-level parser
     urls = {
         'Code': ('💻', 'https://github.com/gregbugaj/marie-ai'),
-        'Docs': ('📖', 'https://github.com/gregbugaj/marie-ai'),
+        'Docs': ('📖', 'https://github.com/gregbugaj/marie-ai/tree/main/docs'),
         'Help': ('💬', 'https://github.com/gregbugaj/marie-ai'),
     }
     url_str = '\n'.join(
@@ -25,7 +25,7 @@ def set_base_parser():
 
     parser = argparse.ArgumentParser(
         epilog=f'''
-Marie (v{colored(__version__, "green")}) is the Document processing framework powered by deep learning.
+Marie-AI 🦊 (v{colored(__version__, "green")}) is the Document processing framework powered by deep learning.
 
 {url_str}
 
@@ -37,7 +37,7 @@ Marie (v{colored(__version__, "green")}) is the Document processing framework po
         '--version',
         action='version',
         version=__version__,
-        help='Show Marie version',
+        help='Show Marie-AI version',
     )
 
     parser.add_argument(
@@ -45,6 +45,6 @@ Marie (v{colored(__version__, "green")}) is the Document processing framework po
         '--version-full',
         action='version',
         version=format_full_version_info(*get_full_version()),
-        help='Show Marie and all dependencies\' versions',
+        help='Show Marie-AI and all dependencies\' versions',
     )
     return parser
