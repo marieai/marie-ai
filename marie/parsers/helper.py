@@ -2,6 +2,8 @@
 import argparse
 import os
 from typing import Tuple
+from marie.enums import GatewayProtocolType
+from marie.logging.predefined import default_logger
 
 _SHOW_ALL_ARGS = 'MARIE_FULL_CLI' in os.environ
 
@@ -257,5 +259,69 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
         return lines
 
+def _get_gateway_class(protocol):
+    from marie.serve.runtimes.gateway.grpc import GRPCGateway
+    from marie.serve.runtimes.gateway.http import HTTPGateway
+    from marie.serve.runtimes.gateway.websocket import WebSocketGateway
+
+    gateway_dict = {
+        GatewayProtocolType.GRPC: GRPCGateway,
+        GatewayProtocolType.WEBSOCKET: WebSocketGateway,
+        GatewayProtocolType.HTTP: HTTPGateway,
+    }
+    return gateway_dict[protocol]
+
+
+def _set_gateway_uses(args: 'argparse.Namespace'):
+    if not args.uses:
+        if len(args.protocol) == 1 and len(args.port) == 1:
+            args.uses = _get_gateway_class(args.protocol[0]).__name__
+        elif len(args.protocol) == len(args.port):
+            from marie.serve.runtimes.gateway.composite import CompositeGateway
+
+            args.uses = CompositeGateway.__name__
+        else:
+            raise ValueError(
+                'You need to specify as much protocols as ports if you want to use a jina built-in gateway'
+            )
+
+
+def _update_gateway_args(args: 'argparse.Namespace'):
+    from marie.helper import random_ports
+
+    if not args.port:
+        args.port = random_ports(len(args.protocol))
+    _set_gateway_uses(args)
+
+
+class CastToIntAction(argparse.Action):
+    """argparse action to cast a list of values to int"""
+
+    def __call__(self, parser, args, values, option_string=None):
+        """
+        call the CastToIntAction
+
+
+        .. # noqa: DAR401
+        :param parser: the parser
+        :param args: args to initialize the values
+        :param values: the values to add to the parser
+        :param option_string: inherited, not used
+        """
+        if isinstance(values, list):
+            d = [_port_to_int(port) for port in values]
+        elif isinstance(values, str):
+            d = _port_to_int(values)
+        setattr(args, self.dest, d)
+
+
+def _port_to_int(port):
+    try:
+        return int(port)
+    except ValueError:
+        default_logger.warning(
+            f'port {port} is not an integer and cannot be cast to one'
+        )
+        return port
 
 _chf = _ColoredHelpFormatter

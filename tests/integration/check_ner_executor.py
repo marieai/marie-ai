@@ -66,12 +66,11 @@ def process_dir(
 
 
 if __name__ == "__main__":
-
-    # pip install git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
     # _name_or_path = "rms/layoutlmv3-large-corr-ner"
     _name_or_path = "rms/layoutlmv3-large-20221118-001-best"
+    _name_or_path = "rms/layoutlmv3-large-20221129-dit"
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 
@@ -80,11 +79,10 @@ if __name__ == "__main__":
     storage_conf = storage_provider_config("postgresql", config_data)
     executor = NerExtractionExecutor(_name_or_path)
 
-    single_file = True
     storage_enabled = False
-    img_path = f"/home/gbugaj/tmp/PID_1925_9289_0_157186264.png"
+    img_path = f"/home/gbugaj/tmp/2022-08-09/PID_698_7367_0_159277012.tif"
 
-    if single_file:
+    if not os.path.isdir(img_path):
         process_file(executor, img_path, storage_enabled, storage_conf)
     else:
         process_dir(executor, img_path, storage_enabled, storage_conf)

@@ -17,11 +17,11 @@ from marie.version import __version__
 
 # logger = setup_logger(__file__)
 # logger = MarieLogger("")
-logger = default_logger()
+logger = default_logger
 
 
 def main():
-    args = set_gateway_parser().parse_args(["--port", "5000", "--title", "Foxy Marie"])
+    args = set_gateway_parser().parse_args(["--port", "5000", "--title", "Marie-AI"])
 
     def extend_rest_function(app):
         @app.get("/hello", tags=["My Extended APIs"])

@@ -11,7 +11,7 @@ import torch
 from docarray import DocumentArray
 from torch.backends import cudnn
 
-from marie import Executor
+from marie import Executor, requests
 # from marie.boxes import BoxProcessorCraft
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes import PSMode
@@ -306,7 +306,7 @@ class TextExtractionExecutor(Executor):
 
         return {"regions": output, "extended": extended}
 
-    # @requests()
+    @requests(on="/text/extract")
     def extract(self, docs: Optional[DocumentArray] = None, **kwargs):
         """
         Load the image from `uri`, extract text and bounding boxes.

@@ -13,8 +13,21 @@ import warnings
 from argparse import Namespace, ArgumentParser
 from itertools import islice
 from socket import AF_INET, SOCK_STREAM, socket
-from typing import Dict, TYPE_CHECKING, Optional, Tuple, Union, Callable, Sequence, Iterable, List, Any, Iterator, Set, \
-    TypeVar
+from typing import (
+    Dict,
+    TYPE_CHECKING,
+    Optional,
+    Tuple,
+    Union,
+    Callable,
+    Sequence,
+    Iterable,
+    List,
+    Any,
+    Iterator,
+    Set,
+    TypeVar,
+)
 
 from rich.console import Console
 
@@ -24,6 +37,7 @@ from marie import __windows__
 # based on jina
 
 T = TypeVar('T')
+
 
 def get_internal_ip():
     """
@@ -173,7 +187,9 @@ def run_async(func, *args, **kwargs):
             except AttributeError:
                 from marie.excepts import BadClient
 
-                raise BadClient("something wrong when running the eventloop, result can not be retrieved")
+                raise BadClient(
+                    "something wrong when running the eventloop, result can not be retrieved"
+                )
         else:
 
             raise RuntimeError(
@@ -363,7 +379,9 @@ def _update_policy():
             if not isinstance(asyncio.get_event_loop_policy(), uvloop.EventLoopPolicy):
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         except ModuleNotFoundError:
-            warnings.warn('Install `uvloop` via `pip install "marie[uvloop]"` for better performance.')
+            warnings.warn(
+                'Install `uvloop` via `pip install "marie[uvloop]"` for better performance.'
+            )
 
 
 def _close_loop():
@@ -434,6 +452,10 @@ class CatchAllCleanupContextManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
             self.sub_context.__exit__(exc_type, exc_val, exc_tb)
+
+
+def random_ports(n_ports):
+    return [random_port() for _ in range(n_ports)]
 
 
 def random_identity(use_uuid1: bool = False) -> str:
@@ -738,6 +760,7 @@ def get_rich_console():
         color_system=None if "MARIE_LOG_NO_COLOR" in os.environ else "auto",
     )
 
+
 from marie.parsers import set_client_cli_parser
 
 
@@ -747,6 +770,7 @@ def parse_client(kwargs):
         kwargs, set_client_cli_parser(), warn_unknown=True
     )
 
+
 def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     if 'host' in kwargs.keys():
         return_scheme = dict()
@@ -755,7 +779,7 @@ def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             return_scheme['port'],
             return_scheme['protocol'],
             return_scheme['tls'],
-        ) = _parse_host_scheme(kwargs['host'])
+        ) = parse_host_scheme(kwargs['host'])
 
         for key, value in return_scheme.items():
             if value:
@@ -771,10 +795,12 @@ def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 
     return kwargs
 
+
 def _add_default_port_tls(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     if ('tls' in kwargs) and ('port' not in kwargs):
         kwargs['port'] = 443
     return kwargs
+
 
 def _delete_host_slash(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     if 'host' in kwargs:
@@ -782,7 +808,8 @@ def _delete_host_slash(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             kwargs['host'] = kwargs['host'][:-1]
     return kwargs
 
-def _parse_host_scheme(host: str) -> Tuple[str, str, str, bool]:
+
+def parse_host_scheme(host: str) -> Tuple[str, str, str, bool]:
     scheme, _hostname, port = _parse_url(host)
 
     tls = None
@@ -953,6 +980,7 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
                 v = False
     return v
 
+
 def countdown(t: int, reason: str = 'I am blocking this thread') -> None:
     """
     Display the countdown in console.
@@ -1111,7 +1139,9 @@ def reset_ports():
         if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
             min_port = int(os.environ.get("JINA_RANDOM_PORT_MIN", "16384"))
         else:
-            min_port = int(os.environ.get("JINA_RANDOM_PORT_MIN", str(DEFAULT_MIN_PORT)))
+            min_port = int(
+                os.environ.get("JINA_RANDOM_PORT_MIN", str(DEFAULT_MIN_PORT))
+            )
         max_port = int(os.environ.get("JINA_RANDOM_PORT_MAX", str(MAX_PORT)))
         return set(range(min_port, max_port + 1)) - set(assigned_ports)
 
