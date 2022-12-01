@@ -2,7 +2,9 @@ import os
 from typing import Dict
 
 DEPLOYMENT_FILES = [
-    'deployment',
+    'statefulset-executor',
+    'deployment-executor',
+    'deployment-gateway',
     'deployment-uses-before',
     'deployment-uses-after',
     'deployment-uses-before-after',
@@ -21,7 +23,6 @@ def get_yaml(template: str, params: Dict) -> Dict:
     :param params: dictionary for replacing the placeholders (keys) with the actual values.
     :return: The yaml dictionary with the corresponding template filled with parameters
     """
-
     if template == 'configmap':
         yaml = _get_configmap_yaml(template, params)
     elif template in DEPLOYMENT_FILES and params.get('device_plugins'):
@@ -58,7 +59,7 @@ def _get_configmap_yaml(template: str, params: Dict):
     config_map['metadata']['namespace'] = params.get('namespace')
     if params.get('data'):
         for key, value in params['data'].items():
-            config_map['data'][key] = value
+            config_map['data'][key] = str(value)
     return config_map
 
 

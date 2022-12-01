@@ -3,15 +3,13 @@ from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING
 
-from grpc import RpcError
+# from hubble.executor.helper import is_valid_huburi
+# from hubble.executor.hubio import HubIO
 
-from marie.enums import GatewayProtocolType, PodRoleType
-# from marie.hubble.helper import is_valid_huburi
-# from marie.hubble.hubio import HubIO
-from marie.serve.networking import GrpcConnectionPool
-from marie.types.request.control import ControlRequest
+from marie.enums import PodRoleType
+from marie.parsers.helper import _update_gateway_args
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from argparse import Namespace
 
 
@@ -77,35 +75,17 @@ def update_runtime_cls(args, copy=False) -> 'Namespace':
     :return: runtime class as a string
     """
     _args = deepcopy(args) if copy else args
-    gateway_runtime_dict = {
-        GatewayProtocolType.GRPC: 'GRPCGatewayRuntime',
-        GatewayProtocolType.WEBSOCKET: 'WebSocketGatewayRuntime',
-        GatewayProtocolType.HTTP: 'HTTPGatewayRuntime',
-    }
+
+    # TODO : Reimplement
     # if _args.runtime_cls == 'WorkerRuntime' and is_valid_huburi(_args.uses):
     #     _hub_args = deepcopy(_args)
     #     _hub_args.uri = _args.uses
     #     _hub_args.no_usage = True
     #     _args.uses = HubIO(_hub_args).pull()
 
-    if hasattr(_args, 'protocol'):
-        _args.runtime_cls = gateway_runtime_dict[_args.protocol]
+    if hasattr(_args, 'protocol') and _args.pod_role == PodRoleType.GATEWAY:
+        _update_gateway_args(_args)
     if _args.pod_role == PodRoleType.HEAD:
         _args.runtime_cls = 'HeadRuntime'
 
     return _args
-
-
-def is_ready(address: str) -> bool:
-    """
-    TODO: make this async
-    Check if status is ready.
-    :param address: the address where the control message needs to be sent
-    :return: True if status is ready else False.
-    """
-
-    try:
-        GrpcConnectionPool.send_request_sync(ControlRequest('STATUS'), address)
-    except RpcError:
-        return False
-    return True
