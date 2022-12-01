@@ -1,7 +1,7 @@
 """Argparser module for WorkerRuntime"""
 
-from jina.parsers.helper import KVAppendAction, add_arg_group
-from jina.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
+from marie.parsers.helper import KVAppendAction, add_arg_group
+from marie.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
 
 
 def mixin_worker_runtime_parser(parser):
@@ -10,7 +10,7 @@ def mixin_worker_runtime_parser(parser):
     """
 
     gp = add_arg_group(parser, title='WorkerRuntime')
-    from jina import __default_executor__
+    from marie import __default_executor__
 
     gp.add_argument(
         '--uses',

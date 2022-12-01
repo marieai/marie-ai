@@ -61,7 +61,7 @@ def callback_exec(
     on_error: Callable,
     on_always: Callable,
     continue_on_error: bool,
-    logger: JinaLogger,
+    logger: MarieLogger,
 ) -> None:
     """Execute the callback with the response.
 

@@ -1,8 +1,8 @@
 import os
 from typing import Iterable, List, Union
 
-from jina.proto import jina_pb2
-from jina.types.request.data import DataRequest
+from marie.proto import jina_pb2
+from marie.types.request.data import DataRequest
 
 
 class DataRequestProto:
