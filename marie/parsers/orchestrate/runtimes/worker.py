@@ -1,6 +1,7 @@
 """Argparser module for WorkerRuntime"""
-from marie import __default_host__, helper
-from marie.parsers.helper import KVAppendAction, add_arg_group
+
+from jina.parsers.helper import KVAppendAction, add_arg_group
+from jina.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
 
 
 def mixin_worker_runtime_parser(parser):
@@ -9,7 +10,7 @@ def mixin_worker_runtime_parser(parser):
     """
 
     gp = add_arg_group(parser, title='WorkerRuntime')
-    from marie import __default_executor__
+    from jina import __default_executor__
 
     gp.add_argument(
         '--uses',
@@ -17,8 +18,9 @@ def mixin_worker_runtime_parser(parser):
         default=__default_executor__,
         help='''
         The config of the executor, it could be one of the followings:
+        * the string literal of an Executor class name
         * an Executor YAML file (.yml, .yaml, .jaml)
-        * a Marie Hub Executor (must start with `mariehub://` or `mariehub+docker://`)
+        * a Jina Hub Executor (must start with `jinahub://` or `jinahub+docker://`)
         * a docker image (must start with `docker://`)
         * the string literal of a YAML config (must start with `!` or `jtype: `)
         * the string literal of a JSON config
@@ -65,28 +67,38 @@ The customized python modules need to be imported before loading the executor
 
 Note that the recommended way is to only import a single module - a simple python file, if your
 executor can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
-which should be structured as a python package.
+which should be structured as a python package. For more details, please see the
+`Executor cookbook <https://docs.jina.ai/fundamentals/executor/executor-files/>`__
 ''',
     )
 
     gp.add_argument(
-        '--port-in',
-        type=int,
-        default=helper.random_port(),
-        dest='port',
-        help='The port for input data to bind to, default a random port between [49152, 65535]',
-    )
-    gp.add_argument(
-        '--host-in',
+        '--output-array-type',
         type=str,
-        default=__default_host__,
-        help=f'The host address for binding to, by default it is {__default_host__}',
+        default=None,
+        help='''
+The type of array `tensor` and `embedding` will be serialized to.
+
+Supports the same types as `docarray.to_protobuf(.., ndarray_type=...)`, which can be found 
+`here <https://docarray.jina.ai/fundamentals/document/serialization/#from-to-protobuf>`.
+Defaults to retaining whatever type is returned by the Executor.
+''',
     )
 
     gp.add_argument(
-        '--native',
+        '--exit-on-exceptions',
+        type=str,
+        default=[],
+        nargs='*',
+        help='List of exceptions that will cause the Executor to shut down.',
+    )
+
+    gp.add_argument(
+        '--no-reduce',
+        '--disable-reduce',
         action='store_true',
         default=False,
-        help='If set, only native Executors is allowed, and the Executor is always run inside WorkerRuntime.',
+        help='Disable the built-in reduction mechanism. Set this if the reduction is to be handled by the Executor itself by operating on a `docs_matrix` or `docs_map`',
     )
 
+    mixin_base_runtime_parser(gp)

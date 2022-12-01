@@ -86,7 +86,7 @@ class BaseGateway(JAMLCompatible, metaclass=GatewayType):
 
         import json
 
-        from jina.serve.streamer import GatewayStreamer
+        from marie.serve.streamer import GatewayStreamer
 
         graph_description = json.loads(self.runtime_args.graph_description)
         graph_conditions = json.loads(self.runtime_args.graph_conditions)

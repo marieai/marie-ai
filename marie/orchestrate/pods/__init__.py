@@ -13,9 +13,12 @@ from marie.helper import typename
 from marie.jaml import JAML
 from marie.logging.logger import MarieLogger
 from marie.orchestrate.pods.helper import ConditionalEvent, _get_event
+from marie.parsers.helper import _update_gateway_args
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 
 __all__ = ['BasePod', 'Pod']
+
+from marie.serve.runtimes.gateway import GatewayRuntime
 
 
 def run(

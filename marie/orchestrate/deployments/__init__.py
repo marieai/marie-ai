@@ -353,7 +353,7 @@ class Deployment(BaseDeployment):
         :return: True if this deployment is provided as a sandbox, False otherwise
         """
         uses = getattr(self.args, 'uses') or ''
-        is_sandbox = uses.startswith('jinahub+sandbox://') or uses.startswith('jinaai+sandbox://')
+        is_sandbox = uses.startswith('jinahub+sandbox://')
         return is_sandbox
 
     @property
@@ -364,7 +364,7 @@ class Deployment(BaseDeployment):
         :return: True if this deployment is to be run in docker
         """
         uses = getattr(self.args, 'uses', '')
-        is_docker = uses.startswith('jinahub+docker://') or uses.startswith('docker://') or uses.startswith('jinaai+docker://')
+        is_docker = uses.startswith('jinahub+docker://') or uses.startswith('docker://')
         return is_docker
 
     @property

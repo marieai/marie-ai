@@ -1,5 +1,3 @@
-import argparse
-
 from marie.parsers.helper import add_arg_group
 
 
@@ -10,17 +8,12 @@ def mixin_head_parser(parser):
 
     gp = add_arg_group(parser, title='Head')
 
-    try:
-        gp.add_argument(
-            '--compression',
-            type=str,
-            default='NoCompression',
-            help='The compression mechanism used when sending requests from the Head to the WorkerRuntimes. Possibilities '
-            'are `NoCompression, Gzip, Deflate`. For more details, '
-            'check https://grpc.github.io/grpc/python/grpc.html#compression.',
-        )
-    except argparse.ArgumentError:
-        pass
+    gp.add_argument(
+        '--compression',
+        choices=['NoCompression', 'Deflate', 'Gzip'],
+        help='The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, '
+        'check https://grpc.github.io/grpc/python/grpc.html#compression.',
+    )
 
     gp.add_argument(
         '--uses-before-address',
@@ -38,13 +31,6 @@ def mixin_head_parser(parser):
         '--connection-list',
         type=str,
         help='dictionary JSON with a list of connections to configure',
-    )
-
-    gp.add_argument(
-        '--disable-reduce',
-        action='store_true',
-        default=False,
-        help='Disable the built-in reduce mechanism, set this if the reduction is to be handled by the Executor connected to this Head',
     )
 
     gp.add_argument(

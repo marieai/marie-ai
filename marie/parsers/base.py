@@ -25,7 +25,7 @@ def set_base_parser():
 
     parser = argparse.ArgumentParser(
         epilog=f'''
-Marie-AI 🦊 (v{colored(__version__, "green")}) is the Document processing framework powered by deep learning.
+Marie 🦊 (v{colored(__version__, "green")}) is the Document processing framework powered by deep learning.
 
 {url_str}
 
@@ -37,7 +37,7 @@ Marie-AI 🦊 (v{colored(__version__, "green")}) is the Document processing fram
         '--version',
         action='version',
         version=__version__,
-        help='Show Marie-AI version',
+        help='Show Marie version',
     )
 
     parser.add_argument(
@@ -45,6 +45,6 @@ Marie-AI 🦊 (v{colored(__version__, "green")}) is the Document processing fram
         '--version-full',
         action='version',
         version=format_full_version_info(*get_full_version()),
-        help='Show Marie-AI and all dependencies\' versions',
+        help='Show Marie and all dependencies\' versions',
     )
     return parser

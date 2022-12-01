@@ -31,7 +31,7 @@ from marie.logging.predefined import default_logger
 from marie.utils.network import find_open_port
 from marie.version import __version__
 from marie.common.file_io import PathManager
-from marie import __cache_dir__
+from marie import __cache_dir__, __cache_path__
 
 # from marie.logger import setup_logger
 from marie.utils.utils import ensure_exists, FileSystem
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     os.environ["FLASK_DEBUG"] = "1"
 
     # by default cache is located in '~/.cache' here we will map it under the runtime cache directory
-    os.environ["TORCH_HOME"] = str(__cache_dir__)
+    os.environ["TORCH_HOME"] = str(__cache_path__)
 
     os.environ["MARIE_PORT"] = "-1"
 
