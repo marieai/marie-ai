@@ -1,6 +1,7 @@
 import argparse
 import base64
 import copy
+import inspect
 import json
 import multiprocessing
 import os
@@ -8,6 +9,7 @@ import sys
 import threading
 import time
 import uuid
+import warnings
 from collections import OrderedDict
 from contextlib import ExitStack
 from typing import (
@@ -34,9 +36,9 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from marie import __default_host__, __default_port_monitoring__, __docker_host__, helper
+from marie import __default_host__, __docker_host__, helper
 from marie.clients import Client
-from marie.clients.mixin import AsyncPostMixin, PostMixin
+from marie.clients.mixin import AsyncPostMixin, HealthCheckMixin, PostMixin, ProfileMixin
 from marie.enums import (
     DeploymentRoleType,
     FlowBuildLevel,
@@ -50,12 +52,14 @@ from marie.excepts import (
     RuntimeFailToStart,
 )
 from marie.helper import (
+    GATEWAY_NAME,
     ArgNamespace,
     CatchAllCleanupContextManager,
     download_mermaid_url,
     get_internal_ip,
     get_public_ip,
     is_port_free,
+    send_telemetry_event,
     typename,
 )
 from marie.jaml import JAMLCompatible
@@ -68,10 +72,11 @@ from marie.parsers import (
     set_gateway_parser,
 )
 from marie.parsers.flow import set_flow_parser
+from marie.serve.networking import host_is_local, in_docker
 
 __all__ = ['Flow']
-
-from marie.serve.networking import host_is_local, in_docker
+GATEWAY_ARGS_BLACKLIST = ['uses', 'uses_with']
+EXECUTOR_ARGS_BLACKLIST = ['port', 'port_monitoring', 'uses', 'uses_with']
 
 
 class FlowType(type(ExitStack), type(JAMLCompatible)):
@@ -82,12 +87,11 @@ class FlowType(type(ExitStack), type(JAMLCompatible)):
 
 _regex_port = r'(.*?):([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$'
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.base import BaseClient
     from marie.orchestrate.flow.asyncio import AsyncFlow
     from marie.serve.executors import BaseExecutor
 
-GATEWAY_NAME = 'gateway'
 FALLBACK_PARSERS = [
     set_gateway_parser(),
     set_deployment_parser(),
@@ -96,7 +100,14 @@ FALLBACK_PARSERS = [
 ]
 
 
-class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
+class Flow(
+    PostMixin,
+    ProfileMixin,
+    HealthCheckMixin,
+    JAMLCompatible,
+    ExitStack,
+    metaclass=FlowType,
+):
     """Flow is how Jina streamlines and distributes Executors."""
 
     # overload_inject_start_client_flow
@@ -106,22 +117,32 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         *,
         asyncio: Optional[bool] = False,
         host: Optional[str] = '0.0.0.0',
+        metrics: Optional[bool] = False,
+        metrics_exporter_host: Optional[str] = None,
+        metrics_exporter_port: Optional[int] = None,
         port: Optional[int] = None,
         protocol: Optional[str] = 'GRPC',
         proxy: Optional[bool] = False,
-        return_responses: Optional[bool] = False,
         tls: Optional[bool] = False,
+        traces_exporter_host: Optional[str] = None,
+        traces_exporter_port: Optional[int] = None,
+        tracing: Optional[bool] = False,
         **kwargs,
     ):
         """Create a Flow. Flow is how Jina streamlines and scales Executors. This overloaded method provides arguments from `jina client` CLI.
 
         :param asyncio: If set, then the input and output of this Client work in an asynchronous manner.
-        :param host: The host address of the runtime, by default it is 0.0.0.0.
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
         :param port: The port of the Gateway, which the client should connect to.
         :param protocol: Communication protocol between server and client.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
-        :param return_responses: If set, return results as List of Requests instead of a reduced DocArray.
         :param tls: If set, connect to gateway using tls encryption
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
 
         .. # noqa: DAR202
         .. # noqa: DAR101
@@ -135,48 +156,49 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     def __init__(
         self,
         *,
-        compression: Optional[str] = 'NoCompression',
+        compression: Optional[str] = None,
         cors: Optional[bool] = False,
-        default_swagger_ui: Optional[bool] = False,
         deployments_addresses: Optional[str] = '{}',
-        deployments_disable_reduce: Optional[str] = '[]',
+        deployments_metadata: Optional[str] = '{}',
+        deployments_no_reduce: Optional[str] = '[]',
         description: Optional[str] = None,
+        docker_kwargs: Optional[dict] = None,
+        entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
         expose_endpoints: Optional[str] = None,
         expose_graphql_endpoint: Optional[bool] = False,
+        floating: Optional[bool] = False,
         graph_conditions: Optional[str] = '{}',
         graph_description: Optional[str] = '{}',
-        grpc_server_kwargs: Optional[dict] = None,
+        grpc_server_options: Optional[dict] = None,
         host: Optional[str] = '0.0.0.0',
-        host_in: Optional[str] = '0.0.0.0',
         log_config: Optional[str] = None,
+        metrics: Optional[bool] = False,
+        metrics_exporter_host: Optional[str] = None,
+        metrics_exporter_port: Optional[int] = None,
         monitoring: Optional[bool] = False,
         name: Optional[str] = 'gateway',
-        native: Optional[bool] = False,
         no_crud_endpoints: Optional[bool] = False,
         no_debug_endpoints: Optional[bool] = False,
-        output_array_type: Optional[str] = None,
-        polling: Optional[str] = 'ANY',
-        port: Optional[int] = None,
-        port_monitoring: Optional[int] = 9090,
-        prefetch: Optional[int] = 0,
-        protocol: Optional[str] = 'GRPC',
+        port_monitoring: Optional[str] = None,
+        prefetch: Optional[int] = 1000,
+        protocol: Optional[List[str]] = ['GRPC'],
         proxy: Optional[bool] = False,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
         quiet_error: Optional[bool] = False,
-        replicas: Optional[int] = 1,
-        runtime_cls: Optional[str] = 'GRPCGatewayRuntime',
-        shards: Optional[int] = 1,
+        retries: Optional[int] = -1,
+        runtime_cls: Optional[str] = 'GatewayRuntime',
         ssl_certfile: Optional[str] = None,
         ssl_keyfile: Optional[str] = None,
         timeout_ctrl: Optional[int] = 60,
         timeout_ready: Optional[int] = 600000,
         timeout_send: Optional[int] = None,
         title: Optional[str] = None,
-        uses: Optional[Union[str, Type['BaseExecutor'], dict]] = 'BaseExecutor',
-        uses_metas: Optional[dict] = None,
-        uses_requests: Optional[dict] = None,
+        traces_exporter_host: Optional[str] = None,
+        traces_exporter_port: Optional[int] = None,
+        tracing: Optional[bool] = False,
+        uses: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
         uses_with: Optional[dict] = None,
         uvicorn_kwargs: Optional[dict] = None,
         workspace: Optional[str] = None,
@@ -184,21 +206,29 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     ):
         """Create a Flow. Flow is how Jina streamlines and scales Executors. This overloaded method provides arguments from `jina gateway` CLI.
 
-        :param compression: The compression mechanism used when sending requests to Executors. Possibilites are: `NoCompression, Gzip, Deflate`. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
         :param cors: If set, a CORS middleware is added to FastAPI frontend to allow cross-origin access.
-        :param default_swagger_ui: If set, the default swagger ui is used for `/docs` endpoint.
-        :param deployments_addresses: dictionary JSON with the input addresses of each Deployment
-        :param deployments_disable_reduce: list JSON disabling the built-in merging mechanism for each Deployment listed
+        :param deployments_addresses: JSON dictionary with the input addresses of each Deployment
+        :param deployments_metadata: JSON dictionary with the request metadata for each Deployment
+        :param deployments_no_reduce: list JSON disabling the built-in merging mechanism for each Deployment listed
         :param description: The description of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
         :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
         :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
         :param graph_conditions: Dictionary stating which filtering conditions each Executor in the graph requires to receive Documents.
         :param graph_description: Routing graph for the gateway
-        :param grpc_server_kwargs: Dictionary of kwargs arguments that will be passed to the grpc server when starting the server # todo update
-        :param host: The host address of the runtime, by default it is 0.0.0.0.
-        :param host_in: The host address for binding to, by default it is 0.0.0.0
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
         :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
         :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
         :param name: The name of this object.
 
@@ -209,51 +239,37 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
               - ...
 
               When not given, then the default naming strategy will apply.
-        :param native: If set, only native Executors is allowed, and the Executor is always run inside WorkerRuntime.
-        :param no_crud_endpoints: If set, /index, /search, /update, /delete endpoints are removed from HTTP interface.
+        :param no_crud_endpoints: If set, `/index`, `/search`, `/update`, `/delete` endpoints are removed from HTTP interface.
 
-                  Any executor that has `@requests(on=...)` bind with those values will receive data requests.
-        :param no_debug_endpoints: If set, /status /post endpoints are removed from HTTP interface.
-        :param output_array_type: The type of array `tensor` and `embedding` will be serialized to.
-
-          Supports the same types as `docarray.to_protobuf(.., ndarray_type=...)`, which can be found
-          `here <https://docarray.jina.ai/fundamentals/document/serialization/#from-to-protobuf>`.
-          Defaults to retaining whatever type is returned by the Executor.
-        :param polling: The polling strategy of the Deployment and its endpoints (when `shards>1`).
-              Can be defined for all endpoints of a Deployment or by endpoint.
-              Define per Deployment:
-              - ANY: only one (whoever is idle) Pod polls the message
-              - ALL: all Pods poll the message (like a broadcast)
-              Define per Endpoint:
-              JSON dict, {endpoint: PollingType}
-              {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
-        :param port: The port for input data to bind to, default is a random port between [49152, 65535]
-        :param port_monitoring: The port on which the prometheus server is exposed, default port is 9090
+                  Any executor that has `@requests(on=...)` bound with those values will receive data requests.
+        :param no_debug_endpoints: If set, `/status` `/post` endpoints are removed from HTTP interface.
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param prefetch: Number of requests fetched from the client before feeding into the first Executor.
 
-              Used to control the speed of data input into a Flow. 0 disables prefetch (disabled by default)
-        :param protocol: Communication protocol between server and client.
+              Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
+        :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
-        :param py_modules: The customized python modules need to be imported before loading the executor
+        :param py_modules: The customized python modules need to be imported before loading the gateway
 
           Note that the recommended way is to only import a single module - a simple python file, if your
-          executor can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
-          which should be structured as a python package. For more details, please see the
-          `Executor cookbook <https://docs.jina.ai/fundamentals/executor/repository-structure/>`__
+          gateway can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package.
         :param quiet: If set, then no log will be emitted from this object.
         :param quiet_error: If set, then exception stack information will not be added to the log
-        :param replicas: The number of replicas in the deployment
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
         :param runtime_cls: The runtime class to run inside the Pod
-        :param shards: The number of shards in the deployment running at the same time. For more details check https://docs.jina.ai/fundamentals/flow/create-flow/#complex-flow-topologies
         :param ssl_certfile: the path to the certificate file
         :param ssl_keyfile: the path to the key file
         :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
         :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
         :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
         :param title: The title of this HTTP server. It will be used in automatics docs such as Swagger UI.
-        :param uses: The config of the executor, it could be one of the followings:
-                  * an Executor YAML file (.yml, .yaml, .jaml)
-                  * a Jina Hub Executor (must start with `jinahub://` or `jinahub+docker://`)
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the gateway, it could be one of the followings:
+                  * the string literal of an Gateway class name
+                  * a Gateway YAML file (.yml, .yaml, .jaml)
                   * a docker image (must start with `docker://`)
                   * the string literal of a YAML config (must start with `!` or `jtype: `)
                   * the string literal of a JSON config
@@ -261,8 +277,6 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                   When use it under Python, one can use the following values additionally:
                   - a Python dict that represents the config
                   - a text file stream has `.read()` interface
-        :param uses_metas: Dictionary of keyword arguments that will override the `metas` configuration in `uses`
-        :param uses_requests: Dictionary of keyword arguments that will override the `requests` configuration in `uses`
         :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
         :param uvicorn_kwargs: Dictionary of kwargs arguments that will be passed to Uvicorn server when starting the server
 
@@ -308,7 +322,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
               When not given, then the default naming strategy will apply.
         :param quiet: If set, then no log will be emitted from this object.
         :param quiet_error: If set, then exception stack information will not be added to the log
-        :param uses: The YAML file represents a flow
+        :param uses: The YAML path represents a flow. It can be either a local file path or a URL.
         :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
 
         .. # noqa: DAR202
@@ -322,6 +336,147 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         args: Optional['argparse.Namespace'] = None,
         **kwargs,
     ):
+        # implementation_stub_inject_start_flow
+
+        """Create a Flow. Flow is how Jina streamlines and scales Executors.
+
+        EXAMPLE USAGE
+
+            Python API
+
+            .. code-block:: python
+
+                from jina import Flow
+
+                f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
+                with f:
+                    f.bock()  # serve Flow
+
+            To and from YAML configuration
+
+            .. code-block:: python
+
+                from jina import Flow
+
+                f = Flow().add(uses='jinahub+docker://SimpleIndexer')  # create Flow and add Executor
+                f.save_config('flow.yml')  # save YAML config file
+                f = Flow.load_config('flow.yml')  # load Flow from YAML config
+                with f:
+                    f.bock()  # serve Flow
+
+        :param asyncio: If set, then the input and output of this Client work in an asynchronous manner.
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param port: The port of the Gateway, which the client should connect to.
+        :param protocol: Communication protocol between server and client.
+        :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
+        :param tls: If set, connect to gateway using tls encryption
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param cors: If set, a CORS middleware is added to FastAPI frontend to allow cross-origin access.
+        :param deployments_addresses: JSON dictionary with the input addresses of each Deployment
+        :param deployments_metadata: JSON dictionary with the request metadata for each Deployment
+        :param deployments_no_reduce: list JSON disabling the built-in merging mechanism for each Deployment listed
+        :param description: The description of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
+        :param env: The map of environment variables that are available inside runtime
+        :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
+        :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
+        :param graph_conditions: Dictionary stating which filtering conditions each Executor in the graph requires to receive Documents.
+        :param graph_description: Routing graph for the gateway
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param no_crud_endpoints: If set, `/index`, `/search`, `/update`, `/delete` endpoints are removed from HTTP interface.
+
+                  Any executor that has `@requests(on=...)` bound with those values will receive data requests.
+        :param no_debug_endpoints: If set, `/status` `/post` endpoints are removed from HTTP interface.
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param prefetch: Number of requests fetched from the client before feeding into the first Executor.
+
+              Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
+        :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
+        :param py_modules: The customized python modules need to be imported before loading the gateway
+
+          Note that the recommended way is to only import a single module - a simple python file, if your
+          gateway can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package.
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param runtime_cls: The runtime class to run inside the Pod
+        :param ssl_certfile: the path to the certificate file
+        :param ssl_keyfile: the path to the key file
+        :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
+        :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
+        :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
+        :param title: The title of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the gateway, it could be one of the followings:
+                  * the string literal of an Gateway class name
+                  * a Gateway YAML file (.yml, .yaml, .jaml)
+                  * a docker image (must start with `docker://`)
+                  * the string literal of a YAML config (must start with `!` or `jtype: `)
+                  * the string literal of a JSON config
+
+                  When use it under Python, one can use the following values additionally:
+                  - a Python dict that represents the config
+                  - a text file stream has `.read()` interface
+        :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
+        :param uvicorn_kwargs: Dictionary of kwargs arguments that will be passed to Uvicorn server when starting the server
+
+          More details can be found in Uvicorn docs: https://www.uvicorn.org/settings/
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+        :param env: The map of environment variables that are available inside runtime
+        :param inspect: The strategy on those inspect deployments in the flow.
+
+              If `REMOVE` is given then all inspect deployments are removed when building the flow.
+        :param log_config: The YAML config of the logger used in this object.
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param uses: The YAML path represents a flow. It can be either a local file path or a URL.
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+
+        .. # noqa: DAR102
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        """
+        # implementation_stub_inject_end_flow
         super().__init__()
         self._version = '1'  #: YAML version number, this will be later overridden if YAML config says the other way
         self._deployment_nodes = OrderedDict()  # type: Dict[str, Deployment]
@@ -354,6 +509,13 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         known_keys = vars(args)
         self._common_kwargs = {k: v for k, v in kwargs.items() if k not in known_keys}
 
+        # gateway args inherit from flow args
+        self._gateway_kwargs = {
+            k: v
+            for k, v in self._common_kwargs.items()
+            if k not in GATEWAY_ARGS_BLACKLIST
+        }
+
         self._kwargs = ArgNamespace.get_non_defaults_args(
             args, _flow_parser
         )  #: for yaml dump
@@ -374,7 +536,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             endpoint = [endpoint]
         elif not endpoint:
             if op_flow._last_changed_deployment and connect_to_last_deployment:
-                endpoint = [op_flow.last_deployment]
+                endpoint = [op_flow._last_deployment]
             else:
                 endpoint = []
 
@@ -392,7 +554,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         return endpoint
 
     @property
-    def last_deployment(self):
+    def _last_deployment(self):
         """Last deployment
 
 
@@ -403,8 +565,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         """
         return self._last_changed_deployment[-1]
 
-    @last_deployment.setter
-    def last_deployment(self, name: str):
+    @_last_deployment.setter
+    def _last_deployment(self, name: str):
         """
         Set a Deployment as the last Deployment in the Flow, useful when modifying the Flow.
 
@@ -415,7 +577,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         if name not in self._deployment_nodes:
             raise FlowMissingDeploymentError(f'{name} can not be found in this Flow')
 
-        if self._last_changed_deployment and name == self.last_deployment:
+        if self._last_changed_deployment and name == self._last_deployment:
             pass
         else:
             self._last_changed_deployment.append(name)
@@ -427,11 +589,12 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     @allowed_levels([FlowBuildLevel.EMPTY])
     def _add_gateway(
         self,
-        needs: str,
+        needs: Union[str, Set[str]],
         graph_description: Dict[str, List[str]],
         deployments_addresses: Dict[str, List[str]],
+        deployments_metadata: Dict[str, Dict[str, str]],
         graph_conditions: Dict[str, Dict],
-        deployments_disabled_reduce: List[str],
+        deployments_no_reduce: List[str],
         **kwargs,
     ):
         kwargs.update(
@@ -447,34 +610,60 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             )
         )
 
-        kwargs.update(self._common_kwargs)
+        kwargs.update(self._gateway_kwargs)
         args = ArgNamespace.kwargs2namespace(kwargs, set_gateway_parser())
 
         # We need to check later if the port was manually set or randomly
         args.default_port = (
             kwargs.get('port', None) is None and kwargs.get('port_expose', None) is None
         )
+
+        if not args.port:
+            args.port = helper.random_ports(len(args.protocol))
         args.noblock_on_start = True
         args.graph_description = json.dumps(graph_description)
         args.graph_conditions = json.dumps(graph_conditions)
         args.deployments_addresses = json.dumps(deployments_addresses)
-        args.deployments_disable_reduce = json.dumps(deployments_disabled_reduce)
+        args.deployments_metadata = json.dumps(deployments_metadata)
+        args.deployments_no_reduce = json.dumps(deployments_no_reduce)
         self._deployment_nodes[GATEWAY_NAME] = Deployment(args, needs)
+
+    def _get_deployments_metadata(self) -> Dict[str, Dict[str, str]]:
+        """Get the metadata of all deployments in the Flow
+
+        :return: a dictionary of deployment name and its metadata
+        """
+        return {
+            name: deployment.grpc_metadata
+            for name, deployment in self._deployment_nodes.items()
+            if deployment.grpc_metadata
+        }
 
     def _get_deployments_addresses(self) -> Dict[str, List[str]]:
         graph_dict = {}
-        for node, v in self._deployment_nodes.items():
-            if node == 'gateway':
+        for node, deployment in self._deployment_nodes.items():
+            if node == GATEWAY_NAME:
                 continue
-            if v.head_args:
+            if deployment.head_args:
                 # add head information
-                graph_dict[node] = [f'{v.protocol}://{v.host}:{v.head_port}']
+                graph_dict[node] = [
+                    f'{deployment.protocol}://{deployment.host}:{deployment.head_port}'
+                ]
             else:
                 # there is no head, add the worker connection information instead
-                host = v.host
-                if host_is_local(host) and in_docker() and v.dockerized_uses:
-                    host = __docker_host__
-                graph_dict[node] = [f'{v.protocol}://{host}:{port}' for port in v.ports]
+                ports = deployment.ports
+                hosts = [
+                    __docker_host__
+                    if host_is_local(host)
+                    and in_docker()
+                    and deployment.dockerized_uses
+                    else host
+                    for host in deployment.hosts
+                ]
+                graph_dict[node] = [
+                    f'{deployment.protocol}://{host}:{port}'
+                    for host, port in zip(hosts, ports)
+                ]
 
         return graph_dict
 
@@ -486,7 +675,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         from marie.serve.networking import GrpcConnectionPool
 
         for node, v in self._deployment_nodes.items():
-            if node == 'gateway':
+            if node == GATEWAY_NAME:
                 continue
 
             if v.external:
@@ -507,13 +696,22 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         return graph_dict if graph_dict else None
 
+    def _get_k8s_deployments_metadata(self) -> Dict[str, List[str]]:
+        graph_dict = {}
+
+        for node, v in self._deployment_nodes.items():
+            if v.grpc_metadata:
+                graph_dict[node] = v.grpc_metadata
+
+        return graph_dict or None
+
     def _get_docker_compose_deployments_addresses(self) -> Dict[str, List[str]]:
         graph_dict = {}
         from marie.orchestrate.deployments.config.docker_compose import port
         from marie.orchestrate.deployments.config.helper import to_compatible_name
 
         for node, v in self._deployment_nodes.items():
-            if node == 'gateway':
+            if node == GATEWAY_NAME:
                 continue
 
             if v.external:
@@ -551,7 +749,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     def _get_disabled_reduce_deployments(self) -> List[str]:
         disabled_deployments = []
         for node, v in self._deployment_nodes.items():
-            if v.args.disable_reduce:
+            if v.args.no_reduce:
                 disabled_deployments.append(node)
 
         return disabled_deployments
@@ -559,7 +757,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     def _get_graph_representation(self) -> Dict[str, List[str]]:
         def _add_node(graph, n):
             # in the graph we need to distinguish between start and end gateway, although they are the same deployment
-            if n == 'gateway':
+            if n == GATEWAY_NAME:
                 n = 'start-gateway'
             if n not in graph:
                 graph[n] = []
@@ -574,8 +772,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                 need = _add_node(graph_dict, need)
                 graph_dict[need].append(node)
 
-        # find all non hanging leafs
-        last_deployment = self.last_deployment
+        # find all non floating leafs
+        last_deployment = self._last_deployment
         if last_deployment != 'gateway':
             graph_dict[last_deployment].append('end-gateway')
 
@@ -608,9 +806,10 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             **kwargs,
         )
 
+    @allowed_levels([FlowBuildLevel.EMPTY])
     def needs_all(self, name: str = 'joiner', *args, **kwargs) -> 'Flow':
         """
-        Collect all hanging Deployments so far and add a blocker to the Flow; wait until all handing pods completed.
+        Collect all floating Deployments so far and add a blocker to the Flow; wait until all handing pods completed.
 
         :param name: the name of this joiner (default is ``joiner``)
         :param args: additional positional arguments which are forwarded to the add and needs function
@@ -628,38 +827,47 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     def add(
         self,
         *,
-        compression: Optional[str] = 'NoCompression',
+        compression: Optional[str] = None,
         connection_list: Optional[str] = None,
         disable_auto_volume: Optional[bool] = False,
-        disable_reduce: Optional[bool] = False,
         docker_kwargs: Optional[dict] = None,
         entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
+        exit_on_exceptions: Optional[List[str]] = [],
         external: Optional[bool] = False,
+        floating: Optional[bool] = False,
         force_update: Optional[bool] = False,
         gpus: Optional[str] = None,
+        grpc_metadata: Optional[dict] = None,
+        grpc_server_options: Optional[dict] = None,
         host: Optional[str] = '0.0.0.0',
-        host_in: Optional[str] = '0.0.0.0',
         install_requirements: Optional[bool] = False,
         log_config: Optional[str] = None,
+        metrics: Optional[bool] = False,
+        metrics_exporter_host: Optional[str] = None,
+        metrics_exporter_port: Optional[int] = None,
         monitoring: Optional[bool] = False,
         name: Optional[str] = None,
         native: Optional[bool] = False,
+        no_reduce: Optional[bool] = False,
         output_array_type: Optional[str] = None,
         polling: Optional[str] = 'ANY',
-        port: Optional[int] = None,
-        port_monitoring: Optional[int] = 9090,
+        port_monitoring: Optional[str] = None,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
         quiet_error: Optional[bool] = False,
-        quiet_remote_logs: Optional[bool] = False,
+        reload: Optional[bool] = False,
         replicas: Optional[int] = 1,
+        retries: Optional[int] = -1,
         runtime_cls: Optional[str] = 'WorkerRuntime',
         shards: Optional[int] = 1,
         timeout_ctrl: Optional[int] = 60,
         timeout_ready: Optional[int] = 600000,
         timeout_send: Optional[int] = None,
-        upload_files: Optional[List[str]] = None,
+        tls: Optional[bool] = False,
+        traces_exporter_host: Optional[str] = None,
+        traces_exporter_port: Optional[int] = None,
+        tracing: Optional[bool] = False,
         uses: Optional[Union[str, Type['BaseExecutor'], dict]] = 'BaseExecutor',
         uses_after: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
         uses_after_address: Optional[str] = None,
@@ -675,19 +883,20 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
     ) -> Union['Flow', 'AsyncFlow']:
         """Add an Executor to the current Flow object.
 
-        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. Possibilities are `NoCompression, Gzip, Deflate`. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
         :param connection_list: dictionary JSON with a list of connections to configure
         :param disable_auto_volume: Do not automatically mount a volume for dockerized Executors.
-        :param disable_reduce: Disable the built-in reduce mechanism, set this if the reduction is to be handled by the Executor connected to this Head
         :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
           container.
 
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
+        :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
         :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
         :param force_update: If set, always pull the latest Hub Executor bundle even it exists on local
-        :param gpus: This argument allows dockerized Jina executor discover local gpu devices.
+        :param gpus: This argument allows dockerized Jina Executors to discover local gpu devices.
 
               Note,
               - To access all gpus, use `--gpus all`.
@@ -695,10 +904,14 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
               - To access specified gpus based on device id, use `--gpus device=[YOUR-GPU-DEVICE-ID]`
               - To access specified gpus based on multiple device id, use `--gpus device=[YOUR-GPU-DEVICE-ID1],device=[YOUR-GPU-DEVICE-ID2]`
               - To specify more parameters, use `--gpus device=[YOUR-GPU-DEVICE-ID],runtime=nvidia,capabilities=display
-        :param host: The host address of the runtime, by default it is 0.0.0.0.
-        :param host_in: The host address for binding to, by default it is 0.0.0.0
+        :param grpc_metadata: The metadata to be passed to the gRPC request.
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
         :param install_requirements: If set, install `requirements.txt` in the Hub Executor bundle to local
         :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
         :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
         :param name: The name of this object.
 
@@ -710,6 +923,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
               When not given, then the default naming strategy will apply.
         :param native: If set, only native Executors is allowed, and the Executor is always run inside WorkerRuntime.
+        :param no_reduce: Disable the built-in reduction mechanism. Set this if the reduction is to be handled by the Executor itself by operating on a `docs_matrix` or `docs_map`
         :param output_array_type: The type of array `tensor` and `embedding` will be serialized to.
 
           Supports the same types as `docarray.to_protobuf(.., ndarray_type=...)`, which can be found
@@ -723,33 +937,29 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
               Define per Endpoint:
               JSON dict, {endpoint: PollingType}
               {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
-        :param port: The port for input data to bind to, default is a random port between [49152, 65535]
-        :param port_monitoring: The port on which the prometheus server is exposed, default port is 9090
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
           executor can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
           which should be structured as a python package. For more details, please see the
-          `Executor cookbook <https://docs.jina.ai/fundamentals/executor/repository-structure/>`__
+          `Executor cookbook <https://docs.jina.ai/fundamentals/executor/executor-files/>`__
         :param quiet: If set, then no log will be emitted from this object.
         :param quiet_error: If set, then exception stack information will not be added to the log
-        :param quiet_remote_logs: Do not display the streaming of remote logs on local console
+        :param reload: If set, the Executor reloads the modules as they change
         :param replicas: The number of replicas in the deployment
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
         :param runtime_cls: The runtime class to run inside the Pod
         :param shards: The number of shards in the deployment running at the same time. For more details check https://docs.jina.ai/fundamentals/flow/create-flow/#complex-flow-topologies
         :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
         :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
         :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
-        :param upload_files: The files on the host to be uploaded to the remote
-          workspace. This can be useful when your Deployment has more
-          file dependencies beyond a single YAML file, e.g.
-          Python files, data files.
-
-          Note,
-          - currently only flatten structure is supported, which means if you upload `[./foo/a.py, ./foo/b.pp, ./bar/c.yml]`, then they will be put under the _same_ workspace on the remote, losing all hierarchies.
-          - by default, `--uses` YAML file is always uploaded.
-          - uploaded files are by default isolated across the runs. To ensure files are submitted to the same workspace across different runs, use `--workspace-id` to specify the workspace.
+        :param tls: If set, connect to deployment using tls encryption
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
         :param uses: The config of the executor, it could be one of the followings:
+                  * the string literal of an Executor class name
                   * an Executor YAML file (.yml, .yaml, .jaml)
                   * a Jina Hub Executor (must start with `jinahub://` or `jinahub+docker://`)
                   * a docker image (must start with `docker://`)
@@ -782,7 +992,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         """
 
     # overload_inject_end_deployment
-    @allowed_levels([FlowBuildLevel.EMPTY])
+    @overload
     def add(
         self,
         *,
@@ -790,19 +1000,153 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         copy_flow: bool = True,
         deployment_role: 'DeploymentRoleType' = DeploymentRoleType.DEPLOYMENT,
         **kwargs,
-    ) -> 'Flow':
+    ) -> Union['Flow', 'AsyncFlow']:
         """
         Add a Deployment to the current Flow object and return the new modified Flow object.
         The attribute of the Deployment can be later changed with :py:meth:`set` or deleted with :py:meth:`remove`
 
-        .. # noqa: DAR401
         :param needs: the name of the Deployment(s) that this Deployment receives data from.
                            One can also use 'gateway' to indicate the connection with the gateway.
         :param deployment_role: the role of the Deployment, used for visualization and route planning
         :param copy_flow: when set to true, then always copy the current Flow and do the modification on top of it then return, otherwise, do in-line modification
         :param kwargs: other keyword-value arguments that the Deployment CLI supports
         :return: a (new) Flow object with modification
+
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        .. # noqa: DAR401
         """
+
+    @allowed_levels([FlowBuildLevel.EMPTY])
+    def add(
+        self,
+        **kwargs,
+    ) -> Union['Flow', 'AsyncFlow']:
+        # implementation_stub_inject_start_add
+
+        """Add a Deployment to the current Flow object and return the new modified Flow object.
+        The attribute of the Deployment can be later changed with :py:meth:`set` or deleted with :py:meth:`remove`
+
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param connection_list: dictionary JSON with a list of connections to configure
+        :param disable_auto_volume: Do not automatically mount a volume for dockerized Executors.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
+        :param env: The map of environment variables that are available inside runtime
+        :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
+        :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
+        :param force_update: If set, always pull the latest Hub Executor bundle even it exists on local
+        :param gpus: This argument allows dockerized Jina Executors to discover local gpu devices.
+
+              Note,
+              - To access all gpus, use `--gpus all`.
+              - To access multiple gpus, e.g. make use of 2 gpus, use `--gpus 2`.
+              - To access specified gpus based on device id, use `--gpus device=[YOUR-GPU-DEVICE-ID]`
+              - To access specified gpus based on multiple device id, use `--gpus device=[YOUR-GPU-DEVICE-ID1],device=[YOUR-GPU-DEVICE-ID2]`
+              - To specify more parameters, use `--gpus device=[YOUR-GPU-DEVICE-ID],runtime=nvidia,capabilities=display
+        :param grpc_metadata: The metadata to be passed to the gRPC request.
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param install_requirements: If set, install `requirements.txt` in the Hub Executor bundle to local
+        :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param native: If set, only native Executors is allowed, and the Executor is always run inside WorkerRuntime.
+        :param no_reduce: Disable the built-in reduction mechanism. Set this if the reduction is to be handled by the Executor itself by operating on a `docs_matrix` or `docs_map`
+        :param output_array_type: The type of array `tensor` and `embedding` will be serialized to.
+
+          Supports the same types as `docarray.to_protobuf(.., ndarray_type=...)`, which can be found
+          `here <https://docarray.jina.ai/fundamentals/document/serialization/#from-to-protobuf>`.
+          Defaults to retaining whatever type is returned by the Executor.
+        :param polling: The polling strategy of the Deployment and its endpoints (when `shards>1`).
+              Can be defined for all endpoints of a Deployment or by endpoint.
+              Define per Deployment:
+              - ANY: only one (whoever is idle) Pod polls the message
+              - ALL: all Pods poll the message (like a broadcast)
+              Define per Endpoint:
+              JSON dict, {endpoint: PollingType}
+              {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param py_modules: The customized python modules need to be imported before loading the executor
+
+          Note that the recommended way is to only import a single module - a simple python file, if your
+          executor can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package. For more details, please see the
+          `Executor cookbook <https://docs.jina.ai/fundamentals/executor/executor-files/>`__
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param reload: If set, the Executor reloads the modules as they change
+        :param replicas: The number of replicas in the deployment
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param runtime_cls: The runtime class to run inside the Pod
+        :param shards: The number of shards in the deployment running at the same time. For more details check https://docs.jina.ai/fundamentals/flow/create-flow/#complex-flow-topologies
+        :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
+        :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
+        :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
+        :param tls: If set, connect to deployment using tls encryption
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the executor, it could be one of the followings:
+                  * the string literal of an Executor class name
+                  * an Executor YAML file (.yml, .yaml, .jaml)
+                  * a Jina Hub Executor (must start with `jinahub://` or `jinahub+docker://`)
+                  * a docker image (must start with `docker://`)
+                  * the string literal of a YAML config (must start with `!` or `jtype: `)
+                  * the string literal of a JSON config
+
+                  When use it under Python, one can use the following values additionally:
+                  - a Python dict that represents the config
+                  - a text file stream has `.read()` interface
+        :param uses_after: The executor attached after the Pods described by --uses, typically used for receiving from all shards, accepted type follows `--uses`. This argument only applies for sharded Deployments (shards > 1).
+        :param uses_after_address: The address of the uses-before runtime
+        :param uses_before: The executor attached before the Pods described by --uses, typically before sending to all shards, accepted type follows `--uses`. This argument only applies for sharded Deployments (shards > 1).
+        :param uses_before_address: The address of the uses-before runtime
+        :param uses_metas: Dictionary of keyword arguments that will override the `metas` configuration in `uses`
+        :param uses_requests: Dictionary of keyword arguments that will override the `requests` configuration in `uses`
+        :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
+        :param volumes: The path on the host to be mounted inside the container.
+
+          Note,
+          - If separated by `:`, then the first part will be considered as the local host path and the second part is the path in the container system.
+          - If no split provided, then the basename of that directory will be mounted into container's root path, e.g. `--volumes="/user/test/my-workspace"` will be mounted into `/my-workspace` inside the container.
+          - All volumes are mounted with read-write mode.
+        :param when: The condition that the documents need to fulfill before reaching the Executor.The condition can be defined in the form of a `DocArray query condition <https://docarray.jina.ai/fundamentals/documentarray/find/#query-by-conditions>`
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+        :param needs: the name of the Deployment(s) that this Deployment receives data from. One can also use "gateway" to indicate the connection with the gateway.
+        :param deployment_role: the role of the Deployment, used for visualization and route planning
+        :param copy_flow: when set to true, then always copy the current Flow and do the modification on top of it then return, otherwise, do in-line modification
+        :param kwargs: other keyword-value arguments that the Deployment CLI supports
+        :return: a (new) Flow object with modification
+        :return: a (new) Flow object with modification
+
+        .. # noqa: DAR102
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        """
+        # implementation_stub_inject_end_add
+
+        needs = kwargs.pop('needs', None)
+        copy_flow = kwargs.pop('copy_flow', True)
+        deployment_role = kwargs.get('deployment_role', DeploymentRoleType.DEPLOYMENT)
+
         op_flow = copy.deepcopy(self) if copy_flow else self
 
         # deployment naming logic
@@ -832,11 +1176,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         # set the kwargs inherit from `Flow(kwargs1=..., kwargs2=)`
         for key, value in op_flow._common_kwargs.items():
 
-            # do not inherit from all the argument from the flow
-            if key not in kwargs and key not in [
-                'port',
-                'port_monitoring',
-            ]:
+            # do not inherit from all the argument from the flow and respect EXECUTOR_ARGS_BLACKLIST
+            if key not in kwargs and key not in EXECUTOR_ARGS_BLACKLIST:
                 kwargs[key] = value
 
         # update kwargs of this Deployment
@@ -846,7 +1187,6 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                 deployment_role=deployment_role,
             )
         )
-
         parser = set_deployment_parser()
         if deployment_role == DeploymentRoleType.GATEWAY:
             parser = set_gateway_parser()
@@ -868,14 +1208,259 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             port = helper.random_port()
             args.port = port
 
-        if len(needs) > 1 and args.external and args.disable_reduce:
+        if len(needs) > 1 and args.external and args.no_reduce:
             raise ValueError(
                 'External Executors with multiple needs have to do auto reduce.'
             )
 
         op_flow._deployment_nodes[deployment_name] = Deployment(args, needs)
 
-        op_flow.last_deployment = deployment_name
+        if not args.floating:
+            op_flow._last_deployment = deployment_name
+
+        return op_flow
+
+    # overload_inject_start_config_gateway
+    @overload
+    def config_gateway(
+        self,
+        *,
+        compression: Optional[str] = None,
+        cors: Optional[bool] = False,
+        deployments_addresses: Optional[str] = '{}',
+        deployments_metadata: Optional[str] = '{}',
+        deployments_no_reduce: Optional[str] = '[]',
+        description: Optional[str] = None,
+        docker_kwargs: Optional[dict] = None,
+        entrypoint: Optional[str] = None,
+        env: Optional[dict] = None,
+        expose_endpoints: Optional[str] = None,
+        expose_graphql_endpoint: Optional[bool] = False,
+        floating: Optional[bool] = False,
+        graph_conditions: Optional[str] = '{}',
+        graph_description: Optional[str] = '{}',
+        grpc_server_options: Optional[dict] = None,
+        host: Optional[str] = '0.0.0.0',
+        log_config: Optional[str] = None,
+        metrics: Optional[bool] = False,
+        metrics_exporter_host: Optional[str] = None,
+        metrics_exporter_port: Optional[int] = None,
+        monitoring: Optional[bool] = False,
+        name: Optional[str] = 'gateway',
+        no_crud_endpoints: Optional[bool] = False,
+        no_debug_endpoints: Optional[bool] = False,
+        port_monitoring: Optional[str] = None,
+        prefetch: Optional[int] = 1000,
+        protocol: Optional[List[str]] = ['GRPC'],
+        proxy: Optional[bool] = False,
+        py_modules: Optional[List[str]] = None,
+        quiet: Optional[bool] = False,
+        quiet_error: Optional[bool] = False,
+        retries: Optional[int] = -1,
+        runtime_cls: Optional[str] = 'GatewayRuntime',
+        ssl_certfile: Optional[str] = None,
+        ssl_keyfile: Optional[str] = None,
+        timeout_ctrl: Optional[int] = 60,
+        timeout_ready: Optional[int] = 600000,
+        timeout_send: Optional[int] = None,
+        title: Optional[str] = None,
+        traces_exporter_host: Optional[str] = None,
+        traces_exporter_port: Optional[int] = None,
+        tracing: Optional[bool] = False,
+        uses: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
+        uses_with: Optional[dict] = None,
+        uvicorn_kwargs: Optional[dict] = None,
+        workspace: Optional[str] = None,
+        **kwargs,
+    ):
+        """Configure the Gateway inside a Flow. The Gateway exposes your Flow logic as a service to the internet according to the protocol and configuration you choose.
+
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param cors: If set, a CORS middleware is added to FastAPI frontend to allow cross-origin access.
+        :param deployments_addresses: JSON dictionary with the input addresses of each Deployment
+        :param deployments_metadata: JSON dictionary with the request metadata for each Deployment
+        :param deployments_no_reduce: list JSON disabling the built-in merging mechanism for each Deployment listed
+        :param description: The description of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
+        :param env: The map of environment variables that are available inside runtime
+        :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
+        :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
+        :param graph_conditions: Dictionary stating which filtering conditions each Executor in the graph requires to receive Documents.
+        :param graph_description: Routing graph for the gateway
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param no_crud_endpoints: If set, `/index`, `/search`, `/update`, `/delete` endpoints are removed from HTTP interface.
+
+                  Any executor that has `@requests(on=...)` bound with those values will receive data requests.
+        :param no_debug_endpoints: If set, `/status` `/post` endpoints are removed from HTTP interface.
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param prefetch: Number of requests fetched from the client before feeding into the first Executor.
+
+              Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
+        :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
+        :param py_modules: The customized python modules need to be imported before loading the gateway
+
+          Note that the recommended way is to only import a single module - a simple python file, if your
+          gateway can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package.
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param runtime_cls: The runtime class to run inside the Pod
+        :param ssl_certfile: the path to the certificate file
+        :param ssl_keyfile: the path to the key file
+        :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
+        :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
+        :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
+        :param title: The title of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the gateway, it could be one of the followings:
+                  * the string literal of an Gateway class name
+                  * a Gateway YAML file (.yml, .yaml, .jaml)
+                  * a docker image (must start with `docker://`)
+                  * the string literal of a YAML config (must start with `!` or `jtype: `)
+                  * the string literal of a JSON config
+
+                  When use it under Python, one can use the following values additionally:
+                  - a Python dict that represents the config
+                  - a text file stream has `.read()` interface
+        :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
+        :param uvicorn_kwargs: Dictionary of kwargs arguments that will be passed to Uvicorn server when starting the server
+
+          More details can be found in Uvicorn docs: https://www.uvicorn.org/settings/
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        """
+
+    # overload_inject_end_config_gateway
+
+    @allowed_levels([FlowBuildLevel.EMPTY])
+    def config_gateway(
+        self,
+        args: Optional['argparse.Namespace'] = None,
+        **kwargs,
+    ) -> Union['Flow', 'AsyncFlow']:
+        # implementation_stub_inject_start_config_gateway
+
+        """Configure the Gateway inside a Flow. The Gateway exposes your Flow logic as a service to the internet according to the protocol and configuration you choose.
+
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param cors: If set, a CORS middleware is added to FastAPI frontend to allow cross-origin access.
+        :param deployments_addresses: JSON dictionary with the input addresses of each Deployment
+        :param deployments_metadata: JSON dictionary with the request metadata for each Deployment
+        :param deployments_no_reduce: list JSON disabling the built-in merging mechanism for each Deployment listed
+        :param description: The description of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
+        :param env: The map of environment variables that are available inside runtime
+        :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
+        :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
+        :param graph_conditions: Dictionary stating which filtering conditions each Executor in the graph requires to receive Documents.
+        :param graph_description: Routing graph for the gateway
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host address of the runtime, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas. Then, every resulting address will be considered as one replica of the Executor.
+        :param log_config: The YAML config of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param no_crud_endpoints: If set, `/index`, `/search`, `/update`, `/delete` endpoints are removed from HTTP interface.
+
+                  Any executor that has `@requests(on=...)` bound with those values will receive data requests.
+        :param no_debug_endpoints: If set, `/status` `/post` endpoints are removed from HTTP interface.
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param prefetch: Number of requests fetched from the client before feeding into the first Executor.
+
+              Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
+        :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
+        :param py_modules: The customized python modules need to be imported before loading the gateway
+
+          Note that the recommended way is to only import a single module - a simple python file, if your
+          gateway can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package.
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param runtime_cls: The runtime class to run inside the Pod
+        :param ssl_certfile: the path to the certificate file
+        :param ssl_keyfile: the path to the key file
+        :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
+        :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
+        :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
+        :param title: The title of this HTTP server. It will be used in automatics docs such as Swagger UI.
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the gateway, it could be one of the followings:
+                  * the string literal of an Gateway class name
+                  * a Gateway YAML file (.yml, .yaml, .jaml)
+                  * a docker image (must start with `docker://`)
+                  * the string literal of a YAML config (must start with `!` or `jtype: `)
+                  * the string literal of a JSON config
+
+                  When use it under Python, one can use the following values additionally:
+                  - a Python dict that represents the config
+                  - a text file stream has `.read()` interface
+        :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
+        :param uvicorn_kwargs: Dictionary of kwargs arguments that will be passed to Uvicorn server when starting the server
+
+          More details can be found in Uvicorn docs: https://www.uvicorn.org/settings/
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+        :return: the new Flow object
+
+        .. # noqa: DAR102
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        """
+        # implementation_stub_inject_end_config_gateway
+
+        copy_flow = kwargs.pop('copy_flow', True)
+
+        op_flow = copy.deepcopy(self) if copy_flow else self
+
+        # override gateway args inherited from Flow API
+        for key, value in kwargs.items():
+            op_flow._gateway_kwargs[key] = value
 
         return op_flow
 
@@ -908,7 +1493,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         :param kwargs: kwargs for .add()
         :return: the new instance of the Flow
         """
-        _last_deployment = self.last_deployment
+        _last_deployment = self._last_deployment
         op_flow = self.add(
             name=name,
             needs=_last_deployment,
@@ -929,7 +1514,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         )
 
         # register any future connection to _last_deployment by the auxiliary Deployment
-        op_flow._inspect_deployments[_last_deployment] = op_flow.last_deployment
+        op_flow._inspect_deployments[_last_deployment] = op_flow._last_deployment
 
         return op_flow
 
@@ -968,7 +1553,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         ]
         if needs:
             if include_last_deployment:
-                needs.append(self.last_deployment)
+                needs.append(self._last_deployment)
             return self.add(
                 name=name,
                 needs=needs,
@@ -992,7 +1577,9 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         )
 
     @allowed_levels([FlowBuildLevel.EMPTY])
-    def build(self, copy_flow: bool = False) -> 'Flow':
+    def build(
+        self, copy_flow: bool = False, disable_build_sandbox: bool = False
+    ) -> 'Flow':
         """
         Build the current Flow and make it ready to use
 
@@ -1002,6 +1589,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             context manager, or using :meth:`start`, :meth:`build` will be invoked.
 
         :param copy_flow: when set to true, then always copy the current Flow and do the modification on top of it then return, otherwise, do in-line modification
+        :param disable_build_sandbox: when set to true, the sandbox building part will be skipped, will be used by `plot`
         :return: the current Flow (by default)
 
         .. note::
@@ -1020,19 +1608,27 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         .. # noqa: DAR401
         """
+        if multiprocessing.get_start_method().lower() == 'fork':
+            os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '1'
 
         op_flow = copy.deepcopy(self) if copy_flow else self
 
         if op_flow.args.inspect == FlowInspectType.COLLECT:
             op_flow.gather_inspect(copy_flow=False)
 
+        if not disable_build_sandbox:
+            for deployment in self._deployment_nodes.values():
+                deployment.update_sandbox_args()
+
         if GATEWAY_NAME not in op_flow._deployment_nodes:
             op_flow._add_gateway(
-                needs={op_flow.last_deployment},
+                needs={op_flow._last_deployment},
                 graph_description=op_flow._get_graph_representation(),
                 deployments_addresses=op_flow._get_deployments_addresses(),
+                deployments_metadata=op_flow._get_deployments_metadata(),
                 graph_conditions=op_flow._get_graph_conditions(),
-                deployments_disabled_reduce=op_flow._get_disabled_reduce_deployments(),
+                deployments_no_reduce=op_flow._get_disabled_reduce_deployments(),
+                uses=op_flow.gateway_args.uses,
             )
 
         removed_deployments = []
@@ -1053,7 +1649,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             while (
                 len(op_flow._last_changed_deployment) > 0
                 and len(removed_deployments) > 0
-                and op_flow.last_deployment in removed_deployments
+                and op_flow._last_deployment in removed_deployments
             ):
                 op_flow._last_changed_deployment.pop()
 
@@ -1075,7 +1671,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         hanging_deployments = _hanging_deployments(op_flow)
         if hanging_deployments:
             op_flow.logger.warning(
-                f'{hanging_deployments} are hanging in this flow with no deployment receiving from them, '
+                f'{hanging_deployments} are "floating" in this flow with no deployment receiving from them, '
                 f'you may want to double check if it is intentional or some mistake'
             )
         op_flow._build_level = FlowBuildLevel.GRAPH
@@ -1122,9 +1718,18 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         self._build_level = FlowBuildLevel.EMPTY
 
+        self._stop_time = time.time()
+        send_telemetry_event(
+            event='stop',
+            obj=self,
+            entity_id=self._entity_id,
+            duration=self._stop_time - self._start_time,
+            exc_type=str(exc_type),
+        )
         self.logger.debug('flow is closed!')
         self.logger.close()
 
+    @allowed_levels([FlowBuildLevel.EMPTY, FlowBuildLevel.GRAPH])
     def start(self):
         """Start to run all Deployments in this Flow.
 
@@ -1138,14 +1743,15 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         :return: this instance
         """
-
+        self._start_time = time.time()
         if self._build_level.value < FlowBuildLevel.GRAPH.value:
             self.build(copy_flow=False)
 
         port_gateway = self._deployment_nodes[GATEWAY_NAME].args.port
+        host_gateway = self._deployment_nodes[GATEWAY_NAME].args.host
 
         if not (
-            is_port_free(__default_host__, port_gateway)
+            is_port_free(host_gateway, port_gateway)
         ):  # we check if the port is not used at parsing time as well for robustness
             raise PortAlreadyUsed(f'port:{port_gateway}')
 
@@ -1154,13 +1760,15 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             for k, v in self.args.env.items():
                 os.environ[k] = str(v)
 
-        for k, v in self:
-            if not v.external:
-                self.enter_context(v)
+        for depl_name, deployment in self:
+            if not deployment.external:
+                self.enter_context(deployment)
 
         self._wait_until_all_ready()
 
         self._build_level = FlowBuildLevel.RUNNING
+
+        send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
 
         return self
 
@@ -1206,7 +1814,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         progress = Progress(
             SpinnerColumn(),
-            TextColumn('Waiting [b]{task.fields[pending_str]}[/]', justify='right'),
+            TextColumn('Waiting [b]{task.fields[pending_str]}[/]...', justify='right'),
             BarColumn(),
             MofNCompleteColumn(),
             TimeElapsedColumn(),
@@ -1228,27 +1836,26 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                     daemon=True,
                 )
                 threads.append(t)
-                t.start()
+
+            # kick off ip getter thread, address, http, graphq
+            all_panels = []
+
+            t_ip = threading.Thread(
+                target=self._get_summary_table, args=(all_panels, results), daemon=True
+            )
+            threads.append(t_ip)
 
             # kick off spinner thread
             t_m = threading.Thread(
                 target=_polling_status, args=(progress, task), daemon=True
             )
-            t_m.start()
+            threads.append(t_m)
 
-            # kick off ip getter thread
-            addr_table = self._init_table()
-
-            t_ip = threading.Thread(
-                target=self._get_address_table, args=(addr_table,), daemon=True
-            )
-            t_ip.start()
+            for t in threads:
+                t.start()
 
             for t in threads:
                 t.join()
-            if t_ip is not None:
-                t_ip.join()
-            t_m.join()
 
             error_deployments = [k for k, v in results.items() if v != 'done']
             if error_deployments:
@@ -1257,14 +1864,10 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                 )
                 self.close()
                 raise RuntimeFailToStart
+            from rich.rule import Rule
 
-        if addr_table:
             print(
-                Panel(
-                    addr_table,
-                    title=':tada: [b]Flow is ready to serve![/]',
-                    expand=False,
-                )
+                Rule(':tada: Flow is ready to serve!'), *all_panels
             )  # can't use logger here see : https://github.com/Textualize/rich/discussions/2024
         self.logger.debug(
             f'{self.num_deployments} Deployments (i.e. {self.num_pods} Pods) are running in this Flow'
@@ -1320,7 +1923,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             port=self.port,
             protocol=self.protocol,
         )
-        kwargs.update(self._common_kwargs)
+        kwargs.update(self._gateway_kwargs)
         return Client(**kwargs)
 
     @property
@@ -1439,7 +2042,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         )
 
         if build and op_flow._build_level.value == FlowBuildLevel.EMPTY:
-            op_flow.build(False)
+            op_flow.build(copy_flow=False, disable_build_sandbox=True)
 
         mermaid_str = op_flow._mermaid_str
         if vertical_layout:
@@ -1487,26 +2090,37 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         return f'https://mermaid.ink/{img_type}/{encoded_str}'
 
     @property
-    def port(self) -> int:
+    def port(self) -> Union[List[int], Optional[int]]:
         """Return the exposed port of the gateway
         .. # noqa: DAR201
         """
         if GATEWAY_NAME in self._deployment_nodes:
-            return self._deployment_nodes[GATEWAY_NAME].port
+            res = self._deployment_nodes[GATEWAY_NAME].port
         else:
-            return self._common_kwargs.get('port', None)
+            res = self._gateway_kwargs.get('port', None) or self._gateway_kwargs.get(
+                'ports', None
+            )
+        if not isinstance(res, list):
+            return res
+        elif len(res) == 1:
+            return res[0]
+        else:
+            return res
 
     @port.setter
-    def port(self, value: int):
+    def port(self, value: Union[int, List[int]]):
         """Set the new exposed port of the Flow (affects Gateway and Client)
 
         :param value: the new port to expose
         """
-        self._common_kwargs['port'] = value
+        if isinstance(value, int):
+            self._gateway_kwargs['port'] = [value]
+        elif isinstance(value, list):
+            self._gateway_kwargs['port'] = value
 
         # Flow is build to graph already
         if self._build_level >= FlowBuildLevel.GRAPH:
-            self[GATEWAY_NAME].args.port = self._common_kwargs['port']
+            self[GATEWAY_NAME].args.port = self._gateway_kwargs['port']
 
         # Flow is running already, then close the existing gateway
         if self._build_level >= FlowBuildLevel.RUNNING:
@@ -1522,7 +2136,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         if GATEWAY_NAME in self._deployment_nodes:
             return self._deployment_nodes[GATEWAY_NAME].host
         else:
-            return self._common_kwargs.get('host', __default_host__)
+            return self._gateway_kwargs.get('host', __default_host__)
 
     @host.setter
     def host(self, value: str):
@@ -1530,11 +2144,11 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         :param value: the new port to expose
         """
-        self._common_kwargs['host'] = value
+        self._gateway_kwargs['host'] = value
 
         # Flow is build to graph already
         if self._build_level >= FlowBuildLevel.GRAPH:
-            self[GATEWAY_NAME].args.host = self._common_kwargs['host']
+            self[GATEWAY_NAME].args.host = self._gateway_kwargs['host']
 
         # Flow is running already, then close the existing gateway
         if self._build_level >= FlowBuildLevel.RUNNING:
@@ -1553,16 +2167,14 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             return False
 
     @property
-    def port_monitoring(self) -> int:
+    def port_monitoring(self) -> Optional[int]:
         """Return if the monitoring is enabled
         .. # noqa: DAR201
         """
         if GATEWAY_NAME in self._deployment_nodes:
             return self[GATEWAY_NAME].args.port_monitoring
         else:
-            return self._common_kwargs.get(
-                'port_monitoring', __default_port_monitoring__
-            )
+            return self._gateway_kwargs.get('port_monitoring', None)
 
     @property
     def address_private(self) -> str:
@@ -1584,45 +2196,70 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         return self._deployment_nodes.items().__iter__()
 
     def _init_table(self):
-        table = Table(title=None, box=None, highlight=True, show_header=False)
+        table = Table(
+            title=None, box=None, highlight=True, show_header=False, min_width=40
+        )
+        table.add_column('', justify='left')
         table.add_column('', justify='right')
         table.add_column('', justify='right')
-        table.add_column('', justify='right')
-        table.add_column('', justify='right')
-
         return table
 
-    def _get_address_table(self, address_table):
-        _protocol = str(self.protocol)
-        if self.gateway_args.ssl_certfile and self.gateway_args.ssl_keyfile:
-            _protocol = f'{self.protocol}S'
-            address_table.add_row(
-                ':link:', 'Protocol', f':closed_lock_with_key: {_protocol}'
-            )
+    def _get_summary_table(self, all_panels: List[Panel], results):
 
+        results['summary'] = 'pending'
+
+        address_table = self._init_table()
+
+        if not isinstance(self.protocol, list):
+            _protocols = [str(self.protocol)]
         else:
-            address_table.add_row(':link:', 'Protocol', _protocol)
+            _protocols = [str(_p) for _p in self.protocol]
 
-        _protocol = _protocol.lower()
-        address_table.add_row(
-            ':house:',
-            'Local',
-            f'[link={_protocol}://{self.host}:{self.port}]{self.host}:{self.port}[/]',
-        )
-        address_table.add_row(
-            ':lock:',
-            'Private',
-            f'[link={_protocol}://{self.address_private}:{self.port}]{self.address_private}:{self.port}[/]',
-        )
+        if not isinstance(self.port, list):
+            _ports = [self.port]
+        else:
+            _ports = [str(_p) for _p in self.port]
 
-        if self.address_public:
+        for _port, _protocol in zip(_ports, _protocols):
+            if self.gateway_args.ssl_certfile and self.gateway_args.ssl_keyfile:
+                _protocol = f'{_protocol}S'
+                address_table.add_row(
+                    ':chains:', 'Protocol', f':closed_lock_with_key: {_protocol}'
+                )
+
+            else:
+                address_table.add_row(':chains:', 'Protocol', _protocol)
+
+            _protocol = _protocol.lower()
             address_table.add_row(
-                ':earth_africa:',
-                'Public',
-                f'[link={_protocol}://{self.address_public}:{self.port}]{self.address_public}:{self.port}[/]',
+                ':house:',
+                'Local',
+                f'[link={_protocol}://{self.host}:{_port}]{self.host}:{_port}[/]',
             )
+            address_table.add_row(
+                ':lock:',
+                'Private',
+                f'[link={_protocol}://{self.address_private}:{_port}]{self.address_private}:{_port}[/]',
+            )
+
+            if self.address_public:
+                address_table.add_row(
+                    ':earth_africa:',
+                    'Public',
+                    f'[link={_protocol}://{self.address_public}:{_port}]{self.address_public}:{_port}[/]',
+                )
+
+        all_panels.append(
+            Panel(
+                address_table,
+                title=':link: [b]Endpoint[/]',
+                expand=False,
+            )
+        )
 
         if self.protocol == GatewayProtocolType.HTTP:
+
+            http_ext_table = self._init_table()
 
             _address = [
                 f'[link={_protocol}://localhost:{self.port}/docs]Local[/]',
@@ -1632,10 +2269,10 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                 _address.append(
                     f'[link={_protocol}://{self.address_public}:{self.port}/docs]Public[/]'
                 )
-            address_table.add_row(
+            http_ext_table.add_row(
                 ':speech_balloon:',
                 'Swagger UI',
-                '·'.join(_address),
+                '.../docs',
             )
 
             _address = [
@@ -1648,10 +2285,10 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                     f'[link={_protocol}://{self.address_public}:{self.port}/redoc]Public[/]'
                 )
 
-            address_table.add_row(
+            http_ext_table.add_row(
                 ':books:',
                 'Redoc',
-                '·'.join(_address),
+                '.../redoc',
             )
 
             if self.gateway_args.expose_graphql_endpoint:
@@ -1665,39 +2302,64 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                         f'[link={_protocol}://{self.address_public}:{self.port}/graphql]Public[/]'
                     )
 
-                address_table.add_row(
+                http_ext_table.add_row(
                     ':strawberry:',
                     'GraphQL UI',
-                    '·'.join(_address),
+                    '.../graphql',
                 )
 
-        if self.monitoring:
-            for name, deployment in self:
-                _address = [
-                    f'[link=http://localhost:{deployment.args.port_monitoring}]Local[/]',
-                    f'[link=http://{self.address_private}:{deployment.args.port_monitoring}]Private[/]',
-                ]
-
-                if self.address_public:
-                    _address.append(
-                        f'[link=http://{self.address_public}:{deployment.args.port_monitoring}]Public[/]'
-                    )
-
-                if deployment.args.monitoring:
-                    address_table.add_row(
-                        ':bar_chart:',
-                        f'Monitor [b]{name}[/]',
-                        '·'.join(_address),
-                    )
-
-            return self[GATEWAY_NAME].args.port_monitoring
-        else:
-            return self._common_kwargs.get(
-                'port_monitoring', __default_port_monitoring__
+            all_panels.append(
+                Panel(
+                    http_ext_table,
+                    title=':gem: [b]HTTP extension[/]',
+                    expand=False,
+                )
             )
 
-        return address_table
+        if self.monitoring:
+            monitor_ext_table = self._init_table()
 
+            for name, deployment in self:
+
+                if deployment.args.monitoring:
+
+                    for replica in deployment.pod_args['pods'][0]:
+                        _address = [
+                            f'[link=http://localhost:{replica.port_monitoring}]Local[/]',
+                            f'[link=http://{self.address_private}:{replica.port_monitoring}]Private[/]',
+                        ]
+
+                        if self.address_public:
+                            _address.append(
+                                f'[link=http://{self.address_public}:{deployment.args.port_monitoring}]Public[/]'
+                            )
+
+                        _name = (
+                            name
+                            if len(deployment.pod_args['pods'][0]) == 1
+                            else replica.name
+                        )
+
+                        monitor_ext_table.add_row(
+                            ':flashlight:',  # upstream issue: they dont have :torch: emoji, so we use :flashlight:
+                            # to represent observability of Prometheus (even they have :torch: it will be a war
+                            # between AI community and Cloud-native community fighting on this emoji)
+                            _name,
+                            f'...[b]:{replica.port_monitoring}[/]',
+                        )
+
+            all_panels.append(
+                Panel(
+                    monitor_ext_table,
+                    title=':gem: [b]Prometheus extension[/]',
+                    expand=False,
+                )
+            )
+
+        results['summary'] = 'done'
+        return all_panels
+
+    @allowed_levels([FlowBuildLevel.RUNNING])
     def block(
         self, stop_event: Optional[Union[threading.Event, multiprocessing.Event]] = None
     ):
@@ -1718,18 +2380,29 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             pass
 
     @property
-    def protocol(self) -> GatewayProtocolType:
+    def protocol(self) -> Union[GatewayProtocolType, List[GatewayProtocolType]]:
         """Return the protocol of this Flow
 
-        :return: the protocol of this Flow
+        :return: the protocol of this Flow, if only 1 protocol is supported otherwise returns the list of protocols
         """
-        v = self._common_kwargs.get('protocol', GatewayProtocolType.GRPC)
-        if isinstance(v, str):
-            v = GatewayProtocolType.from_string(v)
-        return v
+        v = (
+            self._gateway_kwargs.get('protocol', None)
+            or self._gateway_kwargs.get('protocols', None)
+            or [GatewayProtocolType.GRPC]
+        )
+        if not isinstance(v, list):
+            v = [v]
+        v = GatewayProtocolType.from_string_list(v)
+        if len(v) == 1:
+            return v[0]
+        else:
+            return v
 
     @protocol.setter
-    def protocol(self, value: Union[str, GatewayProtocolType]):
+    def protocol(
+        self,
+        value: Union[str, GatewayProtocolType, List[str], List[GatewayProtocolType]],
+    ):
         """Set the protocol of this Flow, can only be set before the Flow has been started
 
         :param value: the protocol to set
@@ -1739,15 +2412,21 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             raise RuntimeError('Protocol can not be changed after the Flow has started')
 
         if isinstance(value, str):
-            self._common_kwargs['protocol'] = GatewayProtocolType.from_string(value)
+            self._gateway_kwargs['protocol'] = [GatewayProtocolType.from_string(value)]
         elif isinstance(value, GatewayProtocolType):
-            self._common_kwargs['protocol'] = value
+            self._gateway_kwargs['protocol'] = [value]
+        elif isinstance(value, list):
+            self._gateway_kwargs['protocol'] = GatewayProtocolType.from_string_list(
+                value
+            )
         else:
-            raise TypeError(f'{value} must be either `str` or `GatewayProtocolType`')
+            raise TypeError(
+                f'{value} must be either `str` or `GatewayProtocolType` or list of protocols'
+            )
 
         # Flow is build to graph already
         if self._build_level >= FlowBuildLevel.GRAPH:
-            self[GATEWAY_NAME].args.protocol = self._common_kwargs['protocol']
+            self[GATEWAY_NAME].args.protocol = self._gateway_kwargs['protocol']
 
     def __getitem__(self, item):
         if isinstance(item, str):
@@ -1879,6 +2558,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         """
         ...
 
+    @allowed_levels([FlowBuildLevel.EMPTY])
     def expose_endpoint(self, exec_endpoint: str, **kwargs):
         """Expose an Executor's endpoint (defined by `@requests(on=...)`) to HTTP endpoint for easier access.
 
@@ -1891,10 +2571,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         """
         self._endpoints_mapping[exec_endpoint] = kwargs
 
-    # for backward support
-    join = needs
-
-    def to_k8s_yaml(
+    def to_kubernetes_yaml(
         self,
         output_base_path: str,
         k8s_namespace: Optional[str] = None,
@@ -1915,7 +2592,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         if self._build_level.value < FlowBuildLevel.GRAPH.value:
             self.build(copy_flow=False)
 
-        from marie.orchestrate.deployments.config.k8s import K8sDeploymentConfig
+        from jina.orchestrate.deployments.config.k8s import K8sDeploymentConfig
 
         k8s_namespace = k8s_namespace or self.args.name or 'default'
 
@@ -1923,10 +2600,16 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
             if v.external or (node == 'gateway' and not include_gateway):
                 continue
             if node == 'gateway' and v.args.default_port:
-                from marie.serve.networking import GrpcConnectionPool
+                from jina.serve.networking import GrpcConnectionPool
 
                 v.args.port = GrpcConnectionPool.K8S_PORT
                 v.first_pod_args.port = GrpcConnectionPool.K8S_PORT
+
+                v.args.port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
+                v.first_pod_args.port_monitoring = (
+                    GrpcConnectionPool.K8S_PORT_MONITORING
+                )
+
                 v.args.default_port = False
 
             deployment_base = os.path.join(output_base_path, node)
@@ -1938,8 +2621,11 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
                 )
                 if node == 'gateway'
                 else None,
+                k8s_deployments_metadata=self._get_k8s_deployments_metadata()
+                if node == 'gateway'
+                else None,
             )
-            configs = k8s_deployment.to_k8s_yaml()
+            configs = k8s_deployment.to_kubernetes_yaml()
             for name, k8s_objects in configs:
                 filename = os.path.join(deployment_base, f'{name}.yml')
                 os.makedirs(deployment_base, exist_ok=True)
@@ -1952,6 +2638,8 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         self.logger.info(
             f'K8s yaml files have been created under [b]{output_base_path}[/]. You can use it by running [b]kubectl apply -R -f {output_base_path}[/]'
         )
+
+    to_k8s_yaml = to_kubernetes_yaml
 
     def to_docker_compose_yaml(
         self,
@@ -1973,7 +2661,7 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
         output_path = output_path or 'docker-compose.yml'
         network_name = network_name or 'jina-network'
 
-        from marie.orchestrate.deployments.config.docker_compose import (
+        from jina.orchestrate.deployments.config.docker_compose import (
             DockerComposeConfig,
         )
 
@@ -2017,9 +2705,9 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         # noqa: DAR201
         """
-        if 'port' in self._common_kwargs:
-            kwargs = copy.deepcopy(self._common_kwargs)
-            kwargs['port'] = self._common_kwargs['port']
+        if 'port' in self._gateway_kwargs:
+            kwargs = copy.deepcopy(self._gateway_kwargs)
+            kwargs['port'] = self._gateway_kwargs['port']
 
         return ArgNamespace.kwargs2namespace(kwargs, set_client_cli_parser())
 
@@ -2029,11 +2717,32 @@ class Flow(PostMixin, JAMLCompatible, ExitStack, metaclass=FlowType):
 
         # noqa: DAR201
         """
-        return ArgNamespace.kwargs2namespace(self._common_kwargs, set_gateway_parser())
+        return ArgNamespace.kwargs2namespace(self._gateway_kwargs, set_gateway_parser())
 
-    def update_network_interface(self, **kwargs):
+    def _update_network_interface(self, **kwargs):
         """Update the network interface of this Flow (affects Gateway & Client)
 
         :param kwargs: new network settings
         """
-        self._common_kwargs.update(kwargs)
+        self._gateway_kwargs.update(kwargs)
+
+    def __getattribute__(self, item):
+        obj = super().__getattribute__(item)
+
+        if (
+            item == 'load_config' and inspect.ismethod(obj) and obj.__self__ is Flow
+        ):  # check if obj load config call from an instance and not the Class
+            warnings.warn(
+                "Calling `load_config` from a Flow instance will override all of the instance's initial parameters. We recommend to use `Flow.load_config(...)` instead"
+            )
+
+        return obj
+
+    @property
+    def _entity_id(self) -> str:
+        import uuid
+
+        if hasattr(self, '_entity_id_'):
+            return self._entity_id_
+        self._entity_id_ = uuid.uuid1().hex
+        return self._entity_id_

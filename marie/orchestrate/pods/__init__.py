@@ -107,9 +107,9 @@ class BasePod(ABC):
     def __init__(self, args: 'argparse.Namespace'):
         self.args = args
 
-        if hasattr(self.args, 'port'):
-            self.args.port = self.args.port
-        self.args.parallel = self.args.shards
+        if self.args.pod_role == PodRoleType.GATEWAY:
+            _update_gateway_args(self.args)
+        self.args.parallel = getattr(self.args, 'shards', 1)
         self.name = self.args.name or self.__class__.__name__
         self.is_forked = False
         self.logger = MarieLogger(self.name, **vars(self.args))
@@ -134,6 +134,8 @@ class BasePod(ABC):
         self._timeout_ctrl = self.args.timeout_ctrl
 
     def _get_control_address(self):
+        if self.args.pod_role == PodRoleType.GATEWAY:
+            return f'{self.args.host}:{self.args.port[0]}'
         return f'{self.args.host}:{self.args.port}'
 
     def close(self) -> None:
@@ -170,7 +172,7 @@ class BasePod(ABC):
             self.logger.debug(
                 f'{"shutdown is is already set" if self.is_shutdown.is_set() else "Runtime was never started"}. Runtime will end gracefully on its own'
             )
-            pass
+            self._terminate()
         self.is_shutdown.set()
         self.logger.debug(__stop_msg__)
         self.logger.close()
@@ -188,12 +190,21 @@ class BasePod(ABC):
         :param timeout: The time to wait before readiness or failure is determined
             .. # noqa: DAR201
         """
-        return AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
-            timeout=timeout,
-            ready_or_shutdown_event=self.ready_or_shutdown.event,
-            ctrl_address=self.runtime_ctrl_address,
-            timeout_ctrl=self._timeout_ctrl,
-        )
+        if self.args.pod_role == PodRoleType.GATEWAY:
+            return GatewayRuntime.wait_for_ready_or_shutdown(
+                timeout=timeout,
+                ready_or_shutdown_event=self.ready_or_shutdown.event,
+                ctrl_address=self.runtime_ctrl_address,
+                timeout_ctrl=self._timeout_ctrl,
+                protocol=self.args.protocol[0],
+            )
+        else:
+            return AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+                timeout=timeout,
+                ready_or_shutdown_event=self.ready_or_shutdown.event,
+                ctrl_address=self.runtime_ctrl_address,
+                timeout_ctrl=self._timeout_ctrl,
+            )
 
     def _fail_start_timeout(self, timeout):
         """

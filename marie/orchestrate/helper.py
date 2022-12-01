@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from marie import __cache_path__
 
 def generate_default_volume_and_workspace(workspace_id=''):
     """automatically generate a docker volume, and an Executor workspace inside it
@@ -9,7 +10,7 @@ def generate_default_volume_and_workspace(workspace_id=''):
     :return: List of volumes and a workspace string
     """
 
-    default_workspace = os.environ.get('MARIE_DEFAULT_WORKSPACE_BASE')
+    default_workspace = __cache_path__
     container_addr = '/app'
     if default_workspace:  # use default workspace provided in env var
         host_addr = default_workspace
@@ -17,7 +18,7 @@ def generate_default_volume_and_workspace(workspace_id=''):
             path=os.path.abspath(default_workspace), start=Path.home()
         )
     else:  # fallback if no custom volume and no default workspace
-        workspace = os.path.join('.marie', 'executor-workspace')
+        workspace = os.path.join(__cache_path__, 'executor-workspace')
         host_addr = os.path.join(
             Path.home(),
             workspace,

@@ -1,23 +1,33 @@
 import copy
+import json
 import os
 import re
 import subprocess
 from abc import abstractmethod
 from argparse import Namespace
+from collections import defaultdict
 from contextlib import ExitStack
 from itertools import cycle
 from typing import Dict, List, Optional, Set, Union
 
 from marie import __default_executor__, __default_host__, __docker_host__, helper
 from marie.enums import DeploymentRoleType, PodRoleType, PollingType
-from marie.helper import CatchAllCleanupContextManager
+from marie.helper import (
+    CatchAllCleanupContextManager,
+    _parse_hosts,
+    _parse_ports,
+    make_iterable,
+    parse_host_scheme,
+)
 from marie.jaml.helper import complete_path
-from marie.orchestrate.pods.container import ContainerPod
 from marie.orchestrate.pods.factory import PodFactory
-from marie.serve.networking import GrpcConnectionPool, host_is_local, in_docker
+from marie.parsers.helper import _update_gateway_args
+from marie.serve.networking import host_is_local, in_docker
 
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
 
+def replace_secret_of_hub_uri():
+    pass
 
 class BaseDeployment(ExitStack):
     """A BaseDeployment is an immutable set of pods.
@@ -34,38 +44,6 @@ class BaseDeployment(ExitStack):
             are properly closed.
         """
         ...
-
-    @staticmethod
-    def _set_upload_files(args):
-        # sets args.upload_files at the deployment level so that pods inherit from it.
-        # all pods work under one remote workspace, hence important to have upload_files set for all
-
-        def valid_path(path):
-            try:
-                complete_path(path)
-                return True
-            except FileNotFoundError:
-                return False
-
-        _upload_files = set()
-        for param in ['uses', 'uses_before', 'uses_after']:
-            param_value = getattr(args, param, None)
-            if param_value and valid_path(param_value):
-                _upload_files.add(param_value)
-
-        if getattr(args, 'py_modules', None):
-            _upload_files.update(
-                {py_module for py_module in args.py_modules if valid_path(py_module)}
-            )
-        if getattr(args, 'upload_files', None):
-            _upload_files.update(
-                {
-                    upload_file
-                    for upload_file in args.upload_files
-                    if valid_path(upload_file)
-                }
-            )
-        return list(_upload_files)
 
     @property
     def role(self) -> 'DeploymentRoleType':
@@ -97,6 +75,13 @@ class BaseDeployment(ExitStack):
         .. # noqa: DAR201
         """
         return self.head_args.port if self.head_args else None
+
+    @property
+    def head_port_monitoring(self):
+        """Get the port_monitoring of the HeadPod of this deployment
+        .. # noqa: DAR201
+        """
+        return self.head_args.port_monitoring if self.head_args else None
 
     def __enter__(self) -> 'BaseDeployment':
         with CatchAllCleanupContextManager(self):
@@ -229,7 +214,6 @@ class Deployment(BaseDeployment):
         self, args: Union['Namespace', Dict], needs: Optional[Set[str]] = None
     ):
         super().__init__()
-        args.upload_files = BaseDeployment._set_upload_files(args)
         self.args = args
         self.args.polling = (
             args.polling if hasattr(args, 'polling') else PollingType.ANY
@@ -241,26 +225,121 @@ class Deployment(BaseDeployment):
             needs or set()
         )  #: used in the :class:`jina.flow.Flow` to build the graph
 
+        # parse addresses for distributed replicas
+        (
+            self.ext_repl_hosts,
+            self.ext_repl_ports,
+            self.ext_repl_schemes,
+            self.ext_repl_tls,
+        ) = ([], [], [], [])
+        if self.args.pod_role != PodRoleType.GATEWAY:
+            self._parse_external_replica_hosts_and_ports()
+            self._parse_addresses_into_host_and_port()
+        if len(self.ext_repl_ports) > 1:
+            self.args.replicas = len(self.ext_repl_ports)
+
         self.uses_before_pod = None
         self.uses_after_pod = None
         self.head_pod = None
         self.shards = {}
+        self._update_port_args()
         self.update_pod_args()
+        self._sandbox_deployed = False
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         super().__exit__(exc_type, exc_val, exc_tb)
         self.join()
 
+    def _parse_addresses_into_host_and_port(self):
+        # splits addresses passed to `host` into separate `host` and `port`
+        _hostname, port, scheme, tls = parse_host_scheme(self.args.host)
+        if _hostname != self.args.host:  # more than just hostname was passed to `host`
+            self.args.host = _hostname
+            self.args.port = port
+            self.args.scheme = scheme
+            self.args.tls = tls
+        for i, repl_host in enumerate(self.ext_repl_hosts):
+            _hostname, port, scheme, tls = parse_host_scheme(repl_host)
+            if (
+                _hostname != self.ext_repl_hosts[i]
+            ):  # more than just hostname was passed to `host`
+                self.ext_repl_hosts[i] = _hostname
+                self.ext_repl_ports[i] = port
+                self.ext_repl_schemes[i] = scheme
+                self.ext_repl_tls[i] = tls
+
+    def _parse_external_replica_hosts_and_ports(self):
+        # splits user provided lists of hosts and ports into a host and port for every distributed replica
+        ext_repl_ports = make_iterable(_parse_ports(str(self.args.port)))
+        ext_repl_hosts = make_iterable(_parse_hosts(str(self.args.host)))
+        if len(ext_repl_hosts) < len(ext_repl_ports):
+            if (
+                len(ext_repl_hosts) == 1
+            ):  # only one host given, assume replicas are on the same host
+                ext_repl_hosts = ext_repl_hosts * len(ext_repl_ports)
+        elif len(ext_repl_hosts) > len(ext_repl_ports):
+            if (
+                len(ext_repl_ports) == 1
+            ):  # only one port given, assume replicas are on the same port
+                ext_repl_ports = ext_repl_ports * len(ext_repl_hosts)
+        if len(ext_repl_hosts) != len(ext_repl_ports):
+            raise ValueError(
+                f'Number of hosts ({len(ext_repl_hosts)}) does not match the number of ports ({len(ext_repl_ports)})'
+            )
+        self.args.port, self.args.host = int(ext_repl_ports[0]), ext_repl_hosts[0]
+        self.ext_repl_hosts, self.ext_repl_ports = ext_repl_hosts, ext_repl_ports
+        # varying tls and schemes other than 'grpc' only implemented if the entire address is passed to `host`
+        self.ext_repl_schemes = [
+            getattr(self.args, 'scheme', None) for _ in self.ext_repl_ports
+        ]
+        self.ext_repl_tls = [
+            getattr(self.args, 'tls', None) for _ in self.ext_repl_ports
+        ]
+
+    def _update_port_args(self):
+        _all_port_monitoring = _parse_ports(self.args.port_monitoring)
+        self.args.all_port_monitoring = (
+            [_all_port_monitoring]
+            if not type(_all_port_monitoring) == list
+            else _all_port_monitoring
+        )
+        self.args.port_monitoring = int(
+            self.args.all_port_monitoring[0]
+        )  # this is for the head
+
     def update_pod_args(self):
         """Update args of all its pods based on Deployment args. Including head/tail"""
+        if self.args.runtime_cls == 'GatewayRuntime':
+            _update_gateway_args(self.args)
         if isinstance(self.args, Dict):
             # This is used when a Deployment is created in a remote context, where pods & their connections are already given.
             self.pod_args = self.args
         else:
             self.pod_args = self._parse_args(self.args)
 
+        if self.external:
+            for pod, port, host, scheme, tls in zip(
+                self.pod_args['pods'][0],
+                self.ext_repl_ports,
+                self.ext_repl_hosts,
+                self.ext_repl_schemes,
+                self.ext_repl_tls,
+            ):
+                pod.port = port
+                pod.host = host
+                pod.scheme = scheme
+                pod.tls = tls
+
+    def update_sandbox_args(self):
+        """Update args of all its pods based on the host and port returned by Hubble"""
         if self.is_sandbox:
-            raise NotImplemented()
+            host, port = ("localhost", -1) #HubIO.deploy_public_sandbox(self.args)
+            self._sandbox_deployed = True
+            self.first_pod_args.host = host
+            self.first_pod_args.port = port
+            if self.head_args:
+                self.pod_args['head'].host = host
+                self.pod_args['head'].port = port
 
     def update_worker_pod_args(self):
         """Update args of all its worker pods based on Deployment args. Does not touch head and tail"""
@@ -273,9 +352,20 @@ class Deployment(BaseDeployment):
 
         :return: True if this deployment is provided as a sandbox, False otherwise
         """
-        uses = getattr(self.args, 'uses', '')
-        is_sandbox = uses.startswith('jinahub+sandbox://')
+        uses = getattr(self.args, 'uses') or ''
+        is_sandbox = uses.startswith('jinahub+sandbox://') or uses.startswith('jinaai+sandbox://')
         return is_sandbox
+
+    @property
+    def _is_docker(self) -> bool:
+        """
+        Check if this deployment is to be run in docker.
+
+        :return: True if this deployment is to be run in docker
+        """
+        uses = getattr(self.args, 'uses', '')
+        is_docker = uses.startswith('jinahub+docker://') or uses.startswith('docker://') or uses.startswith('jinaai+docker://')
+        return is_docker
 
     @property
     def tls_enabled(self):
@@ -286,7 +376,8 @@ class Deployment(BaseDeployment):
         """
         has_cert = getattr(self.args, 'ssl_certfile', None) is not None
         has_key = getattr(self.args, 'ssl_keyfile', None) is not None
-        return self.is_sandbox or (has_cert and has_key)
+        tls = getattr(self.args, 'tls', False)
+        return tls or self.is_sandbox or (has_cert and has_key)
 
     @property
     def external(self) -> bool:
@@ -298,12 +389,26 @@ class Deployment(BaseDeployment):
         return getattr(self.args, 'external', False) or self.is_sandbox
 
     @property
+    def grpc_metadata(self):
+        """
+        Get the gRPC metadata for this deployment.
+        :return: The gRPC metadata for this deployment. If the deployment is a gateway, return None.
+        """
+        return getattr(self.args, 'grpc_metadata', None)
+
+    @property
     def protocol(self):
         """
         :return: the protocol of this deployment
         """
-        protocol = getattr(self.args, 'protocol', 'grpc')
-        return str(protocol) + ('s' if self.tls_enabled else '')
+        protocol = getattr(self.args, 'protocol', ['grpc'])
+        if not isinstance(protocol, list):
+            protocol = [protocol]
+        protocol = [str(_p) + ('s' if self.tls_enabled else '') for _p in protocol]
+        if len(protocol) == 1:
+            return protocol[0]
+        else:
+            return protocol
 
     @property
     def first_pod_args(self) -> Namespace:
@@ -336,7 +441,7 @@ class Deployment(BaseDeployment):
         """Returns a list of ports exposed by this Deployment.
         Exposed means these are the ports a Client/Gateway is supposed to communicate with.
         For sharded deployments this will be the head_port.
-        For non sharded deployments it will be all replica ports
+        For non-sharded deployments it will be all replica ports
         .. # noqa: DAR201
         """
         if self.head_port:
@@ -344,8 +449,24 @@ class Deployment(BaseDeployment):
         else:
             ports = []
             for replica in self.pod_args['pods'][0]:
-                ports.append(replica.port)
+                if isinstance(replica.port, list):
+                    ports.extend(replica.port)
+                else:
+                    ports.append(replica.port)
             return ports
+
+    @property
+    def hosts(self) -> List[str]:
+        """Returns a list of host addresses exposed by this Deployment.
+        Exposed means these are the host a Client/Gateway is supposed to communicate with.
+        For sharded deployments this will be the head host.
+        For non-sharded deployments it will be all replica hosts
+        .. # noqa: DAR201
+        """
+        if self.head_host:
+            return [self.head_host]
+        else:
+            return [replica.host for replica in self.pod_args['pods'][0]]
 
     @property
     def dockerized_uses(self) -> bool:
@@ -452,51 +573,26 @@ class Deployment(BaseDeployment):
     def __eq__(self, other: 'BaseDeployment'):
         return self.num_pods == other.num_pods and self.name == other.name
 
-    def activate(self):
-        """
-        Activate all worker pods in this deployment by registering them with the head
-        """
-        if self.head_pod is not None:
-            for shard_id in self.pod_args['pods']:
-                for pod_idx, pod_args in enumerate(self.pod_args['pods'][shard_id]):
-                    worker_host = self.get_worker_host(
-                        pod_args, self.shards[shard_id]._pods[pod_idx], self.head_pod
-                    )
-                    GrpcConnectionPool.activate_worker_sync(
-                        worker_host,
-                        int(pod_args.port),
-                        self.head_pod.runtime_ctrl_address,
-                        shard_id,
-                    )
-
     @staticmethod
-    def get_worker_host(pod_args, pod, head_pod):
+    def get_worker_host(pod_args, pod_is_container, head_is_container):
         """
         Check if the current pod and head are both containerized on the same host
         If so __docker_host__ needs to be advertised as the worker's address to the head
 
         :param pod_args: arguments of the worker pod
-        :param pod: the worker pod
-        :param head_pod: head pod communicating with the worker pod
-        :return: host to use in activate messages
+        :param pod_is_container: boolean specifying if pod is to be run in container
+        :param head_is_container: boolean specifying if head pod is to be run in container
+        :return: host to pass in connection list of the head
         """
         # Check if the current pod and head are both containerized on the same host
         # If so __docker_host__ needs to be advertised as the worker's address to the head
         worker_host = (
             __docker_host__
-            if Deployment._is_container_to_container(pod, head_pod)
+            if (pod_is_container and (head_is_container or in_docker()))
             and host_is_local(pod_args.host)
             else pod_args.host
         )
         return worker_host
-
-    @staticmethod
-    def _is_container_to_container(pod, head_pod):
-        # Check if both shard_id/pod_idx and the head are containerized
-        # if the head is not containerized, it still could mean that the deployment itself is containerized
-        return type(pod) == ContainerPod and (
-            type(head_pod) == ContainerPod or in_docker()
-        )
 
     def start(self) -> 'Deployment':
         """
@@ -508,6 +604,9 @@ class Deployment(BaseDeployment):
             If one of the :class:`Pod` fails to start, make sure that all of them
             are properly closed.
         """
+        if self.is_sandbox and not self._sandbox_deployed:
+            self.update_sandbox_args()
+
         if self.pod_args['uses_before'] is not None:
             _args = self.pod_args['uses_before']
             if getattr(self.args, 'noblock_on_start', False):
@@ -534,8 +633,6 @@ class Deployment(BaseDeployment):
             )
             self.enter_context(self.shards[shard_id])
 
-        if not getattr(self.args, 'noblock_on_start', False):
-            self.activate()
         return self
 
     def wait_start_success(self) -> None:
@@ -556,7 +653,6 @@ class Deployment(BaseDeployment):
                 self.head_pod.wait_start_success()
             for shard_id in self.shards:
                 self.shards[shard_id].wait_start_success()
-            self.activate()
         except:
             self.close()
             raise
@@ -604,25 +700,47 @@ class Deployment(BaseDeployment):
         return is_ready
 
     @staticmethod
-    def _parse_slice(value: str):
-        """Parses a `slice()` from string, like `start:stop:step`.
+    def _parse_devices(value: str, num_devices: int):
+        """Parses a list of devices from string, like `start:stop:step` or 'num1,num2,num3` or combination of both.
 
         :param value: a string like
+        :param num_devices: total number of devices
         :return: slice
         """
+
+        use_uuids = False
         if re.match(WRAPPED_SLICE_BASE, value):
             value = value[1:-1]
 
         if value:
-            parts = value.split(':')
+            parts = value.split(',')
             if len(parts) == 1:
-                # slice(stop)
-                parts = [parts[0], str(int(parts[0]) + 1)]
-            # else: slice(start, stop[, step])
+                parts = value.split(':')
+
+                if len(parts) == 1:
+                    try:
+                        int(parts[0])
+                    except:
+                        use_uuids = True
+                    if use_uuids:
+                        return parts
+                    parts = [parts[0], str(int(parts[0]) + 1)]
+            else:
+                # try to detect if parts are not numbers
+                try:
+                    int(parts[0])
+                except:
+                    use_uuids = True
+
+                if not use_uuids:
+                    return [int(p) for p in parts]
+                else:
+                    return parts
         else:
-            # slice()
             parts = []
-        return slice(*[int(p) if p else None for p in parts])
+
+        all_devices = range(num_devices)
+        return all_devices[slice(*[int(p) if p else None for p in parts])]
 
     @staticmethod
     def _roundrobin_cuda_device(device_str: str, replicas: int):
@@ -632,7 +750,12 @@ class Deployment(BaseDeployment):
         :param replicas: the number of replicas
         :return: a map from replica id to device id
         """
-        if device_str and device_str.startswith('RR') and replicas >= 1:
+        if (
+            device_str
+            and isinstance(device_str, str)
+            and device_str.startswith('RR')
+            and replicas >= 1
+        ):
             try:
                 num_devices = str(subprocess.check_output(['nvidia-smi', '-L'])).count(
                     'UUID'
@@ -642,30 +765,37 @@ class Deployment(BaseDeployment):
                 if num_devices == 0:
                     return
 
-            all_devices = list(range(num_devices))
+            selected_devices = []
             if device_str[2:]:
-                all_devices = all_devices[Deployment._parse_slice(device_str[2:])]
 
-            _c = cycle(all_devices)
+                for device in Deployment._parse_devices(device_str[2:], num_devices):
+                    selected_devices.append(device)
+            else:
+                selected_devices = range(num_devices)
+            _c = cycle(selected_devices)
             return {j: next(_c) for j in range(replicas)}
 
     @staticmethod
     def _set_pod_args(args: Namespace) -> Dict[int, List[Namespace]]:
         result = {}
-        sharding_enabled = args.shards and args.shards > 1
+        shards = getattr(args, 'shards', 1)
+        replicas = getattr(args, 'replicas', 1)
+        sharding_enabled = shards and shards > 1
 
         cuda_device_map = None
         if args.env:
             cuda_device_map = Deployment._roundrobin_cuda_device(
-                args.env.get('CUDA_VISIBLE_DEVICES'), args.replicas
+                args.env.get('CUDA_VISIBLE_DEVICES'), replicas
             )
 
-        for shard_id in range(args.shards):
+        for shard_id in range(shards):
             replica_args = []
-            for replica_id in range(args.replicas):
+            for replica_id in range(replicas):
                 _args = copy.deepcopy(args)
                 _args.shard_id = shard_id
-                _args.pod_role = PodRoleType.WORKER
+                # for gateway pods, the pod role shouldn't be changed
+                if _args.pod_role != PodRoleType.GATEWAY:
+                    _args.pod_role = PodRoleType.WORKER
 
                 if cuda_device_map:
                     _args.env['CUDA_VISIBLE_DEVICES'] = str(cuda_device_map[replica_id])
@@ -683,10 +813,31 @@ class Deployment(BaseDeployment):
                 # the gateway needs to respect the assigned port
                 if args.deployment_role == DeploymentRoleType.GATEWAY or args.external:
                     _args.port = args.port
-                elif args.shards == 1 and args.replicas == 1:
+                elif shards == 1 and replicas == 1:
+                    _args.port = args.port
+                    _args.port_monitoring = args.port_monitoring
+
+                elif shards == 1:
+                    _args.port_monitoring = (
+                        helper.random_port()
+                        if replica_id >= len(args.all_port_monitoring)
+                        else args.all_port_monitoring[replica_id]
+                    )
                     # if there are no shards/replicas, we dont need to distribute ports randomly
                     # we should rather use the pre assigned one
-                    args.port = args.port
+                    _args.port = helper.random_port()
+                elif shards > 1:
+                    port_monitoring_index = (
+                        replica_id + replicas * shard_id + 1
+                    )  # the first index is for the head
+                    _args.port_monitoring = (
+                        helper.random_port()
+                        if port_monitoring_index >= len(args.all_port_monitoring)
+                        else args.all_port_monitoring[
+                            port_monitoring_index
+                        ]  # we skip the head port here
+                    )
+                    _args.port = helper.random_port()
                 else:
                     _args.port = helper.random_port()
                     _args.port_monitoring = helper.random_port()
@@ -703,7 +854,7 @@ class Deployment(BaseDeployment):
 
         _args = copy.deepcopy(args)
         _args.pod_role = PodRoleType.WORKER
-        _args.host = __default_host__
+        _args.host = _args.host or __default_host__
         _args.port = helper.random_port()
 
         if _args.name:
@@ -762,7 +913,17 @@ class Deployment(BaseDeployment):
                 )
 
             parsed_args['head'] = BaseDeployment._copy_to_head_args(args)
+
         parsed_args['pods'] = self._set_pod_args(args)
+
+        if parsed_args['head'] is not None:
+            connection_list = defaultdict(list)
+
+            for shard_id in parsed_args['pods']:
+                for pod_idx, pod_args in enumerate(parsed_args['pods'][shard_id]):
+                    worker_host = self.get_worker_host(pod_args, self._is_docker, False)
+                    connection_list[shard_id].append(f'{worker_host}:{pod_args.port}')
+            parsed_args['head'].connection_list = json.dumps(connection_list)
 
         return parsed_args
 
@@ -775,6 +936,7 @@ class Deployment(BaseDeployment):
         .. # noqa: DAR201
         """
         mermaid_graph = []
+        secret = '&ltsecret&gt'
         if self.role != DeploymentRoleType.GATEWAY and not self.external:
             mermaid_graph = [f'subgraph {self.name};', f'\ndirection LR;\n']
 
@@ -784,7 +946,7 @@ class Deployment(BaseDeployment):
                 else None
             )
             uses_before_uses = (
-                self.uses_before_args.uses
+                replace_secret_of_hub_uri(self.uses_before_args.uses, secret)
                 if self.uses_before_args is not None
                 else None
             )
@@ -792,7 +954,9 @@ class Deployment(BaseDeployment):
                 self.uses_after_args.name if self.uses_after_args is not None else None
             )
             uses_after_uses = (
-                self.uses_after_args.uses if self.uses_after_args is not None else None
+                replace_secret_of_hub_uri(self.uses_after_args.uses, secret)
+                if self.uses_after_args is not None
+                else None
             )
             shard_names = []
             if len(self.pod_args['pods']) > 1:
@@ -812,7 +976,7 @@ class Deployment(BaseDeployment):
                     ]  # all the uses should be the same but let's keep it this
                     # way
                     for rep_i, (name, use) in enumerate(zip(names, uses)):
-                        escaped_uses = f'"{use}"'
+                        escaped_uses = f'"{replace_secret_of_hub_uri(use, secret)}"'
                         shard_mermaid_graph.append(f'{name}[{escaped_uses}]:::pod;')
                     shard_mermaid_graph.append('end;')
                     shard_mermaid_graph = [
@@ -822,7 +986,9 @@ class Deployment(BaseDeployment):
                     mermaid_graph.append('\n')
                 if uses_before_name is not None:
                     for shard_name in shard_names:
-                        escaped_uses_before_uses = f'"{uses_before_uses}"'
+                        escaped_uses_before_uses = (
+                            f'"{replace_secret_of_hub_uri(uses_before_uses, secret)}"'
+                        )
                         mermaid_graph.append(
                             f'{self.args.name}-head[{escaped_uses_before_uses}]:::HEADTAIL --> {shard_name};'
                         )
@@ -834,16 +1000,17 @@ class Deployment(BaseDeployment):
                         )
             else:
                 # single shard case, no uses_before or uses_after_considered
-                name = list(self.pod_args['pods'].values())[0][0].name
-                uses = f'"{list(self.pod_args["pods"].values())[0][0].uses}"'
-                num_replicas = list(self.pod_args['pods'].values())[0][0].replicas
+                pod_args = list(self.pod_args['pods'].values())[0][0]
+                uses = f'"{replace_secret_of_hub_uri(pod_args.uses, secret)}"'
 
                 # just put the replicas in parallel
-                if num_replicas > 1:
-                    for rep_i in range(num_replicas):
-                        mermaid_graph.append(f'{name}/rep-{rep_i}[{uses}]:::pod;')
+                if pod_args.replicas > 1:
+                    for rep_i in range(pod_args.replicas):
+                        mermaid_graph.append(
+                            f'{pod_args.name}/rep-{rep_i}["{uses}"]:::pod;'
+                        )
                 else:
-                    mermaid_graph.append(f'{name}[{uses}]:::pod;')
+                    mermaid_graph.append(f'{pod_args.name}["{uses}"]:::pod;')
 
             mermaid_graph.append('end;')
         return mermaid_graph

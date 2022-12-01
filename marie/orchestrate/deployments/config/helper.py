@@ -1,9 +1,14 @@
 import os
+from typing import Dict
 
-from jina import __default_executor__, __version__
-from jina.enums import PodRoleType
-from jina.hubble.helper import parse_hub_uri
-from jina.hubble.hubio import HubIO
+from marie import (
+    __default_executor__,
+    __default_grpc_gateway__,
+    __default_http_gateway__,
+    __default_websocket_gateway__,
+    __version__,
+)
+from marie.enums import PodRoleType
 
 
 def get_image_name(uses: str) -> str:
@@ -19,13 +24,7 @@ def get_image_name(uses: str) -> str:
     :return: normalized image name
     """
     try:
-        rebuild_image = 'JINA_HUB_NO_IMAGE_REBUILD' not in os.environ
-        scheme, name, tag, secret = parse_hub_uri(uses)
-        meta_data, _ = HubIO.fetch_meta(
-            name, tag, secret=secret, rebuild_image=rebuild_image, force=True
-        )
-        image_name = meta_data.image_name
-        return image_name
+        raise Exception("Invalid uses")
     except Exception:
         if uses.startswith('docker'):
             # docker:// is a valid requirement and user may want to put its own image
@@ -50,10 +49,9 @@ def get_base_executor_version():
     import requests
 
     try:
-        url = 'https://registry.hub.docker.com/v1/repositories/jinaai/jina/tags'
-        tags = requests.get(url).json()
-        name_set = {tag['name'] for tag in tags}
-        if __version__ in name_set:
+        url = 'https://registry.hub.docker.com/v2/repositories/jinaai/jina/tags'
+        result: Dict = requests.get(url, params={'name': __version__}).json()
+        if result.get('count', 0) > 0:
             return __version__
         else:
             return 'master'
@@ -72,8 +70,8 @@ def construct_runtime_container_args(cargs, uses_metas, uses_with, pod_type):
     """
     import json
 
-    from jina.helper import ArgNamespace
-    from jina.parsers import set_pod_parser
+    from marie.helper import ArgNamespace
+    from marie.parsers import set_pod_parser
 
     taboo = {
         'uses_with',
@@ -82,7 +80,6 @@ def construct_runtime_container_args(cargs, uses_metas, uses_with, pod_type):
         'uses_before',
         'uses_after',
         'workspace_id',
-        'upload_files',
         'noblock_on_start',
         'env',
     }
@@ -115,12 +112,21 @@ def validate_uses(uses: str):
     :param uses: uses argument
     :return: boolean indicating whether is a valid uses to be used in K8s or docker compose
     """
-    if uses == __default_executor__ or uses.startswith('docker://'):
+    # Uses can be either None (not specified), default gateway class, default executor or docker image
+    # None => deplyoment uses base container image and uses is determined inside container
+    # default gateway class or default executor => deployment uses base container and sets uses in command
+    # container images => deployment uses the specified container image and uses is defined by container
+    if (
+        uses is None
+        or uses
+        in [
+            __default_http_gateway__,
+            __default_websocket_gateway__,
+            __default_grpc_gateway__,
+            __default_executor__,
+        ]
+        or uses.startswith('docker://')
+    ):
         return True
 
-    try:
-        scheme, _, _, _ = parse_hub_uri(uses)
-        if scheme in {'jinahub+docker', 'jinahub+sandbox'}:
-            return True
-    except ValueError:
-        return False
+    raise Exception("Invalid uses")

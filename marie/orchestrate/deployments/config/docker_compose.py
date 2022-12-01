@@ -3,18 +3,23 @@ import os
 from argparse import Namespace
 from typing import Dict, List, Optional, Tuple, Union
 
-from marie import __default_executor__
-from jina.enums import PodRoleType
-from jina.excepts import NoContainerizedError
-from jina.orchestrate.deployments import BaseDeployment
-from jina.orchestrate.deployments.config.helper import (
+from marie import (
+    __default_executor__,
+    __default_grpc_gateway__,
+    __default_http_gateway__,
+    __default_websocket_gateway__,
+)
+from marie.enums import PodRoleType
+from marie.excepts import NoContainerizedError
+from marie.orchestrate.deployments import BaseDeployment
+from marie.orchestrate.deployments.config.helper import (
     construct_runtime_container_args,
     get_base_executor_version,
     get_image_name,
     to_compatible_name,
     validate_uses,
 )
-from jina.orchestrate.helper import generate_default_volume_and_workspace
+from marie.orchestrate.helper import generate_default_volume_and_workspace
 
 port = 8081
 
@@ -52,36 +57,42 @@ class DockerComposeConfig:
         ) -> Dict:
             import os
 
-            image_name = os.getenv(
-                'JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard'
-            )
             cargs = copy.copy(self.service_args)
+
+            image_name = self._get_image_name(cargs.uses)
+
             cargs.deployments_addresses = self.deployments_addresses
             from marie.helper import ArgNamespace
             from marie.parsers import set_gateway_parser
 
             taboo = {
-                'uses_with',
                 'uses_metas',
                 'volumes',
                 'uses_before',
                 'uses_after',
                 'workspace',
                 'workspace_id',
-                'upload_files',
                 'noblock_on_start',
                 'env',
             }
+
+            if cargs.uses not in [
+                __default_http_gateway__,
+                __default_websocket_gateway__,
+                __default_grpc_gateway__,
+            ]:
+                cargs.uses = 'config.yml'
 
             non_defaults = ArgNamespace.get_non_defaults_args(
                 cargs, set_gateway_parser(), taboo=taboo
             )
             _args = ArgNamespace.kwargs2list(non_defaults)
+
             container_args = ['gateway'] + _args
 
-            protocol = str(non_defaults.get('protocol', 'grpc')).lower()
+            protocol = str(non_defaults.get('protocol', ['grpc'])[0]).lower()
 
-            ports = [f'{cargs.port}'] + (
+            ports = cargs.port + (
                 [f'{cargs.port_monitoring}'] if cargs.monitoring else []
             )
 
@@ -96,7 +107,7 @@ class DockerComposeConfig:
                 'expose': ports,
                 'ports': [f'{_port}:{_port}' for _port in ports],
                 'healthcheck': {
-                    'test': f'python -m jina.resources.health_check.gateway localhost:{cargs.port} {protocol}',
+                    'test': f'jina ping gateway {protocol}://127.0.0.1:{cargs.port[0]}',
                     'interval': '2s',
                 },
                 'environment': envs,
@@ -109,7 +120,12 @@ class DockerComposeConfig:
                 'JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard'
             )
 
-            if uses is not None and uses != __default_executor__:
+            if uses is not None and uses not in [
+                __default_executor__,
+                __default_http_gateway__,
+                __default_websocket_gateway__,
+                __default_grpc_gateway__,
+            ]:
                 image_name = get_image_name(uses)
 
             return image_name
@@ -165,7 +181,7 @@ class DockerComposeConfig:
                     'entrypoint': ['jina'],
                     'command': container_args,
                     'healthcheck': {
-                        'test': f'python -m jina.resources.health_check.pod localhost:{cargs.port}',
+                        'test': f'jina ping executor 127.0.0.1:{cargs.port}',
                         'interval': '2s',
                     },
                     'environment': [
