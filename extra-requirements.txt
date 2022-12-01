@@ -1,6 +1,38 @@
-# MARIE PACKAGE DEPENDENCIES
+# PACKAGE DEPENDENCIES
+#
+# Essential: only 5, they are labeled with `core`: docarray, numpy, grpcio, protobuf, pyyaml. They will be installed
+#           when you do `pip install marie`. They are essential to run 90% features & functionalities of Jina.
+# Extensions: they are labeled with different tags. They will NOT be installed by default. One can install a group of
+#           of dependencies labeled `tag` by `pip install "jina[tag]"`
+#
+# FILE FORMAT
+# https://hanxiao.io/2019/11/07/A-Better-Practice-for-Managing-extras-require-Dependencies-in-Python/
+# Put your extra requirements here in the following format
+#
+# package[version]: tag1, tag2, ...
+#
+#
+# REMARKS ON TAGS
+# 1. Try to reuse the existing tags if possible.
+#    If you intend to create a new tag, keep it alphabetical, short and general
+# 2. Package name itself is a tag already, so you don't need to tag it again.
+#    For example, 'numpy>=0.4.1: numpy' is redundant
+# 3. Tag order doesn't matter; case-sensitive; duplicated tag will be ignored
+# 4. Tag `all` is reserved for representing all packages
+
 # AVAILABLE TAGS:
 # core < perf < standard < devel: these tags correspond to Docker image tag
+# test: required for **setting up test ENVIRONMENT**
+
+
+numpy:                      core
+protobuf>=3.20.0:           core
+grpcio>=1.46.0,<1.48.1:     core
+grpcio-reflection>=1.46.0,<1.48.1:  core
+grpcio-health-checking>=1.46.0,<1.48.1:  core
+pyyaml>=5.3.1:              core
+packaging>=20.0:            core
+docarray>=0.16.4:           core
 
 prometheus_client:          perf
 psutil:                     test
@@ -15,3 +47,7 @@ opentelemetry-semantic-conventions>=0.33b0:    perf,standard,devel
 opentelemetry-instrumentation-aiohttp-client>=0.33b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.33b0: perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.13.0: perf,standrad,devel
+
+
+psutil:                     test
+strawberry-graphql>=0.96.0: cicd,devel

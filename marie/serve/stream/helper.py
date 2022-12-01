@@ -1,18 +1,48 @@
-from typing import Iterator, AsyncIterator, Union
+import asyncio
+from typing import AsyncIterator, Iterator, Optional, Union
 
 from marie.helper import get_or_reuse_loop
+
+
+class _RequestsCounter:
+    """Class used to wrap a count integer so that it can be updated inside methods.
+
+    .. code-block:: python
+
+        def count_increment(i: int, rc: _RequestsCounter):
+            i += 1
+            rc.count += 1
+
+
+        c_int = 0
+        c_rc = _RequestsCounter()
+        count_increment(c_int, c_rc)
+
+        assert c_int == 0
+        assert c_rc.count == 1
+    """
+
+    count = 0
 
 
 class AsyncRequestsIterator:
     """Iterator to allow async iteration of blocking/non-blocking iterator from the Client"""
 
-    def __init__(self, iterator: Union[Iterator, AsyncIterator]) -> None:
+    def __init__(
+        self,
+        iterator: Union[Iterator, AsyncIterator],
+        request_counter: Optional[_RequestsCounter] = None,
+        prefetch: int = 0,
+    ) -> None:
         """Async request iterator
-        TODO (Deepankar): accept `num_req`
 
         :param iterator: request iterator
+        :param request_counter: counter of the numbers of request being handled at a given moment
+        :param prefetch: The max amount of requests to be handled at a given moment (0 disables feature)
         """
         self.iterator = iterator
+        self._request_counter = request_counter
+        self._prefetch = prefetch
 
     def iterator__next__(self):
         """
@@ -31,6 +61,7 @@ class AsyncRequestsIterator:
 
     async def __anext__(self):
         if isinstance(self.iterator, Iterator):
+
             """
             An `Iterator` indicates "blocking" code, which might block all tasks in the event loop.
             Hence we iterate in the default executor provided by asyncio.
@@ -51,4 +82,7 @@ class AsyncRequestsIterator:
             # we assume that `AsyncIterator` doesn't block the event loop
             request = await self.iterator.__anext__()
 
+        if self._prefetch > 0:
+            while self._request_counter.count >= self._prefetch:
+                await asyncio.sleep(0)
         return request
