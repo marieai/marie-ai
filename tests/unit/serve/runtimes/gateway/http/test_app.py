@@ -29,9 +29,9 @@ def test_custom_swagger(p):
     # otherwise the app can hang as it is not cleaned up correctly
     # see https://fastapi.tiangolo.com/advanced/testing-events/
     with TestClient(app) as client:
-        # print(app.routes)
-        # for route in app.routes:
-        #     print(route.path)
+        print(app.routes)
+        for route in app.routes:
+            print(route.path)
 
         assert any('/docs' in r.path for r in app.routes)
         assert any('/openapi.json' in r.path for r in app.routes)
@@ -62,6 +62,8 @@ def test_tag_update():
         d2 = {'data': [d2.to_dict()]}
         r1 = req.post(f'http://localhost:{port}/index', json=d1)
         r2 = req.post(f'http://localhost:{port}/index', json=d2)
+
+        f.block()
     assert r1.json()['data'][0]['tags'] == {'prop1': 'val'}
     assert r2.json()['data'][0]['tags'] == {'prop2': 'val'}
 

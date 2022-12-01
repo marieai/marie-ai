@@ -5,7 +5,8 @@ import re
 import signal as _signal
 import sys as _sys
 import warnings as _warnings
-from pathlib import Path
+from pathlib import Path as _Path
+
 from distutils.util import strtobool as strtobool
 
 import docarray as _docarray
@@ -20,6 +21,59 @@ if strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
     warnings.simplefilter(action='ignore', category=FutureWarning)
     warnings.simplefilter(action='ignore', category=UserWarning)
 
+def _warning_on_one_line(message, category, filename, lineno, *args, **kwargs):
+    return '\033[1;33m%s: %s\033[0m \033[1;30m(raised from %s:%s)\033[0m\n' % (
+        category.__name__,
+        message,
+        filename,
+        lineno,
+    )
+
+
+_warnings.formatwarning = _warning_on_one_line
+_warnings.simplefilter('always', DeprecationWarning)
+
+# JINA_MP_START_METHOD has higher priority than os-patch
+_start_method = _os.environ.get('JINA_MP_START_METHOD', None)
+if _start_method and _start_method.lower() in {'fork', 'spawn', 'forkserver'}:
+    from multiprocessing import set_start_method as _set_start_method
+
+    try:
+        _set_start_method(_start_method.lower())
+        _warnings.warn(
+            f'multiprocessing start method is set to `{_start_method.lower()}`'
+        )
+    except Exception as e:
+        _warnings.warn(
+            f'failed to set multiprocessing start_method to `{_start_method.lower()}`: {e!r}'
+        )
+elif _sys.version_info >= (3, 8, 0) and _platform.system() == 'Darwin':
+    # DO SOME OS-WISE PATCHES
+
+    # temporary fix for python 3.8 on macos where the default start is set to "spawn"
+    # https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
+    from multiprocessing import set_start_method as _set_start_method
+
+    _set_start_method('fork')
+
+# do not change this line manually
+# this is managed by git tag and updated on every release
+# NOTE: this represents the NEXT release version
+
+__version__ = '3.12.1'
+
+# do not change this line manually
+# this is managed by proto/build-proto.sh and updated on every execution
+__proto_version__ = '0.1.13'
+
+try:
+    __docarray_version__ = _docarray.__version__
+except AttributeError as e:
+    raise OSError(
+        "`docarray` dependency is not installed correctly, please reinstall with `pip install -U --force-reinstall docarray`"
+    )
+
+__uptime__ = _datetime.datetime.now().isoformat()
 
 __windows__ = _sys.platform == "win32"
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
@@ -34,11 +88,8 @@ __model_path__ = _os.path.join(
 __config_dir__ = _os.path.join(
     _os.path.abspath(_os.path.join(__root_dir__, "..")), "config"
 )
-__cache_dir__ = _os.path.join(
-    _os.path.abspath(_os.path.join(__root_dir__, "..")), ".cache"
-)
-__marie_home__ = _os.path.join(str(Path.home()), ".marie")
 
+__marie_home__ = _os.path.join(str(_Path.home()), ".marie")
 
 __default_host__ = _os.environ.get(
     "MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0"
@@ -58,15 +109,16 @@ __args_executor_func__ = {
 }
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
 
-try:
-    __docarray_version__ = _docarray.__version__
-except AttributeError as e:
-    raise OSError(
-        "`docarray` dependency is not installed correctly, please reinstall with `pip install -U --force-reinstall docarray`"
-    )
+__args_executor_init__ = {'metas', 'requests', 'runtime_args'}
+__resources_path__ = _os.path.join(
+    _os.path.dirname(_sys.modules['jina'].__file__), 'resources'
+)
 
-__uptime__ = _datetime.datetime.now().isoformat()
+__cache_path__ = f'{_os.path.expanduser("~")}/.cache/{__package__}'
+if not _Path(__cache_path__).exists():
+    _Path(__cache_path__).mkdir(parents=True, exist_ok=True)
 
+__cache_dir__ = __cache_path__
 
 # 1. clean this tuple,
 # 2. grep -rohEI --exclude-dir=jina/hub --exclude-dir=tests --include \*.py "\'MARIE_.*?\'" jina  | sort -u | sed "s/$/,/g"

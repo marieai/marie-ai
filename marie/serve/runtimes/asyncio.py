@@ -5,72 +5,87 @@ import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional, Union
 
+from grpc import RpcError
+
 from marie import __windows__
-
-# from jina.importer import ImportExtensions
-# from jina.serve.networking import GrpcConnectionPool
-# from jina.serve.runtimes.base import BaseRuntime
+from marie.helper import send_telemetry_event
 from marie.importer import ImportExtensions
-from marie.serve.runtimes.monitoring import MonitoringMixin
-
-# from jina.types.request.control import ControlRequest
-# from jina.types.request.data import DataRequest
-
+from marie.serve.instrumentation import InstrumentationMixin
+from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.base import BaseRuntime
+from marie.serve.runtimes.monitoring import MonitoringMixin
+from marie.types.request.data import DataRequest
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     import multiprocessing
     import threading
 
 
-class ControlRequest:
-    pass
+HANDLED_SIGNALS = (
+    signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
+    signal.SIGTERM,  # Unix signal 15. Sent by `kill <pid>`.
+)
 
 
-class DataRequest:
-    pass
-
-
-class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
+class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, InstrumentationMixin, ABC):
     """
     The async runtime to start a new event loop.
     """
 
     def __init__(
-        self,
-        args: "argparse.Namespace",
-        cancel_event: Optional[Union["asyncio.Event", "multiprocessing.Event", "threading.Event"]] = None,
-        **kwargs,
+            self,
+            args: 'argparse.Namespace',
+            cancel_event: Optional[
+                Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
+            ] = None,
+            **kwargs,
     ):
         super().__init__(args, **kwargs)
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self.is_cancel = cancel_event or asyncio.Event()
+
+        def _cancel(sig):
+            def _inner_cancel(*args, **kwargs):
+                self.logger.debug(f'Received signal {sig.name}')
+                self.is_cancel.set(),
+
+            return _inner_cancel
+
         if not __windows__:
-            # TODO: windows event loops don't support signal handlers
             try:
-                for signame in {"SIGINT", "SIGTERM"}:
-                    self._loop.add_signal_handler(
-                        getattr(signal, signame),
-                        lambda *args, **kwargs: self.is_cancel.set(),
-                    )
+                for sig in HANDLED_SIGNALS:
+                    self._loop.add_signal_handler(sig, _cancel(sig), sig, None)
             except (ValueError, RuntimeError) as exc:
                 self.logger.warning(
-                    f" The runtime {self.__class__.__name__} will not be able to handle termination signals. "
-                    f" {repr(exc)}"
+                    f' The runtime {self.__class__.__name__} will not be able to handle termination signals. '
+                    f' {repr(exc)}'
                 )
         else:
             with ImportExtensions(
-                required=True,
-                logger=self.logger,
-                help_text="""If you see a 'DLL load failed' error, please reinstall `pywin32`.
-                If you're using conda, please use the command `conda install -c anaconda pywin32`""",
+                    required=True,
+                    logger=self.logger,
+                    help_text='''If you see a 'DLL load failed' error, please reinstall `pywin32`.
+                    If you're using conda, please use the command `conda install -c anaconda pywin32`''',
             ):
                 import win32api
 
-            win32api.SetConsoleCtrlHandler(lambda *args, **kwargs: self.is_cancel.set(), True)
+            win32api.SetConsoleCtrlHandler(
+                lambda *args, **kwargs: self.is_cancel.set(), True
+            )
 
         self._setup_monitoring()
+        self._setup_instrumentation(
+            name=self.args.name,
+            tracing=self.args.tracing,
+            traces_exporter_host=self.args.traces_exporter_host,
+            traces_exporter_port=self.args.traces_exporter_port,
+            metrics=self.args.metrics,
+            metrics_exporter_host=self.args.metrics_exporter_host,
+            metrics_exporter_port=self.args.metrics_exporter_port,
+        )
+        send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
+        self._start_time = time.time()
         self._loop.run_until_complete(self.async_setup())
 
     def run_forever(self):
@@ -81,12 +96,35 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         """
         self._loop.run_until_complete(self._loop_body())
 
+    def _teardown_instrumentation(self):
+        try:
+            if self.tracing and self.tracer_provider:
+                if hasattr(self.tracer_provider, 'force_flush'):
+                    self.tracer_provider.force_flush()
+                if hasattr(self.tracer_provider, 'shutdown'):
+                    self.tracer_provider.shutdown()
+            if self.metrics and self.meter_provider:
+                if hasattr(self.meter_provider, 'force_flush'):
+                    self.meter_provider.force_flush()
+                if hasattr(self.meter_provider, 'shutdown'):
+                    self.meter_provider.shutdown()
+        except Exception as ex:
+            self.logger.warning(f'Exception during instrumentation teardown, {str(ex)}')
+
     def teardown(self):
         """Call async_teardown() and stop and close the event loop."""
+        self._teardown_instrumentation()
         self._loop.run_until_complete(self.async_teardown())
         self._loop.stop()
         self._loop.close()
         super().teardown()
+        self._stop_time = time.time()
+        send_telemetry_event(
+            event='stop',
+            obj=self,
+            duration=self._stop_time - self._start_time,
+            entity_id=self._entity_id,
+        )
 
     async def _wait_for_cancel(self):
         """Do NOT override this method when inheriting from :class:`GatewayPod`"""
@@ -104,7 +142,7 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         try:
             await asyncio.gather(self.async_run_forever(), self._wait_for_cancel())
         except asyncio.CancelledError:
-            self.logger.warning("received terminate ctrl message from main process")
+            self.logger.warning('received terminate ctrl message from main process')
 
     def _cancel(self):
         """
@@ -154,16 +192,24 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         :return: True if status is ready else False.
         """
 
-        # TODO : implement me
+        try:
+            from grpc_health.v1 import health_pb2, health_pb2_grpc
 
-        return True
+            response = GrpcConnectionPool.send_health_check_sync(
+                ctrl_address, timeout=1.0
+            )
+            # TODO: Get the proper value of the ServingStatus SERVING KEY
+            return response.status == 1
+        except RpcError:
+            return False
 
-    @staticmethod
+    @classmethod
     def wait_for_ready_or_shutdown(
-        timeout: Optional[float],
-        ready_or_shutdown_event: Union["multiprocessing.Event", "threading.Event"],
-        ctrl_address: str,
-        **kwargs,
+            cls,
+            timeout: Optional[float],
+            ready_or_shutdown_event: Union['multiprocessing.Event', 'threading.Event'],
+            ctrl_address: str,
+            **kwargs,
     ):
         """
         Check if the runtime has successfully started
@@ -177,19 +223,24 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, ABC):
         timeout_ns = 1000000000 * timeout if timeout else None
         now = time.time_ns()
         while timeout_ns is None or time.time_ns() - now < timeout_ns:
-            if ready_or_shutdown_event.is_set() or AsyncNewLoopRuntime.is_ready(ctrl_address):
+            if ready_or_shutdown_event.is_set() or cls.is_ready(ctrl_address, **kwargs):
                 return True
             time.sleep(0.1)
         return False
 
-    def _log_info_msg(self, request: Union[ControlRequest, DataRequest]):
-        if type(request) == DataRequest:
-            self._log_data_request(request)
-        elif type(request) == ControlRequest:
-            self._log_control_request(request)
-
-    def _log_control_request(self, request: ControlRequest):
-        self.logger.debug(f"recv ControlRequest {request.command} with id: {request.header.request_id}")
+    def _log_info_msg(self, request: DataRequest):
+        self._log_data_request(request)
 
     def _log_data_request(self, request: DataRequest):
-        self.logger.debug(f"recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}")
+        self.logger.debug(
+            f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
+        )
+
+    @property
+    def _entity_id(self):
+        import uuid
+
+        if hasattr(self, '_entity_id_'):
+            return self._entity_id_
+        self._entity_id_ = uuid.uuid1().hex
+        return self._entity_id_

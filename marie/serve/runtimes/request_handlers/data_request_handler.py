@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, List, Optional, overload
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from docarray import DocumentArray
 
@@ -11,8 +11,8 @@ from marie.types.request.data import DataRequest
 if TYPE_CHECKING:
     import argparse
     from prometheus_client import CollectorRegistry
-    from marie.logging.logger import MarieLogger
 
+    from marie.logging.logger import MarieLogger
 
 class DataRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
@@ -77,7 +77,7 @@ class DataRequestHandler:
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
                     "workspace": self.args.workspace,
                     "shard_id": self.args.shard_id,
-                    "shards": self.args.shards, # GB: Need to remove this
+                    "shards": self.args.shards,  # GB: Need to remove this
                     "replicas": self.args.replicas,
                     "name": self.args.name,
                     "metrics_registry": metrics_registry,
@@ -155,7 +155,8 @@ class DataRequestHandler:
 
             else:
                 raise TypeError(
-                    f"The return type must be DocumentArray / Dict / `None`, " f"but getting {return_data!r}"
+                    f"The return type must be DocumentArray / Dict / `None`, "
+                    f"but getting {return_data!r}"
                 )
 
         if self._counter:
@@ -171,7 +172,9 @@ class DataRequestHandler:
         return requests[0]
 
     @staticmethod
-    def replace_docs(request: List["DataRequest"], docs: "DocumentArray", ndarrray_type: str = None) -> None:
+    def replace_docs(
+        request: List["DataRequest"], docs: "DocumentArray", ndarrray_type: str = None
+    ) -> None:
         """Replaces the docs in a message with new Documents.
 
         :param request: The request object
@@ -188,7 +191,6 @@ class DataRequestHandler:
         :param parameters: the new parameters to be used
         """
         request.parameters = parameters
-
 
     def close(self):
         """Close the data request handler, by closing the executor"""
@@ -252,7 +254,13 @@ class DataRequestHandler:
         :returns: DocumentArray extraced from the field from all messages
         """
         if len(requests) > 1:
-            result = DocumentArray([d for r in reversed([request for request in requests]) for d in getattr(r, field)])
+            result = DocumentArray(
+                [
+                    d
+                    for r in reversed([request for request in requests])
+                    for d in getattr(r, field)
+                ]
+            )
         else:
             result = getattr(requests[0], field)
 

@@ -1,6 +1,7 @@
 import pytest
 
-from marie.serve.executors.decorators import store_init_kwargs, requests
+from marie.serve.executors.decorators import requests
+from marie.serve.helper import store_init_kwargs
 from marie.helper import iscoroutinefunction
 
 
