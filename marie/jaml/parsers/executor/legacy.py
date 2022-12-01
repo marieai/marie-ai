@@ -1,55 +1,13 @@
-import inspect
-from functools import reduce
-from typing import Any, Dict, Optional, Set, Type
+import dataclasses
+from typing import Any, Dict, Optional, Type
 
-from marie.jaml.parsers.base import VersionedYAMLParser
+from marie.jaml.parsers.base import BaseLegacyParser
 from marie.serve.executors import BaseExecutor
 from marie.serve.executors.metas import get_default_metas
 
 
-class LegacyParser(VersionedYAMLParser):
+class ExecutorLegacyParser(BaseLegacyParser):
     """Legacy parser for executor."""
-
-    version = 'legacy'  # the version number this parser designed for
-
-    @staticmethod
-    def _get_all_arguments(class_):
-        """
-
-        :param class_: target class from which we want to retrieve arguments
-        :return: all the arguments of all the classes from which `class_` inherits
-        """
-
-        def get_class_arguments(class_):
-            """
-            :param class_: the class to check
-            :return: a list containing the arguments from `class_`
-            """
-            signature = inspect.signature(class_.__init__)
-            class_arguments = [p.name for p in signature.parameters.values()]
-            return class_arguments
-
-        def accumulate_classes(cls) -> Set[Type]:
-            """
-            :param cls: the class to check
-            :return: all classes from which cls inherits from
-            """
-
-            def _accumulate_classes(c, cs):
-                cs.append(c)
-                if cls == object:
-                    return cs
-                for base in c.__bases__:
-                    _accumulate_classes(base, cs)
-                return cs
-
-            classes = []
-            _accumulate_classes(cls, classes)
-            return set(classes)
-
-        all_classes = accumulate_classes(class_)
-        args = list(map(lambda x: get_class_arguments(x), all_classes))
-        return set(reduce(lambda x, y: x + y, args))
 
     def parse(
         self,
@@ -72,20 +30,32 @@ class LegacyParser(VersionedYAMLParser):
 
         cls._init_from_yaml = True
         # tmp_p = {kk: expand_env_var(vv) for kk, vv in data.get('with', {}).items()}
-        obj = cls(
-            **data.get('with', {}),
-            metas=data.get('metas', {}),
-            requests=data.get('requests', {}),
-            runtime_args=runtime_args,
-        )
+        if dataclasses.is_dataclass(cls):
+            obj = cls(
+                **data.get('with', {}),
+            )
+            cls.__bases__[0].__init__(
+                obj,
+                **data.get('with', {}),
+                metas=data.get('metas', {}),
+                requests=data.get('requests', {}),
+                runtime_args=runtime_args,
+            )
+        else:
+            obj = cls(
+                **data.get('with', {}),
+                metas=data.get('metas', {}),
+                requests=data.get('requests', {}),
+                runtime_args=runtime_args,
+            )
         cls._init_from_yaml = False
 
         # check if the yaml file used to instanciate 'cls' has arguments that are not in 'cls'
-        arguments_from_cls = LegacyParser._get_all_arguments(cls)
+        arguments_from_cls = ExecutorLegacyParser._get_all_arguments(cls)
         arguments_from_yaml = set(data.get('with', {}))
         difference_set = arguments_from_yaml - arguments_from_cls
         # only log warnings about unknown args for main Pod
-        if any(difference_set) and not LegacyParser.is_tail_or_head(data):
+        if any(difference_set) and not ExecutorLegacyParser.is_tail_or_head(data):
             default_logger.warning(
                 f'The given arguments {difference_set} are not defined in `{cls.__name__}.__init__`'
             )

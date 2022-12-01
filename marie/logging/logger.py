@@ -6,12 +6,12 @@ import platform
 import sys
 from typing import Optional
 
-import yaml
 from rich.logging import LogRender as _LogRender
 from rich.logging import RichHandler as _RichHandler
 
 from marie import __resources_path__, __uptime__, __windows__
 from marie.enums import LogVerbosity
+from marie.jaml import JAML
 from marie.logging import formatter
 
 # TODO : Implement MDC like context for logging
@@ -22,15 +22,15 @@ class _MyLogRender(_LogRender):
     """Override the original rich log record for more compact layout."""
 
     def __call__(
-        self,
-        console,
-        renderables,
-        log_time=None,
-        time_format=None,
-        level=None,
-        path=None,
-        line_no=None,
-        link_path=None,
+            self,
+            console,
+            renderables,
+            log_time=None,
+            time_format=None,
+            level=None,
+            path=None,
+            line_no=None,
+            link_path=None,
     ):
         from rich.containers import Renderables
         from rich.table import Table
@@ -41,7 +41,7 @@ class _MyLogRender(_LogRender):
         if self.show_level:
             output.add_column(style="log.level", width=5)
 
-        output.add_column(ratio=1, style="log.message", overflow="ellipsis")
+        output.add_column(ratio=1, style='log.message', overflow='ellipsis')
 
         if self.show_time:
             output.add_column(style="log.path")
@@ -94,11 +94,11 @@ class SysLogHandlerWrapper(logging.handlers.SysLogHandler):
     """
 
     priority_map = {
-        "DEBUG": "debug",
-        "INFO": "info",
-        "WARNING": "warning",
-        "ERROR": "error",
-        "CRITICAL": "critical",
+        'DEBUG': 'debug',
+        'INFO': 'info',
+        'WARNING': 'warning',
+        'ERROR': 'error',
+        'CRITICAL': 'critical',
     }
 
 
@@ -112,28 +112,27 @@ class MarieLogger:
     :return:: an executor object.
     """
 
-    supported = {"FileHandler", "StreamHandler", "SysLogHandler", "RichHandler"}
+    supported = {'FileHandler', 'StreamHandler', 'SysLogHandler', 'RichHandler'}
 
     def __init__(
-        self,
-        context: str,
-        name: Optional[str] = None,
-        log_config: Optional[str] = None,
-        quiet: bool = False,
-        **kwargs,
+            self,
+            context: str,
+            name: Optional[str] = None,
+            log_config: Optional[str] = None,
+            quiet: bool = False,
+            **kwargs,
     ):
 
-        if not log_config:
-            log_config = os.getenv(
-                "MARIE_LOG_CONFIG",
-                "default",
-            )
+        log_config = os.getenv(
+            'MARIE_LOG_CONFIG',
+            log_config or 'default',
+        )
 
-        if quiet or os.getenv("MARIE_LOG_CONFIG", None) == "QUIET":
-            log_config = "quiet"
+        if quiet or os.getenv('MARIE_LOG_CONFIG', None) == 'QUIET':
+            log_config = 'quiet'
 
         if not name:
-            name = os.getenv("MARIE_DEPLOYMENT_NAME", context)
+            name = os.getenv('MARIE_DEPLOYMENT_NAME', context)
 
         # Remove all handlers associated with the root logger object.
         for handler in logging.root.handlers[:]:
@@ -143,13 +142,12 @@ class MarieLogger:
         self.logger.propagate = False
 
         context_vars = {
-            "name": name,
-            "uptime": __uptime__,
-            "context": context,
+            'name': name,
+            'uptime': __uptime__,
+            'context': context,
         }
 
         self.add_handlers(log_config, **context_vars)
-        self.success = lambda *x: self.logger.log(LogVerbosity.SUCCESS, *x)
         self.debug = self.logger.debug
         self.warning = self.logger.warning
         self.critical = self.logger.critical
@@ -157,6 +155,14 @@ class MarieLogger:
         self.info = self.logger.info
         self._is_closed = False
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
+
+    def success(self, *args):
+        """
+        Provides an API to print success messages
+
+        :param args: the args to be forwarded to the log
+        """
+        self.logger.log(LogVerbosity.SUCCESS, *args)
 
     @property
     def handlers(self):
@@ -192,64 +198,68 @@ class MarieLogger:
 
         if not os.path.exists(config_path):
             old_config_path = config_path
-            if "logging." in config_path and ".yml" in config_path:
+            if 'logging.' in config_path and '.yml' in config_path:
                 config_path = os.path.join(__resources_path__, config_path)
             else:
-                config_path = os.path.join(__resources_path__, f"logging.{config_path}.yml")
+                config_path = os.path.join(
+                    __resources_path__, f'logging.{config_path}.yml'
+                )
             if not os.path.exists(config_path):
                 config_path = old_config_path
 
         with open(config_path) as fp:
-            config = yaml.safe_load(fp)
+            config = JAML.load(fp)
 
-        for h in config["handlers"]:
-            cfg = config["configs"].get(h, None)
-            fmt = getattr(formatter, cfg.get("formatter", "Formatter"))
+        for h in config['handlers']:
+            cfg = config['configs'].get(h, None)
+            fmt = getattr(formatter, cfg.get('formatter', 'Formatter'))
 
             if h not in self.supported or not cfg:
-                raise ValueError(f"can not find configs for {h}, maybe it is not supported")
+                raise ValueError(
+                    f'can not find configs for {h}, maybe it is not supported'
+                )
 
             handler = None
-            if h == "StreamHandler":
+            if h == 'StreamHandler':
                 handler = logging.StreamHandler(sys.stdout)
-                handler.setFormatter(fmt(cfg["format"].format_map(kwargs)))
-            elif h == "RichHandler":
+                handler.setFormatter(fmt(cfg['format'].format_map(kwargs)))
+            elif h == 'RichHandler':
                 kwargs_handler = copy.deepcopy(cfg)
-                kwargs_handler.pop("format")
+                kwargs_handler.pop('format')
 
                 handler = RichHandler(**kwargs_handler)
-                handler.setFormatter(fmt(cfg["format"].format_map(kwargs)))
+                handler.setFormatter(fmt(cfg['format'].format_map(kwargs)))
 
-            elif h == "SysLogHandler" and not __windows__:
-                if cfg["host"] and cfg["port"]:
-                    handler = SysLogHandlerWrapper(address=(cfg["host"], cfg["port"]))
+            elif h == 'SysLogHandler' and not __windows__:
+                if cfg['host'] and cfg['port']:
+                    handler = SysLogHandlerWrapper(address=(cfg['host'], cfg['port']))
                 else:
                     # a UNIX socket is used
-                    if platform.system() == "Darwin":
-                        handler = SysLogHandlerWrapper(address="/var/run/syslog")
+                    if platform.system() == 'Darwin':
+                        handler = SysLogHandlerWrapper(address='/var/run/syslog')
                     else:
-                        handler = SysLogHandlerWrapper(address="/dev/log")
+                        handler = SysLogHandlerWrapper(address='/dev/log')
                 if handler:
-                    handler.ident = cfg.get("ident", "")
-                    handler.setFormatter(fmt(cfg["format"].format_map(kwargs)))
+                    handler.ident = cfg.get('ident', '')
+                    handler.setFormatter(fmt(cfg['format'].format_map(kwargs)))
 
                 try:
                     handler._connect_unixsocket(handler.address)
                 except OSError:
                     handler = None
                     pass
-            elif h == "FileHandler":
-                filename = cfg["output"].format_map(kwargs)
+            elif h == 'FileHandler':
+                filename = cfg['output'].format_map(kwargs)
                 if __windows__:
                     # colons are not allowed in filenames
-                    filename = filename.replace(":", ".")
+                    filename = filename.replace(':', '.')
                 handler = logging.FileHandler(filename, delay=True)
-                handler.setFormatter(fmt(cfg["format"].format_map(kwargs)))
+                handler.setFormatter(fmt(cfg['format'].format_map(kwargs)))
 
             if handler:
                 self.logger.addHandler(handler)
 
-        verbose_level = LogVerbosity.from_string(config["level"])
-        if "MARIE_LOG_LEVEL" in os.environ:
-            verbose_level = LogVerbosity.from_string(os.environ["MARIE_LOG_LEVEL"])
+        verbose_level = LogVerbosity.from_string(config['level'])
+        if 'MARIE_LOG_LEVEL' in os.environ:
+            verbose_level = LogVerbosity.from_string(os.environ['MARIE_LOG_LEVEL'])
         self.logger.setLevel(verbose_level.value)
