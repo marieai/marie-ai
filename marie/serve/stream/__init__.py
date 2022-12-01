@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 from typing import (
     TYPE_CHECKING,
@@ -6,18 +5,21 @@ from typing import (
     Awaitable,
     Callable,
     Iterator,
-    List,
     Optional,
     Union,
 )
 
 from marie.excepts import InternalNetworkError
 from marie.logging.logger import MarieLogger
-from marie.serve.stream.helper import AsyncRequestsIterator
+from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter
+from marie.types.request.data import DataRequest
 
-__all__ = ["RequestStreamer"]
+__all__ = ['RequestStreamer']
 
-from marie.types.request import Request
+from marie.types.request.data import Response
+
+if TYPE_CHECKING:  # pragma: no cover
+    from marie.types.request import Request
 
 
 class RequestStreamer:
@@ -28,76 +30,97 @@ class RequestStreamer:
     class _EndOfStreaming(Exception):
         pass
 
-    class _RequestsCounter:
-        count = 0
-
     def __init__(
-        self,
-        args: argparse.Namespace,
-        request_handler: Callable[["Request"], "Awaitable[Request]"],
-        result_handler: Callable[["Request"], Optional["Request"]],
-        end_of_iter_handler: Optional[Callable[[], None]] = None,
-        logger: Optional["MarieLogger"] = None,
+            self,
+            request_handler: Callable[['Request'], 'Awaitable[Request]'],
+            result_handler: Callable[['Request'], Optional['Request']],
+            prefetch: int = 0,
+            end_of_iter_handler: Optional[Callable[[], None]] = None,
+            logger: Optional['MarieLogger'] = None,
+            **logger_kwargs
     ):
         """
-        :param args: args from CLI
         :param request_handler: The callable responsible for handling the request. It should handle a request as input and return a Future to be awaited
         :param result_handler: The callable responsible for handling the response.
         :param end_of_iter_handler: Optional callable to handle the end of iteration if some special action needs to be taken.
+        :param prefetch: How many Requests are processed from the Client at the same time.
         :param logger: Optional logger that can be used for logging
+        :param logger_kwargs: Extra keyword arguments that may be passed to the internal logger constructor if none is provided
 
         """
-        self.args = args
-        self.logger = logger or MarieLogger(self.__class__.__name__, **vars(args))
-        self._prefetch = getattr(self.args, "prefetch", 0)
+        self.logger = logger or MarieLogger(self.__class__.__name__, **logger_kwargs)
+        self._prefetch = prefetch
         self._request_handler = request_handler
         self._result_handler = result_handler
         self._end_of_iter_handler = end_of_iter_handler
+        self.total_num_floating_tasks_alive = 0
 
-    async def stream(self, request_iterator, context=None, *args) -> AsyncIterator["Request"]:
+    async def stream(
+            self, request_iterator, context=None, results_in_order: bool = False, *args
+    ) -> AsyncIterator['Request']:
         """
         stream requests from client iterator and stream responses back.
 
         :param request_iterator: iterator of requests
         :param context: context of the grpc call
+        :param results_in_order: return the results in the same order as the request_iterator
         :param args: positional arguments
         :yield: responses from Executors
         """
+        if context is not None:
+            for metadatum in context.invocation_metadata():
+                if metadatum.key == '__results_in_order__':
+                    results_in_order = (metadatum.value == 'true')
 
-        async_iter: AsyncIterator = (
-            self._stream_requests_with_prefetch(request_iterator, self._prefetch)
-            if self._prefetch > 0
-            else self._stream_requests(request_iterator)
-        )
+        async_iter: AsyncIterator = self._stream_requests(request_iterator=request_iterator,
+                                                          results_in_order=results_in_order)
+
         try:
             async for response in async_iter:
                 yield response
         except InternalNetworkError as err:
             if (
-                context is not None
+                    context is not None
             ):  # inside GrpcGateway we can handle the error directly here through the grpc context
                 context.set_details(err.details())
                 context.set_code(err.code())
-                self.logger.error(f"Error while getting responses from deployments: {err.details()}")
+                self.logger.error(
+                    f'Error while getting responses from deployments: {err.details()}'
+                )
                 r = Response()
                 if err.request_id:
                     r.header.request_id = err.request_id
                 yield r
             else:  # HTTP and WS need different treatment further up the stack
+                self.logger.error(
+                    f'Error while getting responses from deployments: {err.details()}'
+                )
                 raise
+        except Exception as err:  # HTTP and WS need different treatment further up the stack
+            self.logger.error(
+                f'Error while getting responses from deployments: {err}'
+            )
+            raise err
 
     async def _stream_requests(
-        self,
-        request_iterator: Union[Iterator, AsyncIterator],
+            self,
+            request_iterator: Union[Iterator, AsyncIterator],
+            results_in_order: bool = False
     ) -> AsyncIterator:
         """Implements request and response handling without prefetching
         :param request_iterator: requests iterator from Client
+        :param results_in_order: return the results in the same order as the request_iterator
         :yield: responses
         """
         result_queue = asyncio.Queue()
+        future_queue = asyncio.Queue()
+        floating_results_queue = asyncio.Queue()
         end_of_iter = asyncio.Event()
         all_requests_handled = asyncio.Event()
-        requests_to_handle = self._RequestsCounter()
+        requests_to_handle = _RequestsCounter()
+        floating_tasks_to_handle = _RequestsCounter()
+        all_floating_requests_awaited = asyncio.Event()
+        empty_requests_iterator = asyncio.Event()
 
         def update_all_handled():
             if end_of_iter.is_set() and requests_to_handle.count == 0:
@@ -106,7 +129,10 @@ class RequestStreamer:
         async def end_future():
             raise self._EndOfStreaming
 
-        def callback(future: "asyncio.Future"):
+        async def exception_raise(exception):
+            raise exception
+
+        def callback(future: 'asyncio.Future'):
             """callback to be run after future is completed.
             1. Put the future in the result queue.
             2. Remove the future from futures when future is completed.
@@ -118,6 +144,9 @@ class RequestStreamer:
             """
             result_queue.put_nowait(future)
 
+        def hanging_callback(future: 'asyncio.Future'):
+            floating_results_queue.put_nowait(future)
+
         async def iterate_requests() -> None:
             """
             1. Traverse through the request iterator.
@@ -127,10 +156,28 @@ class RequestStreamer:
             4. Handle EOI (needed for websocket client)
             5. Set `end_of_iter` event
             """
-            async for request in AsyncRequestsIterator(iterator=request_iterator):
+            num_reqs = 0
+            async for request in AsyncRequestsIterator(
+                    iterator=request_iterator,
+                    request_counter=requests_to_handle,
+                    prefetch=self._prefetch,
+            ):
+                num_reqs += 1
                 requests_to_handle.count += 1
-                future: "asyncio.Future" = self._request_handler(request=request)
-                future.add_done_callback(callback)
+                future_responses, future_hanging = self._request_handler(
+                    request=request
+                )
+                future_queue.put_nowait(future_responses)
+                future_responses.add_done_callback(callback)
+                if future_hanging is not None:
+                    floating_tasks_to_handle.count += 1
+                    future_hanging.add_done_callback(hanging_callback)
+                else:
+                    all_floating_requests_awaited.set()
+
+            if num_reqs == 0:
+                empty_requests_iterator.set()
+
             if self._end_of_iter_handler is not None:
                 self._end_of_iter_handler()
             end_of_iter.set()
@@ -139,79 +186,66 @@ class RequestStreamer:
                 # It will be waiting for something that will never appear
                 future_cancel = asyncio.ensure_future(end_future())
                 result_queue.put_nowait(future_cancel)
+            if (
+                    all_floating_requests_awaited.is_set()
+                    or empty_requests_iterator.is_set()
+            ):
+                # It will be waiting for something that will never appear
+                future_cancel = asyncio.ensure_future(end_future())
+                floating_results_queue.put_nowait(future_cancel)
 
-        asyncio.create_task(iterate_requests())
-        while not all_requests_handled.is_set():
-            future = await result_queue.get()
-            try:
-                response = self._result_handler(future.result())
-                yield response
-                requests_to_handle.count -= 1
-                update_all_handled()
-            except self._EndOfStreaming:
-                pass
+        async def handle_floating_responses():
+            while (
+                    not all_floating_requests_awaited.is_set()
+                    and not empty_requests_iterator.is_set()
+            ):
+                hanging_response = await floating_results_queue.get()
+                try:
+                    hanging_response.result()
+                    floating_tasks_to_handle.count -= 1
+                    if floating_tasks_to_handle.count == 0 and end_of_iter.is_set():
+                        all_floating_requests_awaited.set()
+                except self._EndOfStreaming:
+                    pass
 
-    async def _stream_requests_with_prefetch(self, request_iterator: Union[Iterator, AsyncIterator], prefetch: int):
-        """Implements request and response handling with prefetching
+        iterate_requests_task = asyncio.create_task(iterate_requests())
+        handle_floating_task = asyncio.create_task(handle_floating_responses())
+        self.total_num_floating_tasks_alive += 1
 
-        :param request_iterator: requests iterator from Client
-        :param prefetch: number of requests to prefetch
-        :yield: response
+        def floating_task_done(*args):
+            self.total_num_floating_tasks_alive -= 1
+
+        handle_floating_task.add_done_callback(floating_task_done)
+
+        def iterating_task_done(task):
+            if task.exception() is not None:
+                all_requests_handled.set()
+                future_cancel = asyncio.ensure_future(exception_raise(task.exception()))
+                result_queue.put_nowait(future_cancel)
+
+        iterate_requests_task.add_done_callback(iterating_task_done)
+
+        async def receive_responses():
+            while not all_requests_handled.is_set():
+                if not results_in_order:
+                    future = await result_queue.get()
+                else:
+                    future = await future_queue.get()
+                    await future
+                try:
+                    response = self._result_handler(future.result())
+                    yield response
+                    requests_to_handle.count -= 1
+                    update_all_handled()
+                except self._EndOfStreaming:
+                    pass
+
+        async for response in receive_responses():
+            yield response
+
+    async def wait_floating_requests_end(self):
         """
-
-        async def iterate_requests(num_req: int, fetch_to: List[Union["asyncio.Task", "asyncio.Future"]]):
-            """
-            1. Traverse through the request iterator.
-            2. Append the future returned from `handle_request` to `fetch_to` which will later be awaited.
-
-            :param num_req: number of requests
-            :param fetch_to: the task list storing requests
-            :return: False if append task to `fetch_to` else False
-            """
-            count = 0
-            async for request in AsyncRequestsIterator(iterator=request_iterator):
-                fetch_to.append(self._request_handler(request))
-                count += 1
-                if count == num_req:
-                    return False
-            return True
-
-        prefetch_task = []
-        is_req_empty = await iterate_requests(prefetch, prefetch_task)
-        if is_req_empty and not prefetch_task:
-            self.logger.error(
-                "receive an empty stream from the client! "
-                "please check your client's inputs, "
-                'you can use "Client.check_input(inputs)"'
-            )
-            return
-
-        # the total num requests < prefetch
-        if is_req_empty:
-            for r in asyncio.as_completed(prefetch_task):
-                res = await r
-                yield self._result_handler(res)
-        else:
-            # if there are left over (`else` clause above is unnecessary for code but for better readability)
-            onrecv_task = []
-            # the following code "interleaves" prefetch_task and onrecv_task, when one dries, it switches to the other
-            while prefetch_task:
-                # if self.logger.debug_enabled:
-                #     if hasattr(self.msg_handler, 'msg_sent') and hasattr(
-                #         self.msg_handler, 'msg_recv'
-                #     ):
-                #         self.logger.debug(
-                #             f'send: {self.msg_handler.msg_sent} '
-                #             f'recv: {self.msg_handler.msg_recv} '
-                #             f'pending: {self.msg_handler.msg_sent - self.msg_handler.msg_recv}'
-                #         )
-                onrecv_task.clear()
-                for r in asyncio.as_completed(prefetch_task):
-                    res = await r
-                    yield self._result_handler(res)
-                    if not is_req_empty:
-                        is_req_empty = await iterate_requests(1, onrecv_task)
-
-                # this list dries, clear it and feed it with on_recv_task
-                prefetch_task.clear()
-                prefetch_task = [j for j in onrecv_task]
+        Await this coroutine to make sure that all the floating tasks that the request handler may bring are properly consumed
+        """
+        while self.total_num_floating_tasks_alive > 0:
+            await asyncio.sleep(0)

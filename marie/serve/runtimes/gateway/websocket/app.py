@@ -1,18 +1,19 @@
 import argparse
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
 from marie.clients.request import request_generator
 from marie.enums import DataInputType, WebsocketSubProtocols
 from marie.excepts import InternalNetworkError
+from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
 from marie.types.request.data import DataRequest
+from marie.types.request.status import StatusMessage
 
-if TYPE_CHECKING:
-    from prometheus_client import CollectorRegistry
+if TYPE_CHECKING: # pragma: no cover
+    from opentelemetry import trace
 
-    from marie.serve.networking import GrpcConnectionPool
-    from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
+    from marie.serve.streamer import GatewayStreamer
 
 
 def _fits_ws_close_msg(msg: str):
@@ -23,20 +24,18 @@ def _fits_ws_close_msg(msg: str):
 
 
 def get_fastapi_app(
-    args: 'argparse.Namespace',
-    topology_graph: 'TopologyGraph',
-    connection_pool: 'GrpcConnectionPool',
+    streamer: 'GatewayStreamer',
     logger: 'MarieLogger',
-    metrics_registry: Optional['CollectorRegistry'] = None,
+    tracing: Optional[bool] = None,
+    tracer_provider: Optional['trace.TracerProvider'] = None,
 ):
     """
     Get the app from FastAPI as the Websocket interface.
 
-    :param args: passed arguments.
-    :param topology_graph: topology graph that manages the logic of sending to the proper executors.
-    :param connection_pool: Connection Pool to handle multiple replicas and sending to different of them
+    :param streamer: gateway streamer object.
     :param logger: Jina logger.
-    :param metrics_registry: optional metrics registry for prometheus used if we need to expose metrics from the executor or from the data request handler
+    :param tracing: Enables tracing is set to True.
+    :param tracer_provider: If tracing is enabled the tracer_provider will be used to instrument the code.
     :return: fastapi app
     """
 
@@ -103,7 +102,9 @@ def get_fastapi_app(
             except WebSocketDisconnect:
                 pass
 
-        async def send(self, websocket: WebSocket, data: DataRequest) -> None:
+        async def send(
+            self, websocket: WebSocket, data: Union[DataRequest, StatusMessage]
+        ) -> None:
             subprotocol = self.protocol_dict[self.get_client(websocket)]
             if subprotocol == WebsocketSubProtocols.JSON:
                 return await websocket.send_json(data.to_dict(), mode='text')
@@ -114,24 +115,45 @@ def get_fastapi_app(
 
     app = FastAPI()
 
-    from marie.serve.runtimes.gateway.request_handling import RequestHandler
-    from marie.serve.stream import RequestStreamer
+    if tracing:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    request_handler = RequestHandler(metrics_registry, args.name)
+        FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 
-    streamer = RequestStreamer(
-        args=args,
-        request_handler=request_handler.handle_request(
-            graph=topology_graph, connection_pool=connection_pool
-        ),
-        result_handler=request_handler.handle_result(),
+    @app.get(
+        path='/',
+        summary='Get the health of Jina service',
     )
+    async def _health():
+        """
+        Get the health of this Jina service.
+        .. # noqa: DAR201
 
-    streamer.Call = streamer.stream
+        """
+        return {}
+
+    @app.get(
+        path='/status',
+        summary='Get the status of Jina service',
+    )
+    async def _status():
+        """
+        Get the status of this Jina service.
+
+        This is equivalent to running `jina -vf` from command line.
+
+        .. # noqa: DAR201
+        """
+        version, env_info = get_full_version()
+        for k, v in version.items():
+            version[k] = str(v)
+        for k, v in env_info.items():
+            env_info[k] = str(v)
+        return {'jina': version, 'envs': env_info}
 
     @app.on_event('shutdown')
     async def _shutdown():
-        await connection_pool.close()
+        await streamer.close()
 
     @app.websocket('/')
     async def websocket_endpoint(
@@ -166,6 +188,97 @@ def get_fastapi_app(
             async for msg in streamer.stream(request_iterator=req_iter()):
                 await manager.send(websocket, msg)
         except InternalNetworkError as err:
+            import grpc
+
+            manager.disconnect(websocket)
+            fallback_msg = (
+                f'Connection to deployment at {err.dest_addr} timed out. You can adjust `timeout_send` attribute.'
+                if err.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+                else f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
+            )
+            msg = (
+                err.details()
+                if _fits_ws_close_msg(
+                    err.details()
+                )  # some messages are too long for ws closing message
+                else fallback_msg
+            )
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
+        except WebSocketDisconnect:
+            logger.info('Client successfully disconnected from server')
+            manager.disconnect(websocket)
+
+    async def _get_singleton_result(request_iterator) -> Dict:
+        """
+        Streams results from AsyncPrefetchCall as a dict
+
+        :param request_iterator: request iterator, with length of 1
+        :return: the first result from the request iterator
+        """
+        async for k in streamer.stream(request_iterator=request_iterator):
+            request_dict = k.to_dict()
+            return request_dict
+
+    from docarray import DocumentArray
+
+    from marie.proto import jina_pb2
+    from marie.serve.executors import __dry_run_endpoint__
+    from marie.serve.runtimes.gateway.http.models import PROTO_TO_PYDANTIC_MODELS
+
+    @app.get(
+        path='/dry_run',
+        summary='Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to '
+        'validate connectivity',
+        response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
+    )
+    async def _dry_run_http():
+        """
+        Get the health of the complete Flow service.
+        .. # noqa: DAR201
+
+        """
+
+        da = DocumentArray()
+
+        try:
+            _ = await _get_singleton_result(
+                request_generator(
+                    exec_endpoint=__dry_run_endpoint__,
+                    data=da,
+                    data_type=DataInputType.DOCUMENT,
+                )
+            )
+            status_message = StatusMessage()
+            status_message.set_code(jina_pb2.StatusProto.SUCCESS)
+            return status_message.to_dict()
+        except Exception as ex:
+            status_message = StatusMessage()
+            status_message.set_exception(ex)
+            return status_message.to_dict(use_integers_for_enums=True)
+
+    @app.websocket('/dry_run')
+    async def websocket_endpoint(
+        websocket: WebSocket, response: Response
+    ):  # 'response' is a FastAPI response, not a Jina response
+        from marie.proto import jina_pb2
+        from marie.serve.executors import __dry_run_endpoint__
+
+        await manager.connect(websocket)
+
+        da = DocumentArray()
+        try:
+            async for _ in streamer.stream(
+                request_iterator=request_generator(
+                    exec_endpoint=__dry_run_endpoint__,
+                    data=da,
+                    data_type=DataInputType.DOCUMENT,
+                )
+            ):
+                pass
+            status_message = StatusMessage()
+            status_message.set_code(jina_pb2.StatusProto.SUCCESS)
+            await manager.send(websocket, status_message)
+        except InternalNetworkError as err:
             manager.disconnect(websocket)
             msg = (
                 err.details()
@@ -176,5 +289,10 @@ def get_fastapi_app(
         except WebSocketDisconnect:
             logger.info('Client successfully disconnected from server')
             manager.disconnect(websocket)
+        except Exception as ex:
+            manager.disconnect(websocket)
+            status_message = StatusMessage()
+            status_message.set_exception(ex)
+            await manager.send(websocket, status_message)
 
     return app
