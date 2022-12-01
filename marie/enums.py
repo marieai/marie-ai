@@ -17,6 +17,7 @@ To use these enums in YAML config, following the example below:
 """
 
 from enum import Enum, EnumMeta, Flag, IntEnum
+from typing import List, Union
 
 
 class EnumType(EnumMeta):
@@ -40,10 +41,13 @@ class EnumType(EnumMeta):
         :param cls: Target class.
         :return: Registered class.
         """
-        reg_cls_set = getattr(cls, "_registered_class", set())
+        reg_cls_set = getattr(cls, '_registered_class', set())
         if cls.__name__ not in reg_cls_set:
             reg_cls_set.add(cls.__name__)
-            setattr(cls, "_registered_class", reg_cls_set)
+            setattr(cls, '_registered_class', reg_cls_set)
+        from marie.jaml import JAML
+
+        JAML.register(cls)
         return cls
 
 
@@ -51,6 +55,13 @@ class BetterEnum(IntEnum, metaclass=EnumType):
     """The base class of Enum used in Jina."""
 
     def __str__(self):
+        return self.to_string()
+
+    def to_string(self):
+        """
+        Convert the Enum to string representation
+        :return: the string representation of the enum
+        """
         return self.name
 
     def __format__(self, format_spec):  # noqa
@@ -173,6 +184,15 @@ class GatewayProtocolType(BetterEnum):
     HTTP = 1
     WEBSOCKET = 2
 
+    @classmethod
+    def from_string_list(cls, string_list: List[Union[str, 'GatewayProtocolType']]):
+        """
+        Returns a list of Enums from a list of strings or enums
+        :param string_list: list of strings or enums
+        :return: a list of Enums
+        """
+        return [cls.from_string(s) if isinstance(s, str) else s for s in string_list]
+
 
 class PodRoleType(BetterEnum):
     """The enum of a Pod role."""
@@ -200,51 +220,6 @@ class DeploymentRoleType(BetterEnum):
         :return: True if the Deployment role is inspect related else False.
         """
         return self.value in {2, 4}
-
-
-class RequestType(BetterEnum):
-    """The enum of Client mode."""
-
-    DATA = 0
-    CONTROL = 1
-
-
-class CompressAlgo(BetterEnum):
-    """
-    The enum of Compress algorithms.
-
-    .. note::
-        LZ4 requires additional package, to install it use pip install "jina[lz4]"
-
-    .. seealso::
-
-        https://docs.python.org/3/library/archiving.html
-    """
-
-    NONE = 0
-    LZ4 = 1
-    ZLIB = 2
-    GZIP = 3
-    BZ2 = 4
-    LZMA = 5
-
-
-class OnErrorStrategy(BetterEnum):
-    """
-    The level of error handling.
-
-    .. warning::
-        In theory, all methods below do not 100% guarantee the success
-        execution on the sequel flow. If something is wrong in the upstream,
-        it is hard to CARRY this exception and moving forward without ANY
-        side-effect.
-    """
-
-    IGNORE = (
-        0  #: Ignore it, keep running all Drivers & Executors logics in the sequel flow
-    )
-    SKIP_HANDLE = 1  #: Skip all Executors in the sequel, only `pre_hook` and `post_hook` are called
-    THROW_EARLY = 2  #: Immediately throw the exception, the sequel flow will not be running at all
 
 
 class FlowInspectType(BetterEnum):

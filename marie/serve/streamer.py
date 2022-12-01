@@ -35,7 +35,7 @@ class GatewayStreamer:
             compression: Optional[str] = None,
             runtime_name: str = 'custom gateway',
             prefetch: int = 0,
-            logger: Optional['JinaLogger'] = None,
+            logger: Optional['MarieLogger'] = None,
             metrics_registry: Optional['CollectorRegistry'] = None,
             meter: Optional['Meter'] = None,
             aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
@@ -156,7 +156,7 @@ class GatewayStreamer:
         :param results_in_order: return the results in the same order as the request_iterator
         :yield: Yields DocumentArrays or Responses from the Executors
         """
-        from jina.types.request.data import DataRequest
+        from marie.types.request.data import DataRequest
 
         def _req_generator():
             for docs_batch in docs.batch(batch_size=request_size, shuffle=False):

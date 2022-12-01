@@ -42,6 +42,14 @@ def mixin_base_deployment_parser(parser):
         'This Deployment will not be context managed by the Flow.',
     )
 
+    gp.add_argument(
+        '--grpc-metadata',
+        action=KVAppendAction,
+        metavar='KEY: VALUE',
+        nargs='*',
+        help='The metadata to be passed to the gRPC request.',
+    )
+
     # hidden CLI used for internal only
 
     gp.add_argument(
@@ -51,4 +59,11 @@ def mixin_base_deployment_parser(parser):
         help='The role of this deployment in the flow'
         if _SHOW_ALL_ARGS
         else argparse.SUPPRESS,
+    )
+
+    gp.add_argument(
+        '--tls',
+        action='store_true',
+        default=False,
+        help='If set, connect to deployment using tls encryption',
     )
