@@ -1,4 +1,4 @@
-"""Module containing the Base Client for Marie."""
+"""Module containing the Base Client for Jina."""
 import abc
 import argparse
 import inspect
@@ -7,19 +7,20 @@ from abc import ABC
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Iterator, Optional, Union
 
 from marie.excepts import BadClientInput
-from marie.helper import T, parse_client, typename
+from marie.helper import T, parse_client, send_telemetry_event, typename
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 
-if TYPE_CHECKING:
+if TYPE_CHECKING: # pragma: no cover
     from marie.clients.request import GeneratorSourceType
     from marie.types.request import Request, Response
 
     InputType = Union[GeneratorSourceType, Callable[..., GeneratorSourceType]]
     CallbackFnType = Optional[Callable[[Response], None]]
+from marie.serve.instrumentation import InstrumentationMixin
 
 
-class BaseClient(ABC):
+class BaseClient(InstrumentationMixin, ABC):
     """A base client for connecting to the Flow Gateway.
 
     :param args: the Namespace from argparse
@@ -46,6 +47,18 @@ class BaseClient(ABC):
             os.unsetenv('http_proxy')
             os.unsetenv('https_proxy')
         self._inputs = None
+        self._setup_instrumentation(
+            name=self.args.name
+            if hasattr(self.args, 'name')
+            else self.__class__.__name__,
+            tracing=self.args.tracing,
+            traces_exporter_host=self.args.traces_exporter_host,
+            traces_exporter_port=self.args.traces_exporter_port,
+            metrics=self.args.metrics,
+            metrics_exporter_host=self.args.metrics_exporter_host,
+            metrics_exporter_port=self.args.metrics_exporter_port,
+        )
+        send_telemetry_event(event='start', obj=self)
 
     @staticmethod
     def check_input(inputs: Optional['InputType'] = None, **kwargs) -> None:
@@ -150,6 +163,14 @@ class BaseClient(ABC):
         on_always: Optional['CallbackFnType'] = None,
         **kwargs,
     ):
+        ...
+
+    @abc.abstractmethod
+    def _is_flow_ready(self, **kwargs) -> bool:
+        """Sends a dry run to the Flow to validate if the Flow is ready to receive requests
+
+        :param kwargs: potential kwargs received passed from the public interface
+        """
         ...
 
     @property

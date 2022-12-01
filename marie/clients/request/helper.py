@@ -1,10 +1,8 @@
 """Module for helper functions for clients."""
 from typing import Tuple
 
-from docarray import DocumentArray, Document
-
+from docarray import Document, DocumentArray
 from marie.enums import DataInputType
-from marie.excepts import BadRequestType
 from marie.types.request.data import DataRequest
 
 
