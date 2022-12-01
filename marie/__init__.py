@@ -208,9 +208,6 @@ from marie.version import __version__
 # Document
 from docarray import Document, DocumentArray
 
-# Executor
-from marie.serve.executors import BaseExecutor as Executor
-from marie.serve.executors.decorators import monitor, requests
 
 # Client
 from marie.clients import Client
@@ -220,6 +217,11 @@ from marie.orchestrate.flow.asyncio import AsyncFlow
 from marie.orchestrate.flow.base import Flow
 # Custom Gateway
 from marie.serve.gateway import BaseGateway as Gateway
+
+# Executor
+from marie.serve.executors import BaseExecutor as Executor
+from marie.serve.executors.decorators import monitor, requests
+
 
 __all__ = [_s for _s in dir() if not _s.startswith('_')]
 __all__.extend(_names_with_underscore)

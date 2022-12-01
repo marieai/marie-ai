@@ -43,13 +43,13 @@ def set_deployment_parser(parser=None):
     :return: the parser
     """
     if not parser:
-        from jina.parsers.base import set_base_parser
+        from marie.parsers.base import set_base_parser
 
         parser = set_base_parser()
 
     set_pod_parser(parser)
 
-    from jina.parsers.orchestrate.deployment import mixin_base_deployment_parser
+    from marie.parsers.orchestrate.deployment import mixin_base_deployment_parser
 
     mixin_base_deployment_parser(parser)
 
@@ -63,13 +63,13 @@ def set_gateway_parser(parser=None):
     :return: the parser
     """
     if not parser:
-        from jina.parsers.base import set_base_parser
+        from marie.parsers.base import set_base_parser
 
         parser = set_base_parser()
 
-    from jina.parsers.orchestrate.base import mixin_base_deployment_parser
-    from jina.parsers.orchestrate.pod import mixin_pod_parser
-    from jina.parsers.orchestrate.runtimes.remote import (
+    from marie.parsers.orchestrate.base import mixin_base_deployment_parser
+    from marie.parsers.orchestrate.pod import mixin_pod_parser
+    from marie.parsers.orchestrate.runtimes.remote import (
         mixin_gateway_parser,
         mixin_gateway_protocol_parser,
         mixin_graphql_parser,
@@ -86,7 +86,7 @@ def set_gateway_parser(parser=None):
     mixin_gateway_parser(parser)
     mixin_pod_parser(parser, pod_type='gateway')
 
-    from jina.enums import DeploymentRoleType
+    from marie.enums import DeploymentRoleType
 
     parser.set_defaults(
         name=GATEWAY_NAME,
@@ -104,12 +104,12 @@ def set_gateway_runtime_args_parser(parser=None):
     :return: the parser
     """
     if not parser:
-        from jina.parsers.base import set_base_parser
+        from marie.parsers.base import set_base_parser
 
         parser = set_base_parser()
 
-    from jina.parsers.orchestrate.pod import mixin_pod_runtime_args_parser
-    from jina.parsers.orchestrate.runtimes.remote import (
+    from marie.parsers.orchestrate.pod import mixin_pod_runtime_args_parser
+    from marie.parsers.orchestrate.runtimes.remote import (
         _add_host,
         mixin_gateway_protocol_parser,
         mixin_gateway_streamer_parser,
@@ -132,15 +132,15 @@ def set_client_cli_parser(parser=None):
     :return: the parser
     """
     if not parser:
-        from jina.parsers.base import set_base_parser
+        from marie.parsers.base import set_base_parser
 
         parser = set_base_parser()
 
-    from jina.parsers.client import (
+    from marie.parsers.client import (
         mixin_client_features_parser,
         mixin_client_protocol_parser,
     )
-    from jina.parsers.orchestrate.runtimes.remote import mixin_client_gateway_parser
+    from marie.parsers.orchestrate.runtimes.remote import mixin_client_gateway_parser
 
     mixin_client_gateway_parser(parser)
     mixin_client_features_parser(parser)
@@ -157,7 +157,7 @@ def set_help_parser(parser=None):
     """
 
     if not parser:
-        from jina.parsers.base import set_base_parser
+        from marie.parsers.base import set_base_parser
 
         parser = set_base_parser()
 
@@ -174,12 +174,12 @@ def get_main_parser():
 
     :return: the parser
     """
-    from jina.parsers.base import set_base_parser
-    from jina.parsers.create import set_new_project_parser
-    from jina.parsers.export import set_export_parser
-    from jina.parsers.flow import set_flow_parser
-    from jina.parsers.helper import _SHOW_ALL_ARGS, _chf
-    from jina.parsers.ping import set_ping_parser
+    from marie.parsers.base import set_base_parser
+    from marie.parsers.create import set_new_project_parser
+    from marie.parsers.export import set_export_parser
+    from marie.parsers.flow import set_flow_parser
+    from marie.parsers.helper import _SHOW_ALL_ARGS, _chf
+    from marie.parsers.ping import set_ping_parser
 
     # create the top-level parser
     parser = set_base_parser()
@@ -243,37 +243,37 @@ def get_main_parser():
         )
     )
 
-    from hubble.executor.parsers import get_main_parser as get_hub_parser
-    from hubble.parsers import get_main_parser as get_auth_parser
-
-    get_auth_parser(
-        sp.add_parser(
-            'auth',
-            description='Login to Jina AI with your GitHub/Google/Email account',
-            formatter_class=_chf,
-            help='Login to Jina AI',
-        )
-    )
-
-    get_hub_parser(
-        sp.add_parser(
-            'hub',
-            help='Manage Executor on Jina Hub',
-            description='Push/Pull an Executor to/from Jina Hub',
-            formatter_class=_chf,
-        )
-    )
-
-    from jcloud.parsers import get_main_parser as get_jcloud_parser
-
-    get_jcloud_parser(
-        sp.add_parser(
-            'cloud',
-            description='Manage Flows on Jina Cloud',
-            formatter_class=_chf,
-            help='Manage Flows on Jina Cloud',
-        )
-    )
+    # from hubble.executor.parsers import get_main_parser as get_hub_parser
+    # from hubble.parsers import get_main_parser as get_auth_parser
+    #
+    # get_auth_parser(
+    #     sp.add_parser(
+    #         'auth',
+    #         description='Login to Jina AI with your GitHub/Google/Email account',
+    #         formatter_class=_chf,
+    #         help='Login to Jina AI',
+    #     )
+    # )
+    #
+    # get_hub_parser(
+    #     sp.add_parser(
+    #         'hub',
+    #         help='Manage Executor on Jina Hub',
+    #         description='Push/Pull an Executor to/from Jina Hub',
+    #         formatter_class=_chf,
+    #     )
+    # )
+    #
+    # from jcloud.parsers import get_main_parser as get_jcloud_parser
+    #
+    # get_jcloud_parser(
+    #     sp.add_parser(
+    #         'cloud',
+    #         description='Manage Flows on Jina Cloud',
+    #         formatter_class=_chf,
+    #         help='Manage Flows on Jina Cloud',
+    #     )
+    # )
 
     set_help_parser(
         sp.add_parser(

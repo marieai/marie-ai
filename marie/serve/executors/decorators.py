@@ -5,12 +5,12 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Union
 
-from jina import __cache_path__
-from jina.helper import iscoroutinefunction
-from jina.importer import ImportExtensions
+from marie import __cache_path__
+from marie.helper import iscoroutinefunction
+from marie.importer import ImportExtensions
 
 if TYPE_CHECKING:  # pragma: no cover
-    from jina import DocumentArray
+    from marie import DocumentArray
 
 
 @functools.lru_cache()
