@@ -6,12 +6,12 @@ from marie.helper import parse_client
 
 __all__ = ['Client']
 
-from jina.enums import GatewayProtocolType
+from marie.enums import GatewayProtocolType
 
 if TYPE_CHECKING:  # pragma: no cover
-    from jina.clients.grpc import AsyncGRPCClient, GRPCClient
-    from jina.clients.http import AsyncHTTPClient, HTTPClient
-    from jina.clients.websocket import AsyncWebSocketClient, WebSocketClient
+    from marie.clients.grpc import AsyncGRPCClient, GRPCClient
+    from marie.clients.http import AsyncHTTPClient, HTTPClient
+    from marie.clients.websocket import AsyncWebSocketClient, WebSocketClient
 
 
 # overload_inject_start_client
@@ -126,28 +126,28 @@ def Client(
 
     if protocol == GatewayProtocolType.GRPC:
         if is_async:
-            from jina.clients.grpc import AsyncGRPCClient
+            from marie.clients.grpc import AsyncGRPCClient
 
             return AsyncGRPCClient(args, **kwargs)
         else:
-            from jina.clients.grpc import GRPCClient
+            from marie.clients.grpc import GRPCClient
 
             return GRPCClient(args, **kwargs)
     elif protocol == GatewayProtocolType.WEBSOCKET:
         if is_async:
-            from jina.clients.websocket import AsyncWebSocketClient
+            from marie.clients.websocket import AsyncWebSocketClient
 
             return AsyncWebSocketClient(args, **kwargs)
         else:
-            from jina.clients.websocket import WebSocketClient
+            from marie.clients.websocket import WebSocketClient
 
             return WebSocketClient(args, **kwargs)
     elif protocol == GatewayProtocolType.HTTP:
         if is_async:
-            from jina.clients.http import AsyncHTTPClient
+            from marie.clients.http import AsyncHTTPClient
 
             return AsyncHTTPClient(args, **kwargs)
         else:
-            from jina.clients.http import HTTPClient
+            from marie.clients.http import HTTPClient
 
             return HTTPClient(args, **kwargs)
