@@ -38,6 +38,7 @@ shapely
 gradio
 psycopg2-binary==2.8.6
 pytest
+pytest-asyncio
 nlpaug
 psutil
 shapely
@@ -48,4 +49,4 @@ onnxruntime
 onnxruntime-gpu==1.13.1
 onnx==1.12.0
 onnxconverter_common==1.13.0
-
+opentelemetry-api

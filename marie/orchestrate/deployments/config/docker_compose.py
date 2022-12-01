@@ -3,7 +3,7 @@ import os
 from argparse import Namespace
 from typing import Dict, List, Optional, Tuple, Union
 
-from jina import __default_executor__
+from marie import __default_executor__
 from jina.enums import PodRoleType
 from jina.excepts import NoContainerizedError
 from jina.orchestrate.deployments import BaseDeployment
