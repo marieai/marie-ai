@@ -93,7 +93,7 @@ def deprecated_alias(**aliases):
     :param aliases: maps aliases to new arguments
     :return: wrapper
     """
-    from jina.excepts import NotSupportedError
+    from marie.excepts import NotSupportedError
 
     def _rename_kwargs(func_name: str, kwargs, aliases):
         """
@@ -976,7 +976,7 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
             in os.getenv('GITHUB_ACTION_REPOSITORY', __unset_msg__),
         }
 
-        env_info = {k: os.getenv(k, __unset_msg__) for k in __jina_env__}
+        env_info = {k: os.getenv(k, __unset_msg__) for k in __marie_env__}
         full_version = info, env_info
     except Exception as e:
         default_logger.error(str(e))
@@ -1320,7 +1320,7 @@ def run_async(func, *args, **kwargs):
             try:
                 return thread.result
             except AttributeError:
-                from jina.excepts import BadClient
+                from marie.excepts import BadClient
 
                 raise BadClient(
                     'something wrong when running the eventloop, result can not be retrieved'
@@ -1376,7 +1376,7 @@ def download_mermaid_url(mermaid_url, output) -> None:
         with open(output, 'wb') as fp:
             fp.write(urlopen(req).read())
     except:
-        from jina.logging.predefined import default_logger
+        from marie.logging.predefined import default_logger
 
         default_logger.error(
             'can not download image, please check your graph and the network connections'
@@ -1392,7 +1392,7 @@ def find_request_binding(target):
     import ast
     import inspect
 
-    from jina import __default_endpoint__
+    from marie import __default_endpoint__
 
     res = {}
 
@@ -1483,7 +1483,7 @@ def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
 
 
 def get_ci_vendor() -> Optional[str]:
-    from jina import __resources_path__
+    from marie import __resources_path__
 
     with open(os.path.join(__resources_path__, 'ci-vendors.json')) as fp:
         all_cis = json.load(fp)
@@ -1540,7 +1540,7 @@ def get_rich_console():
     )
 
 
-from jina.parsers import set_client_cli_parser
+from marie.parsers import set_client_cli_parser
 
 __default_port_client__ = 80
 __default_port_tls_client__ = 443
@@ -1702,7 +1702,7 @@ def send_telemetry_event(event: str, obj: Any, **kwargs) -> None:
     def _telemetry():
         url = 'https://telemetry.jina.ai/'
         try:
-            from jina.helper import get_full_version
+            from marie.helper import get_full_version
 
             metas, _ = get_full_version()
             data = base64.urlsafe_b64encode(

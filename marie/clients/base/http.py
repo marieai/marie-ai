@@ -1,12 +1,12 @@
 import asyncio
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from starlette import status
 
 from marie.clients.base import BaseClient
 from marie.clients.base.helper import HTTPClientlet
-from marie.clients.helper import callback_exec, callback_exec_on_error
+from marie.clients.helper import callback_exec
 from marie.excepts import BadClient
 from marie.importer import ImportExtensions
 from marie.logging.profile import ProgressBar
@@ -14,27 +14,95 @@ from marie.serve.stream import RequestStreamer
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.base import CallbackFnType, InputType
 
 
 class HTTPBaseClient(BaseClient):
     """A MixIn for HTTP Client."""
 
+    def _handle_response_status(self, r_status, r_str, url):
+        if r_status == status.HTTP_404_NOT_FOUND:
+            raise BadClient(f'no such endpoint {url}')
+        elif (
+                r_status == status.HTTP_503_SERVICE_UNAVAILABLE
+                or r_status == status.HTTP_504_GATEWAY_TIMEOUT
+        ):
+            if (
+                    'header' in r_str
+                    and 'status' in r_str['header']
+                    and 'description' in r_str['header']['status']
+            ):
+                raise ConnectionError(r_str['header']['status']['description'])
+            else:
+                raise ValueError(r_str)
+        elif (
+                r_status < status.HTTP_200_OK or r_status > status.HTTP_300_MULTIPLE_CHOICES
+        ):  # failure codes
+            raise ValueError(r_str)
+
+    async def _is_flow_ready(self, **kwargs) -> bool:
+        """Sends a dry run to the Flow to validate if the Flow is ready to receive requests
+
+        :param kwargs: kwargs coming from the public interface. Includes arguments to be passed to the `HTTPClientlet`
+        :return: boolean indicating the health/readiness of the Flow
+        """
+        from jina.proto import jina_pb2
+
+        async with AsyncExitStack() as stack:
+            try:
+                proto = 'https' if self.args.tls else 'http'
+                url = f'{proto}://{self.args.host}:{self.args.port}/dry_run'
+                iolet = await stack.enter_async_context(
+                    HTTPClientlet(
+                        url=url,
+                        logger=self.logger,
+                        tracer_provider=self.tracer_provider,
+                        **kwargs,
+                    )
+                )
+
+                response = await iolet.send_dry_run(**kwargs)
+                r_status = response.status
+
+                r_str = await response.json()
+                self._handle_response_status(r_status, r_str, url)
+                if r_str['code'] == jina_pb2.StatusProto.SUCCESS:
+                    return True
+                else:
+                    self.logger.error(
+                        f'Returned code is not expected! Description: {r_str["description"]}'
+                    )
+            except Exception as e:
+                self.logger.error(
+                    f'Error while fetching response from HTTP server {e!r}'
+                )
+        return False
+
     async def _get_results(
-        self,
-        inputs: 'InputType',
-        on_done: 'CallbackFnType',
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
-        **kwargs,
+            self,
+            inputs: 'InputType',
+            on_done: 'CallbackFnType',
+            on_error: Optional['CallbackFnType'] = None,
+            on_always: Optional['CallbackFnType'] = None,
+            max_attempts: int = 1,
+            initial_backoff: float = 0.5,
+            max_backoff: float = 0.1,
+            backoff_multiplier: float = 1.5,
+            results_in_order: bool = False,
+            **kwargs,
     ):
         """
         :param inputs: the callable
         :param on_done: the callback for on_done
         :param on_error: the callback for on_error
         :param on_always: the callback for on_always
-        :param kwargs: kwargs for _get_task_name and _get_requests
+        :param max_attempts: Number of sending attempts, including the original request.
+        :param initial_backoff: The first retry will happen with a delay of random(0, initial_backoff)
+        :param max_backoff: The maximum accepted backoff after the exponential incremental delay
+        :param backoff_multiplier: The n-th attempt will occur at random(0, min(initialBackoff*backoffMultiplier**(n-1), maxBackoff))
+        :param results_in_order: return the results in the same order as the inputs
+        :param kwargs: kwargs coming from the public interface. Includes arguments to be passed to the `HTTPClientlet`
         :yields: generator over results
         """
         with ImportExtensions(required=True):
@@ -44,97 +112,72 @@ class HTTPBaseClient(BaseClient):
         request_iterator = self._get_requests(**kwargs)
 
         async with AsyncExitStack() as stack:
-            try:
-                cm1 = ProgressBar(
-                    total_length=self._inputs_length, disable=not (self.show_progress)
+            cm1 = ProgressBar(
+                total_length=self._inputs_length, disable=not (self.show_progress)
+            )
+            p_bar = stack.enter_context(cm1)
+
+            proto = 'https' if self.args.tls else 'http'
+            url = f'{proto}://{self.args.host}:{self.args.port}/post'
+            iolet = await stack.enter_async_context(
+                HTTPClientlet(
+                    url=url,
+                    logger=self.logger,
+                    tracer_provider=self.tracer_provider,
+                    max_attempts=max_attempts,
+                    initial_backoff=initial_backoff,
+                    max_backoff=max_backoff,
+                    backoff_multiplier=backoff_multiplier,
+                    **kwargs,
                 )
-                p_bar = stack.enter_context(cm1)
+            )
 
-                proto = 'https' if self.args.tls else 'http'
-                url = f'{proto}://{self.args.host}:{self.args.port}/post'
-                iolet = await stack.enter_async_context(
-                    HTTPClientlet(url=url, logger=self.logger)
+            def _request_handler(
+                    request: 'Request',
+            ) -> 'Tuple[asyncio.Future, Optional[asyncio.Future]]':
+                """
+                For HTTP Client, for each request in the iterator, we `send_message` using
+                http POST request and add it to the list of tasks which is awaited and yielded.
+                :param request: current request in the iterator
+                :return: asyncio Task for sending message
+                """
+                return asyncio.ensure_future(iolet.send_message(request=request)), None
+
+            def _result_handler(result):
+                return result
+
+            streamer = RequestStreamer(
+                request_handler=_request_handler,
+                result_handler=_result_handler,
+                prefetch=getattr(self.args, 'prefetch', 0),
+                logger=self.logger,
+                **vars(self.args),
+            )
+            async for response in streamer.stream(request_iterator=request_iterator, results_in_order=results_in_order):
+                r_status = response.status
+
+                r_str = await response.json()
+                self._handle_response_status(r_status, r_str, url)
+
+                da = None
+                if 'data' in r_str and r_str['data'] is not None:
+                    from docarray import DocumentArray
+
+                    da = DocumentArray.from_dict(r_str['data'])
+                    del r_str['data']
+
+                resp = DataRequest(r_str)
+                if da is not None:
+                    resp.data.docs = da
+
+                callback_exec(
+                    response=resp,
+                    on_error=on_error,
+                    on_done=on_done,
+                    on_always=on_always,
+                    continue_on_error=self.continue_on_error,
+                    logger=self.logger,
                 )
-
-                def _request_handler(request: 'Request') -> 'asyncio.Future':
-                    """
-                    For HTTP Client, for each request in the iterator, we `send_message` using
-                    http POST request and add it to the list of tasks which is awaited and yielded.
-                    :param request: current request in the iterator
-                    :return: asyncio Task for sending message
-                    """
-                    return asyncio.ensure_future(iolet.send_message(request=request))
-
-                def _result_handler(result):
-                    return result
-
-                streamer = RequestStreamer(
-                    self.args,
-                    request_handler=_request_handler,
-                    result_handler=_result_handler,
-                )
-                async for response in streamer.stream(request_iterator):
-                    r_status = response.status
-
-                    r_str = await response.json()
-                    if r_status == status.HTTP_404_NOT_FOUND:
-                        raise BadClient(f'no such endpoint {url}')
-                    elif r_status == status.HTTP_503_SERVICE_UNAVAILABLE:
-                        if (
-                            'header' in r_str
-                            and 'status' in r_str['header']
-                            and 'description' in r_str['header']['status']
-                        ):
-                            raise ConnectionError(
-                                r_str['header']['status']['description']
-                            )
-                        else:
-                            raise ValueError(r_str)
-                    elif (
-                        r_status < status.HTTP_200_OK
-                        or r_status > status.HTTP_300_MULTIPLE_CHOICES
-                    ):  # failure codes
-                        raise ValueError(r_str)
-
-                    da = None
-                    if 'data' in r_str and r_str['data'] is not None:
-                        from docarray import DocumentArray
-
-                        da = DocumentArray.from_dict(r_str['data'])
-                        del r_str['data']
-
-                    resp = DataRequest(r_str)
-                    if da is not None:
-                        resp.data.docs = da
-
-                    callback_exec(
-                        response=resp,
-                        on_error=on_error,
-                        on_done=on_done,
-                        on_always=on_always,
-                        continue_on_error=self.continue_on_error,
-                        logger=self.logger,
-                    )
-                    if self.show_progress:
-                        p_bar.update()
-                    yield resp
-
-            except (aiohttp.ClientError, ValueError, ConnectionError) as e:
-                self.logger.error(
-                    f'Error while fetching response from HTTP server {e!r}'
-                )
-
-                if on_error or on_always:
-                    if on_error:
-                        callback_exec_on_error(on_error, e, self.logger)
-                    if on_always:
-                        callback_exec(
-                            response=None,
-                            on_error=None,
-                            on_done=None,
-                            on_always=on_always,
-                            continue_on_error=self.continue_on_error,
-                            logger=self.logger,
-                        )
-                else:
-                    raise e
+                if self.show_progress:
+                    p_bar.update()
+                yield resp
