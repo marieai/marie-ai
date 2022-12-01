@@ -4,6 +4,7 @@ from typing import List, Optional, Type
 from marie.excepts import BadYAMLVersion
 from marie.jaml import JAMLCompatible
 from marie.jaml.parsers.base import VersionedYAMLParser
+from marie.serve.gateway import BaseGateway
 
 
 def _get_all_parser(cls: Type['JAMLCompatible']):
@@ -19,8 +20,10 @@ def _get_all_parser(cls: Type['JAMLCompatible']):
         return _get_flow_parser()
     elif issubclass(cls, BaseExecutor):
         return _get_exec_parser()
+    elif issubclass(cls, BaseGateway):
+        return _get_gateway_parser()
     else:
-        return _get_default_parser()
+        raise NotImplementedError(f'No parser exists for cls {cls.__name__}')
 
 
 def _get_flow_parser():
@@ -30,15 +33,15 @@ def _get_flow_parser():
 
 
 def _get_exec_parser():
-    from marie.jaml.parsers.executor.legacy import LegacyParser
+    from marie.jaml.parsers.executor.legacy import ExecutorLegacyParser
 
-    return [LegacyParser], LegacyParser
+    return [ExecutorLegacyParser], ExecutorLegacyParser
 
 
-def _get_default_parser():
-    from marie.jaml.parsers.default.v1 import V1Parser
+def _get_gateway_parser():
+    from marie.jaml.parsers.gateway.legacy import GatewayLegacyParser
 
-    return [V1Parser], V1Parser
+    return [GatewayLegacyParser], GatewayLegacyParser
 
 
 def get_parser(

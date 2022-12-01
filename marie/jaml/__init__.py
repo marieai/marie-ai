@@ -142,7 +142,7 @@ class JAML:
 
 
     .. note::
-        :class:`BaseFlow`, :class:`BaseExecutor`, :class:`BaseDriver`
+        :class:`BaseFlow`, :class:`BaseExecutor`, :class:`BaseGateway`
         and all their subclasses have already implemented JAML interfaces,
         to load YAML config into objects, please use :meth:`Flow.load_config`,
         :meth:`BaseExecutor.load_config`, etc.
@@ -159,7 +159,7 @@ class JAML:
         """Parse the first YAML document in a stream and produce the corresponding Python object.
 
         .. note::
-            :class:`BaseFlow`, :class:`BaseExecutor`, :class:`BaseDriver`
+            :class:`BaseFlow`, :class:`BaseExecutor`, :class:`BaseGateway`
             and all their subclasses have already implemented JAML interfaces,
             to load YAML config into objects, please use :meth:`Flow.load_config`,
             :meth:`BaseExecutor.load_config`, etc.
@@ -554,8 +554,16 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         """
         from marie.jaml.parsers import get_parser
 
-        tmp = get_parser(cls, version=data._version).dump(data)
-        return representer.represent_mapping('!' + cls.__name__, tmp)
+        config_dict = get_parser(cls, version=data._version).dump(data)
+        config_dict_with_jtype = {
+            'jtype': cls.__name__
+        }  # specifies the type of Jina object that is represented
+        config_dict_with_jtype.update(config_dict)
+        # To maintain compatibility with off-the-shelf parsers we don't want any tags ('!...') to show up in the output
+        # Since pyyaml insists on receiving a tag, we need to pass the default map tag. This won't show up in the output
+        return representer.represent_mapping(
+            representer.DEFAULT_MAPPING_TAG, config_dict_with_jtype
+        )
 
     @classmethod
     def _from_yaml(cls, constructor: FullConstructor, node):
@@ -612,7 +620,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         """A high-level interface for loading configuration with features
         of loading extra py_modules, substitute env & context variables. Any class that
         implements :class:`JAMLCompatible` mixin can enjoy this feature, e.g. :class:`BaseFlow`,
-        :class:`BaseExecutor`, :class:`BaseDriver` and all their subclasses.
+        :class:`BaseExecutor`, :class:`BaseGateway` and all their subclasses.
 
         Support substitutions in YAML:
             - Environment variables: ``${{ ENV.VAR }}`` (recommended), ``$VAR`` (deprecated).
@@ -785,3 +793,9 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         except yaml.error.YAMLError:
             return True
         return True
+
+    def _add_runtime_args(self, _runtime_args: Optional[Dict]):
+        if _runtime_args:
+            self.runtime_args = SimpleNamespace(**_runtime_args)
+        else:
+            self.runtime_args = SimpleNamespace()
