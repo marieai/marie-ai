@@ -1,17 +1,24 @@
+import functools
+
 import pytest
 
+from marie.helper import iscoroutinefunction
+from marie.serve.executors import get_executor_taboo
 from marie.serve.executors.decorators import requests
 from marie.serve.helper import store_init_kwargs
-from marie.helper import iscoroutinefunction
 
 
 def test_store_init_kwargs():
+    store_init_kwargs_decorator = functools.partial(
+        store_init_kwargs, taboo=get_executor_taboo()
+    )
+
     class A:
-        @store_init_kwargs
+        @store_init_kwargs_decorator
         def __init__(self, a, b, c, *args, **kwargs):
             pass
 
-        @store_init_kwargs
+        @store_init_kwargs_decorator
         def f(self, a, b, *args, **kwargs):
             pass
 

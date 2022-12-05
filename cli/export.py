@@ -57,8 +57,8 @@ def api_to_dict(show_all_args: bool = False):
 def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
     from argparse import _StoreAction, _StoreTrueAction
 
-    from jina.enums import BetterEnum
-    from jina.parsers.helper import _SHOW_ALL_ARGS, KVAppendAction
+    from marie.enums import BetterEnum
+    from marie.parsers.helper import _SHOW_ALL_ARGS, KVAppendAction
 
     port_attr = ('help', 'choices', 'default', 'required', 'option_strings', 'dest')
     parser = parser_fn(**kwargs)
@@ -93,7 +93,7 @@ def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
 
         if a.dest in random_dest:
             ddd['default_random'] = True
-            from jina.helper import random_identity, random_port
+            from marie.helper import random_identity, random_port
 
             if isinstance(a.default, str):
                 ddd['default_factory'] = random_identity.__name__

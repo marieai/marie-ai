@@ -50,7 +50,7 @@ class HTTPGateway(FastAPIBaseGateway):
 
         :return: FastAPI app
         """
-        from jina.helper import extend_rest_interface
+        from marie.helper import extend_rest_interface
 
         return extend_rest_interface(
             get_fastapi_app(
