@@ -2,24 +2,22 @@ import asyncio
 import multiprocessing
 import os
 import time
-from copy import deepcopy
 from multiprocessing import Process
 from threading import Event
-from unittest import mock
 
 import pytest
 import yaml
-
 from docarray import Document, DocumentArray
-from marie import Client, Executor, Flow, requests
+
+from marie import Client, Executor, Flow, __cache_path__, requests
 from marie.clients.request import request_generator
+from marie.excepts import RuntimeFailToStart
 from marie.parsers import set_pod_parser
 from marie.serve.executors.metas import get_default_metas
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.worker import WorkerRuntime
-
-PORT = 12350
+from marie.helper import random_port
 
 
 class WorkspaceExec(Executor):
@@ -34,8 +32,14 @@ class MyServeExec(Executor):
         docs.texts = ['foo' for _ in docs]
 
 
+@pytest.fixture()
+def exposed_port():
+    port = random_port()
+    yield port
+
+
 @pytest.fixture(autouse=False)
-def served_exec():
+def served_exec(exposed_port):
     import threading
     import time
 
@@ -46,7 +50,7 @@ def served_exec():
     t = threading.Thread(
         name='serve-exec',
         target=serve_exec,
-        kwargs={'port_expose': PORT, 'stop_event': e},
+        kwargs={'port_expose': exposed_port, 'stop_event': e},
     )
     t.start()
     time.sleep(3)  # allow Flow to start
@@ -55,6 +59,77 @@ def served_exec():
 
     e.set()  # set event and stop (unblock) the Flow
     t.join()
+
+
+def test_executor_load_from_hub():
+    exec = Executor.from_hub(
+        'jinahub://DummyHubExecutor', uses_metas={'name': 'hello123'}
+    )
+    da = DocumentArray([Document()])
+    exec.foo(da)
+    assert da.texts == ['hello']
+    assert exec.metas.name == 'hello123'
+
+
+def test_executor_import_with_external_dependencies(capsys):
+    ex = Executor.load_config('../../hubble-executor/config.yml')
+    assert ex.bar == 123
+    ex.foo()
+    out, err = capsys.readouterr()
+    assert 'hello' in out
+
+
+def test_executor_with_pymodule_path():
+    with pytest.raises(FileNotFoundError):
+        _ = Executor.load_config(
+            '''
+        jtype: BaseExecutor
+        py_modules:
+            - jina.no_valide.executor
+        '''
+        )
+
+    ex = Executor.load_config(
+        '''
+    jtype: MyExecutor
+    with:
+        bar: 123
+    py_modules:
+        - unit.serve.executors.dummy_executor
+    '''
+    )
+    assert ex.bar == 123
+    assert ex.process(DocumentArray([Document()]))[0].text == 'hello world'
+
+
+def test_flow_uses_with_pymodule_path():
+    with Flow.load_config(
+        '''
+    jtype: Flow
+    executors:
+        - uses: unit.serve.executors.dummy_executor.MyExecutor
+          uses_with:
+            bar: 123
+    '''
+    ):
+        pass
+
+    with Flow().add(
+        uses='unit.serve.executors.dummy_executor.MyExecutor', uses_with={'bar': 123}
+    ):
+        pass
+
+    with pytest.raises(RuntimeFailToStart):
+        with Flow.load_config(
+            '''
+            jtype: Flow
+            executors:
+                - uses: jina.no_valide.executor
+                  uses_with:
+                    bar: 123
+            '''
+        ):
+            pass
 
 
 @property
@@ -235,6 +310,10 @@ def test_workspace_not_exists(tmpdir):
     ],
 )
 def test_override_requests(uses_requests, expected):
+    from marie.serve.executors import __dry_run_endpoint__
+
+    expected.add(__dry_run_endpoint__)
+
     class OverrideExec(Executor):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -309,8 +388,8 @@ async def test_async_apply():
     assert da1.texts == ['hello'] * N
 
 
-def test_serve(served_exec):
-    docs = Client(port=PORT).post(on='/foo', inputs=DocumentArray.empty(5))
+def test_serve(served_exec, exposed_port):
+    docs = Client(port=exposed_port).post(on='/foo', inputs=DocumentArray.empty(5))
 
     assert docs.texts == ['foo' for _ in docs]
 
@@ -318,27 +397,27 @@ def test_serve(served_exec):
 def test_set_workspace(tmpdir):
     complete_workspace = os.path.abspath(os.path.join(tmpdir, 'WorkspaceExec', '0'))
     with Flow().add(uses=WorkspaceExec, workspace=str(tmpdir)) as f:
-        resp = f.post(on='/foo', inputs=Document(text="abs"))
+        resp = f.post(on='/foo', inputs=Document())
     assert resp[0].text == complete_workspace
-    # with Flow().add(uses=WorkspaceExec, uses_metas={'workspace': str(tmpdir)}) as f:
-    #     resp = f.post(on='/foo', inputs=Document())
-    # assert resp[0].text == complete_workspace
+    with Flow().add(uses=WorkspaceExec, uses_metas={'workspace': str(tmpdir)}) as f:
+        resp = f.post(on='/foo', inputs=Document())
+    assert resp[0].text == complete_workspace
+    complete_workspace_no_replicas = os.path.abspath(
+        os.path.join(tmpdir, 'WorkspaceExec')
+    )
+    assert (
+        WorkspaceExec(workspace=str(tmpdir)).workspace == complete_workspace_no_replicas
+    )
 
 
 def test_default_workspace(tmpdir):
-    with mock.patch.dict(
-        os.environ,
-        {'MARIE_DEFAULT_WORKSPACE_BASE': str(os.path.join(tmpdir, 'mock-workspace'))},
-    ):
-        with Flow().add(uses=WorkspaceExec) as f:
-            resp = f.post(on='/foo', inputs=Document())
-        assert resp[0].text
+    with Flow().add(uses=WorkspaceExec) as f:
+        resp = f.post(on='/foo', inputs=Document())
+    assert resp[0].text
 
-        result_workspace = resp[0].text
+    result_workspace = resp[0].text
 
-        assert result_workspace == os.path.join(
-            os.environ['MARIE_DEFAULT_WORKSPACE_BASE'], 'WorkspaceExec', '0'
-        )
+    assert result_workspace == os.path.join(__cache_path__, 'WorkspaceExec', '0')
 
 
 @pytest.mark.parametrize(
@@ -346,7 +425,7 @@ def test_default_workspace(tmpdir):
     [Executor.StandaloneExecutorType.EXTERNAL, Executor.StandaloneExecutorType.SHARED],
 )
 def test_to_k8s_yaml(tmpdir, exec_type):
-    Executor.to_k8s_yaml(
+    Executor.to_kubernetes_yaml(
         output_base_path=tmpdir,
         port_expose=2020,
         uses='jinahub+docker://DummyHubExecutor',
@@ -416,7 +495,7 @@ def _create_test_data_message(counter=0):
 @pytest.mark.asyncio
 async def test_blocking_sync_exec():
     SLEEP_TIME = 0.01
-    REQUEST_COUNT = 1
+    REQUEST_COUNT = 100
 
     class BlockingExecutor(Executor):
         @requests
@@ -468,3 +547,32 @@ async def test_blocking_sync_exec():
 
     cancel_event.set()
     runtime_thread.join()
+
+
+def test_executors_inheritance_binding():
+    class A(Executor):
+        @requests(on='/index')
+        def a(self, **kwargs):
+            pass
+
+        @requests
+        def default_a(self, **kwargs):
+            pass
+
+    class B(A):
+        @requests(on='/index')
+        def b(self, **kwargs):
+            pass
+
+    class C(B):
+        pass
+
+    assert set(A().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
+    assert A().requests['/index'] == A.a
+    assert A().requests['/default'] == A.default_a
+    assert set(B().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
+    assert B().requests['/index'] == B.b
+    assert B().requests['/default'] == A.default_a
+    assert set(C().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
+    assert C().requests['/index'] == B.b
+    assert C().requests['/default'] == A.default_a

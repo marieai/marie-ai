@@ -2,11 +2,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from docarray import DocumentArray
 
-from jina import __default_endpoint__
-from jina.excepts import BadConfigSource
-from jina.importer import ImportExtensions
-from jina.serve.executors import BaseExecutor
-from jina.types.request.data import DataRequest
+from marie import __default_endpoint__
+from marie.excepts import BadConfigSource
+from marie.importer import ImportExtensions
+from marie.serve.executors import BaseExecutor
+from marie.types.request.data import DataRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     import argparse
@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.context.context import Context
     from prometheus_client import CollectorRegistry
 
-    from jina.logging.logger import JinaLogger
+    from marie.logging.logger import MarieLogger
 
 
 class WorkerRequestHandler:
@@ -74,7 +74,7 @@ class WorkerRequestHandler:
             ):
                 from prometheus_client import Counter, Summary
 
-                from jina.serve.monitoring import _SummaryDeprecated
+                from marie.serve.monitoring import _SummaryDeprecated
 
                 self._document_processed_metrics = Counter(
                     'document_processed',

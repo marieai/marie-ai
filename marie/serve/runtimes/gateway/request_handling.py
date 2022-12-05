@@ -36,12 +36,12 @@ class GatewayRequestHandler(MonitoringRequestMixin):
         metrics_registry: Optional['CollectorRegistry'] = None,
         meter: Optional['Meter'] = None,
         runtime_name: Optional[str] = None,
-        logger: Optional[JinaLogger] = None,
+        logger: Optional[MarieLogger] = None,
     ):
         super().__init__(metrics_registry, meter, runtime_name)
         self._executor_endpoint_mapping = None
         self._gathering_endpoints = False
-        self.logger = logger or JinaLogger(self.__class__.__name__)
+        self.logger = logger or MarieLogger(self.__class__.__name__)
 
     def handle_request(
         self, graph: 'TopologyGraph', connection_pool: 'GrpcConnectionPool'

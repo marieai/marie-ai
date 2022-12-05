@@ -47,7 +47,7 @@ class HTTPBaseClient(BaseClient):
         :param kwargs: kwargs coming from the public interface. Includes arguments to be passed to the `HTTPClientlet`
         :return: boolean indicating the health/readiness of the Flow
         """
-        from jina.proto import jina_pb2
+        from marie.proto import jina_pb2
 
         async with AsyncExitStack() as stack:
             try:
