@@ -93,8 +93,8 @@ def test_dry_run_of_flow(port_generator, protocol):
 
 
 @pytest.mark.asyncio
-# @pytest.mark.parametrize('protocol', ['http'])
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize('protocol', ['http'])
+# @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
 async def test_async_dry_run_of_flow(port_generator, protocol):
     print(f"protocol = {protocol}")
     worker_port = port_generator()
@@ -104,7 +104,7 @@ async def test_async_dry_run_of_flow(port_generator, protocol):
     c = Client(host='localhost', asyncio=True, port=port, protocol=protocol)
     dry_run_alive = await c.is_flow_ready()
 
-    # _teardown(worker_process, gateway_process, dry_run_alive)
+    # _teardown(worker_process, gateway_process, dry_run_alive
     worker_process.terminate()
     worker_process.join()
 

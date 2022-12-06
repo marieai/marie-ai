@@ -254,7 +254,7 @@ class JinaRequestModel(BaseModel):
         None,
         example=[
             {'text': 'hello, world!'},
-            {'uri': 'https://docs.jina.ai/_static/logo-light.svg'},
+            {'uri': 'https://docs.marieai.co/_static/logo-light.svg'},
         ],
         description=DESCRIPTION_DATA,
     )

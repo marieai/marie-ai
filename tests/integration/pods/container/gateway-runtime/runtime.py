@@ -1,8 +1,8 @@
 import sys
 
-from jina.parsers import set_gateway_parser
-from jina.parsers.helper import _update_gateway_args
-from jina.serve.runtimes.gateway import GatewayRuntime
+from marie.parsers import set_gateway_parser
+from marie.parsers.helper import _update_gateway_args
+from marie.serve.runtimes.gateway import GatewayRuntime
 
 
 def run(*args, **kwargs):
