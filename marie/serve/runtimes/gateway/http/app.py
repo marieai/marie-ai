@@ -97,7 +97,7 @@ def get_fastapi_app(
 
         @app.get(
             path='/',
-            summary='Get the health of Jina Gateway service',
+            summary='Get the health of Marie Gateway service',
             response_model=JinaHealthModel,
         )
         async def _gateway_health():
@@ -120,7 +120,7 @@ def get_fastapi_app(
 
         @app.get(
             path='/dry_run',
-            summary='Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to '
+            summary='Get the readiness of Marie Flow service, sends an empty DocumentArray to the complete Flow to '
             'validate connectivity',
             response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
         )
@@ -151,15 +151,15 @@ def get_fastapi_app(
 
         @app.get(
             path='/status',
-            summary='Get the status of Jina service',
+            summary='Get the status of Marie service',
             response_model=JinaInfoModel,
             tags=['Debug'],
         )
         async def _status():
             """
-            Get the status of this Jina service.
+            Get the status of this Marie service.
 
-            This is equivalent to running `jina -vf` from command line.
+            This is equivalent to running `marie -vf` from command line.
 
             .. # noqa: DAR201
             """

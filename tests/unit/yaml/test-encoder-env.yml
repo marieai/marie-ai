@@ -1,0 +1,4 @@
+!BaseExecutor
+metas:
+  name: ${{ ENV.BE_TEST_NAME }}
+  workspace: ${{this.name}}

@@ -16,6 +16,14 @@ set -e
 # or
 # docker build -f Dockerfiles/protogen-3.21.Dockerfile -t jinaai/protogen-3.21:local .
 
+
+# MOD
+# docker build -f Dockerfiles/protogen-3.21.Dockerfile -t marieai/protogen-3.21:local
+# current dir: jina root (the one with README.md)
+# run the following in bash:
+#docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen
+#docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen-3.21:local
+
 SRC_DIR=./
 MODULE=jina
 SRC_NAME="${MODULE}.proto"

@@ -1,0 +1,16 @@
+!Flow
+version: '1'
+with:
+  read_only: true
+executors:
+  - name: crafter
+    shards: 4
+  - name: encoder
+    shards: 4
+  - name: faiss_indexer
+    shards: 1
+    timeout_ready: 10000
+    volumes: './workspace'
+  - name: ranker
+  - name: doc_indexer
+    shards: 1

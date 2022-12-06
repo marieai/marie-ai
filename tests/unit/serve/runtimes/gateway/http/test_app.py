@@ -6,38 +6,14 @@ import aiohttp
 import pytest
 import requests as req
 from docarray import Document, DocumentArray
-from fastapi.testclient import TestClient
 
 from marie import Client, Executor, Flow, requests
 from marie.helper import random_port
-from marie.logging.logger import MarieLogger
 from marie.parsers import set_gateway_parser
-from marie.serve.networking import GrpcConnectionPool
-from marie.serve.runtimes.gateway import TopologyGraph
-from marie.serve.runtimes.gateway.http import HTTPGatewayRuntime, get_fastapi_app
-from marie.serve.runtimes.gateway.websocket import WebSocketGatewayRuntime
+from marie.serve.runtimes.gateway import GatewayRuntime
 
 
-@pytest.mark.parametrize('p', [['--default-swagger-ui'], []])
-def test_custom_swagger(p):
-    args = set_gateway_parser().parse_args(p)
-    logger = MarieLogger('')
-    app = get_fastapi_app(
-        args, TopologyGraph({}), GrpcConnectionPool(logger=logger), logger
-    )
-    # The TestClient is needed here as a context manager to generate the shutdown event correctly
-    # otherwise the app can hang as it is not cleaned up correctly
-    # see https://fastapi.tiangolo.com/advanced/testing-events/
-    with TestClient(app) as client:
-        print(app.routes)
-        for route in app.routes:
-            print(route.path)
-
-        assert any('/docs' in r.path for r in app.routes)
-        assert any('/openapi.json' in r.path for r in app.routes)
-
-
-class TestExecutor(Executor):
+class ExecutorTest(Executor):
     @requests
     def empty(self, docs: 'DocumentArray', **kwargs):
         print(f"# docs {docs}")
@@ -46,15 +22,15 @@ class TestExecutor(Executor):
 @pytest.fixture
 def error_log_level():
     old_env = os.environ.get('JINA_LOG_LEVEL')
-    os.environ['MARIE_LOG_LEVEL'] = 'ERROR'
+    os.environ['JINA_LOG_LEVEL'] = 'ERROR'
     yield
-    os.environ['MARIE_LOG_LEVEL'] = old_env
+    os.environ['JINA_LOG_LEVEL'] = old_env
 
 
 def test_tag_update():
     port = random_port()
 
-    f = Flow(port=port, protocol='http').add(uses=TestExecutor)
+    f = Flow(port=port, protocol='http').add(uses=ExecutorTest)
     d1 = Document(id='1', prop1='val')
     d2 = Document(id='2', prop2='val')
     with f:
@@ -62,8 +38,6 @@ def test_tag_update():
         d2 = {'data': [d2.to_dict()]}
         r1 = req.post(f'http://localhost:{port}/index', json=d1)
         r2 = req.post(f'http://localhost:{port}/index', json=d2)
-
-        f.block()
     assert r1.json()['data'][0]['tags'] == {'prop1': 'val'}
     assert r2.json()['data'][0]['tags'] == {'prop2': 'val'}
 
@@ -179,24 +153,28 @@ xZ36Vrgc4hfaUiifsIiDwA==
     os.unlink(tmp.name)
 
 
-@pytest.mark.parametrize('runtime_cls', [HTTPGatewayRuntime, WebSocketGatewayRuntime])
-def test_uvicorn_ssl_deprecated(cert_pem, key_pem, runtime_cls):
+@pytest.mark.parametrize('uses', ['HTTPGateway', 'WebSocketGateway'])
+def test_uvicorn_ssl_deprecated(cert_pem, key_pem, uses):
     args = set_gateway_parser().parse_args(
         [
+            '--uses',
+            uses,
             '--uvicorn-kwargs',
             f'ssl_certfile: {cert_pem}',  # deprecated
             f'ssl_keyfile: {key_pem}',  # deprecated
             'ssl_keyfile_password: abcd',
         ]
     )
-    with runtime_cls(args):
+    with GatewayRuntime(args):
         pass
 
 
-@pytest.mark.parametrize('runtime_cls', [HTTPGatewayRuntime, WebSocketGatewayRuntime])
-def test_uvicorn_ssl(cert_pem, key_pem, runtime_cls):
+@pytest.mark.parametrize('uses', ['HTTPGateway', 'WebSocketGateway'])
+def test_uvicorn_ssl(cert_pem, key_pem, uses):
     args = set_gateway_parser().parse_args(
         [
+            '--uses',
+            uses,
             '--uvicorn-kwargs',
             'ssl_keyfile_password: abcd',
             '--ssl-certfile',
@@ -205,14 +183,16 @@ def test_uvicorn_ssl(cert_pem, key_pem, runtime_cls):
             f'{key_pem}',
         ]
     )
-    with runtime_cls(args):
+    with GatewayRuntime(args):
         pass
 
 
-@pytest.mark.parametrize('runtime_cls', [HTTPGatewayRuntime, WebSocketGatewayRuntime])
-def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, runtime_cls):
+@pytest.mark.parametrize('uses', ['HTTPGateway', 'WebSocketGateway'])
+def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, uses):
     args = set_gateway_parser().parse_args(
         [
+            '--uses',
+            uses,
             '--uvicorn-kwargs',
             'ssl_keyfile_password: abcde',
             '--ssl-certfile ',
@@ -222,14 +202,16 @@ def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, runtime_cls):
         ]
     )
     with pytest.raises(ssl.SSLError):
-        with runtime_cls(args):
+        with GatewayRuntime(args):
             pass
 
 
-@pytest.mark.parametrize('runtime_cls', [HTTPGatewayRuntime, WebSocketGatewayRuntime])
-def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, runtime_cls):
+@pytest.mark.parametrize('uses', ['HTTPGateway', 'WebSocketGateway'])
+def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, uses):
     args = set_gateway_parser().parse_args(
         [
+            '--uses',
+            uses,
             '--uvicorn-kwargs',
             'ssl_keyfile_password: abcde',
             '--ssl-certfile',
@@ -239,7 +221,7 @@ def test_uvicorn_ssl_wrong_password(cert_pem, key_pem, runtime_cls):
         ]
     )
     with pytest.raises(ssl.SSLError):
-        with runtime_cls(args):
+        with GatewayRuntime(args):
             pass
 
 
@@ -279,3 +261,63 @@ def test_app_models_acceptance(docs_input):
         r = req.post(f'http://localhost:{f.port}/index', json=docs_input)
 
     assert DocumentArray.from_dict(r.json()['data'])[0].text == 'text_input'
+
+
+@pytest.fixture
+def health_check_env():
+    _prev_loglevel = os.environ.get('JINA_LOG_LEVEL', None)
+    os.environ['JINA_LOG_LEVEL'] = 'INFO'
+    os.environ['CICD_JINA_DISABLE_HEALTHCHECK_LOGS'] = '1'
+    yield
+    os.environ['JINA_LOG_LEVEL'] = _prev_loglevel
+    os.environ.pop('CICD_JINA_DISABLE_HEALTHCHECK_LOGS')
+
+
+@pytest.fixture
+def no_health_check_env():
+    _prev_loglevel = os.environ.get('JINA_LOG_LEVEL', None)
+    os.environ['JINA_LOG_LEVEL'] = 'INFO'
+    yield
+    os.environ['JINA_LOG_LEVEL'] = _prev_loglevel
+
+
+def test_healthcheck_logs_http(capfd, no_health_check_env):
+    f = Flow(protocol='http', port=12345).add()
+    with f:
+        req.get('http://localhost:12345/')
+        req.get('http://localhost:12345/docs')
+
+    out, _ = capfd.readouterr()
+    assert '"GET / HTTP/1.1" 200 OK' in out
+    assert '"GET /docs HTTP/1.1" 200 OK' in out
+
+
+def test_no_healthcheck_logs_http_with_env(capfd, health_check_env):
+    f = Flow(protocol='http', port=12345).add()
+    with f:
+        req.get('http://localhost:12345/')
+        req.get('http://localhost:12345/docs')
+
+    out, _ = capfd.readouterr()
+    assert '"GET / HTTP/1.1" 200 OK' not in out
+    assert '"GET /docs HTTP/1.1" 200 OK' in out
+
+
+def test_healthcheck_logs_websocket(capfd, no_health_check_env):
+    f = Flow(protocol='websocket', port=12345).add()
+    with f:
+        req.get('http://localhost:12345/')
+        f.post('/', inputs=DocumentArray.empty())
+
+    out, _ = capfd.readouterr()
+    assert '"GET / HTTP/1.1" 200 OK' in out
+
+
+def test_healthcheck_logs_websocket_with_env(capfd, health_check_env):
+    f = Flow(protocol='websocket', port=12345).add()
+    with f:
+        f.post('/', inputs=DocumentArray.empty())
+        req.get('http://localhost:12345/')
+
+    out, _ = capfd.readouterr()
+    assert '"GET / HTTP/1.1" 200 OK' not in out

@@ -29,7 +29,7 @@ nltk
 timm
 segmentation-models-pytorch
 Wand
-docarray
+docarray==0.19.1
 jsons
 grpcio
 transformers
