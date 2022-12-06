@@ -362,3 +362,9 @@ Colab notebooks
 https://deci.ai/platform/
 https://github.com/onepanelio/onepanel
 
+
+
+# meta info
+```json
+{"jina":{"marie":"2.2.5","docarray":"0.18.1","marie-proto":"0.1.13","protobuf":"4.21.10","proto-backend":"upb","grpcio":"1.51.1","pyyaml":"6.0","python":"3.10.6","platform":"Linux","platform-release":"5.15.0-53-generic","platform-version":"#59-Ubuntu SMP Mon Oct 17 18:53:30 UTC 2022","architecture":"x86_64","processor":"x86_64","uid":"45921550257684","session-id":"a808e3f0-7561-11ed-b5ef-29c3f1b0ce14","uptime":"2022-12-06T06:28:54.905672","ci-vendor":"(unset)","internal":"False"},"envs":{"MARIE_DEFAULT_HOST":"(unset)","MARIE_DEFAULT_TIMEOUT_CTRL":"(unset)","MARIE_DEFAULT_WORKSPACE_BASE":"(unset)","MARIE_DEPLOYMENT_NAME":"(unset)","MARIE_DISABLE_UVLOOP":"(unset)","MARIE_CHECK_VERSION":"(unset)"}}
+```
