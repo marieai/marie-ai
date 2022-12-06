@@ -57,7 +57,7 @@ def get_fastapi_app(
         )
 
     app = FastAPI(
-        title=title or 'My Jina Service',
+        title=title or 'My Marie Service',
         description=description
         or 'This is my awesome service. You can set `title` and `description` in your `Flow` or `Gateway` '
         'to customize the title and description.',

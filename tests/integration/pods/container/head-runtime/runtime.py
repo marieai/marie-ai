@@ -1,7 +1,7 @@
 import sys
 
-from jina.serve.runtimes.head import HeadRuntime
-from jina.parsers import set_pod_parser
+from marie.serve.runtimes.head import HeadRuntime
+from marie.parsers import set_pod_parser
 
 
 def run(*args, **kwargs):

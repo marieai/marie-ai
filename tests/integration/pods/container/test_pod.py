@@ -5,14 +5,14 @@ import time
 
 import pytest
 
-from jina import Client, Document
-from jina.enums import PodRoleType, PollingType
-from jina.helper import random_port
-from jina.orchestrate.pods import Pod
-from jina.orchestrate.pods.container import ContainerPod
-from jina.parsers import set_gateway_parser, set_pod_parser
-from jina.serve.runtimes.head import HeadRuntime
-from jina.serve.runtimes.worker import WorkerRuntime
+from marie import Client, Document
+from marie.enums import PodRoleType, PollingType
+from marie.helper import random_port
+from marie.orchestrate.pods import Pod
+from marie.orchestrate.pods.container import ContainerPod
+from marie.parsers import set_gateway_parser, set_pod_parser
+from marie.serve.runtimes.head import HeadRuntime
+from marie.serve.runtimes.worker import WorkerRuntime
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 

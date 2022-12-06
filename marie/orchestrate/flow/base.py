@@ -2592,7 +2592,7 @@ class Flow(
         if self._build_level.value < FlowBuildLevel.GRAPH.value:
             self.build(copy_flow=False)
 
-        from jina.orchestrate.deployments.config.k8s import K8sDeploymentConfig
+        from marie.orchestrate.deployments.config.k8s import K8sDeploymentConfig
 
         k8s_namespace = k8s_namespace or self.args.name or 'default'
 
@@ -2600,7 +2600,7 @@ class Flow(
             if v.external or (node == 'gateway' and not include_gateway):
                 continue
             if node == 'gateway' and v.args.default_port:
-                from jina.serve.networking import GrpcConnectionPool
+                from marie.serve.networking import GrpcConnectionPool
 
                 v.args.port = GrpcConnectionPool.K8S_PORT
                 v.first_pod_args.port = GrpcConnectionPool.K8S_PORT
@@ -2661,7 +2661,7 @@ class Flow(
         output_path = output_path or 'docker-compose.yml'
         network_name = network_name or 'jina-network'
 
-        from jina.orchestrate.deployments.config.docker_compose import (
+        from marie.orchestrate.deployments.config.docker_compose import (
             DockerComposeConfig,
         )
 

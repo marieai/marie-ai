@@ -8,9 +8,9 @@ import docker
 import pytest
 import requests as req
 
-from jina import Client, Document, Flow
-from jina.helper import random_port
-from jina.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie import Client, Document, Flow
+from marie.helper import random_port
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from tests.helper import (
     _validate_custom_gateway_process,
     _validate_dummy_custom_gateway_response,
@@ -80,7 +80,7 @@ class DockerComposeFlow:
 
 async def run_test(flow, endpoint, num_docs=10, request_size=10):
     # start port forwarding
-    from jina.clients import Client
+    from marie.clients import Client
 
     client_kwargs = dict(
         host='localhost',

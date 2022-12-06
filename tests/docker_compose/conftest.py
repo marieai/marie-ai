@@ -3,7 +3,7 @@ import os
 import docker
 import pytest
 
-from jina.logging.logger import JinaLogger
+from marie.logging.logger import MarieLogger
 
 client = docker.from_env()
 cur_dir = os.path.dirname(__file__)
@@ -16,7 +16,7 @@ def test_dir() -> str:
 
 @pytest.fixture
 def logger():
-    return JinaLogger('docker-compose-testing')
+    return MarieLogger('docker-compose-testing')
 
 
 @pytest.fixture

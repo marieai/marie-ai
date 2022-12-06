@@ -13,7 +13,7 @@ def mixin_client_protocol_parser(parser):
         '--protocol',
         type=GatewayProtocolType.from_string,
         choices=list(GatewayProtocolType),
-        default=GatewayProtocolType.HTTP,
+        default=GatewayProtocolType.GRPC,
         help='Communication protocol between server and client.',
     )
 

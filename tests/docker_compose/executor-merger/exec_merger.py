@@ -1,15 +1,15 @@
 from itertools import chain
 from typing import Dict, List
 
-from jina import Document, DocumentArray, Executor, requests
+from marie import Document, DocumentArray, Executor, requests
 
 
 class ExecMerger(Executor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        from jina.logging.logger import JinaLogger
+        from marie.logging.logger import MarieLogger
 
-        self.logger = JinaLogger(self.__class__.__name__)
+        self.logger = MarieLogger(self.__class__.__name__)
 
     @requests
     def debug(self, docs_matrix: List[DocumentArray], **kwargs):
