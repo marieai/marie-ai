@@ -1,0 +1,25 @@
+!Flow
+version: '1'
+with:
+  read_only: true  # better add this in the query time
+  port: 5555
+executors:
+  - name: loader
+    read_only: true
+    shards: 4
+  - name: flipper
+    shards: 4
+    read_only: true
+  - name: normalizer
+    read_only: true
+    shards: 4
+  - name: encoder
+    timeout_ready: 600000
+    shards: 4
+    read_only: true
+  - name: chunk_indexer
+    polling: all
+    shards: 1
+  - name: ranker
+  - name: doc_indexer
+    shards: 1

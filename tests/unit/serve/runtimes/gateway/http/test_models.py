@@ -1,3 +1,4 @@
+import pydantic
 import pytest
 
 from marie.serve.runtimes.gateway.http.models import (
@@ -8,8 +9,9 @@ from marie.serve.runtimes.gateway.http.models import (
 
 def test_schema_invocation():
     for k, v in vars(PROTO_TO_PYDANTIC_MODELS).items():
-        v.schema()
-        v.schema_json()
+        if isinstance(v, pydantic.BaseModel):
+            v.schema()
+            v.schema_json()
 
 
 def test_enum_definitions():

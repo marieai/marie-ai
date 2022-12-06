@@ -1,0 +1,15 @@
+!Flow
+version: '1'
+with:
+  sse_logger: false
+executors:
+  - name: chunk_seg
+    shards: 3
+  - name: wqncode1
+    shards: 2
+    needs: chunk_seg
+  - name: encode2
+    shards: 2
+    needs: chunk_seg
+  - name: joiner
+    needs: [wqncode1, encode2]

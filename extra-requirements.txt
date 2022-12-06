@@ -61,6 +61,18 @@ aiohttp:                    standard,devel
 aiostream:                  standard,devel
 
 
+pytest:                     test
+pytest-timeout:             test
+pytest-mock:                test
+pytest-cov==3.0.0:          test
+coverage==6.2:              test
+pytest-repeat:              test
+pytest-asyncio:             test
+pytest-reraise:             test
+mock:                       test
+requests-mock:              test
+pytest-custom_exit_code:    test
+
 
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel

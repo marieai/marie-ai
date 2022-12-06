@@ -71,11 +71,11 @@ elif _sys.version_info >= (3, 8, 0) and _platform.system() == 'Darwin':
 # this is managed by git tag and updated on every release
 # NOTE: this represents the NEXT release version
 
-__version__ = '3.12.1'
+__version__ = '2.2.5'
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
-__proto_version__ = '0.1.13'
+__proto_version__ = '0.1.14'
 
 try:
     __docarray_version__ = _docarray.__version__
@@ -135,7 +135,9 @@ __args_executor_func__ = {
 }
 
 __args_executor_init__ = {'metas', 'requests', 'runtime_args'}
-
+#__resources_path__ = _os.path.join(
+#    _os.path.dirname(_sys.modules['marie'].__file__), 'resources'
+#)
 __cache_path__ = f'{_os.path.expanduser("~")}/.cache/{__package__}'
 if not _Path(__cache_path__).exists():
     _Path(__cache_path__).mkdir(parents=True, exist_ok=True)
@@ -215,13 +217,14 @@ from marie.orchestrate.flow.asyncio import AsyncFlow
 
 # Flow
 from marie.orchestrate.flow.base import Flow
-# Custom Gateway
-from marie.serve.gateway import BaseGateway as Gateway
 
 # Executor
 from marie.serve.executors import BaseExecutor as Executor
 from marie.serve.executors.decorators import monitor, requests
 
+
+# Custom Gateway
+from marie.serve.gateway import BaseGateway as Gateway
 
 __all__ = [_s for _s in dir() if not _s.startswith('_')]
 __all__.extend(_names_with_underscore)

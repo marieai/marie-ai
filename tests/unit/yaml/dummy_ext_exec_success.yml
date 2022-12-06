@@ -1,0 +1,2 @@
+!DummyExternalIndexer
+py_modules: dummy_exec.py
