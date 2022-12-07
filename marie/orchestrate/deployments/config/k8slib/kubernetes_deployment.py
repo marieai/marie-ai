@@ -101,7 +101,7 @@ def get_template_yamls(
         'volume_path': volumes[0] if volumes is not None else None,
     }
 
-    if gpus:
+    if gpus and gpus != 'all':
         template_params['device_plugins'] = {'nvidia.com/gpu': gpus}
 
     template_name = 'deployment-executor' if name != 'gateway' else 'deployment-gateway'
@@ -177,6 +177,10 @@ def get_template_yamls(
     ]
 
     template_yaml = kubernetes_tools.get_yaml(template_name, template_params)
+
+    if 'JINA_LOG_LEVEL' in os.environ:
+        env = env or {}
+        env['JINA_LOG_LEVEL'] = os.environ['JINA_LOG_LEVEL']
 
     yamls = [
         kubernetes_tools.get_yaml(

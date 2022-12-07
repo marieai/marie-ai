@@ -26,8 +26,6 @@ from marie.serve.networking import host_is_local, in_docker
 
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
 
-def replace_secret_of_hub_uri():
-    pass
 
 class BaseDeployment(ExitStack):
     """A BaseDeployment is an immutable set of pods.

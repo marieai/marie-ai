@@ -1,0 +1,16 @@
+handlers: []
+level: INFO  # set verbose level
+configs:
+  FileHandler:
+    format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    output: 'jina-{uptime}.log'
+    formatter: JsonFormatter
+  StreamHandler:
+    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    formatter: PlainFormatter
+  SysLogHandler:
+    ident: # this will be prepend to all messages
+    format: '{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
+    host: # when not given then record it locally, /dev/log on linux /var/run/syslog on mac
+    port: # when not given then record it locally,  /dev/log on linux /var/run/syslog on mac
+    formatter: PlainFormatter

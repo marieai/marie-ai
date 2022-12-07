@@ -8,8 +8,8 @@ from marie.enums import PodRoleType
 from marie.orchestrate.pods import Pod
 from marie.orchestrate.pods.container import ContainerPod
 
-if TYPE_CHECKING:
-    from marie.orchestrate.pods import BasePod
+if TYPE_CHECKING:  # pragma: no cover
+    from jina.orchestrate.pods import BasePod
 
 
 class PodFactory:

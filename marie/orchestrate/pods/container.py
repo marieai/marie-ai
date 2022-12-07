@@ -24,7 +24,7 @@ from marie.orchestrate.pods.container_helper import (
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway import GatewayRuntime
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from docker.client import DockerClient
 
 
