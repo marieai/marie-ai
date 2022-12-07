@@ -129,4 +129,9 @@ def validate_uses(uses: str):
     ):
         return True
 
-    raise Exception("Invalid uses")
+    try:
+        scheme, _, _, _ = ("", "", "")  # parse_hub_uri(uses)
+        if scheme in {'mariehub+docker', 'mariehub+sandbox'}:
+            return True
+    except ValueError:
+        return False

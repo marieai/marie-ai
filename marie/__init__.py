@@ -101,10 +101,10 @@ __marie_env__ = (
 
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
 __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
-# __resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
-__resources_path__ = _os.path.join(
-    _os.path.abspath(_os.path.join(__root_dir__, "..")), "resources"
-)
+__resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
+# __resources_path__ = _os.path.join(
+#     _os.path.abspath(_os.path.join(__root_dir__, "..")), "resources"
+# )
 __model_path__ = _os.path.join(
     _os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo"
 )

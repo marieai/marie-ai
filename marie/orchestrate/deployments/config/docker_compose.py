@@ -234,7 +234,7 @@ class DockerComposeConfig:
         if not validate_uses(args.uses):
             raise NoContainerizedError(
                 f'Executor "{args.uses}" is not valid to be used in docker-compose. '
-                'You need to use a containerized Executor. You may check `jina hub --help` to see how Jina Hub can help you building containerized Executors.'
+                'You need to use a containerized Executor. You may check `marie hub --help` to see how Marie Hub can help you building containerized Executors.'
             )
         self.deployments_addresses = deployments_addresses
         self.head_service = None

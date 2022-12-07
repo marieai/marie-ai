@@ -474,7 +474,30 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         """
 
-        raise NotImplemented("Not implemented")
+        def is_valid_huburi(uri):
+            return False
+
+        _source = None
+        if is_valid_huburi(uri):
+            _args = ArgNamespace.kwargs2namespace(
+                {'no_usage': True, **kwargs},
+                # set_hub_pull_parser(),
+                positional_args=(uri,),
+            )
+            _source = ""
+
+        if not _source or _source.startswith('docker://'):
+            raise ValueError(
+                f'Can not construct a native Executor from {uri}. Looks like you want to use it as a '
+                f'Docker container, you may want to use it in the Flow via `.add(uses={uri})` instead.'
+            )
+        return cls.load_config(
+            _source,
+            context=context,
+            uses_with=uses_with,
+            uses_metas=uses_metas,
+            uses_requests=uses_requests,
+        )
 
     @classmethod
     def serve(

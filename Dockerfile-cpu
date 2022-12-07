@@ -157,7 +157,7 @@ COPY --chown=${USER} ./ssh ${HOME}/.ssh
 
 COPY --chown=${USER} ./marie/ /opt/marie-icr/marie
 # FIXME : this should be mouted so it can be edited
-COPY --chown=${USER} ./resources/ /opt/marie-icr/resources
+COPY --chown=${USER} marie/resources/ /opt/marie-icr/resources
 
 COPY --chown=${USER} ./.build /opt/marie-icr/
 COPY --chown=${USER} ./version.txt /opt/marie-icr/

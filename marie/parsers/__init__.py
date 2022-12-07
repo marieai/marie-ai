@@ -228,8 +228,8 @@ def get_main_parser():
     set_new_project_parser(
         sp.add_parser(
             'new',
-            help='Create a new Jina project',
-            description='Create a new Jina toy project with the predefined template.',
+            help='Create a new Marie project',
+            description='Create a new Marie toy project with the predefined template.',
             formatter_class=_chf,
         )
     )
