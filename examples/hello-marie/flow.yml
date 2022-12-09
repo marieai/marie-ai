@@ -1,0 +1,33 @@
+jtype: Flow
+version: '1'
+with:
+  port: 54321
+  protocol: http
+  expose_endpoints:
+    /icr/xx:
+      methods: ["POST"]
+      summary: XX Endpoint
+      tags:
+        - xx-tag
+    /icr/crunch-numbers-xx:
+      methods: ["POST"]
+      summary: XX crunch
+      tags:
+        - xx-tag
+
+    /aa:
+      methods: ["POST"]
+      summary: AA endpoint
+      tags:
+        - aa-tag
+    /crunch-numbers-aa:
+      methods: ["POST"]
+      summary: AA crunch
+      tags:
+        - aa-tag
+
+executors:
+  - uses: executor1/config.yml
+    name: ExecutorAA
+  - uses: executor2/config.yml
+    name: ExecutorXX

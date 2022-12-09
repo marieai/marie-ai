@@ -1,0 +1,3 @@
+jtype: MyExecutorAA
+py_modules:
+  - executor.py
