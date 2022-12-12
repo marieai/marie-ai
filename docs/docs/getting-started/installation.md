@@ -179,18 +179,46 @@ Also, you can run the following codes in your Python interpreter:
 ```
 
 
-### Install on CPU-only platforms
+## Docker image
 
-Marie-AI can be built for CPU-only environment. In CPU mode you can train, test or inference a model.
+Our universal Docker image is ready-to-use on linux/amd64 [Image listing](https://hub.docker.com/u/marieai). 
+The Docker image name always starts with `marieai/marie` followed by a tag composed of three parts:
+
+```text
+marieai/marie:{version}{python_version}{extra}
+```
+nvidia/cuda:11.3.1-runtime-ubuntu20.04 
+
+- `{version}`: The version of MarieAI. Possible values:
+    - `latest`: the last release;
+    - `master`: the master branch of `gregbugaj/marie-ai` repository;
+    - `x.y.z`: the release of a particular version; 
+- `{python_version}`: The Python version of the image. Possible values:
+    - `-py38` for Python 3.8;
+    - `-py39` for Python 3.9;
+    - `-py310` for Python 3.10;
+- `{extra}`: the extra dependency installed along with MarieAI. Possible values:
+    - `-perf`: MarieAI is installed inside the image via `pip install marieai`. It includes all performance dependencies; 
+    - `-standard`: MarieAI is installed inside the image via `pip install marieai`. It includes all recommended dependencies;  
+    - `-devel`: MarieAI is installed inside the image via `pip install "marieai[devel]"`. It includes `standard` plus some extra dependencies;
+- `{env}`: GPU/CPU/XLA support:
+    - ` `: CPU only; 
+    - `-cuda`: MarieAI is build with GPU/CUDA support;  
+
+## Docker on CPU-only platforms
+
+MarieAI can be built for CPU-only environment. In CPU mode you can train, test or inference a model.
 However, there might be limitations of what operations can be used.
 
+### Building container
+
 ```shell
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile-cpu -t gregbugaj/marie-icr:2.5 --no-cache  
+DOCKER_BUILDKIT=1 docker build . -f cpu.Dockerfile -t marieai/marie:2.5 --no-cache  
 ```
 
 ## Docker with GPU Support
 
-### Inference on the gpu
+### Inference on the GPU
 Install following dependencies to ensure docker is setup for GPU processing.
 
 * [Installing Docker and The Docker Utility Engine for NVIDIA GPUs](https://docs.nvidia.com/ai-enterprise/deployment-guide/dg-docker.html)
@@ -212,7 +240,7 @@ docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 
 If we have properly configured our environment you should be able to build the container locally.
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.5-cuda --no-cache 
+DOCKER_BUILDKIT=1 docker build . -f gpu.Dockerfile -t marieai/marie:2.5-cuda --no-cache 
 ```
 
 ## Container maintenance

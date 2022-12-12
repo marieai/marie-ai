@@ -1,9 +1,9 @@
 # PACKAGE DEPENDENCIES
 #
 # Essential: only 5, they are labeled with `core`: docarray, numpy, grpcio, protobuf, pyyaml. They will be installed
-#           when you do `pip install marie`. They are essential to run 90% features & functionalities of Jina.
+#           when you do `pip install marieai`. They are essential to run 90% features & functionalities of MarieAI.
 # Extensions: they are labeled with different tags. They will NOT be installed by default. One can install a group of
-#           of dependencies labeled `tag` by `pip install "jina[tag]"`
+#           of dependencies labeled `tag` by `pip install "marieai[tag]"`
 #
 # FILE FORMAT
 # https://hanxiao.io/2019/11/07/A-Better-Practice-for-Managing-extras-require-Dependencies-in-Python/

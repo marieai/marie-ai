@@ -138,7 +138,7 @@ setup(
     include_package_data=True,
     description='Python library to Integrate AI-powered features into your applications',
     author='Marie AI',
-    author_email='greg@marie-ai.com',
+    author_email='greg@marieai.co',
     license='Apache 2.0',
     url='https://github.com/gregbugaj/marie-ai/',
     download_url='https://github.com/gregbugaj/marie-ai/tags',
@@ -181,7 +181,7 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     project_urls={
-        'Documentation': 'https://docs.marie-ai.com',
+        'Documentation': 'https://docs.marieai.co',
         'Source': 'https://github.com/gregbugaj/marie-ai/',
         'Tracker': 'https://github.com/gregbugaj/marie-ai/issues',
     },

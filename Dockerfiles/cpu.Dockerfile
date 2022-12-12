@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
+FROM ubuntu:20.04 as build-image
 
 ARG PYTHON_VERSION=3.8
 
@@ -52,7 +52,7 @@ RUN python3 -m pip install Wand
 RUN git clone https://github.com/pytorch/fairseq.git && \
     cd fairseq  && \
     python setup.py build install
-    
+
 
 RUN git clone https://github.com/ying09/TextFuseNet.git&& \
     cd TextFuseNet  && \
@@ -61,7 +61,7 @@ RUN git clone https://github.com/ying09/TextFuseNet.git&& \
 
 RUN python3 -m pip install transformers
 
-FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
+FROM ubuntu:20.04
 
 ARG http_proxy
 ARG https_proxy
@@ -125,7 +125,7 @@ RUN useradd -u 431 -r -g ${GROUP} -m -d ${HOME} -s /sbin/nologin -c "${USER} use
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# Install and initialize MARIE-ICR, copy all necessary files
+# Install and initialize MARIE-AI, copy all necessary files
 
 # RUN python3 --version
 COPY --chown=${USER} ./im-policy.xml /etc/ImageMagick-6/policy.xml
@@ -155,11 +155,11 @@ COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
 # this is important otherwise we will get python error that module is not found
 RUN export PYTHONPATH="/opt/marie-icr/"
 
-# RUN all commands below as container user 
+# RUN all commands below as container user
 USER ${USER}
 WORKDIR ${WORKDIR}
 
-RUN mkdir ${HOME}/logs /tmp/supervisord 
+RUN mkdir ${HOME}/logs /tmp/supervisord
 RUN chown ${USER} ${HOME}/logs
 
 EXPOSE 5000
