@@ -44,8 +44,8 @@ jobs:
           body: |
             Thanks for your contribution :heart:
             :broken_heart: Unfortunately, this PR has one ore more **bad commit messages**, it can not be merged. To fix this problem, please refer to:
-            - [Commit Message Guideline for the First Time Contributor](https://github.com/jina-ai/jina/issues/553)
-            - [Contributing Guideline](https://github.com/jina-ai/jina/blob/master/CONTRIBUTING.md)
+            - Commit Message Guideline for the First Time Contributor
+            - [Contributing Guideline](https://github.com/gregbugaj/marie-ai/blob/master/CONTRIBUTING.md)
 
             Note, other CI tests will *not* *start* until the commit messages get fixed.
 
