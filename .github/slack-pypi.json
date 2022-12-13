@@ -1,0 +1,51 @@
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": ":tada: Marie-AI $RELEASE_VER is just released on PyPi!",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "You can now use `pip install -U marieai` to upgrade."
+      },
+      "accessory": {
+        "type": "image",
+        "image_url": "https://docs.marieai.co/_static/favicon.png",
+        "alt_text": "cute cat"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<https://pypi.org/project/marieai/|:package: Check out the PyPi release>"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<https://github.com/gregbugaj/marie-ai/blob/main/CONTRIBUTING.md|:notebook_with_decorative_cover: Read the change log>"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "<https://get.jina.ai|:star: Give Jina a star>"
+        }
+      ]
+    }
+  ]
+}
