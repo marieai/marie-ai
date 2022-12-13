@@ -142,9 +142,6 @@ COPY --chown=${USER} marie/resources/ /opt/marie-icr/resources
 COPY --chown=${USER} ./.build /opt/marie-icr/
 COPY --chown=${USER} ./version.txt /opt/marie-icr/
 
-# FIXME : This should not be here, this needs to be externalized
-#COPY --chown=${USER} ./model_zoo/ /opt/marie-icr/model_zoo
-
 RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 

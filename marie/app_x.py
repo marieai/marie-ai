@@ -12,7 +12,7 @@ import marie.helper
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.parsers import set_gateway_parser
-from marie.serve.runtimes.gateway.http import HTTPGatewayRuntime
+from marie.serve.runtimes.gateway.http import HTTPGateway
 from marie.version import __version__
 
 # logger = setup_logger(__file__)
@@ -33,8 +33,8 @@ def main():
 
     marie.helper.extend_rest_interface = extend_rest_function
     logger.info(args)
-    gateway = HTTPGatewayRuntime(args)
-    gateway.run_forever()
+    gateway = HTTPGateway(args)
+    gateway.run_server()
 
 
 if __name__ == "__main__":
@@ -59,5 +59,3 @@ if __name__ == "__main__":
 
     if __name__ == "__main__":
         main()
-
-#         http://localhost:5000/redoc

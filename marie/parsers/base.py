@@ -9,7 +9,7 @@ def set_base_parser():
 
     :return: the parser
     """
-    from marie.version import __version__
+    from marie import __version__
     from marie.helper import colored, format_full_version_info, get_full_version
 
     # create the top-level parser

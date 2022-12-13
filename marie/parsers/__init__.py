@@ -164,7 +164,7 @@ def set_help_parser(parser=None):
     parser.add_argument(
         'query',
         type=str,
-        help='Lookup the usage & mention of the argument name in Jina API. The name can be fuzzy',
+        help='Lookup the usage & mention of the argument name in Marie API. The name can be fuzzy',
     )
     return parser
 

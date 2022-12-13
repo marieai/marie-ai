@@ -8,7 +8,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry
 
-    from marie.logging.logger import JinaLogger
+    from marie.logging.logger import MarieLogger
     from marie.types.request.data import DataRequest
 
 
@@ -22,7 +22,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
     def __init__(
         self,
-        logger: 'JinaLogger',
+        logger: 'MarieLogger',
         metrics_registry: Optional['CollectorRegistry'] = None,
         meter: Optional['Meter'] = None,
         runtime_name: Optional[str] = None,

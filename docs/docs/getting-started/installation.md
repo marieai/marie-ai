@@ -213,7 +213,7 @@ However, there might be limitations of what operations can be used.
 ### Building container
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . -f cpu.Dockerfile -t marieai/marie:2.5 --no-cache  
+DOCKER_BUILDKIT=1 docker build . -f Dockerfiles/cpu.Dockerfile -t marieai/marie:2.5 --no-cache
 ```
 
 ## Docker with GPU Support
@@ -240,7 +240,7 @@ docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 
 If we have properly configured our environment you should be able to build the container locally.
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . -f gpu.Dockerfile -t marieai/marie:2.5-cuda --no-cache 
+DOCKER_BUILDKIT=1 docker build . -f Dockerfiles/gpu.Dockerfile -t marieai/marie:2.2.5-cuda --no-cache 
 ```
 
 ## Container maintenance
