@@ -1,0 +1,105 @@
+name: Manual Docs Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_token:
+        description: 'Your release token'
+        required: true
+      triggered_by:
+        description: 'CD | TAG | MANUAL'
+        required: false
+        default: MANUAL
+      package:
+        description: The name of the repo to build documentation for.
+        type: string
+        default: marie-ai
+      repo_owner:
+        description: The owner of the repo to build documentation for. Defaults to 'marie-ai'.
+        type: string
+        default: marie-ai
+      pages_branch:
+        description: Branch that Github Pages observes
+        type: string
+        default: gh-pages
+      git_config_name:
+        type: string
+        default: Marie Dev Bot
+      git_config_email:
+        type: string
+        default: dev-bot@marieai.co
+
+# Allow one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+env:
+  # Hosted GitHub runners have 7 GB of memory available, let's use 6 GB
+  NODE_OPTIONS: --max-old-space-size=6144
+
+jobs:
+  token-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check release token
+        id: token-check
+        run: | 
+          touch SUCCESS
+        if: inputs.release_token == env.release_token
+        env:
+          release_token: ${{ secrets.MARIE_CORE_RELEASE_TOKEN }}
+      - name: Fail release token
+        run: |
+          [[ -f SUCCESS ]]
+
+  build-and-push-latest-docs:
+    needs: token-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16.x
+          cache: yarn
+      - name: Install Yarn # Self hosted runners need to install YARN
+        run: npm install -g yarn
+      - name: Install Dependencies
+        run: |
+          cd docs
+          yarn install --frozen-lockfile --non-interactive
+      - name: Docusaurus Build
+        run: |
+          cd docs
+          yarn build
+          mv ./build /tmp/gen-html
+          cd ..
+      - name: Checkout to GH pages branch (${{ inputs.pages_branch }})
+        run: |
+          git fetch origin ${{ inputs.pages_branch }}:${{ inputs.pages_branch }} --depth 1
+          git checkout -f ${{ inputs.pages_branch }}
+          git reset --hard HEAD
+      - name: Small config stuff
+        run: |
+          touch /tmp/gen-html/.nojekyll
+          cp ./docs/_versions.json /tmp/gen-html/_versions.json
+          cp ./docs/CNAME /tmp/gen-html/CNAME
+          cp /tmp/gen-html/404/index.html /tmp/gen-html/404.html
+          sed -i 's/href="\.\./href="/' /tmp/gen-html/404.html # fix asset urls that needs to be updated in 404.html
+      - name: Moving old doc versions
+        run: |
+          cd docs
+          for i in $(cat _versions.json | jq '.[].version' | tr -d '"'); do if [ -d "$i" ]; then mv "$i" /tmp/gen-html; fi; done
+      - name: Swap in new docs
+        run: |
+          rm -rf ./docs
+          mv /tmp/gen-html ./docs
+      - name: Push it up!
+        run: |
+          git config --local user.email "${{ inputs.git_config_email }}"
+          git config --local user.name "${{ inputs.git_config_name }}"
+          git show --summary
+          git add ./docs && git commit -m "chore(docs): update docs due to ${{github.event_name}} on ${{github.repository}}"
+          git push origin ${{ inputs.pages_branch }}
