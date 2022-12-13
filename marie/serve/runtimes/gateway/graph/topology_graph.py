@@ -372,7 +372,7 @@ class TopologyGraph:
                 reduce=node_name not in deployments_no_reduce,
                 timeout_send=timeout_send,
                 retries=retries,
-                logger=self.logger
+                logger=self.logger,
             )
 
         for node_name, outgoing_node_names in graph_representation.items():

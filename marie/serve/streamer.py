@@ -8,6 +8,7 @@ from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.stream import RequestStreamer
+from marie.types.request.data import DataRequest
 
 __all__ = ['GatewayStreamer']
 
@@ -26,22 +27,22 @@ class GatewayStreamer:
     """
 
     def __init__(
-            self,
-            graph_representation: Dict,
-            executor_addresses: Dict[str, Union[str, List[str]]],
-            graph_conditions: Dict = {},
-            deployments_metadata: Dict[str, Dict[str, str]] = {},
-            deployments_no_reduce: List[str] = [],
-            timeout_send: Optional[float] = None,
-            retries: int = 0,
-            compression: Optional[str] = None,
-            runtime_name: str = 'custom gateway',
-            prefetch: int = 0,
-            logger: Optional['MarieLogger'] = None,
-            metrics_registry: Optional['CollectorRegistry'] = None,
-            meter: Optional['Meter'] = None,
-            aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-            tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
+        self,
+        graph_representation: Dict,
+        executor_addresses: Dict[str, Union[str, List[str]]],
+        graph_conditions: Dict = {},
+        deployments_metadata: Dict[str, Dict[str, str]] = {},
+        deployments_no_reduce: List[str] = [],
+        timeout_send: Optional[float] = None,
+        retries: int = 0,
+        compression: Optional[str] = None,
+        runtime_name: str = 'custom gateway',
+        prefetch: int = 0,
+        logger: Optional['JinaLogger'] = None,
+        metrics_registry: Optional['CollectorRegistry'] = None,
+        meter: Optional['Meter'] = None,
+        aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
+        tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
     ):
         """
         :param graph_representation: A dictionary describing the topology of the Deployments. 2 special nodes are expected, the name `start-gateway` and `end-gateway` to
@@ -188,6 +189,16 @@ class GatewayStreamer:
         await self._connection_pool.close()
 
     Call = stream
+
+    async def process_single_data(
+        self, request: DataRequest, context=None
+    ) -> DataRequest:
+        """Implements request and response handling of a single DataRequest
+        :param request: DataRequest from Client
+        :param context: grpc context
+        :return: response DataRequest
+        """
+        return await self._streamer.process_single_data(request, context)
 
     @staticmethod
     def get_streamer():

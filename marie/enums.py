@@ -41,10 +41,10 @@ class EnumType(EnumMeta):
         :param cls: Target class.
         :return: Registered class.
         """
-        reg_cls_set = getattr(cls, '_registered_class', set())
+        reg_cls_set = getattr(cls, "_registered_class", set())
         if cls.__name__ not in reg_cls_set:
             reg_cls_set.add(cls.__name__)
-            setattr(cls, '_registered_class', reg_cls_set)
+            setattr(cls, "_registered_class", reg_cls_set)
         from marie.jaml import JAML
 
         JAML.register(cls)
@@ -185,7 +185,7 @@ class GatewayProtocolType(BetterEnum):
     WEBSOCKET = 2
 
     @classmethod
-    def from_string_list(cls, string_list: List[Union[str, 'GatewayProtocolType']]):
+    def from_string_list(cls, string_list: List[Union[str, "GatewayProtocolType"]]):
         """
         Returns a list of Enums from a list of strings or enums
         :param string_list: list of strings or enums

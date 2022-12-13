@@ -1,14 +1,14 @@
 """Module for Jina Requests."""
 
 from typing import (
-    Iterator,
-    Union,
-    Tuple,
-    AsyncIterable,
-    Iterable,
-    Optional,
-    Dict,
     TYPE_CHECKING,
+    AsyncIterable,
+    Dict,
+    Iterable,
+    Iterator,
+    Optional,
+    Tuple,
+    Union,
 )
 
 from marie.clients.request.helper import _new_data_request_from_batch, _new_data_request
@@ -16,7 +16,7 @@ from marie.enums import DataInputType
 from marie.helper import batch_iterator
 from marie.logging.predefined import default_logger
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover
     from marie import Document
     from docarray.document import DocumentSourceType
     from docarray.document.mixins.content import DocumentContentType

@@ -364,6 +364,15 @@ class Deployment(BaseDeployment):
         uses = getattr(self.args, 'uses', '')
         is_docker = uses.startswith('jinahub+docker://') or uses.startswith('docker://')
         return is_docker
+    @property
+    def _is_executor_from_yaml(self) -> bool:
+        """
+        Check if this deployment is to be run from YAML configuration.
+
+        :return: True if this deployment is to be run from YAML configuration
+        """
+        uses = getattr(self.args, 'uses', '')
+        return uses.endswith('yml') or uses.endswith('yaml')
 
     @property
     def tls_enabled(self):

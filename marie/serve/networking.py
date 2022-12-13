@@ -18,6 +18,7 @@ from marie.excepts import EstablishGrpcConnectionError, InternalNetworkError
 from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.serve.helper import format_grpc_error
 from marie.serve.instrumentation import MetricsTimer
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
@@ -112,7 +113,7 @@ class ReplicaList:
         runtime_name: str,
         aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
         tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
-        deployment_name: str = ''
+        deployment_name: str = '',
     ):
         self.runtime_name = runtime_name
         self._connections = []
@@ -638,7 +639,7 @@ class GrpcConnectionPool:
                     runtime_name=self.runtime_name,
                     aio_tracing_client_interceptors=self.aio_tracing_client_interceptors,
                     tracing_client_interceptor=self.tracing_client_interceptor,
-                    deployment_name=deployment
+                    deployment_name=deployment,
                 )
                 self._deployments[deployment][type][entity_id] = connection_list
 
@@ -969,19 +970,23 @@ class GrpcConnectionPool:
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
         self._logger.debug(
-            f'GRPC call to {current_deployment} errored, getting error {error} for the {retry_i + 1}th time.'
+            f'GRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
         )
         if (
             error.code() != grpc.StatusCode.UNAVAILABLE
             and error.code() != grpc.StatusCode.CANCELLED
             and error.code() != grpc.StatusCode.DEADLINE_EXCEEDED
+            and error.code() != grpc.StatusCode.UNKNOWN
+            and error.code() != grpc.StatusCode.INTERNAL
         ):
             return error
         elif (
             error.code() == grpc.StatusCode.UNAVAILABLE
             or error.code() == grpc.StatusCode.DEADLINE_EXCEEDED
         ) and retry_i >= total_num_tries - 1:  # retries exhausted. if we land here it already failed once, therefore -1
-            self._logger.debug(f'GRPC call for {current_deployment} failed, retries exhausted')
+            self._logger.debug(
+                f'GRPC call for {current_deployment} failed, retries exhausted'
+            )
             from jina.excepts import InternalNetworkError
 
             # after connection failure the gRPC `channel` gets stuck in a failure state for a few seconds
@@ -999,7 +1004,7 @@ class GrpcConnectionPool:
             )
         else:
             self._logger.debug(
-                f'GRPC call to deployment {current_deployment} failed with code {error.code()}, retry attempt {retry_i + 1}/{total_num_tries - 1}.'
+                f'GRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
                 f' Trying next replica, if available.'
             )
             return None
