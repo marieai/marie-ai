@@ -8,7 +8,7 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
 const config = {
   title: 'Marie-AI',
   tagline: 'Integrate AI-powered Analysis Pipelines',
-  url: 'https://github.com/gregbugaj/marie-ai',
+  url: 'https://docs.marieai.co',
   baseUrl: '/',
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',

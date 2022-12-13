@@ -109,7 +109,7 @@ class Flow(
     ExitStack,
     metaclass=FlowType,
 ):
-    """Flow is how Jina streamlines and distributes Executors."""
+    """Flow is how Marie streamlines and distributes Executors."""
 
     # overload_inject_start_client_flow
     @overload
