@@ -2,7 +2,7 @@
 sidebar_position: 1
 ---
 
-# Contribute to 🦊-Marie
+# Contribute to MarieAI(🦊)
 
 # Coding standards
 
