@@ -19,7 +19,9 @@ def set_pod_parser(parser=None):
 
     from marie.parsers.orchestrate.base import mixin_scalable_deployment_parser
     from marie.parsers.orchestrate.pod import mixin_pod_parser
-    from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
+    from marie.parsers.orchestrate.runtimes.container import (
+        mixin_container_runtime_parser,
+    )
     from marie.parsers.orchestrate.runtimes.remote import mixin_remote_runtime_parser
     from marie.parsers.orchestrate.runtimes.worker import mixin_worker_runtime_parser
 
@@ -134,7 +136,10 @@ def set_client_cli_parser(parser=None):
 
         parser = set_base_parser()
 
-    from marie.parsers.client import mixin_client_features_parser, mixin_client_protocol_parser
+    from marie.parsers.client import (
+        mixin_client_features_parser,
+        mixin_client_protocol_parser,
+    )
     from marie.parsers.orchestrate.runtimes.remote import mixin_client_gateway_parser
 
     mixin_client_gateway_parser(parser)

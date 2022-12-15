@@ -1,5 +1,11 @@
 from marie.clients.base.grpc import GRPCBaseClient
-from marie.clients.mixin import AsyncHealthCheckMixin, AsyncPostMixin, HealthCheckMixin, PostMixin, ProfileMixin
+from marie.clients.mixin import (
+    AsyncHealthCheckMixin,
+    AsyncPostMixin,
+    HealthCheckMixin,
+    PostMixin,
+    ProfileMixin,
+)
 
 
 class GRPCClient(GRPCBaseClient, PostMixin, HealthCheckMixin, ProfileMixin):
