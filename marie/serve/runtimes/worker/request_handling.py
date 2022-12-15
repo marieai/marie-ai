@@ -113,8 +113,7 @@ class WorkerRequestHandler:
                         self._batchqueue_config[endpoint] = dbatch_config
 
             self.logger.debug(
-                'Executor Dynamic Batching configs:'
-                f' {self._executor.dynamic_batching}'
+                f'Executor Dynamic Batching configs: {self._executor.dynamic_batching}'
             )
             self.logger.debug(
                 f'Endpoint Batch Queue Configs: {self._batchqueue_config}'
@@ -134,10 +133,7 @@ class WorkerRequestHandler:
 
             with ImportExtensions(
                 required=True,
-                help_text=(
-                    'You need to install the `prometheus_client` to use the'
-                    ' montitoring functionality of jina'
-                ),
+                help_text='You need to install the `prometheus_client` to use the montitoring functionality of jina',
             ):
                 from prometheus_client import Counter, Summary
 
@@ -154,9 +150,7 @@ class WorkerRequestHandler:
                 self._request_size_metrics = _SummaryDeprecated(
                     old_name='request_size_bytes',
                     name='received_request_bytes',
-                    documentation=(
-                        'The size in bytes of the request returned to the gateway'
-                    ),
+                    documentation='The size in bytes of the request returned to the gateway',
                     namespace='jina',
                     labelnames=('executor_endpoint', 'executor', 'runtime_name'),
                     registry=metrics_registry,
@@ -177,16 +171,12 @@ class WorkerRequestHandler:
         if meter:
             self._document_processed_counter = meter.create_counter(
                 name='jina_document_processed',
-                description=(
-                    'Number of Documents that have been processed by the executor'
-                ),
+                description='Number of Documents that have been processed by the executor',
             )
 
             self._request_size_histogram = meter.create_histogram(
                 name='jina_received_request_bytes',
-                description=(
-                    'The size in bytes of the request returned to the gateway'
-                ),
+                description='The size in bytes of the request returned to the gateway',
             )
 
             self._sent_response_size_histogram = meter.create_histogram(
@@ -261,8 +251,8 @@ class WorkerRequestHandler:
                     #  in the same file). Raising a warning for now
                     if file_module.__name__ == '__main__':
                         self.logger.warning(
-                            'The main module file was changed, cannot reload'
-                            ' Executor, please restart the application'
+                            'The main module file was changed, cannot reload Executor, please restart '
+                            'the application'
                         )
                     importlib.reload(sys_mod_files_modules[file])
                 else:
@@ -271,8 +261,7 @@ class WorkerRequestHandler:
                     )
         except Exception as exc:
             self.logger.error(
-                ' Exception when refreshing Executor when changes detected in'
-                f' {changed_files}'
+                f' Exception when refreshing Executor when changes detected in {changed_files}'
             )
             raise exc
 
@@ -371,8 +360,8 @@ class WorkerRequestHandler:
 
             else:
                 raise TypeError(
-                    'The return type must be DocumentArray / Dict / `None`, but'
-                    f' getting {return_data!r}'
+                    f'The return type must be DocumentArray / Dict / `None`, '
+                    f'but getting {return_data!r}'
                 )
 
         WorkerRequestHandler.replace_docs(
@@ -381,9 +370,7 @@ class WorkerRequestHandler:
         return docs
 
     async def handle(
-        self,
-        requests: List['DataRequest'],
-        tracing_context: Optional['Context'] = None,
+        self, requests: List['DataRequest'], tracing_context: Optional['Context'] = None
     ) -> DataRequest:
         """Initialize private parameters and execute private loading functions.
 
@@ -399,7 +386,7 @@ class WorkerRequestHandler:
                 exec_endpoint = __default_endpoint__
             else:
                 self.logger.debug(
-                    'skip executor: endpoint mismatch. '
+                    f'skip executor: endpoint mismatch. '
                     f'Request endpoint: `{exec_endpoint}`. '
                     'Available endpoints: '
                     f'{", ".join(list(self._executor.requests.keys()))}'
@@ -432,10 +419,9 @@ class WorkerRequestHandler:
                 field='docs',
             )
 
-            (
-                docs_matrix,
-                docs_map,
-            ) = WorkerRequestHandler._get_docs_matrix_from_request(requests)
+            docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(
+                requests
+            )
             return_data = await self._executor.__acall__(
                 req_endpoint=requests[0].header.exec_endpoint,
                 docs=docs,
@@ -457,9 +443,7 @@ class WorkerRequestHandler:
 
     @staticmethod
     def replace_docs(
-        request: List['DataRequest'],
-        docs: 'DocumentArray',
-        ndarrray_type: str = None,
+        request: List['DataRequest'], docs: 'DocumentArray', ndarrray_type: str = None
     ) -> None:
         """Replaces the docs in a message with new Documents.
 
