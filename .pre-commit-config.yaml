@@ -8,14 +8,6 @@
 # 'pre-commit run --all'
 
 repos:
-  - repo: https://github.com/psf/black
-    rev: 22.3.0
-    hooks:
-    - id: black
-      types: [python]
-      exclude: ^(tests|marie/models|marie/boxes/dit|marie/proto/pb/jina_pb2.py|marie/proto/pb/jina_pb2_grpc.py|marie/proto/pb2/jina_pb2.py|marie/proto/pb2/jina_pb2_grpc.py|docs/|marie/resources/)
-      args:
-        - -S
   - repo: https://github.com/pycqa/flake8
     rev: "5.0.4"
     hooks:
@@ -25,10 +17,18 @@ repos:
           - --max-complexity=10
           - --max-line-length=127
           - --select=E9,F63,F7,F82
+  - repo: https://github.com/psf/black
+    rev: 22.3.0
+    hooks:
+    - id: black
+      types: [python]
+      exclude: ^(tests|marie/models|marie/boxes/dit|marie/proto/pb/jina_pb2.py|marie/proto/pb/jina_pb2_grpc.py|marie/proto/pb2/jina_pb2.py|marie/proto/pb2/jina_pb2_grpc.py|docs/|marie/resources/)
+      args:
+        - -S
 #  - repo: https://github.com/pycqa/isort
 #    rev: 5.10.1
 #    hooks:
 #      - id: isort
-#        args: ["--profile", "black"]
+#        args: ["--profile", "black", "--skip", "marie/models"]
 
 
