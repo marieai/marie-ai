@@ -1,9 +1,10 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from detectron2 import _C
 from torch import nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair
+
+from detectron2 import _C
 
 
 class _ROIAlign(Function):
@@ -16,20 +17,14 @@ class _ROIAlign(Function):
         ctx.input_shape = input.size()
         ctx.aligned = aligned
         output = _C.roi_align_forward(
-            input,
-            roi,
-            spatial_scale,
-            output_size[0],
-            output_size[1],
-            sampling_ratio,
-            aligned,
+            input, roi, spatial_scale, output_size[0], output_size[1], sampling_ratio, aligned
         )
         return output
 
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
-        (rois,) = ctx.saved_tensors
+        rois, = ctx.saved_tensors
         output_size = ctx.output_size
         spatial_scale = ctx.spatial_scale
         sampling_ratio = ctx.sampling_ratio
@@ -97,12 +92,7 @@ class ROIAlign(nn.Module):
         """
         assert rois.dim() == 2 and rois.size(1) == 5
         return roi_align(
-            input,
-            rois,
-            self.output_size,
-            self.spatial_scale,
-            self.sampling_ratio,
-            self.aligned,
+            input, rois, self.output_size, self.spatial_scale, self.sampling_ratio, self.aligned
         )
 
     def __repr__(self):

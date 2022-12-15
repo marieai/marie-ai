@@ -10,7 +10,7 @@ __all__ = ["paste_masks_in_image"]
 BYTES_PER_FLOAT = 4
 # TODO: This memory limit may be too much or too little. It would be better to
 # determine it based on available resources.
-GPU_MEM_LIMIT = 1024**3  # 1 GB memory limit
+GPU_MEM_LIMIT = 1024 ** 3  # 1 GB memory limit
 
 
 def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
@@ -37,12 +37,8 @@ def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
         x0_int, y0_int = torch.clamp(boxes.min(dim=0).values.floor()[:2] - 1, min=0).to(
             dtype=torch.int32
         )
-        x1_int = torch.clamp(boxes[:, 2].max().ceil() + 1, max=img_w).to(
-            dtype=torch.int32
-        )
-        y1_int = torch.clamp(boxes[:, 3].max().ceil() + 1, max=img_h).to(
-            dtype=torch.int32
-        )
+        x1_int = torch.clamp(boxes[:, 2].max().ceil() + 1, max=img_w).to(dtype=torch.int32)
+        y1_int = torch.clamp(boxes[:, 3].max().ceil() + 1, max=img_h).to(dtype=torch.int32)
     else:
         x0_int, y0_int = 0, 0
         x1_int, y1_int = img_w, img_h
@@ -89,9 +85,7 @@ def paste_masks_in_image(masks, boxes, image_shape, threshold=0.5):
         number of detected object instances and Himage, Wimage are the image width
         and height. img_masks[i] is a binary mask for object instance i.
     """
-    assert (
-        masks.shape[-1] == masks.shape[-2]
-    ), "Only square mask predictions are supported"
+    assert masks.shape[-1] == masks.shape[-2], "Only square mask predictions are supported"
     N = len(masks)
     if N == 0:
         return masks.new_empty((0,) + image_shape, dtype=torch.uint8)
@@ -117,19 +111,11 @@ def paste_masks_in_image(masks, boxes, image_shape, threshold=0.5):
     chunks = torch.chunk(torch.arange(N, device=device), num_chunks)
 
     img_masks = torch.zeros(
-        N,
-        img_h,
-        img_w,
-        device=device,
-        dtype=torch.bool if threshold >= 0 else torch.uint8,
+        N, img_h, img_w, device=device, dtype=torch.bool if threshold >= 0 else torch.uint8
     )
     for inds in chunks:
         masks_chunk, spatial_inds = _do_paste_mask(
-            masks[inds, None, :, :],
-            boxes[inds],
-            img_h,
-            img_w,
-            skip_empty=device.type == "cpu",
+            masks[inds, None, :, :], boxes[inds], img_h, img_w, skip_empty=device.type == "cpu"
         )
 
         if threshold >= 0:

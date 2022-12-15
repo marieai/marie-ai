@@ -3,12 +3,18 @@
 # File: transformer.py
 
 import inspect
+import numpy as np
 import pprint
 import sys
 from abc import ABCMeta, abstractmethod
-
-import numpy as np
-from fvcore.transforms.transform import BlendTransform, CropTransform, HFlipTransform, NoOpTransform, Transform, TransformList
+from fvcore.transforms.transform import (
+    BlendTransform,
+    CropTransform,
+    HFlipTransform,
+    NoOpTransform,
+    Transform,
+    TransformList,
+)
 from PIL import Image
 
 from .transform import ExtentTransform, ResizeTransform
@@ -29,9 +35,9 @@ __all__ = [
 
 
 def check_dtype(img):
-    assert isinstance(
-        img, np.ndarray
-    ), "[TransformGen] Needs an numpy array, but got a {}!".format(type(img))
+    assert isinstance(img, np.ndarray), "[TransformGen] Needs an numpy array, but got a {}!".format(
+        type(img)
+    )
     assert not isinstance(img.dtype, np.integer) or (
         img.dtype == np.uint8
     ), "[TransformGen] Got image of type {}, use uint8 or floating points instead!".format(
@@ -87,13 +93,11 @@ class TransformGen(metaclass=ABCMeta):
             argstr = []
             for name, param in sig.parameters.items():
                 assert (
-                    param.kind != param.VAR_POSITIONAL
-                    and param.kind != param.VAR_KEYWORD
+                    param.kind != param.VAR_POSITIONAL and param.kind != param.VAR_KEYWORD
                 ), "The default __repr__ doesn't support *args or **kwargs"
-                assert hasattr(
-                    self, name
-                ), "Attribute {} not found! Default __repr__ only works if attributes match the constructor.".format(
-                    name
+                assert hasattr(self, name), (
+                    "Attribute {} not found! "
+                    "Default __repr__ only works if attributes match the constructor.".format(name)
                 )
                 attr = getattr(self, name)
                 default = param.default
@@ -124,9 +128,7 @@ class RandomFlip(TransformGen):
         super().__init__()
 
         if horiz and vert:
-            raise ValueError(
-                "Cannot do both horiz and vert. Please use two Flip instead."
-            )
+            raise ValueError("Cannot do both horiz and vert. Please use two Flip instead.")
         if not horiz and not vert:
             raise ValueError("At least one of horiz or vert has to be True!")
         self._init(locals())
@@ -141,7 +143,7 @@ class RandomFlip(TransformGen):
 
 
 class Resize(TransformGen):
-    """Resize image to a target size"""
+    """ Resize image to a target size"""
 
     def __init__(self, shape, interp=Image.BILINEAR):
         """
@@ -167,11 +169,7 @@ class ResizeShortestEdge(TransformGen):
     """
 
     def __init__(
-        self,
-        short_edge_length,
-        max_size=sys.maxsize,
-        sample_style="range",
-        interp=Image.BILINEAR,
+        self, short_edge_length, max_size=sys.maxsize, sample_style="range", interp=Image.BILINEAR
     ):
         """
         Args:
@@ -193,9 +191,7 @@ class ResizeShortestEdge(TransformGen):
         h, w = img.shape[:2]
 
         if self.is_range:
-            size = np.random.randint(
-                self.short_edge_length[0], self.short_edge_length[1] + 1
-            )
+            size = np.random.randint(self.short_edge_length[0], self.short_edge_length[1] + 1)
         else:
             size = np.random.choice(self.short_edge_length)
         if size == 0:
@@ -235,9 +231,7 @@ class RandomCrop(TransformGen):
     def get_transform(self, img):
         h, w = img.shape[:2]
         croph, cropw = self.get_crop_size((h, w))
-        assert h >= croph and w >= cropw, "Shape computation in {} has bugs.".format(
-            self
-        )
+        assert h >= croph and w >= cropw, "Shape computation in {} has bugs.".format(self)
         h0 = np.random.randint(h - croph + 1)
         w0 = np.random.randint(w - cropw + 1)
         return CropTransform(w0, h0, cropw, croph)
@@ -305,10 +299,7 @@ class RandomExtent(TransformGen):
 
         return ExtentTransform(
             src_rect=(src_rect[0], src_rect[1], src_rect[2], src_rect[3]),
-            output_size=(
-                int(src_rect[3] - src_rect[1]),
-                int(src_rect[2] - src_rect[0]),
-            ),
+            output_size=(int(src_rect[3] - src_rect[1]), int(src_rect[2] - src_rect[0])),
         )
 
 
@@ -408,11 +399,7 @@ class RandomLighting(TransformGen):
         super().__init__()
         self._init(locals())
         self.eigen_vecs = np.array(
-            [
-                [-0.5675, 0.7192, 0.4009],
-                [-0.5808, -0.0045, -0.8140],
-                [-0.5836, -0.6948, 0.4203],
-            ]
+            [[-0.5675, 0.7192, 0.4009], [-0.5808, -0.0045, -0.8140], [-0.5836, -0.6948, 0.4203]]
         )
         self.eigen_vals = np.array([0.2175, 0.0188, 0.0045])
 
@@ -420,9 +407,7 @@ class RandomLighting(TransformGen):
         assert img.shape[-1] == 3, "Saturation only works on RGB images"
         weights = np.random.normal(scale=self.scale, size=3)
         return BlendTransform(
-            src_image=self.eigen_vecs.dot(weights * self.eigen_vals),
-            src_weight=1.0,
-            dst_weight=1.0,
+            src_image=self.eigen_vecs.dot(weights * self.eigen_vals), src_weight=1.0, dst_weight=1.0
         )
 
 
@@ -454,9 +439,7 @@ def apply_transform_gens(transform_gens, img):
         tfm = g.get_transform(img)
         assert isinstance(
             tfm, Transform
-        ), "TransformGen {} must return an instance of Transform! Got {} instead".format(
-            g, tfm
-        )
+        ), "TransformGen {} must return an instance of Transform! Got {} instead".format(g, tfm)
         img = tfm.apply_image(img)
         tfms.append(tfm)
     return img, TransformList(tfms)

@@ -3,9 +3,8 @@
 
 import glob
 import os
-
-import torch
 from setuptools import find_packages, setup
+import torch
 from torch.utils.cpp_extension import CUDA_HOME, CppExtension, CUDAExtension
 
 torch_ver = [int(x) for x in torch.__version__.split(".")[:2]]
@@ -29,9 +28,7 @@ def get_extensions():
     extra_compile_args = {"cxx": []}
     define_macros = []
 
-    if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv(
-        "FORCE_CUDA", "0"
-    ) == "1":
+    if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv("FORCE_CUDA", "0") == "1":
         extension = CUDAExtension
         sources += source_cuda
         define_macros += [("WITH_CUDA", None)]
@@ -69,7 +66,8 @@ setup(
     version="0.1",
     author="FAIR",
     url="https://github.com/facebookresearch/detectron2",
-    description="Detectron2 is FAIR's next-generation research platform for object detection and segmentation.",
+    description="Detectron2 is FAIR's next-generation research "
+    "platform for object detection and segmentation.",
     packages=find_packages(exclude=("configs", "tests")),
     python_requires=">=3.6",
     install_requires=[

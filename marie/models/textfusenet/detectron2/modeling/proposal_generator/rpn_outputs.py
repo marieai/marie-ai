@@ -1,14 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import itertools
 import logging
-
 import numpy as np
 import torch
 import torch.nn.functional as F
+from fvcore.nn import smooth_l1_loss
+
 from detectron2.layers import batched_nms, cat
 from detectron2.structures import Boxes, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
-from fvcore.nn import smooth_l1_loss
 
 from ..sampling import subsample_labels
 
@@ -113,9 +113,7 @@ def find_top_rpn_proposals(
 
         topk_proposals.append(topk_proposals_i)
         topk_scores.append(topk_scores_i)
-        level_ids.append(
-            torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device)
-        )
+        level_ids.append(torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device))
 
     # 2. Concat all levels together
     topk_scores = cat(topk_scores, dim=1)
@@ -133,11 +131,7 @@ def find_top_rpn_proposals(
         keep = boxes.nonempty(threshold=min_box_side_len)
         lvl = level_ids
         if keep.sum().item() != len(boxes):
-            boxes, scores_per_img, lvl = (
-                boxes[keep],
-                scores_per_img[keep],
-                level_ids[keep],
-            )
+            boxes, scores_per_img, lvl = boxes[keep], scores_per_img[keep], level_ids[keep]
 
         keep = batched_nms(boxes.tensor, scores_per_img, lvl, nms_thresh)
         # In Detectron1, there was different behavior during training vs. testing.
@@ -183,10 +177,7 @@ def rpn_losses(
     """
     pos_masks = gt_objectness_logits == 1
     localization_loss = smooth_l1_loss(
-        pred_anchor_deltas[pos_masks],
-        gt_anchor_deltas[pos_masks],
-        smooth_l1_beta,
-        reduction="sum",
+        pred_anchor_deltas[pos_masks], gt_anchor_deltas[pos_masks], smooth_l1_beta, reduction="sum"
     )
 
     valid_masks = gt_objectness_logits >= 0
@@ -267,25 +258,19 @@ class RPNOutputs(object):
         gt_anchor_deltas = []
         # Concatenate anchors from all feature maps into a single Boxes per image
         anchors = [Boxes.cat(anchors_i) for anchors_i in self.anchors]
-        for image_size_i, anchors_i, gt_boxes_i in zip(
-            self.image_sizes, anchors, self.gt_boxes
-        ):
+        for image_size_i, anchors_i, gt_boxes_i in zip(self.image_sizes, anchors, self.gt_boxes):
             """
             image_size_i: (h, w) for the i-th image
             anchors_i: anchors for i-th image
             gt_boxes_i: ground-truth boxes for i-th image
             """
             match_quality_matrix = pairwise_iou(gt_boxes_i, anchors_i)
-            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(
-                match_quality_matrix
-            )
+            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(match_quality_matrix)
 
             if self.boundary_threshold >= 0:
                 # Discard anchors that go out of the boundaries of the image
                 # NOTE: This is legacy functionality that is turned off by default in Detectron2
-                anchors_inside_image = anchors_i.inside_box(
-                    image_size_i, self.boundary_threshold
-                )
+                anchors_inside_image = anchors_i.inside_box(image_size_i, self.boundary_threshold)
                 gt_objectness_logits_i[~anchors_inside_image] = -1
 
             if len(gt_boxes_i) == 0:
@@ -337,9 +322,7 @@ class RPNOutputs(object):
         """
         # Collect all objectness labels and delta targets over feature maps and images
         # The final ordering is L, N, H, W, A from slowest to fastest axis.
-        num_anchors_per_map = [
-            np.prod(x.shape[1:]) for x in self.pred_objectness_logits
-        ]
+        num_anchors_per_map = [np.prod(x.shape[1:]) for x in self.pred_objectness_logits]
         num_anchors_per_image = sum(num_anchors_per_map)
 
         # Stack to: (N, num_anchors_per_image)
@@ -356,9 +339,7 @@ class RPNOutputs(object):
 
         assert gt_objectness_logits.shape[1] == num_anchors_per_image
         # Split to tuple of L tensors, each with shape (N, num_anchors_per_map)
-        gt_objectness_logits = torch.split(
-            gt_objectness_logits, num_anchors_per_map, dim=1
-        )
+        gt_objectness_logits = torch.split(gt_objectness_logits, num_anchors_per_map, dim=1)
         # Concat from all feature maps
         gt_objectness_logits = cat([x.flatten() for x in gt_objectness_logits], dim=0)
 
@@ -426,9 +407,7 @@ class RPNOutputs(object):
             N, _, Hi, Wi = pred_anchor_deltas_i.shape
             # Reshape: (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B) -> (N*Hi*Wi*A, B)
             pred_anchor_deltas_i = (
-                pred_anchor_deltas_i.view(N, -1, B, Hi, Wi)
-                .permute(0, 3, 4, 1, 2)
-                .reshape(-1, B)
+                pred_anchor_deltas_i.view(N, -1, B, Hi, Wi).permute(0, 3, 4, 1, 2).reshape(-1, B)
             )
             # Concatenate all anchors to shape (N*Hi*Wi*A, B)
             # type(anchors_i[0]) is Boxes (B = 4) or RotatedBoxes (B = 5)

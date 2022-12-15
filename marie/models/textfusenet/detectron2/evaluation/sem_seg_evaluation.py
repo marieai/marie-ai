@@ -2,16 +2,16 @@
 import itertools
 import json
 import logging
+import numpy as np
 import os
 from collections import OrderedDict
-
-import numpy as np
 import PIL.Image as Image
 import pycocotools.mask as mask_util
 import torch
+from fvcore.common.file_io import PathManager
+
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.utils.comm import all_gather, is_main_process, synchronize
-from fvcore.common.file_io import PathManager
 
 from .evaluator import DatasetEvaluator
 
@@ -21,9 +21,7 @@ class SemSegEvaluator(DatasetEvaluator):
     Evaluate semantic segmentation
     """
 
-    def __init__(
-        self, dataset_name, distributed, num_classes, ignore_label=255, output_dir=None
-    ):
+    def __init__(self, dataset_name, distributed, num_classes, ignore_label=255, output_dir=None):
         """
         Args:
             dataset_name (str): name of the dataset to be evaluated.
@@ -74,15 +72,13 @@ class SemSegEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int)
-            with PathManager.open(
-                self.input_file_to_gt_file[input["file_name"]], "rb"
-            ) as f:
+            with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = np.array(Image.open(f), dtype=np.int)
 
             gt[gt == self._ignore_label] = self._num_classes
 
             self._conf_matrix += np.bincount(
-                self._N * pred.reshape(-1) + gt.reshape(-1), minlength=self._N**2
+                self._N * pred.reshape(-1) + gt.reshape(-1), minlength=self._N ** 2
             ).reshape(self._N, self._N)
 
             self._predictions.extend(self.encode_json_sem_seg(pred, input["file_name"]))
@@ -154,9 +150,7 @@ class SemSegEvaluator(DatasetEvaluator):
             if self._contiguous_id_to_dataset_id is not None:
                 assert (
                     label in self._contiguous_id_to_dataset_id
-                ), "Label {} is not in the metadata info for {}".format(
-                    label, self._dataset_name
-                )
+                ), "Label {} is not in the metadata info for {}".format(label, self._dataset_name)
                 dataset_id = self._contiguous_id_to_dataset_id[label]
             else:
                 dataset_id = int(label)
@@ -164,10 +158,6 @@ class SemSegEvaluator(DatasetEvaluator):
             mask_rle = mask_util.encode(np.array(mask[:, :, None], order="F"))[0]
             mask_rle["counts"] = mask_rle["counts"].decode("utf-8")
             json_list.append(
-                {
-                    "file_name": input_file_name,
-                    "category_id": dataset_id,
-                    "segmentation": mask_rle,
-                }
+                {"file_name": input_file_name, "category_id": dataset_id, "segmentation": mask_rle}
             )
         return json_list

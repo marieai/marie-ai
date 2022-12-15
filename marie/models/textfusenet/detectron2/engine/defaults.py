@@ -13,12 +13,24 @@ import argparse
 import logging
 import os
 from collections import OrderedDict
+import torch
+from fvcore.common.file_io import PathManager
+from fvcore.nn.precise_bn import get_bn_modules
+from torch.nn.parallel import DistributedDataParallel
 
 import detectron2.data.transforms as T
-import torch
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.data import MetadataCatalog, build_detection_test_loader, build_detection_train_loader
-from detectron2.evaluation import DatasetEvaluator, inference_on_dataset, print_csv_format, verify_results
+from detectron2.data import (
+    MetadataCatalog,
+    build_detection_test_loader,
+    build_detection_train_loader,
+)
+from detectron2.evaluation import (
+    DatasetEvaluator,
+    inference_on_dataset,
+    print_csv_format,
+    verify_results,
+)
 from detectron2.modeling import build_model
 from detectron2.solver import build_lr_scheduler, build_optimizer
 from detectron2.utils import comm
@@ -26,19 +38,11 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
 from detectron2.utils.logger import setup_logger
-from fvcore.common.file_io import PathManager
-from fvcore.nn.precise_bn import get_bn_modules
-from torch.nn.parallel import DistributedDataParallel
 
 from . import hooks
 from .train_loop import SimpleTrainer
 
-__all__ = [
-    "default_argument_parser",
-    "default_setup",
-    "DefaultPredictor",
-    "DefaultTrainer",
-]
+__all__ = ["default_argument_parser", "default_setup", "DefaultPredictor", "DefaultTrainer"]
 
 
 def default_argument_parser():
@@ -49,28 +53,17 @@ def default_argument_parser():
         argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description="Detectron2 Training")
-    parser.add_argument(
-        "--config-file", default="", metavar="FILE", help="path to config file"
-    )
+    parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
     parser.add_argument(
         "--resume",
         default=True,
         action="store_true",
         help="whether to attempt to resume from the checkpoint directory",
     )
-    parser.add_argument(
-        "--eval-only", action="store_true", help="perform evaluation only"
-    )
-    parser.add_argument(
-        "--num-gpus", type=int, default=1, help="number of gpus *per machine*"
-    )
+    parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
+    parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
     parser.add_argument("--num-machines", type=int, default=1)
-    parser.add_argument(
-        "--machine-rank",
-        type=int,
-        default=0,
-        help="the rank of this machine (unique per machine)",
-    )
+    parser.add_argument("--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)")
 
     # PyTorch still may leave orphan processes in multi-gpu training.
     # Therefore we use a deterministic way to obtain port,
@@ -106,11 +99,7 @@ def default_setup(cfg, args):
     setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
 
-    logger.info(
-        "Rank of current process: {}. World size: {}".format(
-            rank, comm.get_world_size()
-        )
-    )
+    logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
     logger.info("Environment info:\n" + collect_env_info())
 
     logger.info("Command line arguments: " + str(args))
@@ -185,9 +174,7 @@ class DefaultPredictor:
             # whether the model expects BGR inputs or RGB
             original_image = original_image[:, :, ::-1]
         height, width = original_image.shape[:2]
-        image = self.transform_gen.get_transform(original_image).apply_image(
-            original_image
-        )
+        image = self.transform_gen.get_transform(original_image).apply_image(original_image)
         image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
         inputs = {"image": image, "height": height, "width": width}
@@ -242,10 +229,7 @@ class DefaultTrainer(SimpleTrainer):
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
-                model,
-                device_ids=[comm.get_local_rank()],
-                broadcast_buffers=False,
-                find_unused_parameters=True,
+                model, device_ids=[comm.get_local_rank()], broadcast_buffers=False, find_unused_parameters=True
             )
         super().__init__(model, data_loader, optimizer)
 
@@ -277,10 +261,7 @@ class DefaultTrainer(SimpleTrainer):
         # The checkpoint stores the training iteration that just finished, thus we start
         # at the next iteration (or iter zero if there's no checkpoint).
         self.start_iter = (
-            self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get(
-                "iteration", -1
-            )
-            + 1
+            self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
         )
 
     def build_hooks(self):
@@ -315,11 +296,7 @@ class DefaultTrainer(SimpleTrainer):
         # This is not always the best: if checkpointing has a different frequency,
         # some checkpoints may have more precise statistics than others.
         if comm.is_main_process():
-            ret.append(
-                hooks.PeriodicCheckpointer(
-                    self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD
-                )
-            )
+            ret.append(hooks.PeriodicCheckpointer(self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD))
 
         def test_and_save_results():
             self._last_eval_results = self.test(self.cfg, self.model)
@@ -487,12 +464,8 @@ class DefaultTrainer(SimpleTrainer):
             if comm.is_main_process():
                 assert isinstance(
                     results_i, dict
-                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
-                    results_i
-                )
-                logger.info(
-                    "Evaluation results for {} in csv format:".format(dataset_name)
-                )
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(results_i)
+                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
                 print_csv_format(results_i)
 
         if len(results) == 1:

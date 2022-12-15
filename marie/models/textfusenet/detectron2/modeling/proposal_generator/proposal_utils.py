@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import math
-
 import torch
+
 from detectron2.structures import Instances
 
 

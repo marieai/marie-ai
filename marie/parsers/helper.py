@@ -116,9 +116,7 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
                         % (
                             'enabled'
                             if action.default
-                            else (
-                                f'disabled, use "{action.option_strings[0]}" to enable it'
-                            )
+                            else f'disabled, use "{action.option_strings[0]}" to enable it'
                         ),
                         attrs=['dark'],
                     )
@@ -312,10 +310,10 @@ class CastToIntAction(argparse.Action):
         :param values: the values to add to the parser
         :param option_string: inherited, not used
         """
-        if isinstance(values, list):
-            d = [_port_to_int(port) for port in values]
-        elif isinstance(values, str):
-            d = _port_to_int(values)
+        d = []
+        for value in values:
+            value = value.split(',')
+            d.extend([_port_to_int(port) for port in value])
         setattr(args, self.dest, d)
 
 
@@ -327,6 +325,26 @@ def _port_to_int(port):
             f'port {port} is not an integer and cannot be cast to one'
         )
         return port
+
+
+class CastHostAction(argparse.Action):
+    """argparse action to cast a list of values to int"""
+
+    def __call__(self, parser, args, values, option_string=None):
+        """
+        call the CastHostAction
+
+
+        .. # noqa: DAR401
+        :param parser: the parser
+        :param args: args to initialize the values
+        :param values: the values to add to the parser
+        :param option_string: inherited, not used
+        """
+        d = []
+        for value in values:
+            d.extend(value.split(','))
+        setattr(args, self.dest, d)
 
 
 _chf = _ColoredHelpFormatter

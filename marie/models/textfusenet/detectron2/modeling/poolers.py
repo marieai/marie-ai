@@ -1,18 +1,16 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 import math
 import sys
-
 import torch
-from detectron2.layers import ROIAlign, ROIAlignRotated, cat
 from torch import nn
 from torchvision.ops import RoIPool
+
+from detectron2.layers import ROIAlign, ROIAlignRotated, cat
 
 __all__ = ["ROIPooler"]
 
 
-def assign_boxes_to_levels(
-    box_lists, min_level, max_level, canonical_box_size, canonical_level
-):
+def assign_boxes_to_levels(box_lists, min_level, max_level, canonical_box_size, canonical_level):
     """
     Map each box in `box_lists` to a feature map level index and return the assignment
     vector.
@@ -72,16 +70,12 @@ def convert_boxes_to_pooler_format(box_lists):
 
     def fmt_box_list(box_tensor, batch_index):
         repeated_index = torch.full(
-            (len(box_tensor), 1),
-            batch_index,
-            dtype=box_tensor.dtype,
-            device=box_tensor.device,
+            (len(box_tensor), 1), batch_index, dtype=box_tensor.dtype, device=box_tensor.device
         )
         return cat((repeated_index, box_tensor), dim=1)
 
     pooler_fmt_boxes = cat(
-        [fmt_box_list(box_list.tensor, i) for i, box_list in enumerate(box_lists)],
-        dim=0,
+        [fmt_box_list(box_list.tensor, i) for i, box_list in enumerate(box_lists)], dim=0
     )
 
     return pooler_fmt_boxes
@@ -139,20 +133,14 @@ class ROIPooler(nn.Module):
         if pooler_type == "ROIAlign":
             self.level_poolers = nn.ModuleList(
                 ROIAlign(
-                    output_size,
-                    spatial_scale=scale,
-                    sampling_ratio=sampling_ratio,
-                    aligned=False,
+                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio, aligned=False
                 )
                 for scale in scales
             )
         elif pooler_type == "ROIAlignV2":
             self.level_poolers = nn.ModuleList(
                 ROIAlign(
-                    output_size,
-                    spatial_scale=scale,
-                    sampling_ratio=sampling_ratio,
-                    aligned=True,
+                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio, aligned=True
                 )
                 for scale in scales
             )
@@ -162,9 +150,7 @@ class ROIPooler(nn.Module):
             )
         elif pooler_type == "ROIAlignRotated":
             self.level_poolers = nn.ModuleList(
-                ROIAlignRotated(
-                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio
-                )
+                ROIAlignRotated(output_size, spatial_scale=scale, sampling_ratio=sampling_ratio)
                 for scale in scales
             )
         else:
@@ -186,9 +172,7 @@ class ROIPooler(nn.Module):
         if len(scales) > 1:
             # When there is only one feature map, canonical_level is redundant and we should not
             # require it to be a sensible value. Therefore we skip this assertion
-            assert (
-                self.min_level <= canonical_level and canonical_level <= self.max_level
-            )
+            assert self.min_level <= canonical_level and canonical_level <= self.max_level
         self.canonical_level = canonical_level
         assert canonical_box_size > 0
         self.canonical_box_size = canonical_box_size
@@ -231,11 +215,7 @@ class ROIPooler(nn.Module):
             return self.level_poolers[0](x[0], pooler_fmt_boxes)
 
         level_assignments = assign_boxes_to_levels(
-            box_lists,
-            self.min_level,
-            self.max_level,
-            self.canonical_box_size,
-            self.canonical_level,
+            box_lists, self.min_level, self.max_level, self.canonical_box_size, self.canonical_level
         )
 
         num_boxes = len(pooler_fmt_boxes)
@@ -244,9 +224,7 @@ class ROIPooler(nn.Module):
 
         dtype, device = x[0].dtype, x[0].device
         output = torch.zeros(
-            (num_boxes, num_channels, output_size, output_size),
-            dtype=dtype,
-            device=device,
+            (num_boxes, num_channels, output_size, output_size), dtype=dtype, device=device
         )
 
         for level, (x_level, pooler) in enumerate(zip(x, self.level_poolers)):

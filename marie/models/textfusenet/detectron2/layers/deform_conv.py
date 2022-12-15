@@ -1,13 +1,13 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import math
 from functools import lru_cache
-
 import torch
-from detectron2 import _C
 from torch import nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair
+
+from detectron2 import _C
 
 from .wrappers import _NewEmptyTensorOp
 
@@ -28,9 +28,7 @@ class _DeformConv(Function):
     ):
         if input is not None and input.dim() != 4:
             raise ValueError(
-                "Expected 4D tensor as input, got {}D tensor instead.".format(
-                    input.dim()
-                )
+                "Expected 4D tensor as input, got {}D tensor instead.".format(input.dim())
             )
         ctx.stride = _pair(stride)
         ctx.padding = _pair(padding)
@@ -42,9 +40,7 @@ class _DeformConv(Function):
         ctx.save_for_backward(input, offset, weight)
 
         output = input.new_empty(
-            _DeformConv._output_size(
-                input, weight, ctx.padding, ctx.dilation, ctx.stride
-            )
+            _DeformConv._output_size(input, weight, ctx.padding, ctx.dilation, ctx.stride)
         )
 
         ctx.bufs_ = [input.new_empty(0), input.new_empty(0)]  # columns, ones
@@ -52,12 +48,8 @@ class _DeformConv(Function):
         if not input.is_cuda:
             raise NotImplementedError
         else:
-            cur_im2col_step = _DeformConv._cal_im2col_step(
-                input.shape[0], ctx.im2col_step
-            )
-            assert (
-                input.shape[0] % cur_im2col_step
-            ) == 0, "im2col step must divide batchsize"
+            cur_im2col_step = _DeformConv._cal_im2col_step(input.shape[0], ctx.im2col_step)
+            assert (input.shape[0] % cur_im2col_step) == 0, "im2col step must divide batchsize"
 
             _C.deform_conv_forward(
                 input,
@@ -90,12 +82,8 @@ class _DeformConv(Function):
         if not grad_output.is_cuda:
             raise NotImplementedError
         else:
-            cur_im2col_step = _DeformConv._cal_im2col_step(
-                input.shape[0], ctx.im2col_step
-            )
-            assert (
-                input.shape[0] % cur_im2col_step
-            ) == 0, "im2col step must divide batchsize"
+            cur_im2col_step = _DeformConv._cal_im2col_step(input.shape[0], ctx.im2col_step)
+            assert (input.shape[0] % cur_im2col_step) == 0, "im2col step must divide batchsize"
 
             if ctx.needs_input_grad[0] or ctx.needs_input_grad[1]:
                 grad_input = torch.zeros_like(input)
@@ -345,14 +333,12 @@ class DeformConv(nn.Module):
         super(DeformConv, self).__init__()
 
         assert not bias
-        assert (
-            in_channels % groups == 0
-        ), "in_channels {} cannot be divisible by groups {}".format(in_channels, groups)
+        assert in_channels % groups == 0, "in_channels {} cannot be divisible by groups {}".format(
+            in_channels, groups
+        )
         assert (
             out_channels % groups == 0
-        ), "out_channels {} cannot be divisible by groups {}".format(
-            out_channels, groups
-        )
+        ), "out_channels {} cannot be divisible by groups {}".format(out_channels, groups)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -381,11 +367,7 @@ class DeformConv(nn.Module):
             output_shape = [
                 (i + 2 * p - (di * (k - 1) + 1)) // s + 1
                 for i, p, di, k, s in zip(
-                    x.shape[-2:],
-                    self.padding,
-                    self.dilation,
-                    self.kernel_size,
-                    self.stride,
+                    x.shape[-2:], self.padding, self.dilation, self.kernel_size, self.stride
                 )
             ]
             output_shape = [x.shape[0], self.weight.shape[0]] + output_shape
@@ -475,11 +457,7 @@ class ModulatedDeformConv(nn.Module):
             output_shape = [
                 (i + 2 * p - (di * (k - 1) + 1)) // s + 1
                 for i, p, di, k, s in zip(
-                    x.shape[-2:],
-                    self.padding,
-                    self.dilation,
-                    self.kernel_size,
-                    self.stride,
+                    x.shape[-2:], self.padding, self.dilation, self.kernel_size, self.stride
                 )
             ]
             output_shape = [x.shape[0], self.weight.shape[0]] + output_shape

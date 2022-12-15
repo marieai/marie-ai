@@ -173,8 +173,7 @@ class BasePod(ABC):
         else:
             # here shutdown has been set already, therefore `run` will gracefully finish
             self.logger.debug(
-                f'{"shutdown is is already set" if self.is_shutdown.is_set() else "Runtime was never started"}.'
-                ' Runtime will end gracefully on its own'
+                f'{"shutdown is is already set" if self.is_shutdown.is_set() else "Runtime was never started"}. Runtime will end gracefully on its own'
             )
             self._terminate()
         self.is_shutdown.set()
@@ -220,7 +219,7 @@ class BasePod(ABC):
         _timeout = timeout or -1
         self.logger.warning(
             f'{self} timeout after waiting for {self.args.timeout_ready}ms, '
-            'if your executor takes time to load, you may increase --timeout-ready'
+            f'if your executor takes time to load, you may increase --timeout-ready'
         )
         self.close()
         raise TimeoutError(

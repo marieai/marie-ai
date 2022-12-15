@@ -1,9 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import numpy as np
 from enum import Enum, unique
 from typing import Iterator, List, Tuple, Union
-
-import numpy as np
 import torch
+
 from detectron2.layers import cat
 
 _RawBoxType = Union[List[float], Tuple[float, ...], torch.Tensor, np.ndarray]
@@ -29,9 +29,7 @@ class BoxMode(Enum):
     XYWH_REL = 3
 
     @staticmethod
-    def convert(
-        box: _RawBoxType, from_mode: "BoxMode", to_mode: "BoxMode"
-    ) -> _RawBoxType:
+    def convert(box: _RawBoxType, from_mode: "BoxMode", to_mode: "BoxMode") -> _RawBoxType:
         """
         Args:
             box: can be a 4-tuple, 4-list or a Nx4 array/tensor.
@@ -53,9 +51,7 @@ class BoxMode(Enum):
         else:
             arr = box
 
-        assert (
-            to_mode.value < 2 and from_mode.value < 2
-        ), "Relative mode not yet supported!"
+        assert to_mode.value < 2 and from_mode.value < 2, "Relative mode not yet supported!"
 
         original_shape = arr.shape
         arr = arr.reshape(-1, 4)
@@ -91,9 +87,7 @@ class Boxes:
         Args:
             tensor (Tensor[float]): a Nx4 matrix.  Each row is (x1, y1, x2, y2).
         """
-        device = (
-            tensor.device if isinstance(tensor, torch.Tensor) else torch.device("cpu")
-        )
+        device = tensor.device if isinstance(tensor, torch.Tensor) else torch.device("cpu")
         tensor = torch.as_tensor(tensor, dtype=torch.float32, device=device)
         if tensor.numel() == 0:
             tensor = torch.zeros(0, 4, dtype=torch.float32, device=device)
@@ -172,9 +166,7 @@ class Boxes:
         if isinstance(item, int):
             return Boxes(self.tensor[item].view(1, -1))
         b = self.tensor[item]
-        assert (
-            b.dim() == 2
-        ), "Indexing on Boxes with {} failed to return a matrix!".format(item)
+        assert b.dim() == 2, "Indexing on Boxes with {} failed to return a matrix!".format(item)
         return Boxes(b)
 
     def __len__(self) -> int:
@@ -183,9 +175,7 @@ class Boxes:
     def __repr__(self) -> str:
         return "Boxes(" + str(self.tensor) + ")"
 
-    def inside_box(
-        self, box_size: BoxSizeType, boundary_threshold: int = 0
-    ) -> torch.Tensor:
+    def inside_box(self, box_size: BoxSizeType, boundary_threshold: int = 0) -> torch.Tensor:
         """
         Args:
             box_size (height, width): Size of the reference box.
@@ -293,10 +283,9 @@ def matched_boxlist_iou(boxes1: Boxes, boxes2: Boxes) -> torch.Tensor:
     Returns:
         (tensor) iou, sized [N].
     """
-    assert len(boxes1) == len(
-        boxes2
-    ), "boxlists should have the samenumber of entries, got {}, {}".format(
-        len(boxes1), len(boxes2)
+    assert len(boxes1) == len(boxes2), (
+        "boxlists should have the same"
+        "number of entries, got {}, {}".format(len(boxes1), len(boxes2))
     )
     area1 = boxes1.area()  # [N]
     area2 = boxes2.area()  # [N]

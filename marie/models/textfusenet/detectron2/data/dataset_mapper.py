@@ -1,7 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import copy
 import logging
-
 import numpy as np
 import torch
 from fvcore.common.file_io import PathManager
@@ -34,9 +33,7 @@ class DatasetMapper:
     def __init__(self, cfg, is_train=True):
         if cfg.INPUT.CROP.ENABLED and is_train:
             self.crop_gen = T.RandomCrop(cfg.INPUT.CROP.TYPE, cfg.INPUT.CROP.SIZE)
-            logging.getLogger(__name__).info(
-                "CropGen used in training: " + str(self.crop_gen)
-            )
+            logging.getLogger(__name__).info("CropGen used in training: " + str(self.crop_gen))
         else:
             self.crop_gen = None
 
@@ -51,9 +48,7 @@ class DatasetMapper:
         # fmt: on
         if self.keypoint_on and is_train:
             # Flip only makes sense in training
-            self.keypoint_hflip_indices = utils.create_keypoint_hflip_indices(
-                cfg.DATASETS.TRAIN
-            )
+            self.keypoint_hflip_indices = utils.create_keypoint_hflip_indices(cfg.DATASETS.TRAIN)
         else:
             self.keypoint_hflip_indices = None
 
@@ -102,19 +97,13 @@ class DatasetMapper:
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,
         # but not efficient on large generic data structures due to the use of pickle & mp.Queue.
         # Therefore it's important to use torch.Tensor.
-        dataset_dict["image"] = torch.as_tensor(
-            image.transpose(2, 0, 1).astype("float32")
-        )
+        dataset_dict["image"] = torch.as_tensor(image.transpose(2, 0, 1).astype("float32"))
         # Can use uint8 if it turns out to be slow some day
 
         # USER: Remove if you don't use pre-computed proposals.
         if self.load_proposals:
             utils.transform_proposals(
-                dataset_dict,
-                image_shape,
-                transforms,
-                self.min_box_side_len,
-                self.proposal_topk,
+                dataset_dict, image_shape, transforms, self.min_box_side_len, self.proposal_topk
             )
 
         if not self.is_train:
@@ -133,10 +122,7 @@ class DatasetMapper:
             # USER: Implement additional transformations if you have other types of data
             annos = [
                 utils.transform_instance_annotations(
-                    obj,
-                    transforms,
-                    image_shape,
-                    keypoint_hflip_indices=self.keypoint_hflip_indices,
+                    obj, transforms, image_shape, keypoint_hflip_indices=self.keypoint_hflip_indices
                 )
                 for obj in dataset_dict.pop("annotations")
                 if obj.get("iscrowd", 0) == 0

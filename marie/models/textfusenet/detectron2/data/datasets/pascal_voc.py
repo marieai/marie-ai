@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
+from fvcore.common.file_io import PathManager
 import os
+import numpy as np
 import xml.etree.ElementTree as ET
 
-import numpy as np
-from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.structures import BoxMode
-from fvcore.common.file_io import PathManager
+from detectron2.data import DatasetCatalog, MetadataCatalog
+
 
 __all__ = ["register_pascal_voc"]
 
@@ -29,9 +30,7 @@ def load_voc_instances(dirname: str, split: str):
         dirname: Contain "Annotations", "ImageSets", "JPEGImages"
         split (str): one of "train", "test", "val", "trainval"
     """
-    with PathManager.open(
-        os.path.join(dirname, "ImageSets", "Main", split + ".txt")
-    ) as f:
+    with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
         fileids = np.loadtxt(f, dtype=np.str)
 
     dicts = []
@@ -65,11 +64,7 @@ def load_voc_instances(dirname: str, split: str):
             bbox[0] -= 1.0
             bbox[1] -= 1.0
             instances.append(
-                {
-                    "category_id": CLASS_NAMES.index(cls),
-                    "bbox": bbox,
-                    "bbox_mode": BoxMode.XYXY_ABS,
-                }
+                {"category_id": CLASS_NAMES.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS}
             )
         r["annotations"] = instances
         dicts.append(r)

@@ -4,8 +4,8 @@ import logging
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
-
 import torch
+
 from detectron2.utils.comm import is_main_process
 
 
@@ -75,9 +75,7 @@ class DatasetEvaluators(DatasetEvaluator):
                 for k, v in result.items():
                     assert (
                         k not in results
-                    ), "Different evaluators produce results with the same key {}".format(
-                        k
-                    )
+                    ), "Different evaluators produce results with the same key {}".format(k)
                     results[k] = v
         return results
 
@@ -101,9 +99,7 @@ def inference_on_dataset(model, data_loader, evaluator):
     Returns:
         The return value of `evaluator.evaluate()`
     """
-    num_devices = (
-        torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
-    )
+    num_devices = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     logger = logging.getLogger(__name__)
     logger.info("Start inference on {} images".format(len(data_loader)))
 
@@ -150,9 +146,7 @@ def inference_on_dataset(model, data_loader, evaluator):
     total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
     logger.info(
         "Total inference pure compute time: {} ({:.6f} s / img per device, on {} devices)".format(
-            total_compute_time_str,
-            total_compute_time / (total - num_warmup),
-            num_devices,
+            total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
         )
     )
 

@@ -1,10 +1,18 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import fvcore.nn.weight_init as weight_init
 import numpy as np
+import fvcore.nn.weight_init as weight_init
 import torch
 import torch.nn.functional as F
-from detectron2.layers import Conv2d, DeformConv, FrozenBatchNorm2d, ModulatedDeformConv, ShapeSpec, get_norm
 from torch import nn
+
+from detectron2.layers import (
+    Conv2d,
+    DeformConv,
+    FrozenBatchNorm2d,
+    ModulatedDeformConv,
+    ShapeSpec,
+    get_norm,
+)
 
 from .backbone import Backbone
 from .build import BACKBONE_REGISTRY
@@ -366,9 +374,7 @@ class ResNet(Backbone):
         assert len(self._out_features)
         children = [x[0] for x in self.named_children()]
         for out_feature in self._out_features:
-            assert out_feature in children, "Available children: {}".format(
-                ", ".join(children)
-            )
+            assert out_feature in children, "Available children: {}".format(", ".join(children))
 
     def forward(self, x):
         outputs = {}
@@ -389,8 +395,7 @@ class ResNet(Backbone):
     def output_shape(self):
         return {
             name: ShapeSpec(
-                channels=self._out_feature_channels[name],
-                stride=self._out_feature_strides[name],
+                channels=self._out_feature_channels[name], stride=self._out_feature_strides[name]
             )
             for name in self._out_features
         }
@@ -434,17 +439,13 @@ def build_resnet_backbone(cfg, input_shape):
     # fmt: on
     assert res5_dilation in {1, 2}, "res5_dilation cannot be {}.".format(res5_dilation)
 
-    num_blocks_per_stage = {50: [3, 4, 6, 3], 101: [3, 4, 23, 3], 152: [3, 8, 36, 3]}[
-        depth
-    ]
+    num_blocks_per_stage = {50: [3, 4, 6, 3], 101: [3, 4, 23, 3], 152: [3, 8, 36, 3]}[depth]
 
     stages = []
 
     # Avoid creating variables without gradients
     # It consumes extra memory and may cause allreduce to fail
-    out_stage_idx = [
-        {"res2": 2, "res3": 3, "res4": 4, "res5": 5}[f] for f in out_features
-    ]
+    out_stage_idx = [{"res2": 2, "res3": 3, "res4": 4, "res5": 5}[f] for f in out_features]
     max_stage_idx = max(out_stage_idx)
     for idx, stage_idx in enumerate(range(2, max_stage_idx + 1)):
         dilation = res5_dilation if stage_idx == 5 else 1

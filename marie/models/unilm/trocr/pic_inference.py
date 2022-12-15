@@ -1,43 +1,33 @@
 import glob
 import os
 
+import task
 import deit
 import deit_models
-import fairseq
-import task
 import torch
-import torchvision.transforms as transforms
+import fairseq
 from fairseq import utils
 from fairseq_cli import generate
 from PIL import Image
+import torchvision.transforms as transforms
 
 
 def init(model_path, beam=5):
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
-        arg_overrides={
-            "beam": beam,
-            "task": "text_recognition",
-            "data": "",
-            "fp16": False,
-        },
-    )
+        arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False})
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model[0].to(device)
 
-    img_transform = transforms.Compose(
-        [
-            transforms.Resize((384, 384), interpolation=3),
-            transforms.ToTensor(),
-            transforms.Normalize(0.5, 0.5),
-        ]
-    )
+    img_transform = transforms.Compose([
+        transforms.Resize((384, 384), interpolation=3),
+        transforms.ToTensor(),
+        transforms.Normalize(0.5, 0.5)
+    ])
 
     generator = task.build_generator(
-        model,
-        cfg.generation,
-        extra_gen_cls_kwargs={'lm_model': None, 'lm_weight': None},
+        model, cfg.generation, extra_gen_cls_kwargs={'lm_model': None, 'lm_weight': None}
     )
 
     bpe = task.build_bpe(cfg.bpe)
@@ -57,10 +47,8 @@ def preprocess(img_path, img_transform):
 
 
 def get_text(cfg, generator, model, sample, bpe):
-    decoder_output = task.inference_step(
-        generator, model, sample, prefix_tokens=None, constraints=None
-    )
-    decoder_output = decoder_output[0][0]  # top1
+    decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
+    decoder_output = decoder_output[0][0]       #top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
         hypo_tokens=decoder_output["tokens"].int().cpu(),
@@ -87,16 +75,14 @@ if __name__ == '__main__':
     beam = 5
 
     model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
-    _path = jpg_path
+    _path =  jpg_path
 
     sample = preprocess(_path, img_transform)
     text = get_text(cfg, generator, model, sample, bpe)
     print(f"format : {text}  >> {_path}")
 
-    os.exit(0)
-    burst_dir = (
-        "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
-    )
+    os.exit(0) 
+    burst_dir = "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
 
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
         sample = preprocess(_path, img_transform)
@@ -104,3 +90,4 @@ if __name__ == '__main__':
         print(f"format : {text}  >> {_path}")
 
     print('done')
+

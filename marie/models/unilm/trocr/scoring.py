@@ -1,8 +1,7 @@
-import fastwer
-from fairseq.dataclass import FairseqDataclass
 from fairseq.scoring import BaseScorer, register_scorer
 from nltk.metrics.distance import edit_distance
-
+from fairseq.dataclass import FairseqDataclass
+import fastwer
 
 @register_scorer("cer2", dataclass=FairseqDataclass)
 class CER2Scorer(BaseScorer):
@@ -14,13 +13,12 @@ class CER2Scorer(BaseScorer):
     def add_string(self, ref, pred):
         self.refs.append(ref)
         self.preds.append(pred)
-
+    
     def score(self):
         return fastwer.score(self.preds, self.refs, char_level=True)
 
     def result_string(self) -> str:
         return f"CER2: {self.score():.2f}"
-
 
 # def levenshtein(u, v):
 #     prev = None
@@ -66,7 +64,6 @@ class CER2Scorer(BaseScorer):
 #     def result_string(self) -> str:
 #         return f"CER: {self.score():.2f}"
 
-
 @register_scorer("acc_ed", dataclass=FairseqDataclass)
 class AccEDScorer(BaseScorer):
     def __init__(self, args):
@@ -90,16 +87,15 @@ class AccEDScorer(BaseScorer):
         acc, norm_ed = self.score()
         return f"Accuracy: {acc:.3f} Norm ED: {norm_ed:.2f}"
 
-
 @register_scorer("sroie", dataclass=FairseqDataclass)
 class SROIEScorer(BaseScorer):
     def __init__(self, args):
         super(SROIEScorer, self).__init__(args)
         self.n_detected_words = 0
-        self.n_gt_words = 0
+        self.n_gt_words = 0        
         self.n_match_words = 0
 
-    def add_string(self, ref, pred):
+    def add_string(self, ref, pred):        
         pred_words = list(pred.split())
         ref_words = list(ref.split())
         self.n_gt_words += len(ref_words)

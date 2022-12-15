@@ -1,9 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
-from typing import Dict
-
 import numpy as np
+from typing import Dict
 import torch
+
 from detectron2.layers import ShapeSpec, batched_nms_rotated
 from detectron2.structures import Instances, RotatedBoxes, pairwise_iou_rotated
 from detectron2.utils.events import get_event_storage
@@ -73,16 +73,9 @@ def fast_rcnn_inference_rotated(
     """
     result_per_image = [
         fast_rcnn_inference_single_image_rotated(
-            boxes_per_image,
-            scores_per_image,
-            image_shape,
-            score_thresh,
-            nms_thresh,
-            topk_per_image,
+            boxes_per_image, scores_per_image, image_shape, score_thresh, nms_thresh, topk_per_image
         )
-        for scores_per_image, boxes_per_image, image_shape in zip(
-            scores, boxes, image_shapes
-        )
+        for scores_per_image, boxes_per_image, image_shape in zip(scores, boxes, image_shapes)
     ]
     return tuple(list(x) for x in zip(*result_per_image))
 
@@ -197,10 +190,7 @@ class RROIHeads(StandardROIHeads):
             pooler_type=pooler_type,
         )
         self.box_head = build_box_head(
-            cfg,
-            ShapeSpec(
-                channels=in_channels, height=pooler_resolution, width=pooler_resolution
-            ),
+            cfg, ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution)
         )
 
         self.box_predictor = FastRCNNOutputLayers(
@@ -254,9 +244,7 @@ class RROIHeads(StandardROIHeads):
 
             if has_gt:
                 sampled_targets = matched_idxs[sampled_idxs]
-                proposals_per_image.gt_boxes = targets_per_image.gt_boxes[
-                    sampled_targets
-                ]
+                proposals_per_image.gt_boxes = targets_per_image.gt_boxes[sampled_targets]
             else:
                 gt_boxes = RotatedBoxes(
                     targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 5))
@@ -305,8 +293,6 @@ class RROIHeads(StandardROIHeads):
             return outputs.losses()
         else:
             pred_instances, _ = outputs.inference(
-                self.test_score_thresh,
-                self.test_nms_thresh,
-                self.test_detections_per_img,
+                self.test_score_thresh, self.test_nms_thresh, self.test_detections_per_img
             )
             return pred_instances

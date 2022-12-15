@@ -1,39 +1,40 @@
-import argparse
-import logging
-import os
-from collections import OrderedDict
-from functools import partial
-from typing import Dict, Optional, Tuple
+from fairseq.models import FairseqEncoder, register_model, FairseqEncoderDecoderModel, register_model_architecture
+from fairseq.models.transformer import TransformerDecoder, Embedding, TransformerModel
+from fairseq.models.transformer import base_architecture as base_transformer
+from fairseq.models.fairseq_encoder import EncoderOut
+from torch.nn import Parameter
+from fairseq import utils
+from torch import Tensor
 
 import torch
-from fairseq import utils
-from fairseq.models import FairseqEncoder, FairseqEncoderDecoderModel, register_model, register_model_architecture
-from fairseq.models.fairseq_encoder import EncoderOut
-from fairseq.models.transformer import Embedding, TransformerDecoder, TransformerModel
-from fairseq.models.transformer import base_architecture as base_transformer
-from timm.models import create_model
-from torch import Tensor
 from torch.hub import load_state_dict_from_url
-from torch.nn import Parameter
+
+from timm.models import create_model
+
+from functools import partial
+import logging
+import argparse
+from typing import Dict, Optional, Tuple
+from collections import OrderedDict
+import os
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TARGET_POSITIONS = 1024
 
 from argparse import Namespace
-
-from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from omegaconf import DictConfig
+from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 
 try:
     from .unilm_models import UniLMDecoder
 except:
     from unilm_models import UniLMDecoder
 
-
 @register_model('DeiT_TR')
 @register_model('TrOCR')
 class TrOCRModel(FairseqEncoderDecoderModel):
+
     def load_state_dict(
         self,
         state_dict,
@@ -43,9 +44,7 @@ class TrOCRModel(FairseqEncoderDecoderModel):
     ):
 
         if model_cfg is None and args is not None:
-            logger.warn(
-                "using 'args' is deprecated, please update your code to use dataclass config"
-            )
+            logger.warn("using 'args' is deprecated, please update your code to use dataclass config")
             model_cfg = convert_namespace_to_omegaconf(args).model
 
         self.upgrade_state_dict(state_dict)
@@ -56,55 +55,45 @@ class TrOCRModel(FairseqEncoderDecoderModel):
         if not model_cfg.ape:
             model_seq_len = self.state_dict()['encoder.deit.pos_embed'].shape[1]
             ckpt_seq_len = new_state_dict['encoder.deit.pos_embed'].shape[1]
-            logger.warning(
-                'Load from encoder.deit {:d} seq len to {:d}'.format(
-                    ckpt_seq_len, model_seq_len
-                )
-            )
+            logger.warning('Load from encoder.deit {:d} seq len to {:d}'.format(ckpt_seq_len, model_seq_len))
             if model_seq_len <= ckpt_seq_len:
-                new_state_dict['encoder.deit.pos_embed'] = new_state_dict[
-                    'encoder.deit.pos_embed'
-                ][:, :model_seq_len, :]
+                new_state_dict['encoder.deit.pos_embed'] = new_state_dict['encoder.deit.pos_embed'][:, :model_seq_len, :]
             else:
                 t = self.state_dict()['encoder.deit.pos_embed']
                 t[:, :ckpt_seq_len, :] = new_state_dict['encoder.deit.pos_embed']
                 new_state_dict['encoder.deit.pos_embed'] = t
 
         if hasattr(model_cfg, "reset_dictionary") and model_cfg.reset_dictionary:
-            logger.info(
-                'Reset token embed weights and output projection during loading pretrained models'
-            )
-            del new_state_dict['decoder.embed_tokens.weight']
+            logger.info('Reset token embed weights and output projection during loading pretrained models')
+            del new_state_dict['decoder.embed_tokens.weight'] 
             del new_state_dict['decoder.output_projection.weight']
 
         return super().load_state_dict(new_state_dict, strict=False)
-
+    
     @staticmethod
     def add_args(parser):
         TransformerModel.add_args(parser)
         parser.add_argument(
-            '--deit-arch', type=str, help='the arch name for the DeiT encoder'
-        )
+            '--deit-arch', type=str,
+            help='the arch name for the DeiT encoder'
+        )        
         parser.add_argument(
-            '--ape', action='store_true', help='if use absolute_pos_embed'
-        )
+            '--ape', action='store_true',
+            help='if use absolute_pos_embed'
+        )        
         parser.set_defaults(ape=False)
         parser.add_argument(
-            '--reset-dictionary',
-            action='store_true',
-            help='if reset dictionary and related parameters',
+            '--reset-dictionary', action='store_true',
+            help='if reset dictionary and related parameters'
         )
         parser.add_argument(
-            '--adapt-dictionary',
-            action='store_true',
-            help='if adapt dictionary and related parameters',
+            '--adapt-dictionary', action='store_true',
+            help='if adapt dictionary and related parameters'
         )
         parser.set_defaults(reset_dictionary=False)
         parser.add_argument(
-            '--mask-ratio',
-            default=0.0,
-            type=float,
-            help='the mask ratio for the encoder output masking.',
+            '--mask-ratio', default=0.0, type=float,
+            help='the mask ratio for the encoder output masking.'
         )
 
     @staticmethod
@@ -135,32 +124,28 @@ class TrOCRModel(FairseqEncoderDecoderModel):
 
     @classmethod
     def build_model(cls, args, task):
-        encoder = TrOCREncoder(args=args, dictionary=task.source_dictionary)
+        encoder = TrOCREncoder(
+            args = args,
+            dictionary = task.source_dictionary
+        )
 
         args.encoder_embed_dim = encoder.deit.embed_dim
 
         if getattr(args, "max_target_positions", None) is None:
             args.max_target_positions = DEFAULT_MAX_TARGET_POSITIONS
 
-        if getattr(args, "decoder_pretrained", None).startswith('roberta2'):
+        if getattr(args, "decoder_pretrained", None).startswith('roberta2'):         
             logger.info('Using the learned pos embedding version loading roberta.')
             decoder_embed_tokens = cls.build_embedding(
-                args,
-                task.target_dictionary,
-                args.decoder_embed_dim,
-                args.decoder_embed_path,
+                args, task.target_dictionary, args.decoder_embed_dim, args.decoder_embed_path
             )
-
+            
             pretrained_model = getattr(args, "decoder_pretrained", None)
-            specified = pretrained_model.find('-') != -1
+            specified = pretrained_model.find('-')!=-1
 
             if specified:
                 pretrained_model = pretrained_model.replace('-', '.')
-                logger.info(
-                    'Load pre-trained decoder parameters from {}'.format(
-                        pretrained_model
-                    )
-                )
+                logger.info('Load pre-trained decoder parameters from {}'.format(pretrained_model))
                 roberta = torch.hub.load('pytorch/fairseq:main', pretrained_model)
             elif args.decoder_layers == 6:
                 logger.info('Load pre-trained decoder parameters from roberta.base')
@@ -188,25 +173,18 @@ class TrOCRModel(FairseqEncoderDecoderModel):
             offset = len(roberta_layers) - len(decoder_layers)
             assert offset >= 0
 
+
             decoder_dict = roberta.state_dict()
             new_decoder_dict = {}
             for key, val in decoder_dict.items():
                 if key.startswith('model.encoder.sentence_encoder.layers.'):
-                    layer_num = int(
-                        key[len('model.encoder.sentence_encoder.layers.') :].split('.')[
-                            0
-                        ]
-                    )
+                    layer_num = int(key[len('model.encoder.sentence_encoder.layers.'):].split('.')[0])
                     if layer_num - offset < 0:
                         continue
                     else:
                         new_key = 'model.encoder.sentence_encoder.layers.{}.'.format(
-                            str(layer_num - offset)
-                        ) + '.'.join(
-                            key[len('model.encoder.sentence_encoder.layers.') :].split(
-                                '.'
-                            )[1:]
-                        )
+                            str(layer_num - offset)) + '.'.join(
+                            key[len('model.encoder.sentence_encoder.layers.'):].split('.')[1:])
                         new_decoder_dict[new_key] = val
                 else:
                     new_decoder_dict[key] = val
@@ -214,7 +192,7 @@ class TrOCRModel(FairseqEncoderDecoderModel):
 
             for k, w in list(decoder_dict.items()):
                 if '.lm_head' in k:
-                    k_proj = "output_projection." + k[len('model.encoder.lm_head.') :]
+                    k_proj = "output_projection." + k[len('model.encoder.lm_head.'):]
                     decoder_dict[k_proj] = w.detach().clone()
                     del decoder_dict[k]
 
@@ -229,9 +207,9 @@ class TrOCRModel(FairseqEncoderDecoderModel):
             new_decoder_dict = {}
             for key, val in decoder_dict.items():
                 if "sentence_encoder" in key:
-                    key = key[len('model.encoder.sentence_encoder.') :]
+                    key = key[len('model.encoder.sentence_encoder.'):]
                 elif "encoder" in key:
-                    key = key[len('model.encoder.') :]
+                    key = key[len('model.encoder.'):]
                 new_decoder_dict[key] = val
 
             missing_keys, unexpected_keys = decoder.load_state_dict(
@@ -240,14 +218,11 @@ class TrOCRModel(FairseqEncoderDecoderModel):
 
         elif getattr(args, "decoder_pretrained", None) == 'unilm':
             logger.info('Decoder is pretrained using the unilm.')
-
+            
             prefix_of_parameter = 'bert'
 
             decoder_embed_tokens = cls.build_embedding(
-                args,
-                task.target_dictionary,
-                args.decoder_embed_dim,
-                args.decoder_embed_path,
+                args, task.target_dictionary, args.decoder_embed_dim, args.decoder_embed_path
             )
 
             decoder = UniLMDecoder(
@@ -255,30 +230,18 @@ class TrOCRModel(FairseqEncoderDecoderModel):
                 task.target_dictionary,
                 decoder_embed_tokens,
                 no_encoder_attn=False,
-            )
+            )            
 
-            if (
-                hasattr(args, 'decoder_pretrained_url')
-                and args.decoder_pretrained_url != None
-                and args.decoder_pretrained_url != ''
-            ):
+            if hasattr(args, 'decoder_pretrained_url') and args.decoder_pretrained_url != None and args.decoder_pretrained_url != '':                
                 unilm_url = args.decoder_pretrained_url
-                logger.info(
-                    'The unilm model url: {}.'.format(unilm_url[: unilm_url.find('?')])
-                )
-                unilm_state_dict = torch.hub.load_state_dict_from_url(unilm_url)
+                logger.info('The unilm model url: {}.'.format(unilm_url[:unilm_url.find('?')]))
+                unilm_state_dict = torch.hub.load_state_dict_from_url(unilm_url)            
 
-                unilm_layers = OrderedDict(
-                    [
-                        (k, unilm_state_dict[k])
-                        for k in unilm_state_dict.keys()
-                        if k.startswith(prefix_of_parameter + '.encoder.layer.')
-                    ]
-                )
+                unilm_layers = OrderedDict([(k, unilm_state_dict[k]) for k in unilm_state_dict.keys() if k.startswith(prefix_of_parameter + '.encoder.layer.')])
                 unilm_layers_num = []
                 for k in unilm_layers.keys():
                     t = k.replace(prefix_of_parameter + '.encoder.layer.', '')
-                    t = t[: t.find('.')]
+                    t = t[:t.find('.')]
                     unilm_layers_num.append(int(t))
                 unilm_layers_num = max(unilm_layers_num) + 1
 
@@ -287,142 +250,87 @@ class TrOCRModel(FairseqEncoderDecoderModel):
 
                 decoder_dict = decoder.state_dict()
                 # embedding
-                new_pos_weight = torch.zeros_like(
-                    decoder_dict['embed_positions.weight']
-                )
+                new_pos_weight = torch.zeros_like(decoder_dict['embed_positions.weight'])
                 # position padding will right offset padding idx + 1
-                new_pos_weight[
-                    task.target_dictionary.pad() + 1 :, :
-                ] = unilm_state_dict[
-                    prefix_of_parameter + '.embeddings.position_embeddings.weight'
-                ]
+                new_pos_weight[task.target_dictionary.pad() + 1:, :] = unilm_state_dict[prefix_of_parameter + '.embeddings.position_embeddings.weight']
                 new_decoder_dict = {
-                    'embed_tokens.weight': unilm_state_dict[
-                        prefix_of_parameter + '.embeddings.word_embeddings.weight'
-                    ],
+                    'embed_tokens.weight': unilm_state_dict[prefix_of_parameter + '.embeddings.word_embeddings.weight'],
                     'embed_positions.weight': new_pos_weight,
-                    'layernorm_embedding.weight': unilm_state_dict[
-                        prefix_of_parameter + '.embeddings.LayerNorm.weight'
-                    ],
-                    'layernorm_embedding.bias': unilm_state_dict[
-                        prefix_of_parameter + '.embeddings.LayerNorm.bias'
-                    ],
-                }
+                    'layernorm_embedding.weight': unilm_state_dict[prefix_of_parameter + '.embeddings.LayerNorm.weight'],
+                    'layernorm_embedding.bias': unilm_state_dict[prefix_of_parameter + '.embeddings.LayerNorm.bias']
+                }            
 
                 # layers
                 key_map = {
                     'self_attn.k_proj': 'attention.self.key',
-                    'self_attn.v_proj': 'attention.self.value',
+                    'self_attn.v_proj': 'attention.self.value',                
                     'self_attn.q_proj': 'attention.self.query',
                     'self_attn.out_proj': 'attention.output.dense',
                     'self_attn_layer_norm': 'attention.output.LayerNorm',
                     'fc1': 'intermediate.dense',
                     'fc2': 'output.dense',
-                    'final_layer_norm': 'output.LayerNorm',
+                    'final_layer_norm': 'output.LayerNorm'
                 }
                 for layer_id in range(unilm_layers_num):
-                    unilm_prefix = prefix_of_parameter + '.encoder.layer.{}.'.format(
-                        layer_id
-                    )
+                    unilm_prefix = prefix_of_parameter + '.encoder.layer.{}.'.format(layer_id)
                     decoder_prefix = 'layers.{}.'.format(layer_id)
 
                     for key in key_map:
                         for suffix in ['.weight', '.bias']:
                             decoder_key = decoder_prefix + key + suffix
                             unilm_key = unilm_prefix + key_map[key] + suffix
-                            if (
-                                decoder_key in decoder_dict
-                                and unilm_key in unilm_state_dict
-                            ):
-                                new_decoder_dict[decoder_key] = unilm_state_dict[
-                                    unilm_key
-                                ]
-
+                            if decoder_key in decoder_dict and unilm_key in unilm_state_dict:
+                                new_decoder_dict[decoder_key] = unilm_state_dict[unilm_key]
+                            
                 if hasattr(args, "reset_dictionary") and args.reset_dictionary:
-                    logger.info(
-                        'Reset token embedding weights during decoder initialization.'
-                    )
+                    logger.info('Reset token embedding weights during decoder initialization.')
                     del new_decoder_dict['embed_tokens.weight']
                 elif hasattr(args, "adapt_dictionary") and args.adapt_dictionary:
                     unilm_embed_tokens_weight = new_decoder_dict['embed_tokens.weight']
-                    logger.info(
-                        'Adapt token embedding weights during decoder initialization from {} to {}'.format(
-                            unilm_embed_tokens_weight.shape[0],
-                            decoder_embed_tokens.weight.shape[0],
-                        )
-                    )
-                    new_decoder_dict['embed_tokens.weight'] = torch.zeros_like(
-                        decoder_dict['embed_tokens.weight']
-                    )
-                    new_decoder_dict['embed_tokens.weight'][
-                        : min(
-                            unilm_embed_tokens_weight.shape[0],
-                            decoder_dict['embed_tokens.weight'].shape[0],
-                        ),
-                        :,
-                    ] = unilm_embed_tokens_weight[
-                        : min(
-                            unilm_embed_tokens_weight.shape[0],
-                            decoder_dict['embed_tokens.weight'].shape[0],
-                        ),
-                        :,
-                    ]
+                    logger.info('Adapt token embedding weights during decoder initialization from {} to {}'.format(unilm_embed_tokens_weight.shape[0], decoder_embed_tokens.weight.shape[0]))                
+                    new_decoder_dict['embed_tokens.weight'] = torch.zeros_like(decoder_dict['embed_tokens.weight'])
+                    new_decoder_dict['embed_tokens.weight'][:min(unilm_embed_tokens_weight.shape[0], decoder_dict['embed_tokens.weight'].shape[0]), :] = unilm_embed_tokens_weight[:min(unilm_embed_tokens_weight.shape[0], decoder_dict['embed_tokens.weight'].shape[0]), :]
 
                 missing_keys, unexpected_keys = decoder.load_state_dict(
                     new_decoder_dict, strict=False
                 )
             else:
-                logger.warning(
-                    'You must specify the unilm model url or the decoder is randomly initialized.'
-                )
+                logger.warning('You must specify the unilm model url or the decoder is randomly initialized.')
 
             # freeze k_proj bias
             for layer in decoder.layers:
                 layer.self_attn.k_proj.bias.requires_grad = False
 
-        elif (
-            getattr(args, "decoder_pretrained", None).upper() == 'None'
-            or getattr(args, "decoder_pretrained", None) == None
-        ):
-            logger.info('Decoder is randomly initialized.')
+        elif getattr(args, "decoder_pretrained", None).upper() == 'None' or getattr(args, "decoder_pretrained", None) == None:
+            logger.info('Decoder is randomly initialized.')            
             decoder_embed_tokens = cls.build_embedding(
-                args,
-                task.target_dictionary,
-                args.decoder_embed_dim,
-                args.decoder_embed_path,
-            )
+                args, task.target_dictionary, args.decoder_embed_dim, args.decoder_embed_path
+            )            
             decoder = TransformerDecoder(
-                args=args,
+                args = args,
                 dictionary=task.target_dictionary,
                 embed_tokens=decoder_embed_tokens,
-                no_encoder_attn=False,
+                no_encoder_attn=False
             )
 
-        elif getattr(args, "decoder_pretrained", None).startswith('roberta'):
+        elif getattr(args, "decoder_pretrained", None).startswith('roberta'):  
             logger.info('Using the old version loading roberta.')
             decoder_embed_tokens = cls.build_embedding(
-                args,
-                task.target_dictionary,
-                args.decoder_embed_dim,
-                args.decoder_embed_path,
-            )
+                args, task.target_dictionary, args.decoder_embed_dim, args.decoder_embed_path
+            )        
             decoder = TransformerDecoder(
-                args=args,
+                args = args,
                 dictionary=task.target_dictionary,
                 embed_tokens=decoder_embed_tokens,
-                no_encoder_attn=False,
+                no_encoder_attn=False
             )
 
             pretrained_model = getattr(args, "decoder_pretrained", None)
-            specified = pretrained_model.find('-') != -1
+            specified = pretrained_model.find('-')!=-1
 
             if specified:
                 pretrained_model = pretrained_model.replace('-', '.')
-                logger.info(
-                    'Load pre-trained decoder parameters from {}'.format(
-                        pretrained_model
-                    )
-                )
+                logger.info('Load pre-trained decoder parameters from {}'.format(pretrained_model))
                 roberta = torch.hub.load('pytorch/fairseq:main', pretrained_model)
             elif args.decoder_layers == 6:
                 logger.info('Load pre-trained decoder parameters from roberta.base')
@@ -433,9 +341,7 @@ class TrOCRModel(FairseqEncoderDecoderModel):
             else:
                 raise AttributeError('Cannot determind the pre-trained model')
 
-            decoder.embed_tokens.load_state_dict(
-                roberta.model.encoder.sentence_encoder.embed_tokens.state_dict()
-            )
+            decoder.embed_tokens.load_state_dict(roberta.model.encoder.sentence_encoder.embed_tokens.state_dict())
             roberta_layers = roberta.model.encoder.sentence_encoder.layers
             decoder_layers = decoder.layers
             offset = len(roberta_layers) - len(decoder_layers)
@@ -443,12 +349,8 @@ class TrOCRModel(FairseqEncoderDecoderModel):
 
             for i in range(len(decoder_layers)):
                 roberta_i = i + offset
-                decoder_layers[i].self_attn.load_state_dict(
-                    roberta_layers[roberta_i].self_attn.state_dict()
-                )
-                decoder_layers[i].self_attn_layer_norm.load_state_dict(
-                    roberta_layers[roberta_i].self_attn_layer_norm.state_dict()
-                )
+                decoder_layers[i].self_attn.load_state_dict(roberta_layers[roberta_i].self_attn.state_dict())
+                decoder_layers[i].self_attn_layer_norm.load_state_dict(roberta_layers[roberta_i].self_attn_layer_norm.state_dict())
 
         else:
             raise Exception('Undefined decoder pretraining method.')
@@ -483,7 +385,6 @@ def deit_base_decoder_base(args):
     # args.encoder_embed_dim = 768
     base_transformer(args)
 
-
 @register_model_architecture('DeiT_TR', 'deit_base_decoder_large')
 def deit_base_decoder_large(args):
     # DeiT Encoder  deit_base_distilled_patch16_384
@@ -495,7 +396,6 @@ def deit_base_decoder_large(args):
     args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
     base_transformer(args)
-
 
 @register_model_architecture('TrOCR', 'trocr_base')
 @register_model_architecture('DeiT_TR', 'beit_base_decoder_large')
@@ -510,7 +410,6 @@ def beit_base_decoder_large(args):
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
     base_transformer(args)
 
-
 @register_model_architecture('TrOCR', 'trocr_large')
 @register_model_architecture('DeiT_TR', 'beit_large_decoder_large')
 @register_model_architecture('DeiT_TR', 'DeiT_TR_LargeR_BEiT_Large')
@@ -524,14 +423,11 @@ def beit_large_decoder_large(args):
     args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
     base_transformer(args)
-
-
+    
 @register_model_architecture('DeiT_TR', 'deit_base_decoder_large_custom_size')
 def deit_base_decoder_large_custom_size(args):
     # DeiT Encoder  deit_base_distilled_patch16_custom_size
-    args.deit_arch = getattr(
-        args, "deit_arch", "deit_base_distilled_patch16_custom_size"
-    )
+    args.deit_arch = getattr(args, "deit_arch", "deit_base_distilled_patch16_custom_size")
     # Transformer Decoder
     # args.encoder_embed_dim = 768
     args.decoder_layers = getattr(args, "decoder_layers", 12)
@@ -552,7 +448,6 @@ def nlrv4_compressed_tiny(args):
     args.decoder_layers = 6
     args.max_target_positions = 512
 
-
 @register_model_architecture('TrOCR', 'trocr_small_224')
 def trocr_small(args):
     # DeiT Encoder  deit_base_distilled_patch16_384
@@ -560,8 +455,7 @@ def trocr_small(args):
 
     nlrv4_compressed_tiny(args)
     # Transformer Decoder
-    base_transformer(args)
-
+    base_transformer(args)    
 
 @register_model_architecture('TrOCR', 'trocr_small')
 @register_model_architecture('TrOCR', 'trocr_small_384')
@@ -571,29 +465,17 @@ def trocr_small_384(args):
 
     nlrv4_compressed_tiny(args)
     # Transformer Decoder
-    base_transformer(args)
-
+    base_transformer(args)    
 
 class TrOCREncoder(FairseqEncoder):
     def __init__(self, args, dictionary):
         super().__init__(dictionary)
-
+        
         if 'custom_size' in args.deit_arch:
-            self.deit = create_model(
-                args.deit_arch,
-                pretrained=True,
-                img_size=args.input_size,
-                ape=args.ape,
-                mask_ratio=args.mask_ratio,
-            )
+            self.deit = create_model(args.deit_arch, pretrained=True, img_size=args.input_size, ape=args.ape, mask_ratio=args.mask_ratio)
         else:
-            self.deit = create_model(
-                args.deit_arch,
-                pretrained=True,
-                ape=args.ape,
-                mask_ratio=args.mask_ratio,
-            )
-
+            self.deit = create_model(args.deit_arch, pretrained=True, ape=args.ape, mask_ratio=args.mask_ratio)
+        
         self.fp16 = args.fp16
 
     def forward(self, imgs):
@@ -601,7 +483,7 @@ class TrOCREncoder(FairseqEncoder):
             imgs = imgs.half()
 
         x, encoder_embedding = self.deit.forward_features(imgs)  # bs, n + 2, dim
-        x = x.transpose(0, 1)  # n + 2, bs, dim
+        x = x.transpose(0, 1) # n + 2, bs, dim
 
         encoder_padding_mask = torch.zeros(*x.shape[:2]).transpose(0, 1).to(imgs.device)
 
@@ -615,32 +497,29 @@ class TrOCREncoder(FairseqEncoder):
         }
 
     def reorder_encoder_out(self, encoder_out, new_order):
-        """
-        Reorder encoder output according to `new_order`.
+          """
+          Reorder encoder output according to `new_order`.
 
-        Args:
-            encoder_out: output from the ``forward()`` method
-            new_order (LongTensor): desired order
+          Args:
+              encoder_out: output from the ``forward()`` method
+              new_order (LongTensor): desired order
 
-        Returns:
-            `encoder_out` rearranged according to `new_order`
-        """
-        _encoder_out = encoder_out['encoder_out'][0]
-        _encoder_padding_mask = encoder_out['encoder_padding_mask'][0]
-        _encoder_embedding = encoder_out['encoder_embedding'][0]
-        return {
-            "encoder_out": [_encoder_out.index_select(1, new_order)],
-            "encoder_padding_mask": [
-                _encoder_padding_mask.index_select(0, new_order)
-            ],  # B x T
-            "encoder_embedding": [
-                _encoder_padding_mask.index_select(0, new_order)
-            ],  # B x T x C
-            "encoder_states": [],
-            "src_tokens": [],
-            "src_lengths": [],
+          Returns:
+              `encoder_out` rearranged according to `new_order`
+          """
+          _encoder_out = encoder_out['encoder_out'][0]
+          _encoder_padding_mask = encoder_out['encoder_padding_mask'][0]
+          _encoder_embedding = encoder_out['encoder_embedding'][0]
+          return {
+              "encoder_out": [_encoder_out.index_select(1, new_order)],
+                "encoder_padding_mask": [_encoder_padding_mask.index_select(0, new_order)],  # B x T
+                "encoder_embedding": [_encoder_padding_mask.index_select(0, new_order)],  # B x T x C
+                "encoder_states": [], 
+                "src_tokens": [],
+                "src_lengths": [],
         }
 
+    
 
 if __name__ == '__main__':
     pass

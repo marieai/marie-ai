@@ -127,15 +127,9 @@ def Resize_rotated_box(transform, rotated_boxes):
     theta = rotated_boxes[:, 4] * np.pi / 180.0
     c = np.cos(theta)
     s = np.sin(theta)
-    rotated_boxes[:, 2] *= np.sqrt(
-        np.square(scale_factor_x * c) + np.square(scale_factor_y * s)
-    )
-    rotated_boxes[:, 3] *= np.sqrt(
-        np.square(scale_factor_x * s) + np.square(scale_factor_y * c)
-    )
-    rotated_boxes[:, 4] = (
-        np.arctan2(scale_factor_x * s, scale_factor_y * c) * 180 / np.pi
-    )
+    rotated_boxes[:, 2] *= np.sqrt(np.square(scale_factor_x * c) + np.square(scale_factor_y * s))
+    rotated_boxes[:, 3] *= np.sqrt(np.square(scale_factor_x * s) + np.square(scale_factor_y * c))
+    rotated_boxes[:, 4] = np.arctan2(scale_factor_x * s, scale_factor_y * c) * 180 / np.pi
 
     return rotated_boxes
 

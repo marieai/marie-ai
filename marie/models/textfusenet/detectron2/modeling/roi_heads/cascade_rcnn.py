@@ -1,10 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import torch
+from torch import nn
+from torch.autograd.function import Function
+
 from detectron2.layers import ShapeSpec
 from detectron2.structures import Boxes, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
-from torch import nn
-from torch.autograd.function import Function
 
 from ..box_regression import Box2BoxTransform
 from ..matcher import Matcher
@@ -69,9 +70,7 @@ class CascadeROIHeads(StandardROIHeads):
                     box_head.output_size, self.num_classes, cls_agnostic_bbox_reg=True
                 )
             )
-            self.box2box_transform.append(
-                Box2BoxTransform(weights=cascade_bbox_reg_weights[k])
-            )
+            self.box2box_transform.append(Box2BoxTransform(weights=cascade_bbox_reg_weights[k]))
 
             if k == 0:
                 # The first matching is done by the matcher of ROIHeads (self.proposal_matcher).
@@ -118,9 +117,7 @@ class CascadeROIHeads(StandardROIHeads):
             for stage, output in enumerate(head_outputs):
                 with storage.name_scope("stage{}".format(stage)):
                     stage_losses = output.losses()
-                losses.update(
-                    {k + "_stage{}".format(stage): v for k, v in stage_losses.items()}
-                )
+                losses.update({k + "_stage{}".format(stage): v for k, v in stage_losses.items()})
             return losses
         else:
             # Each is a list[Tensor] of length #image. Each tensor is Ri x (K+1)
@@ -164,9 +161,7 @@ class CascadeROIHeads(StandardROIHeads):
                 targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
             )
             # proposal_labels are 0 or 1
-            matched_idxs, proposal_labels = self.proposal_matchers[stage](
-                match_quality_matrix
-            )
+            matched_idxs, proposal_labels = self.proposal_matchers[stage](match_quality_matrix)
             if len(targets_per_image) > 0:
                 gt_classes = targets_per_image.gt_classes[matched_idxs]
                 # Label unmatched proposals (0 label from matcher) as background (label=num_classes)
@@ -175,9 +170,7 @@ class CascadeROIHeads(StandardROIHeads):
             else:
                 gt_classes = torch.zeros_like(matched_idxs) + self.num_classes
                 gt_boxes = Boxes(
-                    targets_per_image.gt_boxes.tensor.new_zeros(
-                        (len(proposals_per_image), 4)
-                    )
+                    targets_per_image.gt_boxes.tensor.new_zeros((len(proposals_per_image), 4))
                 )
             proposals_per_image.gt_classes = gt_classes
             proposals_per_image.gt_boxes = gt_boxes
@@ -214,9 +207,7 @@ class CascadeROIHeads(StandardROIHeads):
         # but scale down the gradients on features.
         box_features = _ScaleGradient.apply(box_features, 1.0 / self.num_cascade_stages)
         box_features = self.box_head[stage](box_features)
-        pred_class_logits, pred_proposal_deltas = self.box_predictor[stage](
-            box_features
-        )
+        pred_class_logits, pred_proposal_deltas = self.box_predictor[stage](box_features)
         del box_features
 
         outputs = FastRCNNOutputs(

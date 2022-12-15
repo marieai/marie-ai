@@ -7,15 +7,15 @@ import os
 import tempfile
 import time
 from collections import Counter
-
-import detectron2.utils.comm as comm
 import torch
-from detectron2.evaluation.testing import flatten_results_dict
-from detectron2.utils.events import EventStorage, EventWriter
 from fvcore.common.checkpoint import PeriodicCheckpointer as _PeriodicCheckpointer
 from fvcore.common.file_io import PathManager
 from fvcore.common.timer import Timer
 from fvcore.nn.precise_bn import get_bn_modules, update_bn_stats
+
+import detectron2.utils.comm as comm
+from detectron2.evaluation.testing import flatten_results_dict
+from detectron2.utils.events import EventStorage, EventWriter
 
 from .train_loop import HookBase
 
@@ -41,9 +41,7 @@ class CallbackHook(HookBase):
     Create a hook using callback functions provided by the user.
     """
 
-    def __init__(
-        self, *, before_train=None, after_train=None, before_step=None, after_step=None
-    ):
+    def __init__(self, *, before_train=None, after_train=None, before_step=None, after_step=None):
         """
         Each argument is a function that takes one argument: the trainer.
         """
@@ -335,13 +333,10 @@ class EvalHook(HookBase):
                         v = float(v)
                     except Exception:
                         raise ValueError(
-                            "[EvalHook] eval_function should return a nested dict of float. Got '{}: {}' instead.".format(
-                                k, v
-                            )
+                            "[EvalHook] eval_function should return a nested dict of float. "
+                            "Got '{}: {}' instead.".format(k, v)
                         )
-                self.trainer.storage.put_scalars(
-                    **flattened_results, smoothing_hint=False
-                )
+                self.trainer.storage.put_scalars(**flattened_results, smoothing_hint=False)
 
             # Evaluation may take different time among workers.
             # A barrier make them start the next iteration together.
@@ -416,9 +411,7 @@ class PreciseBN(HookBase):
                 num_iter += 1
                 if num_iter % 100 == 0:
                     self._logger.info(
-                        "Running precise-BN ... {}/{} iterations.".format(
-                            num_iter, self._num_iter
-                        )
+                        "Running precise-BN ... {}/{} iterations.".format(num_iter, self._num_iter)
                     )
                 # This way we can reuse the same iterator
                 yield next(self._data_iter)

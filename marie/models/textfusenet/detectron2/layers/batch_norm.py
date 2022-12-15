@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
-
 import torch
 import torch.distributed as dist
-from detectron2.utils import comm
 from torch import nn
 from torch.autograd.function import Function
+
+from detectron2.utils import comm
 
 from .wrappers import BatchNorm2d
 
@@ -49,14 +49,7 @@ class FrozenBatchNorm2d(nn.Module):
         return x * scale + bias
 
     def _load_from_state_dict(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
     ):
         version = local_metadata.get("version", None)
 
@@ -64,36 +57,22 @@ class FrozenBatchNorm2d(nn.Module):
             # No running_mean/var in early versions
             # This will silent the warnings
             if prefix + "running_mean" not in state_dict:
-                state_dict[prefix + "running_mean"] = torch.zeros_like(
-                    self.running_mean
-                )
+                state_dict[prefix + "running_mean"] = torch.zeros_like(self.running_mean)
             if prefix + "running_var" not in state_dict:
                 state_dict[prefix + "running_var"] = torch.ones_like(self.running_var)
 
         if version is not None and version < 3:
             logger = logging.getLogger(__name__)
-            logger.info(
-                "FrozenBatchNorm {} is upgraded to version 3.".format(
-                    prefix.rstrip(".")
-                )
-            )
+            logger.info("FrozenBatchNorm {} is upgraded to version 3.".format(prefix.rstrip(".")))
             # In version < 3, running_var are used without +eps.
             state_dict[prefix + "running_var"] -= self.eps
 
         super()._load_from_state_dict(
-            state_dict,
-            prefix,
-            local_metadata,
-            strict,
-            missing_keys,
-            unexpected_keys,
-            error_msgs,
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
         )
 
     def __repr__(self):
-        return "FrozenBatchNorm2d(num_features={}, eps={})".format(
-            self.num_features, self.eps
-        )
+        return "FrozenBatchNorm2d(num_features={}, eps={})".format(self.num_features, self.eps)
 
     @classmethod
     def convert_frozen_batchnorm(cls, module):

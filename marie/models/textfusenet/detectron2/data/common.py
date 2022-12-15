@@ -2,8 +2,8 @@
 import copy
 import logging
 import random
-
 import torch.utils.data as data
+
 from detectron2.utils.serialize import PicklableWrapper
 
 __all__ = ["MapDataset", "DatasetFromList"]

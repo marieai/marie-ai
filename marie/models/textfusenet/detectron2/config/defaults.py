@@ -42,6 +42,8 @@ _C.MODEL.PIXEL_MEAN = [103.530, 116.280, 123.675]
 _C.MODEL.PIXEL_STD = [1.0, 1.0, 1.0]
 
 
+
+
 # -----------------------------------------------------------------------------
 # INPUT
 # -----------------------------------------------------------------------------
@@ -279,7 +281,7 @@ _C.MODEL.ROI_BOX_HEAD.BBOX_REG_WEIGHTS = (10.0, 10.0, 5.0, 5.0)
 # The transition point from L1 to L2 loss. Set to 0.0 to make the loss simply L1.
 _C.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA = 0.0
 _C.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION = 14
-# 2020-4-29 yejian 0->2
+#2020-4-29 yejian 0->2
 _C.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO = 2
 # Type of pooling operation applied to the incoming feature map for each RoI
 _C.MODEL.ROI_BOX_HEAD.POOLER_TYPE = "ROIAlignV2"
@@ -315,7 +317,7 @@ _C.MODEL.ROI_BOX_CASCADE_HEAD.IOUS = (0.5, 0.6, 0.7)
 _C.MODEL.ROI_MASK_HEAD = CN()
 _C.MODEL.ROI_MASK_HEAD.NAME = "MaskRCNNConvUpsampleHead"
 _C.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION = 14
-# 2020-4-29 yejian 0->2
+#2020-4-29 yejian 0->2
 _C.MODEL.ROI_MASK_HEAD.POOLER_SAMPLING_RATIO = 2
 _C.MODEL.ROI_MASK_HEAD.NUM_CONV = 0  # The number of convs in the mask head
 _C.MODEL.ROI_MASK_HEAD.CONV_DIM = 256
@@ -372,8 +374,8 @@ _C.MODEL.TEXTFUSENET_SEG_HEAD.CHANNELS = 256
 _C.MODEL.TEXTFUSENET_SEG_HEAD.NUM_FPN_FEATURES = 4
 # the num of conv3x3 used to extract fused features
 _C.MODEL.TEXTFUSENET_SEG_HEAD.NUM_CONV3 = 4
-# the num of segmentic classes
-_C.MODEL.TEXTFUSENET_SEG_HEAD.NUM_CLASSES = 2
+# the num of segmentic classes 
+_C.MODEL.TEXTFUSENET_SEG_HEAD.NUM_CLASSES =2
 
 _C.MODEL.TEXTFUSENET_SEG_HEAD.POOLER_RESOLUTION = 14
 _C.MODEL.TEXTFUSENET_SEG_HEAD.SAMPLING_RATIO = 2
@@ -461,9 +463,7 @@ _C.MODEL.RETINANET.SMOOTH_L1_LOSS_BETA = 0.1
 _C.MODEL.RESNETS = CN()
 
 _C.MODEL.RESNETS.DEPTH = 50
-_C.MODEL.RESNETS.OUT_FEATURES = [
-    "res4"
-]  # res4 for C4 backbone, res2..5 for FPN backbone
+_C.MODEL.RESNETS.OUT_FEATURES = ["res4"]  # res4 for C4 backbone, res2..5 for FPN backbone
 
 # Number of groups to use; 1 ==> ResNet; > 1 ==> ResNeXt
 _C.MODEL.RESNETS.NUM_GROUPS = 1

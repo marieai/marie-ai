@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 from collections import Counter
-
 from fvcore.common.file_io import PathManager
 from tabulate import tabulate
 from termcolor import colored
