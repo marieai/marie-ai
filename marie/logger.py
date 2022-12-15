@@ -20,7 +20,9 @@ def setup_logger(name: str, logfile: str = "marie.log"):
 
     # format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     # format = logging.Formatter('[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s')
-    format = logging.Formatter('%(asctime)s, %(levelname)-8s [%(filename)s:%(module)s:%(funcName)s:%(lineno)d] %(message)s')
+    format = logging.Formatter(
+        '%(asctime)s, %(levelname)-8s [%(filename)s:%(module)s:%(funcName)s:%(lineno)d] %(message)s'
+    )
 
     # console log
     ch = logging.StreamHandler(sys.stdout)

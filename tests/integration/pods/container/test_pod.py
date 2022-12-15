@@ -35,7 +35,9 @@ def worker_runtime_docker_image_built():
     import docker
 
     client = docker.from_env()
-    client.images.build(path=os.path.join(cur_dir, 'worker-runtime/'), tag='worker-runtime')
+    client.images.build(
+        path=os.path.join(cur_dir, 'worker-runtime/'), tag='worker-runtime'
+    )
     client.close()
     yield
     time.sleep(2)
@@ -45,7 +47,9 @@ def worker_runtime_docker_image_built():
 
 @pytest.mark.asyncio
 # test gateway, head and worker pod by creating them manually in the most simple configuration
-async def test_pods_trivial_topology(head_runtime_docker_image_built, worker_runtime_docker_image_built):
+async def test_pods_trivial_topology(
+    head_runtime_docker_image_built, worker_runtime_docker_image_built
+):
     worker_port = random_port()
     head_port = random_port()
     port = random_port()
@@ -86,7 +90,9 @@ async def test_pods_trivial_topology(head_runtime_docker_image_built, worker_run
 
         # send requests to the gateway
         c = Client(host='localhost', port=port, asyncio=True)
-        responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+        responses = c.post(
+            '/', inputs=async_inputs, request_size=1, return_responses=True
+        )
         response_list = []
         async for response in responses:
             response_list.append(response)

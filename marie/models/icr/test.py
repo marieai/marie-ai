@@ -39,7 +39,9 @@ def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=Fa
     #                   'IC13_1015', 'IC15_2077', 'SVTP', 'CUTE80']
 
     if calculate_infer_time:
-        evaluation_batch_size = 1  # batch_size should be 1 to calculate the GPU inference time per image.
+        evaluation_batch_size = (
+            1  # batch_size should be 1 to calculate the GPU inference time per image.
+        )
     else:
         evaluation_batch_size = opt.batch_size
 
@@ -53,7 +55,9 @@ def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=Fa
     log.write(dashed_line + '\n')
     for eval_data in eval_data_list:
         eval_data_path = os.path.join(opt.eval_data, eval_data)
-        AlignCollate_evaluation = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+        AlignCollate_evaluation = AlignCollate(
+            imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+        )
         eval_data, eval_data_log = hierarchical_dataset(root=eval_data_path, opt=opt)
         evaluation_loader = torch.utils.data.DataLoader(
             eval_data,
@@ -79,8 +83,12 @@ def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=Fa
         total_evaluation_data_number += len(eval_data)
         total_correct_number += accuracy_by_best_model * length_of_data
         log.write(eval_data_log)
-        print(f'Acc {accuracy_by_best_model:0.3f}\t normalized_ED {norm_ED_by_best_model:0.3f}')
-        log.write(f'Acc {accuracy_by_best_model:0.3f}\t normalized_ED {norm_ED_by_best_model:0.3f}\n')
+        print(
+            f'Acc {accuracy_by_best_model:0.3f}\t normalized_ED {norm_ED_by_best_model:0.3f}'
+        )
+        log.write(
+            f'Acc {accuracy_by_best_model:0.3f}\t normalized_ED {norm_ED_by_best_model:0.3f}\n'
+        )
         print(dashed_line)
         log.write(dashed_line + '\n')
 
@@ -113,10 +121,16 @@ def validation(model, criterion, evaluation_loader, converter, opt):
         length_of_data = length_of_data + batch_size
         image = image_tensors.to(device)
         # For max length prediction
-        length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
-        text_for_pred = torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
+        length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(
+            device
+        )
+        text_for_pred = (
+            torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
+        )
 
-        text_for_loss, length_for_loss = converter.encode(labels, batch_max_length=opt.batch_max_length)
+        text_for_loss, length_for_loss = converter.encode(
+            labels, batch_max_length=opt.batch_max_length
+        )
 
         start_time = time.time()
         if 'CTC' in opt.Prediction:
@@ -187,7 +201,9 @@ def validation(model, criterion, evaluation_loader, converter, opt):
                 pred = pred.lower()
                 gt = gt.lower()
                 alphanumeric_case_insensitve = '0123456789abcdefghijklmnopqrstuvwxyz'
-                out_of_alphanumeric_case_insensitve = f'[^{alphanumeric_case_insensitve}]'
+                out_of_alphanumeric_case_insensitve = (
+                    f'[^{alphanumeric_case_insensitve}]'
+                )
                 pred = re.sub(out_of_alphanumeric_case_insensitve, '', pred)
                 gt = re.sub(out_of_alphanumeric_case_insensitve, '', gt)
 
@@ -276,7 +292,9 @@ def test(opt):
     if 'CTC' in opt.Prediction:
         criterion = torch.nn.CTCLoss(zero_infinity=True).to(device)
     else:
-        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(device)  # ignore [GO] token = ignore index 0
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(
+            device
+        )  # ignore [GO] token = ignore index 0
 
     """ evaluation """
     model.eval()
@@ -285,7 +303,9 @@ def test(opt):
             benchmark_all_eval(model, criterion, converter, opt)
         else:
             log = open(f'./result/{opt.exp_name}/log_evaluation.txt', 'a')
-            AlignCollate_evaluation = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+            AlignCollate_evaluation = AlignCollate(
+                imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+            )
             eval_data, eval_data_log = hierarchical_dataset(root=opt.eval_data, opt=opt)
             evaluation_loader = torch.utils.data.DataLoader(
                 eval_data,
@@ -295,7 +315,9 @@ def test(opt):
                 collate_fn=AlignCollate_evaluation,
                 pin_memory=True,
             )
-            _, accuracy_by_best_model, _, _, _, _, _, _ = validation(model, criterion, evaluation_loader, converter, opt)
+            _, accuracy_by_best_model, _, _, _, _, _, _ = validation(
+                model, criterion, evaluation_loader, converter, opt
+            )
             log.write(eval_data_log)
             print(f'{accuracy_by_best_model:0.3f}')
             log.write(f'{accuracy_by_best_model:0.3f}\n')
@@ -310,13 +332,23 @@ if __name__ == '__main__':
         action='store_true',
         help='evaluate 10 benchmark evaluation datasets',
     )
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+    parser.add_argument(
+        '--workers', type=int, help='number of data loading workers', default=4
+    )
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
-    parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
+    parser.add_argument(
+        '--saved_model', required=True, help="path to saved_model to evaluation"
+    )
     """ Data processing """
-    parser.add_argument('--batch_max_length', type=int, default=25, help='maximum-label-length')
-    parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
-    parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
+    parser.add_argument(
+        '--batch_max_length', type=int, default=25, help='maximum-label-length'
+    )
+    parser.add_argument(
+        '--imgH', type=int, default=32, help='the height of the input image'
+    )
+    parser.add_argument(
+        '--imgW', type=int, default=100, help='the width of the input image'
+    )
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
     parser.add_argument(
         '--character',
@@ -324,14 +356,20 @@ if __name__ == '__main__':
         default='0123456789abcdefghijklmnopqrstuvwxyz',
         help='character label',
     )
-    parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
+    parser.add_argument(
+        '--sensitive', action='store_true', help='for sensitive character mode'
+    )
     parser.add_argument(
         '--PAD',
         action='store_true',
         help='whether to keep ratio then pad for image resize',
     )
-    parser.add_argument('--data_filtering_off', action='store_true', help='for data_filtering_off mode')
-    parser.add_argument('--baiduCTC', action='store_true', help='for data_filtering_off mode')
+    parser.add_argument(
+        '--data_filtering_off', action='store_true', help='for data_filtering_off mode'
+    )
+    parser.add_argument(
+        '--baiduCTC', action='store_true', help='for data_filtering_off mode'
+    )
     """ Model Architecture """
     parser.add_argument(
         '--Transformation',
@@ -351,7 +389,9 @@ if __name__ == '__main__':
         required=True,
         help='SequenceModeling stage. None|BiLSTM',
     )
-    parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
+    parser.add_argument(
+        '--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn'
+    )
     parser.add_argument(
         '--num_fiducial',
         type=int,
@@ -370,7 +410,9 @@ if __name__ == '__main__':
         default=512,
         help='the number of output channel of Feature extractor',
     )
-    parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
+    parser.add_argument(
+        '--hidden_size', type=int, default=256, help='the size of the LSTM hidden state'
+    )
 
     opt = parser.parse_args()
 

@@ -44,7 +44,9 @@ def plot_patches(img_arr, org_img_size, stride=None, size=None):
             jj += 1
 
 
-def plot_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None):
+def plot_patches_2(
+    img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None
+):
     """
     Plots all the patches for the first image in 'img_arr' trying to reconstruct the original image
     Args:
@@ -123,7 +125,11 @@ def get_patches(img_arr, size=256, stride=256):
             for j in range(i_max):
                 print(i * stride, i * stride + size)
                 print(j * stride, j * stride + size)
-                patches_list.append(img_arr[i * stride : i * stride + size, j * stride : j * stride + size])
+                patches_list.append(
+                    img_arr[
+                        i * stride : i * stride + size, j * stride : j * stride + size
+                    ]
+                )
 
     elif img_arr.ndim == 4:
         i_max = img_arr.shape[1] // stride - overlapping
@@ -145,7 +151,9 @@ def get_patches(img_arr, size=256, stride=256):
     return np.stack(patches_list)
 
 
-def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=None, pad=False):
+def get_patches_2(
+    img_arr, size_h=None, stride_h=None, size_w=None, stride_w=None, pad=False
+):
     """
     Takes single image or array of images and returns
     crops using sliding window method.
@@ -272,7 +280,9 @@ def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
     images_list = []
     kk = 0
     for img_count in range(total_nm_images):
-        img_bg = np.zeros((org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype)
+        img_bg = np.zeros(
+            (org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype
+        )
 
         for i in range(i_max):
             for j in range(j_max):
@@ -300,7 +310,9 @@ def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
     return np.stack(images_list)
 
 
-def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None):
+def reconstruct_from_patches_2(
+    img_arr, org_img_size, size_h=None, stride_h=None, size_w=None, stride_w=None
+):
     """[summary]
 
     Args:
@@ -362,7 +374,9 @@ def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None
     images_list = []
     kk = 0
     for img_count in range(total_nm_images):
-        img_bg = np.zeros((org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype)
+        img_bg = np.zeros(
+            (org_img_size[0], org_img_size[1], nm_layers), dtype=img_arr[0].dtype
+        )
 
         for i in range(i_max):
             for j in range(j_max):

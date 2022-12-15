@@ -8,11 +8,17 @@ from tests.helper import ProcessExecutor, _validate_custom_gateway_process, _val
 from tests.unit.yaml.dummy_gateway import DummyGateway
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
-_dummy_gateway_yaml_path = os.path.join(cur_dir, '../../../yaml/test-custom-gateway.yml')
+_dummy_gateway_yaml_path = os.path.join(
+    cur_dir, '../../../yaml/test-custom-gateway.yml'
+)
 
-_dummy_fastapi_gateway_yaml_path = os.path.join(cur_dir, '../../../yaml/test-fastapi-gateway.yml')
+_dummy_fastapi_gateway_yaml_path = os.path.join(
+    cur_dir, '../../../yaml/test-fastapi-gateway.yml'
+)
 
-_flow_with_dummy_gateway_yaml_path = os.path.join(cur_dir, '../../../yaml/test-flow-custom-gateway-nested-config.yml')
+_flow_with_dummy_gateway_yaml_path = os.path.join(
+    cur_dir, '../../../yaml/test-flow-custom-gateway-nested-config.yml'
+)
 
 
 @pytest.mark.parametrize(
@@ -63,17 +69,25 @@ _flow_with_dummy_gateway_yaml_path = os.path.join(cur_dir, '../../../yaml/test-f
 )
 def test_flow_custom_gateway_no_executor(uses, uses_with, expected):
 
-    flow = Flow().config_gateway(uses=uses, uses_with=uses_with).add(uses='ProcessExecutor')
+    flow = (
+        Flow()
+        .config_gateway(uses=uses, uses_with=uses_with)
+        .add(uses='ProcessExecutor')
+    )
     with flow:
         _validate_dummy_custom_gateway_response(flow.port, expected)
-        _validate_custom_gateway_process(flow.port, 'hello', {'text': 'helloworld', 'tags': {'processed': True}})
+        _validate_custom_gateway_process(
+            flow.port, 'hello', {'text': 'helloworld', 'tags': {'processed': True}}
+        )
 
 
 def test_flow_custom_gateway_nested_config():
 
     flow = Flow.load_config(_flow_with_dummy_gateway_yaml_path)
     with flow:
-        _validate_dummy_custom_gateway_response(flow.port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'})
+        _validate_dummy_custom_gateway_response(
+            flow.port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'}
+        )
 
 
 def test_flow_custom_gateway_via_flow_uses_disabled():

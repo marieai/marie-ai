@@ -48,5 +48,7 @@ class CompositeGateway(BaseGateway):
 
     @property
     def _should_exit(self) -> bool:
-        should_exit_values = [getattr(gateway.server, 'should_exit', True) for gateway in self.gateways]
+        should_exit_values = [
+            getattr(gateway.server, 'should_exit', True) for gateway in self.gateways
+        ]
         return all(should_exit_values)

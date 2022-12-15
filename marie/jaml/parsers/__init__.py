@@ -44,7 +44,9 @@ def _get_gateway_parser():
     return [GatewayLegacyParser], GatewayLegacyParser
 
 
-def get_parser(cls: Type['JAMLCompatible'], version: Optional[str]) -> 'VersionedYAMLParser':
+def get_parser(
+    cls: Type['JAMLCompatible'], version: Optional[str]
+) -> 'VersionedYAMLParser':
     """
 
 

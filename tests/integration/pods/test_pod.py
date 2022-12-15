@@ -42,7 +42,9 @@ async def test_pods_trivial_topology(port_generator):
         # send requests to the gateway
         gateway_pod.wait_start_success()
         c = Client(host='localhost', port=port, asyncio=True)
-        responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+        responses = c.post(
+            '/', inputs=async_inputs, request_size=1, return_responses=True
+        )
 
         response_list = []
         async for response in responses:
@@ -115,16 +117,26 @@ def complete_graph_dict():
 @pytest.mark.parametrize('uses_before', [True, False])
 @pytest.mark.parametrize('uses_after', [True, False])
 # test gateway, head and worker pod by creating them manually in a more Flow like topology with branching/merging
-async def test_pods_flow_topology(complete_graph_dict, uses_before, uses_after, port_generator):
-    deployments = [deployment_name for deployment_name in complete_graph_dict.keys() if 'gateway' not in deployment_name]
+async def test_pods_flow_topology(
+    complete_graph_dict, uses_before, uses_after, port_generator
+):
+    deployments = [
+        deployment_name
+        for deployment_name in complete_graph_dict.keys()
+        if 'gateway' not in deployment_name
+    ]
     pods = []
     pod_addresses = '{'
     for deployment in deployments:
         if uses_before:
-            uses_before_port, uses_before_pod = await _start_create_pod(deployment, port_generator, type='uses_before')
+            uses_before_port, uses_before_pod = await _start_create_pod(
+                deployment, port_generator, type='uses_before'
+            )
             pods.append(uses_before_pod)
         if uses_after:
-            uses_after_port, uses_after_pod = await _start_create_pod(deployment, port_generator, type='uses_after')
+            uses_after_port, uses_after_pod = await _start_create_pod(
+                deployment, port_generator, type='uses_after'
+            )
             pods.append(uses_after_pod)
 
         # create worker
@@ -160,7 +172,9 @@ async def test_pods_flow_topology(complete_graph_dict, uses_before, uses_after, 
 
     # create a single gateway pod
 
-    gateway_pod = _create_gateway_pod(json.dumps(complete_graph_dict), pod_addresses, port)
+    gateway_pod = _create_gateway_pod(
+        json.dumps(complete_graph_dict), pod_addresses, port
+    )
     gateway_pod.start()
     gateway_pod.wait_start_success()
 
@@ -482,7 +496,9 @@ class FastSlowExecutor(Executor):
 async def _activate_worker(head_port, worker_port, shard_id=None):
     # this would be done by the Pod, its adding the worker to the head
     activate_msg = ControlRequest(command='ACTIVATE')
-    activate_msg.add_related_entity('worker', '127.0.0.1', worker_port, shard_id=shard_id)
+    activate_msg.add_related_entity(
+        'worker', '127.0.0.1', worker_port, shard_id=shard_id
+    )
     GrpcConnectionPool.send_request_sync(activate_msg, f'127.0.0.1:{head_port}')
 
 

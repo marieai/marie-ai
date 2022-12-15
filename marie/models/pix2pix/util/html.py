@@ -59,7 +59,9 @@ class HTML:
         with self.t:
             with tr():
                 for im, txt, link in zip(ims, txts, links):
-                    with td(style="word-wrap: break-word;", halign="center", valign="top"):
+                    with td(
+                        style="word-wrap: break-word;", halign="center", valign="top"
+                    ):
                         with p():
                             with a(href=os.path.join('images', link)):
                                 img(

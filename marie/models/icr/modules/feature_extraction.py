@@ -25,10 +25,14 @@ class VGG_FeatureExtractor(nn.Module):
             nn.Conv2d(self.output_channel[2], self.output_channel[2], 3, 1, 1),
             nn.ReLU(True),
             nn.MaxPool2d((2, 1), (2, 1)),  # 256x4x25
-            nn.Conv2d(self.output_channel[2], self.output_channel[3], 3, 1, 1, bias=False),
+            nn.Conv2d(
+                self.output_channel[2], self.output_channel[3], 3, 1, 1, bias=False
+            ),
             nn.BatchNorm2d(self.output_channel[3]),
             nn.ReLU(True),  # 512x4x25
-            nn.Conv2d(self.output_channel[3], self.output_channel[3], 3, 1, 1, bias=False),
+            nn.Conv2d(
+                self.output_channel[3], self.output_channel[3], 3, 1, 1, bias=False
+            ),
             nn.BatchNorm2d(self.output_channel[3]),
             nn.ReLU(True),
             nn.MaxPool2d((2, 1), (2, 1)),  # 512x2x25
@@ -79,7 +83,9 @@ class RCNN_FeatureExtractor(nn.Module):
                 pad=1,
             ),
             nn.MaxPool2d(2, (2, 1), (0, 1)),  # 256 x 2 x 27
-            nn.Conv2d(self.output_channel[2], self.output_channel[3], 2, 1, 0, bias=False),
+            nn.Conv2d(
+                self.output_channel[2], self.output_channel[3], 2, 1, 0, bias=False
+            ),
             nn.BatchNorm2d(self.output_channel[3]),
             nn.ReLU(True),
         )  # 512 x 1 x 26
@@ -105,8 +111,12 @@ class GRCL(nn.Module):
         super(GRCL, self).__init__()
         self.wgf_u = nn.Conv2d(input_channel, output_channel, 1, 1, 0, bias=False)
         self.wgr_x = nn.Conv2d(output_channel, output_channel, 1, 1, 0, bias=False)
-        self.wf_u = nn.Conv2d(input_channel, output_channel, kernel_size, 1, pad, bias=False)
-        self.wr_x = nn.Conv2d(output_channel, output_channel, kernel_size, 1, pad, bias=False)
+        self.wf_u = nn.Conv2d(
+            input_channel, output_channel, kernel_size, 1, pad, bias=False
+        )
+        self.wr_x = nn.Conv2d(
+            output_channel, output_channel, kernel_size, 1, pad, bias=False
+        )
 
         self.BN_x_init = nn.BatchNorm2d(output_channel)
 
@@ -164,7 +174,9 @@ class BasicBlock(nn.Module):
 
     def _conv3x3(self, in_planes, out_planes, stride=1):
         "3x3 convolution with padding"
-        return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        return nn.Conv2d(
+            in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False
+        )
 
     def forward(self, x):
         residual = x
@@ -229,7 +241,9 @@ class ResNet(nn.Module):
         self.bn1 = nn.BatchNorm2d(self.output_channel_block[0])
 
         self.maxpool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
-        self.layer2 = self._make_layer(block, self.output_channel_block[1], layers[1], stride=1)
+        self.layer2 = self._make_layer(
+            block, self.output_channel_block[1], layers[1], stride=1
+        )
         self.conv2 = nn.Conv2d(
             self.output_channel_block[1],
             self.output_channel_block[1],
@@ -241,7 +255,9 @@ class ResNet(nn.Module):
         self.bn2 = nn.BatchNorm2d(self.output_channel_block[1])
 
         self.maxpool3 = nn.MaxPool2d(kernel_size=2, stride=(2, 1), padding=(0, 1))
-        self.layer3 = self._make_layer(block, self.output_channel_block[2], layers[2], stride=1)
+        self.layer3 = self._make_layer(
+            block, self.output_channel_block[2], layers[2], stride=1
+        )
         self.conv3 = nn.Conv2d(
             self.output_channel_block[2],
             self.output_channel_block[2],
@@ -252,7 +268,9 @@ class ResNet(nn.Module):
         )
         self.bn3 = nn.BatchNorm2d(self.output_channel_block[2])
 
-        self.layer4 = self._make_layer(block, self.output_channel_block[3], layers[3], stride=1)
+        self.layer4 = self._make_layer(
+            block, self.output_channel_block[3], layers[3], stride=1
+        )
         self.conv4_1 = nn.Conv2d(
             self.output_channel_block[3],
             self.output_channel_block[3],

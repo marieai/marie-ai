@@ -62,7 +62,9 @@ def served_exec(exposed_port):
 
 
 def test_executor_load_from_hub():
-    exec = Executor.from_hub('jinahub://DummyHubExecutor', uses_metas={'name': 'hello123'})
+    exec = Executor.from_hub(
+        'jinahub://DummyHubExecutor', uses_metas={'name': 'hello123'}
+    )
     da = DocumentArray([Document()])
     exec.foo(da)
     assert da.texts == ['hello']
@@ -112,7 +114,9 @@ def test_flow_uses_with_pymodule_path():
     ):
         pass
 
-    with Flow().add(uses='unit.serve.executors.dummy_executor.MyExecutor', uses_with={'bar': 123}):
+    with Flow().add(
+        uses='unit.serve.executors.dummy_executor.MyExecutor', uses_with={'bar': 123}
+    ):
         pass
 
     with pytest.raises(RuntimeFailToStart):
@@ -140,7 +144,9 @@ def workspace(self) -> str:
         or (
             os.path.join(self.runtime_args.workspace, self.metas.name)
             if self.metas.shard_id == -1
-            else os.path.join(self.runtime_args.workspace, self.metas.name, self.metas.shard_id)
+            else os.path.join(
+                self.runtime_args.workspace, self.metas.name, self.metas.shard_id
+            )
         )
     )
 
@@ -231,7 +237,9 @@ def test_executor_workspace(test_metas_workspace_replica_pods, shard_id):
 
 
 @pytest.mark.parametrize('shard_id', [None, -1], indirect=True)
-def test_executor_workspace_parent_replica_nopea(test_metas_workspace_replica_pods, shard_id):
+def test_executor_workspace_parent_replica_nopea(
+    test_metas_workspace_replica_pods, shard_id
+):
     executor = Executor(
         metas={'name': test_metas_workspace_replica_pods['name']},
         runtime_args=test_metas_workspace_replica_pods,
@@ -245,7 +253,9 @@ def test_executor_workspace_parent_replica_nopea(test_metas_workspace_replica_po
 
 
 @pytest.mark.parametrize('shard_id', [0, 1, 2], indirect=True)
-def test_executor_workspace_parent_noreplica_pod(test_metas_workspace_replica_pods, shard_id):
+def test_executor_workspace_parent_noreplica_pod(
+    test_metas_workspace_replica_pods, shard_id
+):
     executor = Executor(
         metas={'name': test_metas_workspace_replica_pods['name']},
         runtime_args=test_metas_workspace_replica_pods,
@@ -260,7 +270,9 @@ def test_executor_workspace_parent_noreplica_pod(test_metas_workspace_replica_po
 
 
 @pytest.mark.parametrize('shard_id', [None, -1], indirect=True)
-def test_executor_workspace_parent_noreplica_nopea(test_metas_workspace_replica_pods, shard_id):
+def test_executor_workspace_parent_noreplica_nopea(
+    test_metas_workspace_replica_pods, shard_id
+):
     executor = Executor(
         metas={'name': test_metas_workspace_replica_pods['name']},
         runtime_args=test_metas_workspace_replica_pods,
@@ -390,8 +402,12 @@ def test_set_workspace(tmpdir):
     with Flow().add(uses=WorkspaceExec, uses_metas={'workspace': str(tmpdir)}) as f:
         resp = f.post(on='/foo', inputs=Document())
     assert resp[0].text == complete_workspace
-    complete_workspace_no_replicas = os.path.abspath(os.path.join(tmpdir, 'WorkspaceExec'))
-    assert WorkspaceExec(workspace=str(tmpdir)).workspace == complete_workspace_no_replicas
+    complete_workspace_no_replicas = os.path.abspath(
+        os.path.join(tmpdir, 'WorkspaceExec')
+    )
+    assert (
+        WorkspaceExec(workspace=str(tmpdir)).workspace == complete_workspace_no_replicas
+    )
 
 
 def test_default_workspace(tmpdir):
@@ -418,7 +434,9 @@ def test_to_k8s_yaml(tmpdir, exec_type):
 
     with open(os.path.join(tmpdir, 'executor0', 'executor0.yml')) as f:
         exec_yaml = list(yaml.safe_load_all(f))[-1]
-        assert exec_yaml['spec']['template']['spec']['containers'][0]['image'].startswith('jinahub/')
+        assert exec_yaml['spec']['template']['spec']['containers'][0][
+            'image'
+        ].startswith('jinahub/')
 
     if exec_type == Executor.StandaloneExecutorType.SHARED:
         assert set(os.listdir(tmpdir)) == {
@@ -432,8 +450,15 @@ def test_to_k8s_yaml(tmpdir, exec_type):
 
         with open(os.path.join(tmpdir, 'gateway', 'gateway.yml')) as f:
             gatewayyaml = list(yaml.safe_load_all(f))[-1]
-            assert gatewayyaml['spec']['template']['spec']['containers'][0]['ports'][0]['containerPort'] == 2020
-            gateway_args = gatewayyaml['spec']['template']['spec']['containers'][0]['args']
+            assert (
+                gatewayyaml['spec']['template']['spec']['containers'][0]['ports'][0][
+                    'containerPort'
+                ]
+                == 2020
+            )
+            gateway_args = gatewayyaml['spec']['template']['spec']['containers'][0][
+                'args'
+            ]
             assert gateway_args[gateway_args.index('--port') + 1] == '2020'
 
 

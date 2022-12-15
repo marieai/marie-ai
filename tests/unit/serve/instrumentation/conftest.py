@@ -24,7 +24,9 @@ class DirMetricExporter(MetricExporter):
         self,
         metric_dir: str,
         preferred_temporality: Dict[type, AggregationTemporality] = None,
-        preferred_aggregation: Dict[type, "opentelemetry.sdk.metrics.view.Aggregation"] = None,
+        preferred_aggregation: Dict[
+            type, "opentelemetry.sdk.metrics.view.Aggregation"
+        ] = None,
     ):
         super().__init__(
             preferred_temporality=preferred_temporality,
@@ -81,14 +83,19 @@ def monkeypatch_metric_exporter(
         time.sleep(2)
 
     def _get_service_name(otel_measurement):
-        return otel_measurement[0]['resource_metrics'][0]['resource']['attributes']['service.name']
+        return otel_measurement[0]['resource_metrics'][0]['resource']['attributes'][
+            'service.name'
+        ]
 
     def read_metrics():
         def read_metric_file(filename):
             with open(filename, 'r') as f:
                 return list(map(json.loads, f.readlines()))
 
-        return {_get_service_name(i): i for i in map(read_metric_file, metrics_path.glob('*'))}
+        return {
+            _get_service_name(i): i
+            for i in map(read_metric_file, metrics_path.glob('*'))
+        }
 
     class PatchedTextReader(PeriodicExportingMetricReader):
         def __init__(self, *args, **kwargs) -> None:

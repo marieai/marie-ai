@@ -14,7 +14,9 @@ class SlowExecutor(Executor):
 
 @pytest.mark.slow
 def test_slow_executor_close(tmpdir):
-    with Flow().add(uses={'jtype': 'SlowExecutor', 'with': {}, 'metas': {'workspace': str(tmpdir)}}) as f:
+    with Flow().add(
+        uses={'jtype': 'SlowExecutor', 'with': {}, 'metas': {'workspace': str(tmpdir)}}
+    ) as f:
         pass
 
     assert os.path.exists(os.path.join(tmpdir, 'test'))

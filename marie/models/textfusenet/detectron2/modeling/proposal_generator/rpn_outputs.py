@@ -96,7 +96,9 @@ def find_top_rpn_proposals(
     topk_proposals = []
     level_ids = []  # #lvl Tensor, each of shape (topk,)
     batch_idx = torch.arange(num_images, device=device)
-    for level_id, proposals_i, logits_i in zip(itertools.count(), proposals, pred_objectness_logits):
+    for level_id, proposals_i, logits_i in zip(
+        itertools.count(), proposals, pred_objectness_logits
+    ):
         Hi_Wi_A = logits_i.shape[1]
         num_proposals_i = min(pre_nms_topk, Hi_Wi_A)
 
@@ -111,7 +113,9 @@ def find_top_rpn_proposals(
 
         topk_proposals.append(topk_proposals_i)
         topk_scores.append(topk_scores_i)
-        level_ids.append(torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device))
+        level_ids.append(
+            torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device)
+        )
 
     # 2. Concat all levels together
     topk_scores = cat(topk_scores, dim=1)
@@ -263,19 +267,25 @@ class RPNOutputs(object):
         gt_anchor_deltas = []
         # Concatenate anchors from all feature maps into a single Boxes per image
         anchors = [Boxes.cat(anchors_i) for anchors_i in self.anchors]
-        for image_size_i, anchors_i, gt_boxes_i in zip(self.image_sizes, anchors, self.gt_boxes):
+        for image_size_i, anchors_i, gt_boxes_i in zip(
+            self.image_sizes, anchors, self.gt_boxes
+        ):
             """
             image_size_i: (h, w) for the i-th image
             anchors_i: anchors for i-th image
             gt_boxes_i: ground-truth boxes for i-th image
             """
             match_quality_matrix = pairwise_iou(gt_boxes_i, anchors_i)
-            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(match_quality_matrix)
+            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(
+                match_quality_matrix
+            )
 
             if self.boundary_threshold >= 0:
                 # Discard anchors that go out of the boundaries of the image
                 # NOTE: This is legacy functionality that is turned off by default in Detectron2
-                anchors_inside_image = anchors_i.inside_box(image_size_i, self.boundary_threshold)
+                anchors_inside_image = anchors_i.inside_box(
+                    image_size_i, self.boundary_threshold
+                )
                 gt_objectness_logits_i[~anchors_inside_image] = -1
 
             if len(gt_boxes_i) == 0:
@@ -284,7 +294,9 @@ class RPNOutputs(object):
             else:
                 # TODO wasted computation for ignored boxes
                 matched_gt_boxes = gt_boxes_i[matched_idxs]
-                gt_anchor_deltas_i = self.box2box_transform.get_deltas(anchors_i.tensor, matched_gt_boxes.tensor)
+                gt_anchor_deltas_i = self.box2box_transform.get_deltas(
+                    anchors_i.tensor, matched_gt_boxes.tensor
+                )
 
             gt_objectness_logits.append(gt_objectness_logits_i)
             gt_anchor_deltas.append(gt_anchor_deltas_i)
@@ -307,7 +319,9 @@ class RPNOutputs(object):
             the label vector to the ignore value (-1) for all elements that are not
             included in the sample.
             """
-            pos_idx, neg_idx = subsample_labels(label, self.batch_size_per_image, self.positive_fraction, 0)
+            pos_idx, neg_idx = subsample_labels(
+                label, self.batch_size_per_image, self.positive_fraction, 0
+            )
             # Fill with the ignore label (-1), then set positive and negative labels
             label.fill_(-1)
             label.scatter_(0, pos_idx, 1)
@@ -323,11 +337,15 @@ class RPNOutputs(object):
         """
         # Collect all objectness labels and delta targets over feature maps and images
         # The final ordering is L, N, H, W, A from slowest to fastest axis.
-        num_anchors_per_map = [np.prod(x.shape[1:]) for x in self.pred_objectness_logits]
+        num_anchors_per_map = [
+            np.prod(x.shape[1:]) for x in self.pred_objectness_logits
+        ]
         num_anchors_per_image = sum(num_anchors_per_map)
 
         # Stack to: (N, num_anchors_per_image)
-        gt_objectness_logits = torch.stack([resample(label) for label in gt_objectness_logits], dim=0)
+        gt_objectness_logits = torch.stack(
+            [resample(label) for label in gt_objectness_logits], dim=0
+        )
 
         # Log the number of positive/negative anchors per-image that's used in training
         num_pos_anchors = (gt_objectness_logits == 1).sum().item()
@@ -338,7 +356,9 @@ class RPNOutputs(object):
 
         assert gt_objectness_logits.shape[1] == num_anchors_per_image
         # Split to tuple of L tensors, each with shape (N, num_anchors_per_map)
-        gt_objectness_logits = torch.split(gt_objectness_logits, num_anchors_per_map, dim=1)
+        gt_objectness_logits = torch.split(
+            gt_objectness_logits, num_anchors_per_map, dim=1
+        )
         # Concat from all feature maps
         gt_objectness_logits = cat([x.flatten() for x in gt_objectness_logits], dim=0)
 
@@ -367,7 +387,9 @@ class RPNOutputs(object):
             [
                 # Reshape: (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B)
                 #          -> (N*Hi*Wi*A, B)
-                x.view(x.shape[0], -1, B, x.shape[-2], x.shape[-1]).permute(0, 3, 4, 1, 2).reshape(-1, B)
+                x.view(x.shape[0], -1, B, x.shape[-2], x.shape[-1])
+                .permute(0, 3, 4, 1, 2)
+                .reshape(-1, B)
                 for x in self.pred_anchor_deltas
             ],
             dim=0,
@@ -403,11 +425,17 @@ class RPNOutputs(object):
             B = anchors_i[0].tensor.size(1)
             N, _, Hi, Wi = pred_anchor_deltas_i.shape
             # Reshape: (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B) -> (N*Hi*Wi*A, B)
-            pred_anchor_deltas_i = pred_anchor_deltas_i.view(N, -1, B, Hi, Wi).permute(0, 3, 4, 1, 2).reshape(-1, B)
+            pred_anchor_deltas_i = (
+                pred_anchor_deltas_i.view(N, -1, B, Hi, Wi)
+                .permute(0, 3, 4, 1, 2)
+                .reshape(-1, B)
+            )
             # Concatenate all anchors to shape (N*Hi*Wi*A, B)
             # type(anchors_i[0]) is Boxes (B = 4) or RotatedBoxes (B = 5)
             anchors_i = type(anchors_i[0]).cat(anchors_i)
-            proposals_i = self.box2box_transform.apply_deltas(pred_anchor_deltas_i, anchors_i.tensor)
+            proposals_i = self.box2box_transform.apply_deltas(
+                pred_anchor_deltas_i, anchors_i.tensor
+            )
             # Append feature map proposals with shape (N, Hi*Wi*A, B)
             proposals.append(proposals_i.view(N, -1, B))
         return proposals

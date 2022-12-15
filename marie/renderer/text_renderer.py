@@ -19,13 +19,17 @@ class TextRenderer(ResultRenderer):
         self.preserve_interword_spaces = False
 
         if "preserve_interword_spaces" in config:
-            self.preserve_interword_spaces = strtobool(config["preserve_interword_spaces"])
+            self.preserve_interword_spaces = strtobool(
+                config["preserve_interword_spaces"]
+            )
 
     @property
     def name(self):
         return "TextRenderer"
 
-    def __render_page(self, image: np.array, result: Dict[str, Any], page_index: int) -> str:
+    def __render_page(
+        self, image: np.array, result: Dict[str, Any], page_index: int
+    ) -> str:
         """Render single result page into text"""
         # 8px X 22px = 2.75 pytorch
         # 8px X 19px = 2.375 vscode
@@ -77,7 +81,9 @@ class TextRenderer(ResultRenderer):
             start_cell_y = cell_y
 
             if False:
-                print(f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}")
+                print(
+                    f"Baseline # {i} : {baseline}, cell-y = {cell_y} , delta_cell_y = {delta_cell_y}"
+                )
 
             for j in range(1, delta_cell_y):
                 buffer += "\n"

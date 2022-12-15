@@ -40,13 +40,19 @@ class _SummaryDeprecated(Summary):
             _labelvalues,
         )
 
-        self._old_name = _build_full_name(self._type, old_name, namespace, subsystem, unit) if old_name else None
+        self._old_name = (
+            _build_full_name(self._type, old_name, namespace, subsystem, unit)
+            if old_name
+            else None
+        )
 
     def collect(self):
         metric = self._get_metric()
         for suffix, labels, value, timestamp, exemplar in self._samples():
             metric.add_sample(self._name + suffix, labels, value, timestamp, exemplar)
             if self._old_name:  # here this is the hack to inject the old metrics names
-                metric.add_sample(self._old_name + suffix, labels, value, timestamp, exemplar)
+                metric.add_sample(
+                    self._old_name + suffix, labels, value, timestamp, exemplar
+                )
 
         return [metric]

@@ -56,7 +56,9 @@ def test_container_pod_pass_envs(env_checker_docker_image_built):
     ) as pod:
         container = pod._container
         status = container.status
-        time.sleep(2)  # to avoid desync between the start and close process which could lead to container never get terminated
+        time.sleep(
+            2
+        )  # to avoid desync between the start and close process which could lead to container never get terminated
 
     assert status == 'running'
     client = docker.from_env()
@@ -100,12 +102,20 @@ def test_container_pod_volume_setting(
         container = pod._container
         source = container.attrs['Mounts'][0]['Source']
         destination = container.attrs['Mounts'][0]['Destination']
-        time.sleep(2)  # to avoid desync between the start and close process which could lead to container never get terminated
+        time.sleep(
+            2
+        )  # to avoid desync between the start and close process which could lead to container never get terminated
 
-    expected_source = os.path.abspath(expected_source) if expected_source else os.path.abspath(default_workspace)
+    expected_source = (
+        os.path.abspath(expected_source)
+        if expected_source
+        else os.path.abspath(default_workspace)
+    )
     expected_destination = expected_destination if expected_destination else '/app'
 
-    assert source.startswith(expected_source)  # there is a random workspace id at the end!
+    assert source.startswith(
+        expected_source
+    )  # there is a random workspace id at the end!
     assert destination == expected_destination
 
 
@@ -226,7 +236,9 @@ def test_pass_arbitrary_kwargs(monkeypatch, mocker):
         ]
     )
     with ContainerPod(args) as pod:
-        time.sleep(2)  # to avoid desync between the start and close process which could lead to container never get terminated
+        time.sleep(
+            2
+        )  # to avoid desync between the start and close process which could lead to container never get terminated
     pod.join()
     assert pod.worker.exitcode == 0
 
@@ -236,7 +248,9 @@ def dummy_custom_gateway_docker_image_built():
     import docker
 
     client = docker.from_env()
-    client.images.build(path=os.path.join(cur_dir, 'custom-gateway/'), tag='custom-gateway')
+    client.images.build(
+        path=os.path.join(cur_dir, 'custom-gateway/'), tag='custom-gateway'
+    )
     client.close()
     yield
     time.sleep(2)
@@ -249,13 +263,19 @@ def test_container_pod_custom_gateway(dummy_custom_gateway_docker_image_built):
 
     port = str(random_port())
     with ContainerPod(
-        set_gateway_parser().parse_args(['--uses', 'docker://custom-gateway', '--port', port, '--protocol', 'http'])
+        set_gateway_parser().parse_args(
+            ['--uses', 'docker://custom-gateway', '--port', port, '--protocol', 'http']
+        )
     ) as pod:
         container = pod._container
         status = pod._container.status
-        _validate_dummy_custom_gateway_response(port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'})
+        _validate_dummy_custom_gateway_response(
+            port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'}
+        )
 
-        time.sleep(2)  # to avoid desync between the start and close process which could lead to container never get terminated
+        time.sleep(
+            2
+        )  # to avoid desync between the start and close process which could lead to container never get terminated
 
     assert status == 'running'
     client = docker.from_env()
@@ -268,4 +288,6 @@ def test_container_pod_with_flow_custom_gateway(
 ):
     flow = Flow().config_gateway(uses='docker://custom-gateway', protocol='http')
     with flow:
-        _validate_dummy_custom_gateway_response(flow.port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'})
+        _validate_dummy_custom_gateway_response(
+            flow.port, {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'}
+        )

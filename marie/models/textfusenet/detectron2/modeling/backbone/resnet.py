@@ -345,7 +345,9 @@ class ResNet(Backbone):
             name = "res" + str(i + 2)
             self.add_module(name, stage)
             self.stages_and_names.append((stage, name))
-            self._out_feature_strides[name] = current_stride = int(current_stride * np.prod([k.stride for k in blocks]))
+            self._out_feature_strides[name] = current_stride = int(
+                current_stride * np.prod([k.stride for k in blocks])
+            )
             self._out_feature_channels[name] = blocks[-1].out_channels
 
         if num_classes is not None:
@@ -364,7 +366,9 @@ class ResNet(Backbone):
         assert len(self._out_features)
         children = [x[0] for x in self.named_children()]
         for out_feature in self._out_features:
-            assert out_feature in children, "Available children: {}".format(", ".join(children))
+            assert out_feature in children, "Available children: {}".format(
+                ", ".join(children)
+            )
 
     def forward(self, x):
         outputs = {}
@@ -430,13 +434,17 @@ def build_resnet_backbone(cfg, input_shape):
     # fmt: on
     assert res5_dilation in {1, 2}, "res5_dilation cannot be {}.".format(res5_dilation)
 
-    num_blocks_per_stage = {50: [3, 4, 6, 3], 101: [3, 4, 23, 3], 152: [3, 8, 36, 3]}[depth]
+    num_blocks_per_stage = {50: [3, 4, 6, 3], 101: [3, 4, 23, 3], 152: [3, 8, 36, 3]}[
+        depth
+    ]
 
     stages = []
 
     # Avoid creating variables without gradients
     # It consumes extra memory and may cause allreduce to fail
-    out_stage_idx = [{"res2": 2, "res3": 3, "res4": 4, "res5": 5}[f] for f in out_features]
+    out_stage_idx = [
+        {"res2": 2, "res3": 3, "res4": 4, "res5": 5}[f] for f in out_features
+    ]
     max_stage_idx = max(out_stage_idx)
     for idx, stage_idx in enumerate(range(2, max_stage_idx + 1)):
         dilation = res5_dilation if stage_idx == 5 else 1

@@ -36,7 +36,9 @@ class NERRouter:
         _name_or_path = (
             kwargs.pop("_name_or_path")
             if "_name_or_path" in kwargs
-            else executor_config(config, NerExtractionExecutor.__name__)["_name_or_path"]
+            else executor_config(config, NerExtractionExecutor.__name__)[
+                "_name_or_path"
+            ]
         )
 
         if _name_or_path is None:

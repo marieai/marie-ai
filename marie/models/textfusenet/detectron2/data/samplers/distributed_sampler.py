@@ -42,7 +42,9 @@ class TrainingSampler(Sampler):
 
     def __iter__(self):
         start = self._rank
-        yield from itertools.islice(self._infinite_indices(), start, None, self._world_size)
+        yield from itertools.islice(
+            self._infinite_indices(), start, None, self._world_size
+        )
 
     def _infinite_indices(self):
         g = torch.Generator()
@@ -113,7 +115,10 @@ class RepeatFactorTrainingSampler(Sampler):
 
         # 2. For each category c, compute the category-level repeat factor:
         #    r(c) = max(1, sqrt(t / f(c)))
-        category_rep = {cat_id: max(1.0, math.sqrt(repeat_thresh / cat_freq)) for cat_id, cat_freq in category_freq.items()}
+        category_rep = {
+            cat_id: max(1.0, math.sqrt(repeat_thresh / cat_freq))
+            for cat_id, cat_freq in category_freq.items()
+        }
 
         # 3. For each image I, compute the image-level repeat factor:
         #    r(I) = max_{c in I} r(c)
@@ -150,7 +155,9 @@ class RepeatFactorTrainingSampler(Sampler):
 
     def __iter__(self):
         start = self._rank
-        yield from itertools.islice(self._infinite_indices(), start, None, self._world_size)
+        yield from itertools.islice(
+            self._infinite_indices(), start, None, self._world_size
+        )
 
     def _infinite_indices(self):
         g = torch.Generator()

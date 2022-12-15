@@ -24,12 +24,21 @@ class HTTPBaseClient(BaseClient):
     def _handle_response_status(self, r_status, r_str, url):
         if r_status == status.HTTP_404_NOT_FOUND:
             raise BadClient(f'no such endpoint {url}')
-        elif r_status == status.HTTP_503_SERVICE_UNAVAILABLE or r_status == status.HTTP_504_GATEWAY_TIMEOUT:
-            if 'header' in r_str and 'status' in r_str['header'] and 'description' in r_str['header']['status']:
+        elif (
+            r_status == status.HTTP_503_SERVICE_UNAVAILABLE
+            or r_status == status.HTTP_504_GATEWAY_TIMEOUT
+        ):
+            if (
+                'header' in r_str
+                and 'status' in r_str['header']
+                and 'description' in r_str['header']['status']
+            ):
                 raise ConnectionError(r_str['header']['status']['description'])
             else:
                 raise ValueError(r_str)
-        elif r_status < status.HTTP_200_OK or r_status > status.HTTP_300_MULTIPLE_CHOICES:  # failure codes
+        elif (
+            r_status < status.HTTP_200_OK or r_status > status.HTTP_300_MULTIPLE_CHOICES
+        ):  # failure codes
             raise ValueError(r_str)
 
     async def _is_flow_ready(self, **kwargs) -> bool:
@@ -61,9 +70,13 @@ class HTTPBaseClient(BaseClient):
                 if r_str['code'] == jina_pb2.StatusProto.SUCCESS:
                     return True
                 else:
-                    self.logger.error(f'Returned code is not expected! Description: {r_str["description"]}')
+                    self.logger.error(
+                        f'Returned code is not expected! Description: {r_str["description"]}'
+                    )
             except Exception as e:
-                self.logger.error(f'Error while fetching response from HTTP server {e!r}')
+                self.logger.error(
+                    f'Error while fetching response from HTTP server {e!r}'
+                )
         return False
 
     async def _get_results(
@@ -99,7 +112,9 @@ class HTTPBaseClient(BaseClient):
         request_iterator = self._get_requests(**kwargs)
 
         async with AsyncExitStack() as stack:
-            cm1 = ProgressBar(total_length=self._inputs_length, disable=not (self.show_progress))
+            cm1 = ProgressBar(
+                total_length=self._inputs_length, disable=not (self.show_progress)
+            )
             p_bar = stack.enter_context(cm1)
 
             proto = 'https' if self.args.tls else 'http'
@@ -138,7 +153,9 @@ class HTTPBaseClient(BaseClient):
                 logger=self.logger,
                 **vars(self.args),
             )
-            async for response in streamer.stream(request_iterator=request_iterator, results_in_order=results_in_order):
+            async for response in streamer.stream(
+                request_iterator=request_iterator, results_in_order=results_in_order
+            ):
                 r_status = response.status
 
                 r_str = await response.json()

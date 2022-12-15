@@ -81,12 +81,16 @@ def gpu_utilization(num_of_gpu):
                 dimension_gpu,
             )
         )
-        system_metrics.append(Metric('GPUMemoryUsed', value['mem_used'], 'MB', dimension_gpu))
+        system_metrics.append(
+            Metric('GPUMemoryUsed', value['mem_used'], 'MB', dimension_gpu)
+        )
 
     statuses = list_gpus.device_statuses()
     for idx, status in enumerate(statuses):
         dimension_gpu = [Dimension('Level', 'Host'), Dimension("device_id", idx)]
-        system_metrics.append(Metric('GPUUtilization', status['utilization'], 'percent', dimension_gpu))
+        system_metrics.append(
+            Metric('GPUUtilization', status['utilization'], 'percent', dimension_gpu)
+        )
 
 
 def collect_all(mod, num_of_gpu):

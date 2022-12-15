@@ -14,7 +14,9 @@ _CURRENT_STORAGE_STACK = []
 
 
 def get_event_storage():
-    assert len(_CURRENT_STORAGE_STACK), "get_event_storage() has to be called inside a 'with EventStorage(...)' context!"
+    assert len(
+        _CURRENT_STORAGE_STACK
+    ), "get_event_storage() has to be called inside a 'with EventStorage(...)' context!"
     return _CURRENT_STORAGE_STACK[-1]
 
 
@@ -154,7 +156,9 @@ class CommonMetricPrinter(EventWriter):
         try:
             data_time = storage.history("data_time").avg(20)
             time = storage.history("time").global_avg()
-            eta_seconds = storage.history("time").median(1000) * (self._max_iter - iteration)
+            eta_seconds = storage.history("time").median(1000) * (
+                self._max_iter - iteration
+            )
             eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
         except KeyError:  # they may not exist in the first few iterations (due to warmup)
             pass
@@ -179,12 +183,20 @@ lr: {lr}  {memory}\
                 eta=eta_string,
                 iter=iteration,
                 losses="  ".join(
-                    ["{}: {:.3f}".format(k, v.median(20)) for k, v in storage.histories().items() if "loss" in k]
+                    [
+                        "{}: {:.3f}".format(k, v.median(20))
+                        for k, v in storage.histories().items()
+                        if "loss" in k
+                    ]
                 ),
                 time="time: {:.4f}".format(time) if time is not None else "",
-                data_time="data_time: {:.4f}".format(data_time) if data_time is not None else "",
+                data_time="data_time: {:.4f}".format(data_time)
+                if data_time is not None
+                else "",
                 lr=lr,
-                memory="max_mem: {:.0f}M".format(max_mem_mb) if max_mem_mb is not None else "",
+                memory="max_mem: {:.0f}M".format(max_mem_mb)
+                if max_mem_mb is not None
+                else "",
             )
         )
 
@@ -228,7 +240,9 @@ class EventStorage:
 
         existing_hint = self._smoothing_hints.get(name)
         if existing_hint is not None:
-            assert existing_hint == smoothing_hint, "Scalar {} was put with a different smoothing_hint!".format(name)
+            assert (
+                existing_hint == smoothing_hint
+            ), "Scalar {} was put with a different smoothing_hint!".format(name)
         else:
             self._smoothing_hints[name] = smoothing_hint
 
@@ -278,7 +292,9 @@ class EventStorage:
         """
         result = {}
         for k, v in self._latest_scalars.items():
-            result[k] = self._history[k].median(window_size) if self._smoothing_hints[k] else v
+            result[k] = (
+                self._history[k].median(window_size) if self._smoothing_hints[k] else v
+            )
         return result
 
     def smoothing_hints(self):

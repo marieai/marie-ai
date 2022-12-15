@@ -66,7 +66,9 @@ def load_image(fname, image_type):
 
 
 # Blueprint Configuration
-blueprint = Blueprint(name="icr_bp", import_name=__name__, url_prefix=marie.conf.API_PREFIX)
+blueprint = Blueprint(
+    name="icr_bp", import_name=__name__, url_prefix=marie.conf.API_PREFIX
+)
 
 logging.info("IcrAPIRoutes inited")
 show_error = True  # show prediction errors
@@ -181,8 +183,12 @@ def process_extract_fullpage(frames, queue_id, checksum, pms_mode, args, **kwarg
     overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
     overlay[padding : h + padding, padding : w + padding] = img
 
-    boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
-    result, overlay_image = icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
+    boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
+        queue_id, checksum, overlay, pms_mode
+    )
+    result, overlay_image = icr_processor.recognize(
+        queue_id, checksum, overlay, boxes, img_fragments, lines
+    )
 
     cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}.png", overlay_image)
     result["overlay_b64"] = encodeToBase64(overlay_image)
@@ -192,7 +198,9 @@ def process_extract_fullpage(frames, queue_id, checksum, pms_mode, args, **kwarg
 
 def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args):
     """Process region based extract"""
-    filter_snippets = bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
+    filter_snippets = (
+        bool(strtobool(args["filter_snippets"])) if "filter_snippets" in args else False
+    )
     output = []
     extended = []
 
@@ -214,13 +222,21 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
             img = img[y : y + h, x : x + w].copy()
             # allow for small padding around the component
             padding = 4
-            overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            overlay = (
+                np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            )
             overlay[padding : h + padding, padding : w + padding] = img
 
-            boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
-            result, overlay_image = icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
+            boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
+                queue_id, checksum, overlay, pms_mode
+            )
+            result, overlay_image = icr_processor.recognize(
+                queue_id, checksum, overlay, boxes, img_fragments, lines
+            )
 
-            cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image)
+            cv2.imwrite(
+                f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image
+            )
             result["overlay_b64"] = encodeToBase64(overlay_image)
             result["id"] = rid
 
@@ -293,7 +309,9 @@ def extract(queue_id: str):
         args = {}
         if "args" in payload:
             args = payload["args"]
-            pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
+            pms_mode = PSMode.from_value(
+                payload["args"]["mode"] if "mode" in payload["args"] else ""
+            )
 
         tmp_file, checksum, file_type = extract_payload(payload, queue_id)
         loaded, frames = load_image(tmp_file, file_type)
@@ -308,9 +326,13 @@ def extract(queue_id: str):
         print(f"regions_len : {len(regions)}")
 
         if len(regions) == 0:
-            result = process_extract_fullpage(frames, queue_id, checksum, pms_mode, args)
+            result = process_extract_fullpage(
+                frames, queue_id, checksum, pms_mode, args
+            )
         else:
-            result = process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
+            result = process_extract_regions(
+                frames, queue_id, checksum, pms_mode, regions, args
+            )
 
         serialized = json.dumps(
             result,

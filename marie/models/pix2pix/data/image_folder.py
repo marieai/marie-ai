@@ -52,7 +52,12 @@ class ImageFolder(data.Dataset):
         imgs = make_dataset(root)
         if len(imgs) == 0:
             raise (
-                RuntimeError("Found 0 images in: " + root + "\nSupported image extensions are: " + ",".join(IMG_EXTENSIONS))
+                RuntimeError(
+                    "Found 0 images in: "
+                    + root
+                    + "\nSupported image extensions are: "
+                    + ",".join(IMG_EXTENSIONS)
+                )
             )
 
         self.root = root

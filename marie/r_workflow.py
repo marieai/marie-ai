@@ -54,7 +54,9 @@ def write_adlib_summary(adlib_dir, adlib_summary_filename, file_sorter):
     root.append(metas)
     pages_node = gfg.Element("PAGES")
 
-    for idx, _path in enumerate(sorted(glob.glob(os.path.join(adlib_dir, "*.xml")), key=file_sorter)):
+    for idx, _path in enumerate(
+        sorted(glob.glob(os.path.join(adlib_dir, "*.xml")), key=file_sorter)
+    ):
         filename = _path.split("/")[-1]
         filePageIndex = _path.split("/")[-1].split(".")[0].split("_")[-1]
         print(f" {filePageIndex} : {filename}")
@@ -131,7 +133,9 @@ def process_workflow(src_file: str) -> None:
     cudnn.deterministic = True
 
     overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
-    box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
+    box = BoxProcessorCraft(
+        work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    )
     # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=True)
     # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./model_zoo/textfusenet', cuda=False)
     icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
@@ -145,7 +149,11 @@ def process_workflow(src_file: str) -> None:
     torch.autograd.profiler.emit_nvtx(enabled=False)
 
     # process each image from the bursts directory
-    for idx, _path in enumerate(sorted(glob.glob(os.path.join(burst_dir, "*.tif")), key=__sort_key_files_by_page)):
+    for idx, _path in enumerate(
+        sorted(
+            glob.glob(os.path.join(burst_dir, "*.tif")), key=__sort_key_files_by_page
+        )
+    ):
         try:
             filename = _path.split("/")[-1]
             doc_id = filename.split("/")[-1].split(".")[0]
@@ -167,7 +175,9 @@ def process_workflow(src_file: str) -> None:
                     save_path = os.path.join(stack_dir, f"{doc_id}.png")
                     imwrite(save_path, stacked)
 
-                save_path = os.path.join(clean_dir, f"{doc_id}.tif")  # This will have the .tif extension
+                save_path = os.path.join(
+                    clean_dir, f"{doc_id}.tif"
+                )  # This will have the .tif extension
                 imwrite(save_path, blended, dpi=(300, 300))
                 image_clean = blended
                 print(f"Saved clean img : {save_path}")
@@ -178,8 +188,12 @@ def process_workflow(src_file: str) -> None:
             result = None
             # require both PDF and OCR results
             if not os.path.exists(pdf_save_path) or not os.path.exists(icr_save_path):
-                boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image_clean, PSMode.SPARSE)
-                result, overlay_image = icr.recognize(key, "test", image_clean, boxes, img_fragments, lines)
+                boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
+                    key, "field", image_clean, PSMode.SPARSE
+                )
+                result, overlay_image = icr.recognize(
+                    key, "test", image_clean, boxes, img_fragments, lines
+                )
 
                 with open(icr_save_path, "w") as f:
                     json.dump(
@@ -223,7 +237,9 @@ def process_workflow(src_file: str) -> None:
     # create assets
     merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{fileId}.ocr.zip"))
     merge_zip(blob_dir, os.path.join(assets_dir, f"{fileId}.blobs.xml.zip"))
-    merge_pdf(pdf_dir, os.path.join(assets_dir, f"{fileId}.pdf"), __sort_key_files_by_page)
+    merge_pdf(
+        pdf_dir, os.path.join(assets_dir, f"{fileId}.pdf"), __sort_key_files_by_page
+    )
     merge_tiff(
         clean_dir,
         os.path.join(assets_dir, f"{fileId}.tif.clean"),
@@ -234,7 +250,9 @@ def process_workflow(src_file: str) -> None:
 if __name__ == "__main__":
     # Register VFS handlers
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
-    PathManager.register_handler(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
+    PathManager.register_handler(
+        VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/")
+    )
 
     src_file = "volume://PID/150300431/PID_576_7188_0_150300431.tif"
     process_workflow(src_file)

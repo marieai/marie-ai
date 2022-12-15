@@ -64,13 +64,21 @@ class TopologyGraph:
 
         def _update_requests_with_filter_condition(self, need_copy):
             for i in range(len(self.parts_to_send)):
-                req = self.parts_to_send[i] if not need_copy else copy.deepcopy(self.parts_to_send[i])
+                req = (
+                    self.parts_to_send[i]
+                    if not need_copy
+                    else copy.deepcopy(self.parts_to_send[i])
+                )
                 filtered_docs = req.docs.find(self._filter_condition)
                 req.data.docs = filtered_docs
                 self.parts_to_send[i] = req
 
-        def _update_request_by_params(self, deployment_name: str, request_input_parameters: Dict):
-            specific_parameters = _parse_specific_params(request_input_parameters, deployment_name)
+        def _update_request_by_params(
+            self, deployment_name: str, request_input_parameters: Dict
+        ):
+            specific_parameters = _parse_specific_params(
+                request_input_parameters, deployment_name
+            )
             for i in range(len(self.parts_to_send)):
                 self.parts_to_send[i].parameters = specific_parameters
 
@@ -96,7 +104,9 @@ class TopologyGraph:
                 raise
 
         def get_endpoints(self, connection_pool: GrpcConnectionPool) -> asyncio.Task:
-            return connection_pool.send_discover_endpoint(self.name, retries=self._retries)
+            return connection_pool.send_discover_endpoint(
+                self.name, retries=self._retries
+            )
 
         async def _wait_previous_and_send(
             self,
@@ -117,28 +127,39 @@ class TopologyGraph:
             if metadata and 'is-error' in metadata:
                 return request, metadata
             elif request is not None:
-                request.parameters = _parse_specific_params(request.parameters, self.name)
-                req_to_send = copy.deepcopy(request) if copy_request_at_send else request
+                request.parameters = _parse_specific_params(
+                    request.parameters, self.name
+                )
+                req_to_send = (
+                    copy.deepcopy(request) if copy_request_at_send else request
+                )
                 self.parts_to_send.append(req_to_send)
                 # this is a specific needs
                 if len(self.parts_to_send) == self.number_of_parts:
                     self.start_time = datetime.utcnow()
                     self._update_request_by_params(self.name, request_input_parameters)
                     if self._filter_condition is not None:
-                        self._update_requests_with_filter_condition(need_copy=not copy_request_at_send)
+                        self._update_requests_with_filter_condition(
+                            need_copy=not copy_request_at_send
+                        )
                     if self._reduce and len(self.parts_to_send) > 1:
-                        self.parts_to_send = [WorkerRequestHandler.reduce_requests(self.parts_to_send)]
+                        self.parts_to_send = [
+                            WorkerRequestHandler.reduce_requests(self.parts_to_send)
+                        ]
 
                     # avoid sending to executor which does not bind to this endpoint
                     if endpoint is not None and executor_endpoint_mapping is not None:
                         if (
                             self.name in executor_endpoint_mapping
                             and endpoint not in executor_endpoint_mapping[self.name]
-                            and __default_endpoint__ not in executor_endpoint_mapping[self.name]
+                            and __default_endpoint__
+                            not in executor_endpoint_mapping[self.name]
                         ):
                             return request, metadata
 
-                    if target_executor_pattern is not None and not re.match(target_executor_pattern, self.name):
+                    if target_executor_pattern is not None and not re.match(
+                        target_executor_pattern, self.name
+                    ):
                         return request, metadata
                     # otherwise, send to executor and get response
                     try:
@@ -157,14 +178,18 @@ class TopologyGraph:
                             resp, metadata = result
                         if WorkerRequestHandler._KEY_RESULT in resp.parameters:
                             # Accumulate results from each Node and then add them to the original
-                            self.result_in_params_returned = resp.parameters[WorkerRequestHandler._KEY_RESULT]
+                            self.result_in_params_returned = resp.parameters[
+                                WorkerRequestHandler._KEY_RESULT
+                            ]
                         request.parameters = request_input_parameters
                         resp.parameters = request_input_parameters
                         self.parts_to_send.clear()
                     except InternalNetworkError as err:
                         self._handle_internalnetworkerror(err)
                     except Exception as err:
-                        self.logger.error(f'Exception sending requests to {self.name}: {err}')
+                        self.logger.error(
+                            f'Exception sending requests to {self.name}: {err}'
+                        )
                         raise err
 
                     self.end_time = datetime.utcnow()
@@ -234,7 +259,9 @@ class TopologyGraph:
                 )
             )
             if self.leaf:  # I am like a leaf
-                return [(not self.floating, wait_previous_and_send_task)]  # I am the last in the chain
+                return [
+                    (not self.floating, wait_previous_and_send_task)
+                ]  # I am the last in the chain
             hanging_tasks_tuples = []
             num_outgoing_nodes = len(self.outgoing_nodes)
             for outgoing_node in self.outgoing_nodes:
@@ -247,7 +274,8 @@ class TopologyGraph:
                     target_executor_pattern=target_executor_pattern,
                     request_input_parameters=request_input_parameters,
                     request_input_has_specific_params=request_input_has_specific_params,
-                    copy_request_at_send=num_outgoing_nodes > 1 and request_input_has_specific_params,
+                    copy_request_at_send=num_outgoing_nodes > 1
+                    and request_input_has_specific_params,
                 )
                 # We are interested in the last one, that will be the task that awaits all the previous
                 hanging_tasks_tuples.extend(t)
@@ -299,7 +327,9 @@ class TopologyGraph:
 
             return asyncio.create_task(task_wrapper())
 
-        def get_leaf_tasks(self, previous_task: Optional[asyncio.Task], *args, **kwargs) -> List[Tuple[bool, asyncio.Task]]:
+        def get_leaf_tasks(
+            self, previous_task: Optional[asyncio.Task], *args, **kwargs
+        ) -> List[Tuple[bool, asyncio.Task]]:
             return [(True, previous_task)]
 
     def __init__(
@@ -338,7 +368,9 @@ class TopologyGraph:
             metadata = deployments_metadata.get(node_name, None)
             nodes[node_name] = self._ReqReplyNode(
                 name=node_name,
-                number_of_parts=num_parts_per_node[node_name] if num_parts_per_node[node_name] > 0 else 1,
+                number_of_parts=num_parts_per_node[node_name]
+                if num_parts_per_node[node_name] > 0
+                else 1,
                 floating=node_name in floating_deployment_set,
                 filter_condition=condition,
                 metadata=metadata,
@@ -354,7 +386,9 @@ class TopologyGraph:
                     if out_node_name not in ['start-gateway', 'end-gateway']:
                         nodes[node_name].outgoing_nodes.append(nodes[out_node_name])
                     if out_node_name == 'end-gateway':
-                        nodes[node_name].outgoing_nodes.append(self._EndGatewayNode(name='__end_gateway__', floating=False))
+                        nodes[node_name].outgoing_nodes.append(
+                            self._EndGatewayNode(name='__end_gateway__', floating=False)
+                        )
 
         self._origin_nodes = [nodes[node_name] for node_name in origin_node_names]
         self.has_filter_conditions = bool(graph_conditions)

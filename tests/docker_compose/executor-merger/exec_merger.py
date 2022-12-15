@@ -13,7 +13,9 @@ class ExecMerger(Executor):
 
     @requests
     def debug(self, docs_matrix: List[DocumentArray], **kwargs):
-        self.logger.debug(f'received doc matrix in exec-merger with length {len(docs_matrix)}.')
+        self.logger.debug(
+            f'received doc matrix in exec-merger with length {len(docs_matrix)}.'
+        )
 
         result = DocumentArray()
         for docs in zip(*docs_matrix):

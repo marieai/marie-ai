@@ -19,7 +19,9 @@ from marie.utils.utils import FileSystem, current_milli_time, ensure_exists
 
 logger = MarieLogger("")
 
-api = Api(prefix=marie.conf.API_PREFIX)  # AttributeError: module 'config' has no attribute 'API_PREFIX
+api = Api(
+    prefix=marie.conf.API_PREFIX
+)  # AttributeError: module 'config' has no attribute 'API_PREFIX
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}

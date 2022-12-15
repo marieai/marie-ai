@@ -61,11 +61,21 @@ print('Eval')
 
 # set image path and export folder directory
 image = 'figures/padded_snippet-HCFA24.jpg'  # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3110.original.tif'  # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3111.original.tif'  # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3112.original.tif'  # can be filepath, PIL image or numpy array
-image = 'figures//PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
+image = (
+    'figures/PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
+)
+image = (
+    'figures/PID_10_5_0_3110.original.tif'  # can be filepath, PIL image or numpy array
+)
+image = (
+    'figures/PID_10_5_0_3111.original.tif'  # can be filepath, PIL image or numpy array
+)
+image = (
+    'figures/PID_10_5_0_3112.original.tif'  # can be filepath, PIL image or numpy array
+)
+image = (
+    'figures//PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
+)
 
 image = '/tmp/hicfa/PID_10_5_0_3101.original.tif'
 output_dir = 'outputs/'

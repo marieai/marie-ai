@@ -20,7 +20,9 @@ class ProcessedResponseModel(BaseModel):
 
 
 class DummyGateway(Gateway):
-    def __init__(self, arg1: str = None, arg2: str = None, arg3: str = 'default-arg3', **kwargs):
+    def __init__(
+        self, arg1: str = None, arg2: str = None, arg3: str = 'default-arg3', **kwargs
+    ):
         super().__init__(**kwargs)
         self.arg1 = arg1
         self.arg2 = arg2

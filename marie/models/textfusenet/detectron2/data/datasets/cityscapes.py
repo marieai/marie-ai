@@ -44,13 +44,19 @@ def load_cityscapes_instances(image_dir, gt_dir, from_json=True, to_polygons=Tru
         suffix = "leftImg8bit.png"
         assert image_file.endswith(suffix)
         prefix = image_dir
-        instance_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_instanceIds.png"
+        instance_file = (
+            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_instanceIds.png"
+        )
         assert os.path.isfile(instance_file), instance_file
 
-        label_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelIds.png"
+        label_file = (
+            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelIds.png"
+        )
         assert os.path.isfile(label_file), label_file
 
-        json_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
+        json_file = (
+            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
+        )
         files.append((image_file, instance_file, label_file, json_file))
     assert len(files), "No images found in {}".format(image_dir)
 
@@ -61,7 +67,9 @@ def load_cityscapes_instances(image_dir, gt_dir, from_json=True, to_polygons=Tru
     pool = mp.Pool(processes=max(mp.cpu_count() // get_world_size() // 2, 4))
 
     ret = pool.map(
-        functools.partial(cityscapes_files_to_dict, from_json=from_json, to_polygons=to_polygons),
+        functools.partial(
+            cityscapes_files_to_dict, from_json=from_json, to_polygons=to_polygons
+        ),
         files,
     )
     logger.info("Loaded {} images from {}".format(len(ret), image_dir))
@@ -93,12 +101,16 @@ def load_cityscapes_semantic(image_dir, gt_dir):
         assert image_file.endswith(suffix)
         prefix = image_dir
 
-        label_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelTrainIds.png"
+        label_file = (
+            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelTrainIds.png"
+        )
         assert os.path.isfile(
             label_file
         ), "Please generate labelTrainIds.png with cityscapesscripts/preparation/createTrainIdLabelImgs.py"  # noqa
 
-        json_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
+        json_file = (
+            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
+        )
 
         with PathManager.open(json_file, "r") as f:
             jsonobj = json.load(f)
@@ -197,7 +209,9 @@ def cityscapes_files_to_dict(files, from_json, to_polygons):
             elif isinstance(poly_wo_overlaps, MultiPolygon):
                 poly_list = poly_wo_overlaps.geoms
             else:
-                raise NotImplementedError("Unknown geometric structure {}".format(poly_wo_overlaps))
+                raise NotImplementedError(
+                    "Unknown geometric structure {}".format(poly_wo_overlaps)
+                )
 
             poly_coord = []
             for poly_el in poly_list:
@@ -251,7 +265,9 @@ def cityscapes_files_to_dict(files, from_json, to_polygons):
             if to_polygons:
                 # This conversion comes from D4809743 and D5171122,
                 # when Mask-RCNN was first developed.
-                contours = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[-2]
+                contours = cv2.findContours(
+                    mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+                )[-2]
                 polygons = [c.reshape(-1).tolist() for c in contours if len(c) >= 3]
                 # opencv's can produce invalid polygons
                 if len(polygons) == 0:
@@ -289,10 +305,14 @@ if __name__ == "__main__":
     os.makedirs(dirname, exist_ok=True)
 
     if args.type == "instance":
-        dicts = load_cityscapes_instances(args.image_dir, args.gt_dir, from_json=True, to_polygons=True)
+        dicts = load_cityscapes_instances(
+            args.image_dir, args.gt_dir, from_json=True, to_polygons=True
+        )
         logger.info("Done loading {} samples.".format(len(dicts)))
 
-        thing_classes = [k.name for k in labels if k.hasInstances and not k.ignoreInEval]
+        thing_classes = [
+            k.name for k in labels if k.hasInstances and not k.ignoreInEval
+        ]
         meta = Metadata().set(thing_classes=thing_classes)
 
     else:

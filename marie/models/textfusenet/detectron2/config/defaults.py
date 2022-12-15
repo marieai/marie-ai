@@ -461,7 +461,9 @@ _C.MODEL.RETINANET.SMOOTH_L1_LOSS_BETA = 0.1
 _C.MODEL.RESNETS = CN()
 
 _C.MODEL.RESNETS.DEPTH = 50
-_C.MODEL.RESNETS.OUT_FEATURES = ["res4"]  # res4 for C4 backbone, res2..5 for FPN backbone
+_C.MODEL.RESNETS.OUT_FEATURES = [
+    "res4"
+]  # res4 for C4 backbone, res2..5 for FPN backbone
 
 # Number of groups to use; 1 ==> ResNet; > 1 ==> ResNeXt
 _C.MODEL.RESNETS.NUM_GROUPS = 1

@@ -32,7 +32,9 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
     ret, link_score = cv2.threshold(linkmap, link_threshold, 1, 0)
 
     text_score_comb = np.clip(text_score + link_score, 0, 1)
-    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(text_score_comb.astype(np.uint8), connectivity=4)
+    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        text_score_comb.astype(np.uint8), connectivity=4
+    )
 
     if True:
         cv2.imwrite(os.path.join("/tmp/fragments/", "linkmap.png"), linkmap * 255)
@@ -75,7 +77,11 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
         segmap[sy:ey, sx:ex] = cv2.dilate(segmap[sy:ey, sx:ex], kernel)
 
         # make box
-        np_contours = np.roll(np.array(np.where(segmap != 0)), 1, axis=0).transpose().reshape(-1, 2)
+        np_contours = (
+            np.roll(np.array(np.where(segmap != 0)), 1, axis=0)
+            .transpose()
+            .reshape(-1, 2)
+        )
         rectangle = cv2.minAreaRect(np_contours)
         box = cv2.boxPoints(rectangle)
 
@@ -109,7 +115,9 @@ def getPoly_core(boxes, labels, mapper, linkmap):
     polys = []
     for k, box in enumerate(boxes):
         # size filter for small instance
-        w, h = int(np.linalg.norm(box[0] - box[1]) + 1), int(np.linalg.norm(box[1] - box[2]) + 1)
+        w, h = int(np.linalg.norm(box[0] - box[1]) + 1), int(
+            np.linalg.norm(box[1] - box[2]) + 1
+        )
         if w < 10 or h < 10:
             polys.append(None)
             continue
@@ -215,8 +223,12 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
         # get edge points to cover character heatmaps
         isSppFound, isEppFound = False, False
-        grad_s = (pp[1][1] - pp[0][1]) / (pp[1][0] - pp[0][0]) + (pp[2][1] - pp[1][1]) / (pp[2][0] - pp[1][0])
-        grad_e = (pp[-2][1] - pp[-1][1]) / (pp[-2][0] - pp[-1][0]) + (pp[-3][1] - pp[-2][1]) / (pp[-3][0] - pp[-2][0])
+        grad_s = (pp[1][1] - pp[0][1]) / (pp[1][0] - pp[0][0]) + (
+            pp[2][1] - pp[1][1]
+        ) / (pp[2][0] - pp[1][0])
+        grad_e = (pp[-2][1] - pp[-1][1]) / (pp[-2][0] - pp[-1][0]) + (
+            pp[-3][1] - pp[-2][1]
+        ) / (pp[-3][0] - pp[-2][0])
         for r in np.arange(0.5, max_r, step_r):
             dx = 2 * half_char_h * r
             if not isSppFound:
@@ -230,7 +242,10 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                     1,
                     thickness=1,
                 )
-                if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
+                if (
+                    np.sum(np.logical_and(word_label, line_img)) == 0
+                    or r + 2 * step_r >= max_r
+                ):
                     spp = p
                     isSppFound = True
             if not isEppFound:
@@ -244,7 +259,10 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                     1,
                     thickness=1,
                 )
-                if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
+                if (
+                    np.sum(np.logical_and(word_label, line_img)) == 0
+                    or r + 2 * step_r >= max_r
+                ):
                     epp = p
                     isEppFound = True
             if isSppFound and isEppFound:
@@ -273,7 +291,9 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
 
 def getDetBoxes(textmap, linkmap, text_threshold, link_threshold, low_text, poly=False):
-    boxes, labels, mapper = getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
+    boxes, labels, mapper = getDetBoxes_core(
+        textmap, linkmap, text_threshold, link_threshold, low_text
+    )
 
     if poly:
         polys = getPoly_core(boxes, labels, mapper, linkmap)

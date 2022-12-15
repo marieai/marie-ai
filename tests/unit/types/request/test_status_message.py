@@ -23,7 +23,9 @@ def test_init_fail():
         StatusMessage(status_object=5)
 
 
-@pytest.mark.parametrize('status_code', [jina_pb2.StatusProto.SUCCESS, jina_pb2.StatusProto.ERROR])
+@pytest.mark.parametrize(
+    'status_code', [jina_pb2.StatusProto.SUCCESS, jina_pb2.StatusProto.ERROR]
+)
 def test_set_code(status_code):
     status = StatusMessage()
     status.set_code(status_code)

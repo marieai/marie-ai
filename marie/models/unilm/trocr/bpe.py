@@ -60,13 +60,19 @@ class GPT2BPEEnhancedSpace(GPT2BPE):
 
     def decode(self, x: str) -> str:
         if INSERT_OR_REPLACE == 1:
-            return self.bpe.decode([int(tok) if tok not in {"<unk>", "<mask>", "<s>"} else tok for tok in x.split()]).replace(
-                '<s>', ' '
-            )
+            return self.bpe.decode(
+                [
+                    int(tok) if tok not in {"<unk>", "<mask>", "<s>"} else tok
+                    for tok in x.split()
+                ]
+            ).replace('<s>', ' ')
         elif INSERT_OR_REPLACE == 0:
-            return self.bpe.decode([int(tok) if tok not in {"<unk>", "<mask>", "<s>"} else tok for tok in x.split()]).replace(
-                '<s>', ''
-            )
+            return self.bpe.decode(
+                [
+                    int(tok) if tok not in {"<unk>", "<mask>", "<s>"} else tok
+                    for tok in x.split()
+                ]
+            ).replace('<s>', '')
 
     def is_beginning_of_word(self, x: str) -> bool:
         return self.decode(x).startswith(" ")

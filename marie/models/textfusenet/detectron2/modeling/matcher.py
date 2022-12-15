@@ -68,7 +68,9 @@ class Matcher(object):
         """
         assert match_quality_matrix.dim() == 2
         if match_quality_matrix.numel() == 0:
-            default_matches = match_quality_matrix.new_full((match_quality_matrix.size(1),), 0, dtype=torch.int64)
+            default_matches = match_quality_matrix.new_full(
+                (match_quality_matrix.size(1),), 0, dtype=torch.int64
+            )
             # When no gt boxes exist, we define IOU = 0 and therefore set labels
             # to `self.labels[0]`, which usually defaults to background class 0
             # To choose to ignore instead, can make labels=[-1,0,-1,1] + set appropriate thresholds
@@ -109,7 +111,9 @@ class Matcher(object):
         # Find the highest quality match available, even if it is low, including ties.
         # Note that the matches qualities must be positive due to the use of
         # `torch.nonzero`.
-        gt_pred_pairs_of_highest_quality = torch.nonzero(match_quality_matrix == highest_quality_foreach_gt[:, None])
+        gt_pred_pairs_of_highest_quality = torch.nonzero(
+            match_quality_matrix == highest_quality_foreach_gt[:, None]
+        )
         # Example gt_pred_pairs_of_highest_quality:
         #   tensor([[    0, 39796],
         #           [    1, 32055],

@@ -124,7 +124,9 @@ class OverlayProcessor(BaseHandler):
             # This is a work around for now
 
             if img.shape != image_numpy.shape:
-                print(f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}")
+                print(
+                    f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
+                )
                 return image_numpy[: img.shape[0], : img.shape[1], :]
 
             return image_numpy
@@ -141,7 +143,9 @@ class OverlayProcessor(BaseHandler):
         # Sizes of input arguments do not match
         # this happens sometimes after a forward pass, the FAKE image is larger than the input
         if real.shape != fake.shape:
-            raise Exception(f"Sizes of input arguments do not match(real, fake) : {real.shape} != {fake.shape}")
+            raise Exception(
+                f"Sizes of input arguments do not match(real, fake) : {real.shape} != {fake.shape}"
+            )
 
         blended_img = cv2.bitwise_or(real, fake)
         blended_img[blended_img >= 120] = [255]
@@ -175,7 +179,9 @@ class OverlayProcessor(BaseHandler):
         real_img = cv2.imread(dst_file_name)
         # viewImage(img, 'Source Image')
 
-        fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir, work_dir, debug_dir)
+        fake_mask = self.__extract_segmentation_mask(
+            real_img, dataroot_dir, work_dir, debug_dir
+        )
 
         # Unable to segment return empty mask
         if np.array(fake_mask).size == 0:
@@ -197,7 +203,9 @@ class OverlayProcessor(BaseHandler):
             real_img = real_img[:h, :w, :]
             fake_mask = fake_mask[:h, :w, :]
 
-            print(f"Image shapes after(real, fake) : {real_img.shape} : {fake_mask.shape}")
+            print(
+                f"Image shapes after(real, fake) : {real_img.shape} : {fake_mask.shape}"
+            )
 
         blended = self.blend_to_text(real_img, fake_mask)
         # viewImage(segmask, 'segmask')

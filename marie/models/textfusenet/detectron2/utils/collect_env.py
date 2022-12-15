@@ -67,7 +67,9 @@ def collect_env_info():
         if CUDA_HOME is not None and os.path.isdir(CUDA_HOME):
             try:
                 nvcc = os.path.join(CUDA_HOME, "bin", "nvcc")
-                nvcc = subprocess.check_output("'{}' -V | tail -n1".format(nvcc), shell=True)
+                nvcc = subprocess.check_output(
+                    "'{}' -V | tail -n1".format(nvcc), shell=True
+                )
                 nvcc = nvcc.decode("utf-8").strip()
             except subprocess.SubprocessError:
                 nvcc = "Not Available"

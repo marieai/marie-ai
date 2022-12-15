@@ -50,9 +50,13 @@ if _start_method and _start_method.lower() in {'fork', 'spawn', 'forkserver'}:
 
     try:
         _set_start_method(_start_method.lower())
-        _warnings.warn(f'multiprocessing start method is set to `{_start_method.lower()}`')
+        _warnings.warn(
+            f'multiprocessing start method is set to `{_start_method.lower()}`'
+        )
     except Exception as e:
-        _warnings.warn(f'failed to set multiprocessing start_method to `{_start_method.lower()}`: {e!r}')
+        _warnings.warn(
+            f'failed to set multiprocessing start_method to `{_start_method.lower()}`: {e!r}'
+        )
 elif _sys.version_info >= (3, 8, 0) and _platform.system() == 'Darwin':
     # DO SOME OS-WISE PATCHES
 
@@ -96,16 +100,24 @@ __marie_env__ = (
 
 __args_executor_init__ = {"metas", "requests", "runtime_args"}
 __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
-__resources_path__ = _os.path.join(_os.path.dirname(_sys.modules["marie"].__file__), "resources")
+__resources_path__ = _os.path.join(
+    _os.path.dirname(_sys.modules["marie"].__file__), "resources"
+)
 # __resources_path__ = _os.path.join(
 #     _os.path.abspath(_os.path.join(__root_dir__, "..")), "resources"
 # )
-__model_path__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo")
-__config_dir__ = _os.path.join(_os.path.abspath(_os.path.join(__root_dir__, "..")), "config")
+__model_path__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo"
+)
+__config_dir__ = _os.path.join(
+    _os.path.abspath(_os.path.join(__root_dir__, "..")), "config"
+)
 
 __marie_home__ = _os.path.join(str(_Path.home()), ".marie")
 
-__default_host__ = _os.environ.get("MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0")
+__default_host__ = _os.environ.get(
+    "MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0"
+)
 __default_port_monitoring__ = 9090
 __docker_host__ = 'host.docker.internal'
 __default_executor__ = "BaseExecutor"

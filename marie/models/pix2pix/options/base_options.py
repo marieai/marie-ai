@@ -96,7 +96,9 @@ class BaseOptions:
             help='specify generator architecture [resnet_9blocks | resnet_6blocks | unet_256 | unet_256_spectral | unet_128]',
         )
 
-        parser.add_argument('--n_layers_D', type=int, default=3, help='only used if netD==n_layers')
+        parser.add_argument(
+            '--n_layers_D', type=int, default=3, help='only used if netD==n_layers'
+        )
         parser.add_argument(
             '--norm',
             type=str,
@@ -115,7 +117,9 @@ class BaseOptions:
             default=0.02,
             help='scaling factor for normal, xavier and orthogonal.',
         )
-        parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
+        parser.add_argument(
+            '--no_dropout', action='store_true', help='no dropout for the generator'
+        )
         # dataset parameters
         parser.add_argument(
             '--dataset_mode',
@@ -123,16 +127,26 @@ class BaseOptions:
             default='unaligned',
             help='chooses how datasets are loaded. [unaligned | aligned | single | colorization]',
         )
-        parser.add_argument('--direction', type=str, default='AtoB', help='AtoB or BtoA')
+        parser.add_argument(
+            '--direction', type=str, default='AtoB', help='AtoB or BtoA'
+        )
         parser.add_argument(
             '--serial_batches',
             action='store_true',
             help='if true, takes images in order to make batches, otherwise takes them randomly',
         )
-        parser.add_argument('--num_threads', default=4, type=int, help='# threads for loading data')
-        parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
-        parser.add_argument('--load_size', type=int, default=286, help='scale images to this size')
-        parser.add_argument('--crop_size', type=int, default=256, help='then crop to this size')
+        parser.add_argument(
+            '--num_threads', default=4, type=int, help='# threads for loading data'
+        )
+        parser.add_argument(
+            '--batch_size', type=int, default=1, help='input batch size'
+        )
+        parser.add_argument(
+            '--load_size', type=int, default=286, help='scale images to this size'
+        )
+        parser.add_argument(
+            '--crop_size', type=int, default=256, help='then crop to this size'
+        )
         parser.add_argument(
             '--max_dataset_size',
             type=int,
@@ -201,7 +215,9 @@ class BaseOptions:
         """
 
         if not self.initialized:  # check if it has been initialized
-            parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+            parser = argparse.ArgumentParser(
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter
+            )
             parser = self.initialize(parser)
 
         # get the basic options

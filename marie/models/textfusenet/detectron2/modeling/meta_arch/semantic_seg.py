@@ -76,7 +76,9 @@ class SemanticSegmentor(nn.Module):
 
         if "sem_seg" in batched_inputs[0]:
             targets = [x["sem_seg"].to(self.device) for x in batched_inputs]
-            targets = ImageList.from_tensors(targets, self.backbone.size_divisibility, self.sem_seg_head.ignore_value).tensor
+            targets = ImageList.from_tensors(
+                targets, self.backbone.size_divisibility, self.sem_seg_head.ignore_value
+            ).tensor
         else:
             targets = None
         results, losses = self.sem_seg_head(features, targets)
@@ -85,7 +87,9 @@ class SemanticSegmentor(nn.Module):
             return losses
 
         processed_results = []
-        for result, input_per_image, image_size in zip(results, batched_inputs, images.image_sizes):
+        for result, input_per_image, image_size in zip(
+            results, batched_inputs, images.image_sizes
+        ):
             height = input_per_image.get("height")
             width = input_per_image.get("width")
             r = sem_seg_postprocess(result, image_size, height, width)
@@ -146,10 +150,16 @@ class SemSegFPNHead(nn.Module):
                 weight_init.c2_msra_fill(conv)
                 head_ops.append(conv)
                 if feature_strides[in_feature] != self.common_stride:
-                    head_ops.append(nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False))
+                    head_ops.append(
+                        nn.Upsample(
+                            scale_factor=2, mode="bilinear", align_corners=False
+                        )
+                    )
             self.scale_heads.append(nn.Sequential(*head_ops))
             self.add_module(in_feature, self.scale_heads[-1])
-        self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
+        self.predictor = Conv2d(
+            conv_dims, num_classes, kernel_size=1, stride=1, padding=0
+        )
         weight_init.c2_msra_fill(self.predictor)
 
     def forward(self, features, targets=None):
@@ -159,12 +169,17 @@ class SemSegFPNHead(nn.Module):
             else:
                 x = x + self.scale_heads[i](features[f])
         x = self.predictor(x)
-        x = F.interpolate(x, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        x = F.interpolate(
+            x, scale_factor=self.common_stride, mode="bilinear", align_corners=False
+        )
 
         if self.training:
             losses = {}
             losses["loss_sem_seg"] = (
-                F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value) * self.loss_weight
+                F.cross_entropy(
+                    x, targets, reduction="mean", ignore_index=self.ignore_value
+                )
+                * self.loss_weight
             )
             return [], losses
         else:

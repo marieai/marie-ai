@@ -76,10 +76,10 @@ def profiling(func):
         end_mem = used_memory(unit=1)
         # level_prefix = ''.join('-' for v in inspect.stack() if v and v.index is not None and v.index >= 0)
         level_prefix = ''
-        mem_status = (
-            f'memory Δ {get_readable_size(end_mem - start_mem)} {get_readable_size(start_mem)} -> {get_readable_size(end_mem)}'
+        mem_status = f'memory Δ {get_readable_size(end_mem - start_mem)} {get_readable_size(start_mem)} -> {get_readable_size(end_mem)}'
+        default_logger.info(
+            f'{level_prefix} {func.__qualname__} time: {elapsed}s {mem_status}'
         )
-        default_logger.info(f'{level_prefix} {func.__qualname__} time: {elapsed}s {mem_status}')
         return r
 
     return arg_wrapper
@@ -139,7 +139,9 @@ class ProgressBar(Progress):
             '[progress.percentage]{task.percentage:>3.0f}%',
             TextColumn('ETA:', style='progress.remaining'),
             TimeRemainingColumn(),
-            _OnDoneColumn(message_on_done if message_on_done else _default_message_on_done),
+            _OnDoneColumn(
+                message_on_done if message_on_done else _default_message_on_done
+            ),
         ]
 
         if not console:
@@ -147,7 +149,9 @@ class ProgressBar(Progress):
 
         super().__init__(*columns, console=console, disable=disable, **kwargs)
 
-        self.task_id = self.add_task('Working...', total=total_length if total_length else 100.0)
+        self.task_id = self.add_task(
+            'Working...', total=total_length if total_length else 100.0
+        )
 
     def update(
         self,
@@ -215,7 +219,9 @@ class _OnDoneColumn(ProgressColumn):
             if callable(self.text_on_done_format):
                 return Text(self.text_on_done_format(task), style=self.style)
             else:
-                return Text(self.text_on_done_format.format(task=task), style=self.style)
+                return Text(
+                    self.text_on_done_format.format(task=task), style=self.style
+                )
         else:
             return Text(self.text_init_format.format(task=task), style=self.style)
 
@@ -272,9 +278,13 @@ class TimeContext:
 
     def _exit_msg(self):
         if self._logger:
-            self._logger.info(f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)')
+            self._logger.info(
+                f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)'
+            )
         else:
             print(
-                colored(f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)'),
+                colored(
+                    f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)'
+                ),
                 flush=True,
             )

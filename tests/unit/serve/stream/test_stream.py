@@ -14,7 +14,9 @@ from marie.types.request.data import DataRequest
 @pytest.mark.parametrize('num_requests', [1, 5, 13])
 @pytest.mark.parametrize('async_iterator', [False, True])
 @pytest.mark.parametrize('results_in_order', [False, True])
-async def test_request_streamer(prefetch, num_requests, async_iterator, results_in_order):
+async def test_request_streamer(
+    prefetch, num_requests, async_iterator, results_in_order
+):
     requests_handled = []
     results_handled = []
 
@@ -74,7 +76,11 @@ async def test_request_streamer(prefetch, num_requests, async_iterator, results_
         prefetch=getattr(args, 'prefetch', 0),
     )
 
-    it = _get_async_requests_iterator(num_requests) if async_iterator else _get_sync_requests_iterator(num_requests)
+    it = (
+        _get_async_requests_iterator(num_requests)
+        if async_iterator
+        else _get_sync_requests_iterator(num_requests)
+    )
     response = streamer.stream(request_iterator=it, results_in_order=results_in_order)
 
     num_responses = 0

@@ -9,7 +9,9 @@ from marie.serve.helper import store_init_kwargs
 
 
 def test_store_init_kwargs():
-    store_init_kwargs_decorator = functools.partial(store_init_kwargs, taboo=get_executor_taboo())
+    store_init_kwargs_decorator = functools.partial(
+        store_init_kwargs, taboo=get_executor_taboo()
+    )
 
     class A:
         @store_init_kwargs_decorator

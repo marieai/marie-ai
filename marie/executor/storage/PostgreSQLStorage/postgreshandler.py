@@ -232,8 +232,12 @@ class PostgreSQLHandler:
                             doc.id,
                             ref_id,
                             ref_type,
-                            doc.embedding.astype(self.dump_dtype).tobytes() if doc.embedding is not None else None,
-                            serialize_to_json(doc.content) if doc.content is not None else None,
+                            doc.embedding.astype(self.dump_dtype).tobytes()
+                            if doc.embedding is not None
+                            else None,
+                            serialize_to_json(doc.content)
+                            if doc.content is not None
+                            else None,
                             doc_without_embedding(doc),
                             self._get_next_shard(doc.id),
                         )
@@ -241,7 +245,9 @@ class PostgreSQLHandler:
                     ],
                 )
             except psycopg2.errors.UniqueViolation as e:
-                self.logger.warning(f"Document already exists in PSQL database. {e}. Skipping entire transaction...")
+                self.logger.warning(
+                    f"Document already exists in PSQL database. {e}. Skipping entire transaction..."
+                )
                 self.connection.rollback()
             self.connection.commit()
 
@@ -431,7 +437,9 @@ class PostgreSQLHandler:
             )
             self.connection.commit()
             cursor = self.connection.cursor()
-            cursor.execute(f"insert into {self.snapshot_table} (select * from {self.table});")
+            cursor.execute(
+                f"insert into {self.snapshot_table} (select * from {self.table});"
+            )
             self.connection.commit()
             self.logger.info("Successfully created snapshot")
         except (Exception, psycopg2.Error) as error:
@@ -534,7 +542,9 @@ class PostgreSQLHandler:
                 )
 
             for record in cursor:
-                yield record[0], np.frombuffer(record[1], dtype=self.dump_dtype) if record[1] is not None else None, record[
+                yield record[0], np.frombuffer(
+                    record[1], dtype=self.dump_dtype
+                ) if record[1] is not None else None, record[
                     2
                 ] if include_metas else None
         except (Exception, psycopg2.Error) as error:
@@ -574,7 +584,11 @@ class PostgreSQLHandler:
         )
 
         for rec in cursor:
-            second_val = np.frombuffer(rec[1], dtype=self.dump_dtype) if rec[1] is not None else None
+            second_val = (
+                np.frombuffer(rec[1], dtype=self.dump_dtype)
+                if rec[1] is not None
+                else None
+            )
             yield rec[0], second_val, rec[2], rec[3]
         self._close_connection(connection)
 
@@ -585,7 +599,9 @@ class PostgreSQLHandler:
         """
         try:
             cursor = self.connection.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false")
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false"
+            )
             records = cursor.fetchall()
             return records[0][0]
         except Exception as e:

@@ -48,7 +48,9 @@ def run_tests(opt):
     model.load_state_dict(torch.load(opt.saved_model, map_location=device))
 
     # prepare data. two demo images from https://github.com/bgshih/crnn#run-demo
-    AlignCollate_demo = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+    AlignCollate_demo = AlignCollate(
+        imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+    )
     demo_data = RawDataset(root=opt.image_folder, opt=opt)  # use RawDataset
     demo_loader = torch.utils.data.DataLoader(
         demo_data,
@@ -66,8 +68,14 @@ def run_tests(opt):
             batch_size = image_tensors.size(0)
             image = image_tensors.to(device)
             # For max length prediction
-            length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
-            text_for_pred = torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
+            length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(
+                device
+            )
+            text_for_pred = (
+                torch.LongTensor(batch_size, opt.batch_max_length + 1)
+                .fill_(0)
+                .to(device)
+            )
 
             if 'CTC' in opt.Prediction:
                 preds = model(image, text_for_pred)
@@ -95,11 +103,15 @@ def run_tests(opt):
             preds_prob = F.softmax(preds, dim=2)
             preds_max_prob, _ = preds_prob.max(dim=2)
 
-            for img_name, pred, pred_max_prob in zip(image_path_list, preds_str, preds_max_prob):
+            for img_name, pred, pred_max_prob in zip(
+                image_path_list, preds_str, preds_max_prob
+            ):
                 try:
                     if 'Attn' in opt.Prediction:
                         pred_EOS = pred.find('[s]')
-                        pred = pred[:pred_EOS]  # prune after "end of sentence" token ([s])
+                        pred = pred[
+                            :pred_EOS
+                        ]  # prune after "end of sentence" token ([s])
                         pred_max_prob = pred_max_prob[:pred_EOS]
 
                     # calculate confidence score (= multiply of pred_max_prob)
@@ -120,13 +132,23 @@ if __name__ == '__main__':
         required=True,
         help='path to image_folder which contains text images',
     )
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+    parser.add_argument(
+        '--workers', type=int, help='number of data loading workers', default=4
+    )
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
-    parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
+    parser.add_argument(
+        '--saved_model', required=True, help="path to saved_model to evaluation"
+    )
     """ Data processing """
-    parser.add_argument('--batch_max_length', type=int, default=25, help='maximum-label-length')
-    parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
-    parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
+    parser.add_argument(
+        '--batch_max_length', type=int, default=25, help='maximum-label-length'
+    )
+    parser.add_argument(
+        '--imgH', type=int, default=32, help='the height of the input image'
+    )
+    parser.add_argument(
+        '--imgW', type=int, default=100, help='the width of the input image'
+    )
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
     parser.add_argument(
         '--character',
@@ -134,7 +156,9 @@ if __name__ == '__main__':
         default='0123456789abcdefghijklmnopqrstuvwxyz',
         help='character label',
     )
-    parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
+    parser.add_argument(
+        '--sensitive', action='store_true', help='for sensitive character mode'
+    )
     parser.add_argument(
         '--PAD',
         action='store_true',
@@ -159,7 +183,9 @@ if __name__ == '__main__':
         required=True,
         help='SequenceModeling stage. None|BiLSTM',
     )
-    parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
+    parser.add_argument(
+        '--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn'
+    )
     parser.add_argument(
         '--num_fiducial',
         type=int,
@@ -178,7 +204,9 @@ if __name__ == '__main__':
         default=512,
         help='the number of output channel of Feature extractor',
     )
-    parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
+    parser.add_argument(
+        '--hidden_size', type=int, default=256, help='the size of the LSTM hidden state'
+    )
 
     opt = parser.parse_args()
 

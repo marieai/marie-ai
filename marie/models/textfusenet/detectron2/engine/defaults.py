@@ -49,15 +49,21 @@ def default_argument_parser():
         argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description="Detectron2 Training")
-    parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
+    parser.add_argument(
+        "--config-file", default="", metavar="FILE", help="path to config file"
+    )
     parser.add_argument(
         "--resume",
         default=True,
         action="store_true",
         help="whether to attempt to resume from the checkpoint directory",
     )
-    parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
-    parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
+    parser.add_argument(
+        "--eval-only", action="store_true", help="perform evaluation only"
+    )
+    parser.add_argument(
+        "--num-gpus", type=int, default=1, help="number of gpus *per machine*"
+    )
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument(
         "--machine-rank",
@@ -100,13 +106,19 @@ def default_setup(cfg, args):
     setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
 
-    logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
+    logger.info(
+        "Rank of current process: {}. World size: {}".format(
+            rank, comm.get_world_size()
+        )
+    )
     logger.info("Environment info:\n" + collect_env_info())
 
     logger.info("Command line arguments: " + str(args))
     if hasattr(args, "config_file"):
         logger.info(
-            "Contents of args.config_file={}:\n{}".format(args.config_file, PathManager.open(args.config_file, "r").read())
+            "Contents of args.config_file={}:\n{}".format(
+                args.config_file, PathManager.open(args.config_file, "r").read()
+            )
         )
 
     logger.info("Running with full config:\n{}".format(cfg))
@@ -152,7 +164,9 @@ class DefaultPredictor:
         # False : whether from last_checkpoint
         checkpointer.load(cfg.MODEL.WEIGHTS, False)
 
-        self.transform_gen = T.ResizeShortestEdge([cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST)
+        self.transform_gen = T.ResizeShortestEdge(
+            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
+        )
 
         self.input_format = cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
@@ -171,7 +185,9 @@ class DefaultPredictor:
             # whether the model expects BGR inputs or RGB
             original_image = original_image[:, :, ::-1]
         height, width = original_image.shape[:2]
-        image = self.transform_gen.get_transform(original_image).apply_image(original_image)
+        image = self.transform_gen.get_transform(original_image).apply_image(
+            original_image
+        )
         image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
         inputs = {"image": image, "height": height, "width": width}
@@ -260,7 +276,12 @@ class DefaultTrainer(SimpleTrainer):
         """
         # The checkpoint stores the training iteration that just finished, thus we start
         # at the next iteration (or iter zero if there's no checkpoint).
-        self.start_iter = self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
+        self.start_iter = (
+            self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get(
+                "iteration", -1
+            )
+            + 1
+        )
 
     def build_hooks(self):
         """
@@ -294,7 +315,11 @@ class DefaultTrainer(SimpleTrainer):
         # This is not always the best: if checkpointing has a different frequency,
         # some checkpoints may have more precise statistics than others.
         if comm.is_main_process():
-            ret.append(hooks.PeriodicCheckpointer(self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD))
+            ret.append(
+                hooks.PeriodicCheckpointer(
+                    self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD
+                )
+            )
 
         def test_and_save_results():
             self._last_eval_results = self.test(self.cfg, self.model)
@@ -436,7 +461,9 @@ class DefaultTrainer(SimpleTrainer):
         if isinstance(evaluators, DatasetEvaluator):
             evaluators = [evaluators]
         if evaluators is not None:
-            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(len(cfg.DATASETS.TEST), len(evaluators))
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
+                len(cfg.DATASETS.TEST), len(evaluators)
+            )
 
         results = OrderedDict()
         for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
@@ -458,10 +485,14 @@ class DefaultTrainer(SimpleTrainer):
             results_i = inference_on_dataset(model, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():
-                assert isinstance(results_i, dict), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                assert isinstance(
+                    results_i, dict
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
                     results_i
                 )
-                logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+                logger.info(
+                    "Evaluation results for {} in csv format:".format(dataset_name)
+                )
                 print_csv_format(results_i)
 
         if len(results) == 1:

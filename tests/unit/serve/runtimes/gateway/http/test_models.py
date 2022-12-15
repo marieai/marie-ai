@@ -13,14 +13,26 @@ def test_schema_invocation():
 
 def test_enum_definitions():
     """This tests: all enums are defined properly as different levels"""
-    status_code_enum_definition = PROTO_TO_PYDANTIC_MODELS.StatusProto().schema()['definitions']['StatusCode']
+    status_code_enum_definition = PROTO_TO_PYDANTIC_MODELS.StatusProto().schema()[
+        'definitions'
+    ]['StatusCode']
     assert status_code_enum_definition['enum'] == [0, 1, 2, 3, 4, 5, 6]
 
 
 def test_timestamp():
     """This tests: google.protobuf.Timestamp are represented as date-time"""
-    assert PROTO_TO_PYDANTIC_MODELS.RouteProto().schema(by_alias=False)['properties']['start_time']['type'] == 'string'
-    assert PROTO_TO_PYDANTIC_MODELS.RouteProto().schema(by_alias=False)['properties']['start_time']['format'] == 'date-time'
+    assert (
+        PROTO_TO_PYDANTIC_MODELS.RouteProto().schema(by_alias=False)['properties'][
+            'start_time'
+        ]['type']
+        == 'string'
+    )
+    assert (
+        PROTO_TO_PYDANTIC_MODELS.RouteProto().schema(by_alias=False)['properties'][
+            'start_time'
+        ]['format']
+        == 'date-time'
+    )
 
 
 @pytest.mark.parametrize('top_k', [5, 10])
@@ -36,7 +48,9 @@ def test_models_with_docs():
     _ = JinaRequestModel(data={'docs': [{'text': 'abc'}]})
 
 
-@pytest.mark.parametrize('bad_docs', ['pure_text', {'docs': {'docs': {'text': 'input'}}}])
+@pytest.mark.parametrize(
+    'bad_docs', ['pure_text', {'docs': {'docs': {'text': 'input'}}}]
+)
 def test_models_fail(bad_docs):
     import pydantic
 

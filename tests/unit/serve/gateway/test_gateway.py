@@ -14,7 +14,9 @@ from tests.unit.yaml.dummy_gateway import DummyGateway
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 _dummy_gateway_yaml_path = os.path.join(cur_dir, '../../yaml/test-custom-gateway.yml')
-_dummy_fastapi_gateway_yaml_path = os.path.join(cur_dir, '../../yaml/test-fastapi-gateway.yml')
+_dummy_fastapi_gateway_yaml_path = os.path.join(
+    cur_dir, '../../yaml/test-fastapi-gateway.yml'
+)
 
 
 def _create_gateway_runtime(port, uses, uses_with, worker_port):
@@ -125,7 +127,9 @@ def test_custom_gateway_no_executors(uses, uses_with, expected):
     worker_port, worker_process = _start_worker_runtime('ProcessExecutor')
     gateway_port, gateway_process = _start_gateway_runtime(uses, uses_with, worker_port)
     _validate_dummy_custom_gateway_response(gateway_port, expected)
-    _validate_custom_gateway_process(gateway_port, 'hello', {'text': 'helloworld', 'tags': {'processed': True}})
+    _validate_custom_gateway_process(
+        gateway_port, 'hello', {'text': 'helloworld', 'tags': {'processed': True}}
+    )
     gateway_process.terminate()
     gateway_process.join()
     worker_process.terminate()

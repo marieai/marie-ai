@@ -20,7 +20,13 @@ def list_files(in_path):
         for file in filenames:
             filename, ext = os.path.splitext(file)
             ext = str.lower(ext)
-            if ext == '.jpg' or ext == '.jpeg' or ext == '.gif' or ext == '.png' or ext == '.pgm':
+            if (
+                ext == '.jpg'
+                or ext == '.jpeg'
+                or ext == '.gif'
+                or ext == '.png'
+                or ext == '.pgm'
+            ):
                 img_files.append(os.path.join(dirpath, file))
             elif ext == '.bmp':
                 mask_files.append(os.path.join(dirpath, file))
@@ -63,7 +69,9 @@ def saveResult(img_file, img, boxes, dirname='./result/', verticals=None, texts=
             f.write(strResult)
 
             poly = poly.reshape(-1, 2)
-            cv2.polylines(img, [poly.reshape((-1, 1, 2))], True, color=(0, 0, 255), thickness=2)
+            cv2.polylines(
+                img, [poly.reshape((-1, 1, 2))], True, color=(0, 0, 255), thickness=2
+            )
             ptColor = (0, 255, 255)
             if verticals is not None:
                 if verticals[i]:

@@ -1,12 +1,10 @@
 import os
 
 import cv2
-import numpy as np
-import tqdm
 
 from marie.boxes.box_processor import PSMode
 from marie.document import TrOcrIcrProcessor
-from marie.executor.text_extraction_executor import CoordinateFormat
+from marie.executor.text.text_extraction_executor import CoordinateFormat
 from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.utils.json import store_json_object
@@ -14,10 +12,6 @@ from marie.utils.utils import ensure_exists
 
 if True:
     from marie.boxes import BoxProcessorUlimDit
-    from marie.boxes.craft_box_processor import BoxProcessorCraft
-    from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-    from marie.document.craft_icr_processor import CraftIcrProcessor
-
 
 if __name__ == "__main__":
     work_dir_boxes = ensure_exists("/tmp/boxes")
@@ -54,7 +48,9 @@ if __name__ == "__main__":
             # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
             icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
-            result, overlay_image = icr.recognize(key, "test", image, boxes, fragments, lines)
+            result, overlay_image = icr.recognize(
+                key, "test", image, boxes, fragments, lines
+            )
 
             # need to decorate our results META data
             result["meta"]["page"] = 0

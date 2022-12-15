@@ -3,7 +3,12 @@ import os
 from argparse import Namespace
 from typing import Dict, List, Optional, Tuple, Union
 
-from marie import __default_executor__, __default_grpc_gateway__, __default_http_gateway__, __default_websocket_gateway__
+from marie import (
+    __default_executor__,
+    __default_grpc_gateway__,
+    __default_http_gateway__,
+    __default_websocket_gateway__,
+)
 from marie.enums import PodRoleType
 from marie.excepts import NoContainerizedError
 from marie.orchestrate.deployments import BaseDeployment
@@ -78,14 +83,16 @@ class DockerComposeConfig:
             ]:
                 cargs.uses = 'config.yml'
 
-            non_defaults = ArgNamespace.get_non_defaults_args(cargs, set_gateway_parser(), taboo=taboo)
+            non_defaults = ArgNamespace.get_non_defaults_args(
+                cargs, set_gateway_parser(), taboo=taboo
+            )
             _args = ArgNamespace.kwargs2list(non_defaults)
 
             container_args = ['gateway'] + _args
 
             protocol = str(non_defaults.get('protocol', ['grpc'])[0]).lower()
 
-            ports = cargs.port + ([f'{cargs.port_monitoring}'] if cargs.monitoring else [])
+            ports = cargs.port + ([cargs.port_monitoring] if cargs.monitoring else [])
 
             envs = [f'JINA_LOG_LEVEL={os.getenv("JINA_LOG_LEVEL", "INFO")}']
             if cargs.env:
@@ -107,7 +114,9 @@ class DockerComposeConfig:
         def _get_image_name(self, uses: Optional[str]):
             import os
 
-            image_name = os.getenv('JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard')
+            image_name = os.getenv(
+                'JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard'
+            )
 
             if uses is not None and uses not in [
                 __default_executor__,
@@ -124,7 +133,9 @@ class DockerComposeConfig:
             uses_with = self.service_args.uses_with
             if cargs.uses != __default_executor__:
                 cargs.uses = 'config.yml'
-            return construct_runtime_container_args(cargs, uses_metas, uses_with, self.pod_type)
+            return construct_runtime_container_args(
+                cargs, uses_metas, uses_with, self.pod_type
+            )
 
         def _update_config_with_volumes(self, config, auto_volume=True):
             if self.service_args.volumes:  # respect custom volume definition
@@ -138,9 +149,13 @@ class DockerComposeConfig:
             (
                 generated_volumes,
                 workspace_in_container,
-            ) = generate_default_volume_and_workspace(workspace_id=self.service_args.workspace_id)
+            ) = generate_default_volume_and_workspace(
+                workspace_id=self.service_args.workspace_id
+            )
             config['volumes'] = generated_volumes
-            if '--workspace' not in config['command']:  # set workspace only of not already given
+            if (
+                '--workspace' not in config['command']
+            ):  # set workspace only of not already given
                 config['command'].append('--workspace')
                 config['command'].append(workspace_in_container)
             return config
@@ -150,7 +165,11 @@ class DockerComposeConfig:
             replica_configs = []
             for i_rep in range(self.service_args.replicas):
                 cargs = copy.copy(self.service_args)
-                cargs.name = f'{cargs.name}/rep-{i_rep}' if self.service_args.replicas > 1 else cargs.name
+                cargs.name = (
+                    f'{cargs.name}/rep-{i_rep}'
+                    if self.service_args.replicas > 1
+                    else cargs.name
+                )
 
                 env = cargs.env
                 image_name = self._get_image_name(cargs.uses)
@@ -163,7 +182,9 @@ class DockerComposeConfig:
                         'test': f'jina ping executor 127.0.0.1:{cargs.port}',
                         'interval': '2s',
                     },
-                    'environment': [f'JINA_LOG_LEVEL={os.getenv("JINA_LOG_LEVEL", "INFO")}'],
+                    'environment': [
+                        f'JINA_LOG_LEVEL={os.getenv("JINA_LOG_LEVEL", "INFO")}'
+                    ],
                 }
 
                 if cargs.gpus:
@@ -188,13 +209,17 @@ class DockerComposeConfig:
 
                 if cargs.monitoring:
                     config['expose'] = [cargs.port_monitoring]
-                    config['ports'] = [f'{cargs.port_monitoring}:{cargs.port_monitoring}']
+                    config['ports'] = [
+                        f'{cargs.port_monitoring}:{cargs.port_monitoring}'
+                    ]
 
                 if env is not None:
                     config['environment'] = [f'{k}={v}' for k, v in env.items()]
 
                 if self.service_args.pod_role == PodRoleType.WORKER:
-                    config = self._update_config_with_volumes(config, auto_volume=not self.common_args.disable_auto_volume)
+                    config = self._update_config_with_volumes(
+                        config, auto_volume=not self.common_args.disable_auto_volume
+                    )
 
                 replica_configs.append(config)
             return replica_configs
@@ -206,10 +231,8 @@ class DockerComposeConfig:
     ):
         if not validate_uses(args.uses):
             raise NoContainerizedError(
-                f'Executor "{args.uses}" is not valid to be used in docker-compose. You'
-                ' need to use a containerized Executor. You may check `marie hub'
-                ' --help` to see how Marie Hub can help you building containerized'
-                ' Executors.'
+                f'Executor "{args.uses}" is not valid to be used in docker-compose. '
+                'You need to use a containerized Executor. You may check `jina hub --help` to see how Jina Hub can help you building containerized Executors.'
             )
         self.deployments_addresses = deployments_addresses
         self.head_service = None
@@ -267,9 +290,13 @@ class DockerComposeConfig:
                     shard_id=i,
                     common_args=self.args,
                     service_args=args,
-                    pod_type=PodRoleType.WORKER if name != 'gateway' else PodRoleType.GATEWAY,
+                    pod_type=PodRoleType.WORKER
+                    if name != 'gateway'
+                    else PodRoleType.GATEWAY,
                     jina_deployment_name=self.name,
-                    deployments_addresses=self.deployments_addresses if name == 'gateway' else None,
+                    deployments_addresses=self.deployments_addresses
+                    if name == 'gateway'
+                    else None,
                 )
             )
 
@@ -302,8 +329,12 @@ class DockerComposeConfig:
                 shard_name = f'{self.name}-{shard_id}' if shards > 1 else f'{self.name}'
                 connection_list[str(shard_id)] = []
                 for i_rep in range(replicas):
-                    replica_name = f'{shard_name}/rep-{i_rep}' if replicas > 1 else shard_name
-                    connection_list[str(shard_id)].append(f'{to_compatible_name(replica_name)}:{port}')
+                    replica_name = (
+                        f'{shard_name}/rep-{i_rep}' if replicas > 1 else shard_name
+                    )
+                    connection_list[str(shard_id)].append(
+                        f'{to_compatible_name(replica_name)}:{port}'
+                    )
 
             parsed_args['head_service'].connection_list = json.dumps(connection_list)
 
@@ -318,6 +349,7 @@ class DockerComposeConfig:
             uses_before_cargs.uses_with = None
             uses_before_cargs.uses_metas = None
             uses_before_cargs.env = None
+            uses_before_cargs.host = args.host[0]
             uses_before_cargs.port = port
             uses_before_cargs.uses_before_address = None
             uses_before_cargs.uses_after_address = None
@@ -327,7 +359,9 @@ class DockerComposeConfig:
             parsed_args['uses_before_service'] = uses_before_cargs
             parsed_args[
                 'head_service'
-            ].uses_before_address = f'{to_compatible_name(uses_before_cargs.name)}:{uses_before_cargs.port}'
+            ].uses_before_address = (
+                f'{to_compatible_name(uses_before_cargs.name)}:{uses_before_cargs.port}'
+            )
         if uses_after and shards > 1:
             uses_after_cargs = copy.deepcopy(args)
             uses_after_cargs.shard_id = 0
@@ -339,6 +373,7 @@ class DockerComposeConfig:
             uses_after_cargs.uses_with = None
             uses_after_cargs.uses_metas = None
             uses_after_cargs.env = None
+            uses_after_cargs.host = args.host[0]
             uses_after_cargs.port = port
             uses_after_cargs.uses_before_address = None
             uses_after_cargs.uses_after_address = None
@@ -348,7 +383,9 @@ class DockerComposeConfig:
             parsed_args['uses_after_service'] = uses_after_cargs
             parsed_args[
                 'head_service'
-            ].uses_after_address = f'{to_compatible_name(uses_after_cargs.name)}:{uses_after_cargs.port}'
+            ].uses_after_address = (
+                f'{to_compatible_name(uses_after_cargs.name)}:{uses_after_cargs.port}'
+            )
 
         for i in range(shards):
             cargs = copy.deepcopy(args)
@@ -363,6 +400,7 @@ class DockerComposeConfig:
                 cargs.pod_role = PodRoleType.GATEWAY
             else:
                 cargs.port = port
+                cargs.host = args.host[0]
             parsed_args['services'].append(cargs)
 
         return parsed_args
@@ -408,6 +446,10 @@ class DockerComposeConfig:
             for worker_service in self.worker_services:
                 configs = worker_service.get_runtime_config()
                 for rep_id, config in enumerate(configs):
-                    name = f'{worker_service.name}/rep-{rep_id}' if len(configs) > 1 else worker_service.name
+                    name = (
+                        f'{worker_service.name}/rep-{rep_id}'
+                        if len(configs) > 1
+                        else worker_service.name
+                    )
                     services.append((to_compatible_name(name), config))
             return services

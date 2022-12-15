@@ -18,7 +18,9 @@ def get_extensions():
 
     main_source = os.path.join(extensions_dir, "vision.cpp")
     sources = glob.glob(os.path.join(extensions_dir, "**", "*.cpp"))
-    source_cuda = glob.glob(os.path.join(extensions_dir, "**", "*.cu")) + glob.glob(os.path.join(extensions_dir, "*.cu"))
+    source_cuda = glob.glob(os.path.join(extensions_dir, "**", "*.cu")) + glob.glob(
+        os.path.join(extensions_dir, "*.cu")
+    )
 
     sources = [main_source] + sources
 
@@ -27,7 +29,9 @@ def get_extensions():
     extra_compile_args = {"cxx": []}
     define_macros = []
 
-    if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv("FORCE_CUDA", "0") == "1":
+    if (torch.cuda.is_available() and CUDA_HOME is not None) or os.getenv(
+        "FORCE_CUDA", "0"
+    ) == "1":
         extension = CUDAExtension
         sources += source_cuda
         define_macros += [("WITH_CUDA", None)]

@@ -50,7 +50,11 @@ def logger():
 async def test_worker_request_handler_new_docs(logger):
     args = set_pod_parser().parse_args(['--uses', 'NewDocsExecutor'])
     handler = WorkerRequestHandler(args, logger)
-    req = list(request_generator('/', DocumentArray([Document(text='input document') for _ in range(10)])))[0]
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
 
@@ -62,7 +66,11 @@ async def test_worker_request_handler_new_docs(logger):
 async def test_aync_worker_request_handler_new_docs(logger):
     args = set_pod_parser().parse_args(['--uses', 'AsyncNewDocsExecutor'])
     handler = WorkerRequestHandler(args, logger)
-    req = list(request_generator('/', DocumentArray([Document(text='input document') for _ in range(10)])))[0]
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
 
@@ -75,7 +83,11 @@ async def test_worker_request_handler_change_docs(logger):
     args = set_pod_parser().parse_args(['--uses', 'ChangeDocsExecutor'])
     handler = WorkerRequestHandler(args, logger)
 
-    req = list(request_generator('/', DocumentArray([Document(text='input document') for _ in range(10)])))[0]
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
 
@@ -91,7 +103,11 @@ async def test_worker_request_handler_change_docs_from_partial_requests(logger):
     handler = WorkerRequestHandler(args, logger)
 
     partial_reqs = [
-        list(request_generator('/', DocumentArray([Document(text='input document') for _ in range(10)])))[0]
+        list(
+            request_generator(
+                '/', DocumentArray([Document(text='input document') for _ in range(10)])
+            )
+        )[0]
     ] * NUM_PARTIAL_REQUESTS
     assert len(partial_reqs) == 5
     assert len(partial_reqs[0].docs) == 10
@@ -107,7 +123,11 @@ async def test_worker_request_handler_clear_docs(logger):
     args = set_pod_parser().parse_args(['--uses', 'ClearDocsExecutor'])
     handler = WorkerRequestHandler(args, logger)
 
-    req = list(request_generator('/', DocumentArray([Document(text='input document') for _ in range(10)])))[0]
+    req = list(
+        request_generator(
+            '/', DocumentArray([Document(text='input document') for _ in range(10)])
+        )
+    )[0]
     assert len(req.docs) == 10
     response = await handler.handle(requests=[req])
 

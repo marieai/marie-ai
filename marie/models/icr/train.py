@@ -23,7 +23,9 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 def train(opt):
     """dataset preparation"""
     if not opt.data_filtering_off:
-        print('Filtering the images containing characters which are not in opt.character')
+        print(
+            'Filtering the images containing characters which are not in opt.character'
+        )
         print('Filtering the images whose label is longer than opt.batch_max_length')
         # see https://github.com/clovaai/deep-text-recognition-benchmark/blob/6593928855fb7abb999a99f428b3e4477d4ae356/dataset.py#L130
 
@@ -32,8 +34,12 @@ def train(opt):
     train_dataset = Batch_Balanced_Dataset(opt)
 
     log = open(f'./saved_models/{opt.exp_name}/log_dataset.txt', 'a')
-    AlignCollate_valid = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
-    valid_dataset, valid_dataset_log = hierarchical_dataset(root=opt.valid_data, opt=opt)
+    AlignCollate_valid = AlignCollate(
+        imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+    )
+    valid_dataset, valid_dataset_log = hierarchical_dataset(
+        root=opt.valid_data, opt=opt
+    )
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset,
         batch_size=opt.batch_size,
@@ -113,7 +119,9 @@ def train(opt):
         else:
             criterion = torch.nn.CTCLoss(zero_infinity=True).to(device)
     else:
-        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(device)  # ignore [GO] token = ignore index 0
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(
+            device
+        )  # ignore [GO] token = ignore index 0
     # loss averager
     loss_avg = Averager()
 
@@ -130,7 +138,9 @@ def train(opt):
     if opt.adam:
         optimizer = optim.Adam(filtered_parameters, lr=opt.lr, betas=(opt.beta1, 0.999))
     else:
-        optimizer = optim.Adadelta(filtered_parameters, lr=opt.lr, rho=opt.rho, eps=opt.eps)
+        optimizer = optim.Adadelta(
+            filtered_parameters, lr=opt.lr, rho=opt.rho, eps=opt.eps
+        )
     print("Optimizer:")
     print(optimizer)
 
@@ -179,11 +189,15 @@ def train(opt):
         else:
             preds = model(image, text[:, :-1])  # align with Attention.forward
             target = text[:, 1:]  # without [GO] Symbol
-            cost = criterion(preds.view(-1, preds.shape[-1]), target.contiguous().view(-1))
+            cost = criterion(
+                preds.view(-1, preds.shape[-1]), target.contiguous().view(-1)
+            )
 
         model.zero_grad()
         cost.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(), opt.grad_clip
+        )  # gradient clipping with 5 (Default)
         optimizer.step()
 
         loss_avg.add(cost)
@@ -216,9 +230,7 @@ def train(opt):
                 )
                 loss_avg.reset()
 
-                current_model_log = (
-                    f'{"Current_accuracy":17s}: {current_accuracy:0.5f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
-                )
+                current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.5f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
 
                 # keep best accuracy model (on valid dataset)
                 if current_accuracy > best_accuracy:
@@ -243,7 +255,9 @@ def train(opt):
                 dashed_line = '-' * 80
                 head = f'{"Ground Truth":25s} | {"Prediction":25s} | Confidence Score & T/F'
                 predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
-                for gt, pred, confidence in zip(labels[:5], preds[:5], confidence_score[:5]):
+                for gt, pred, confidence in zip(
+                    labels[:5], preds[:5], confidence_score[:5]
+                ):
                     if 'Attn' in opt.Prediction:
                         gt = gt[: gt.find('[s]')]
                         pred = pred[: pred.find('[s]')]
@@ -270,26 +284,50 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', help='Where to store logs and models')
     parser.add_argument('--train_data', required=True, help='path to training dataset')
-    parser.add_argument('--valid_data', required=True, help='path to validation dataset')
-    parser.add_argument('--manualSeed', type=int, default=1111, help='for random seed setting')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+    parser.add_argument(
+        '--valid_data', required=True, help='path to validation dataset'
+    )
+    parser.add_argument(
+        '--manualSeed', type=int, default=1111, help='for random seed setting'
+    )
+    parser.add_argument(
+        '--workers', type=int, help='number of data loading workers', default=4
+    )
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
-    parser.add_argument('--num_iter', type=int, default=300000, help='number of iterations to train for')
-    parser.add_argument('--valInterval', type=int, default=1, help='Interval between each validation')
-    parser.add_argument('--saved_model', default='', help="path to model to continue training")
+    parser.add_argument(
+        '--num_iter', type=int, default=300000, help='number of iterations to train for'
+    )
+    parser.add_argument(
+        '--valInterval', type=int, default=1, help='Interval between each validation'
+    )
+    parser.add_argument(
+        '--saved_model', default='', help="path to model to continue training"
+    )
     parser.add_argument('--FT', action='store_true', help='whether to do fine-tuning')
-    parser.add_argument('--adam', action='store_true', help='Whether to use adam (default is Adadelta)')
-    parser.add_argument('--lr', type=float, default=1, help='learning rate, default=1.0 for Adadelta')
-    parser.add_argument('--beta1', type=float, default=0.9, help='beta1 for adam. default=0.9')
+    parser.add_argument(
+        '--adam', action='store_true', help='Whether to use adam (default is Adadelta)'
+    )
+    parser.add_argument(
+        '--lr', type=float, default=1, help='learning rate, default=1.0 for Adadelta'
+    )
+    parser.add_argument(
+        '--beta1', type=float, default=0.9, help='beta1 for adam. default=0.9'
+    )
     parser.add_argument(
         '--rho',
         type=float,
         default=0.95,
         help='decay rate rho for Adadelta. default=0.95',
     )
-    parser.add_argument('--eps', type=float, default=1e-8, help='eps for Adadelta. default=1e-8')
-    parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping value. default=5')
-    parser.add_argument('--baiduCTC', action='store_true', help='for data_filtering_off mode')
+    parser.add_argument(
+        '--eps', type=float, default=1e-8, help='eps for Adadelta. default=1e-8'
+    )
+    parser.add_argument(
+        '--grad_clip', type=float, default=5, help='gradient clipping value. default=5'
+    )
+    parser.add_argument(
+        '--baiduCTC', action='store_true', help='for data_filtering_off mode'
+    )
     """ Data processing """
     parser.add_argument(
         '--select_data',
@@ -309,9 +347,15 @@ if __name__ == '__main__':
         default='1.0',
         help='total data usage ratio, this ratio is multiplied to total number of data.',
     )
-    parser.add_argument('--batch_max_length', type=int, default=48, help='maximum-label-length')
-    parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
-    parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
+    parser.add_argument(
+        '--batch_max_length', type=int, default=48, help='maximum-label-length'
+    )
+    parser.add_argument(
+        '--imgH', type=int, default=32, help='the height of the input image'
+    )
+    parser.add_argument(
+        '--imgW', type=int, default=100, help='the width of the input image'
+    )
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
     parser.add_argument(
         '--character',
@@ -319,13 +363,17 @@ if __name__ == '__main__':
         default='0123456789abcdefghijklmnopqrstuvwxyz',
         help='character label',
     )
-    parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
+    parser.add_argument(
+        '--sensitive', action='store_true', help='for sensitive character mode'
+    )
     parser.add_argument(
         '--PAD',
         action='store_true',
         help='whether to keep ratio then pad for image resize',
     )
-    parser.add_argument('--data_filtering_off', action='store_true', help='for data_filtering_off mode')
+    parser.add_argument(
+        '--data_filtering_off', action='store_true', help='for data_filtering_off mode'
+    )
     """ Model Architecture """
     parser.add_argument(
         '--Transformation',
@@ -345,7 +393,9 @@ if __name__ == '__main__':
         required=True,
         help='SequenceModeling stage. None|BiLSTM',
     )
-    parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
+    parser.add_argument(
+        '--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn'
+    )
     parser.add_argument(
         '--num_fiducial',
         type=int,
@@ -364,7 +414,9 @@ if __name__ == '__main__':
         default=512,
         help='the number of output channel of Feature extractor',
     )
-    parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
+    parser.add_argument(
+        '--hidden_size', type=int, default=256, help='the size of the LSTM hidden state'
+    )
 
     opt = parser.parse_args()
 
@@ -397,7 +449,9 @@ if __name__ == '__main__':
     # print('device count', opt.num_gpu)
     if opt.num_gpu > 1:
         print('------ Use multi-GPU setting ------')
-        print('if you stuck too long time with multi-GPU setting, try to set --workers 0')
+        print(
+            'if you stuck too long time with multi-GPU setting, try to set --workers 0'
+        )
         # check multi-GPU issue https://github.com/clovaai/deep-text-recognition-benchmark/issues/1
         opt.workers = opt.workers * opt.num_gpu
         opt.batch_size = opt.batch_size * opt.num_gpu

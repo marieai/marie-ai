@@ -16,7 +16,9 @@ class Metric(object):
     Class for generating metrics and printing it to stdout of the worker
     """
 
-    def __init__(self, name, value, unit, dimensions, request_id=None, metric_method=None):
+    def __init__(
+        self, name, value, unit, dimensions, request_id=None, metric_method=None
+    ):
         """
         Constructor for Metric class
 

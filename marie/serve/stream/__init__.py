@@ -1,5 +1,13 @@
 import asyncio
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Iterator, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Optional,
+    Union,
+)
 
 from aiostream.aiter_utils import anext
 
@@ -49,7 +57,9 @@ class RequestStreamer:
         self._end_of_iter_handler = end_of_iter_handler
         self.total_num_floating_tasks_alive = 0
 
-    async def stream(self, request_iterator, context=None, results_in_order: bool = False, *args) -> AsyncIterator['Request']:
+    async def stream(
+        self, request_iterator, context=None, results_in_order: bool = False, *args
+    ) -> AsyncIterator['Request']:
         """
         stream requests from client iterator and stream responses back.
 
@@ -64,23 +74,31 @@ class RequestStreamer:
                 if metadatum.key == '__results_in_order__':
                     results_in_order = metadatum.value == 'true'
 
-        async_iter: AsyncIterator = self._stream_requests(request_iterator=request_iterator, results_in_order=results_in_order)
+        async_iter: AsyncIterator = self._stream_requests(
+            request_iterator=request_iterator, results_in_order=results_in_order
+        )
 
         try:
             async for response in async_iter:
                 yield response
         except InternalNetworkError as err:
-            if context is not None:  # inside GrpcGateway we can handle the error directly here through the grpc context
+            if (
+                context is not None
+            ):  # inside GrpcGateway we can handle the error directly here through the grpc context
                 context.set_details(err.details())
                 context.set_code(err.code())
                 context.set_trailing_metadata(err.trailing_metadata())
-                self.logger.error(f'Error while getting responses from deployments: {err.details()}')
+                self.logger.error(
+                    f'Error while getting responses from deployments: {err.details()}'
+                )
                 r = Response()
                 if err.request_id:
                     r.header.request_id = err.request_id
                 yield r
             else:  # HTTP and WS need different treatment further up the stack
-                self.logger.error(f'Error while getting responses from deployments: {err.details()}')
+                self.logger.error(
+                    f'Error while getting responses from deployments: {err.details()}'
+                )
                 raise
         except Exception as err:  # HTTP and WS need different treatment further up the stack
             self.logger.error(f'Error while getting responses from deployments: {err}')
@@ -148,7 +166,9 @@ class RequestStreamer:
             ):
                 num_reqs += 1
                 requests_to_handle.count += 1
-                future_responses, future_hanging = self._request_handler(request=request)
+                future_responses, future_hanging = self._request_handler(
+                    request=request
+                )
                 future_queue.put_nowait(future_responses)
                 future_responses.add_done_callback(callback)
                 if future_hanging is not None:
@@ -168,13 +188,19 @@ class RequestStreamer:
                 # It will be waiting for something that will never appear
                 future_cancel = asyncio.ensure_future(end_future())
                 result_queue.put_nowait(future_cancel)
-            if all_floating_requests_awaited.is_set() or empty_requests_iterator.is_set():
+            if (
+                all_floating_requests_awaited.is_set()
+                or empty_requests_iterator.is_set()
+            ):
                 # It will be waiting for something that will never appear
                 future_cancel = asyncio.ensure_future(end_future())
                 floating_results_queue.put_nowait(future_cancel)
 
         async def handle_floating_responses():
-            while not all_floating_requests_awaited.is_set() and not empty_requests_iterator.is_set():
+            while (
+                not all_floating_requests_awaited.is_set()
+                and not empty_requests_iterator.is_set()
+            ):
                 hanging_response = await floating_results_queue.get()
                 try:
                     hanging_response.result()
@@ -226,7 +252,9 @@ class RequestStreamer:
         while self.total_num_floating_tasks_alive > 0:
             await asyncio.sleep(0)
 
-    async def process_single_data(self, request: DataRequest, context=None) -> DataRequest:
+    async def process_single_data(
+        self, request: DataRequest, context=None
+    ) -> DataRequest:
         """Implements request and response handling of a single DataRequest
         :param request: DataRequest from Client
         :param context: grpc context

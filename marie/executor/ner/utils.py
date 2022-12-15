@@ -60,7 +60,9 @@ def draw_box(draw, box, text, fill_color, font):
         )
 
 
-def visualize_prediction(output_filename, frame, true_predictions, true_boxes, true_scores, label2color):
+def visualize_prediction(
+    output_filename, frame, true_predictions, true_boxes, true_scores, label2color
+):
     image = frame.copy()
     # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
     # label2color = get_label_colors()
@@ -160,7 +162,9 @@ def visualize_icr(frames, results, filename=None):
             button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
             # put text on button with 10px margins
             button_draw = ImageDraw.Draw(button_img, "RGBA")
-            button_draw.text((4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1)
+            button_draw.text(
+                (4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1
+            )
             # draw.rectangle(box, outline="red", width=1)
             # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
             # put button on source image in position (0, 0)

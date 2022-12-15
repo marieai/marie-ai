@@ -60,7 +60,9 @@ def preprocess(img_path, img_transform):
 @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, generator, model, sample, bpe):
     print(task)
-    decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
+    decoder_output = task.inference_step(
+        generator, model, sample, prefix_tokens=None, constraints=None
+    )
     decoder_output = decoder_output[0][0]  # top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(

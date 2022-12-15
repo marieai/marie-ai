@@ -83,7 +83,9 @@ class PdfRenderer(ResultRenderer):
     def name(self):
         return "PdfRenderer"
 
-    def __render_page(self, image: np.array, result: Dict[str, Any], page_index: int) -> PageObject:
+    def __render_page(
+        self, image: np.array, result: Dict[str, Any], page_index: int
+    ) -> PageObject:
         """
         Render individual page as `PageObject`
 

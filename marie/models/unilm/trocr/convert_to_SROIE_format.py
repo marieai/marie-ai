@@ -28,7 +28,9 @@ if __name__ == '__main__':
             if output_fp is not None:
                 output_fp.close()
             output_file = this_output_file
-            output_fp = open(os.path.join(output_dir, output_file), 'w', encoding='utf8')
+            output_fp = open(
+                os.path.join(output_dir, output_file), 'w', encoding='utf8'
+            )
 
         pred_line_id = image_id * 4 + 2
         pred_line = lines[pred_line_id]

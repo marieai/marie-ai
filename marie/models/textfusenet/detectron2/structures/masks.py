@@ -16,7 +16,9 @@ def polygon_area(x, y):
     return 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
 
 
-def polygons_to_bitmask(polygons: List[np.ndarray], height: int, width: int) -> np.ndarray:
+def polygons_to_bitmask(
+    polygons: List[np.ndarray], height: int, width: int
+) -> np.ndarray:
     """
     Args:
         polygons (list[ndarray]): each array has shape (Nx2,)
@@ -31,7 +33,9 @@ def polygons_to_bitmask(polygons: List[np.ndarray], height: int, width: int) -> 
     return mask_utils.decode(rle).astype(np.bool)
 
 
-def rasterize_polygons_within_box(polygons: List[np.ndarray], box: np.ndarray, mask_size: int) -> torch.Tensor:
+def rasterize_polygons_within_box(
+    polygons: List[np.ndarray], box: np.ndarray, mask_size: int
+) -> torch.Tensor:
     """
     Rasterize the polygons into a mask image and
     crop the mask content in the given box.
@@ -91,7 +95,9 @@ class BitMasks:
         Args:
             tensor: bool Tensor of N,H,W, representing N instances in the image.
         """
-        device = tensor.device if isinstance(tensor, torch.Tensor) else torch.device("cpu")
+        device = (
+            tensor.device if isinstance(tensor, torch.Tensor) else torch.device("cpu")
+        )
         tensor = torch.as_tensor(tensor, dtype=torch.bool, device=device)
         assert tensor.dim() == 3, tensor.size()
         self.image_size = tensor.shape[1:]
@@ -118,7 +124,11 @@ class BitMasks:
         if isinstance(item, int):
             return BitMasks(self.tensor[item].view(1, -1))
         m = self.tensor[item]
-        assert m.dim() == 3, "Indexing on BitMasks with {} returns a tensor with shape {}!".format(item, m.shape)
+        assert (
+            m.dim() == 3
+        ), "Indexing on BitMasks with {} returns a tensor with shape {}!".format(
+            item, m.shape
+        )
         return BitMasks(m)
 
     def __iter__(self) -> torch.Tensor:
@@ -178,12 +188,18 @@ class BitMasks:
         assert len(boxes) == len(self), "{} != {}".format(len(boxes), len(self))
         device = self.tensor.device
 
-        batch_inds = torch.arange(len(boxes), device=device).to(dtype=boxes.dtype)[:, None]
+        batch_inds = torch.arange(len(boxes), device=device).to(dtype=boxes.dtype)[
+            :, None
+        ]
         rois = torch.cat([batch_inds, boxes], dim=1)  # Nx5
 
         bit_masks = self.tensor.to(dtype=torch.float32)
         rois = rois.to(device=device)
-        output = ROIAlign((mask_size, mask_size), 1.0, 0, aligned=True).forward(bit_masks[:, None, :, :], rois).squeeze(1)
+        output = (
+            ROIAlign((mask_size, mask_size), 1.0, 0, aligned=True)
+            .forward(bit_masks[:, None, :, :], rois)
+            .squeeze(1)
+        )
         output = output >= 0.5
         return output
 
@@ -221,7 +237,9 @@ class PolygonMasks:
                 t = t.cpu().numpy()
             return np.asarray(t).astype("float64")
 
-        def process_polygons(polygons_per_instance: List[Union[torch.Tensor, np.ndarray]]) -> List[torch.Tensor]:
+        def process_polygons(
+            polygons_per_instance: List[Union[torch.Tensor, np.ndarray]]
+        ) -> List[torch.Tensor]:
             assert isinstance(polygons_per_instance, list), type(polygons_per_instance)
             # transform the polygon to a tensor
             polygons_per_instance = [_make_array(p) for p in polygons_per_instance]
@@ -230,7 +248,8 @@ class PolygonMasks:
             return polygons_per_instance
 
         self.polygons: List[List[torch.Tensor]] = [
-            process_polygons(polygons_per_instance) for polygons_per_instance in polygons
+            process_polygons(polygons_per_instance)
+            for polygons_per_instance in polygons
         ]
 
     def to(self, *args: Any, **kwargs: Any) -> "PolygonMasks":
@@ -264,7 +283,9 @@ class PolygonMasks:
         keep = [1 if len(polygon) > 0 else 0 for polygon in self.polygons]
         return torch.as_tensor(keep, dtype=torch.bool)
 
-    def __getitem__(self, item: Union[int, slice, List[int], torch.BoolTensor]) -> "PolygonMasks":
+    def __getitem__(
+        self, item: Union[int, slice, List[int], torch.BoolTensor]
+    ) -> "PolygonMasks":
         """
         Support indexing over the instances and return a `PolygonMasks` object.
         `item` can be:
@@ -290,7 +311,9 @@ class PolygonMasks:
             elif item.dtype in [torch.int32, torch.int64]:
                 item = item.cpu().numpy().tolist()
             else:
-                raise ValueError("Unsupported tensor dtype={} for indexing!".format(item.dtype))
+                raise ValueError(
+                    "Unsupported tensor dtype={} for indexing!".format(item.dtype)
+                )
             selected_polygons = [self.polygons[i] for i in item]
         return PolygonMasks(selected_polygons)
 
@@ -330,7 +353,10 @@ class PolygonMasks:
         # (several small tensors for representing a single instance mask)
         boxes = boxes.to(torch.device("cpu"))
 
-        results = [rasterize_polygons_within_box(poly, box.numpy(), mask_size) for poly, box in zip(self.polygons, boxes)]
+        results = [
+            rasterize_polygons_within_box(poly, box.numpy(), mask_size)
+            for poly, box in zip(self.polygons, boxes)
+        ]
         """
         poly: list[list[float]], the polygons for one instance
         box: a tensor of shape (4,)

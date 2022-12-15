@@ -34,7 +34,9 @@ class Pix2PixModel(BaseModel):
         parser.set_defaults(norm='batch', netG='unet_256', dataset_mode='aligned')
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
-            parser.add_argument('--lambda_L1', type=float, default=100.0, help='weight for L1 loss')
+            parser.add_argument(
+                '--lambda_L1', type=float, default=100.0, help='weight for L1 loss'
+            )
 
         return parser
 
@@ -86,8 +88,12 @@ class Pix2PixModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
-            self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-            self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_G = torch.optim.Adam(
+                self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)
+            )
+            self.optimizer_D = torch.optim.Adam(
+                self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)
+            )
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
 
@@ -144,7 +150,9 @@ class Pix2PixModel(BaseModel):
         self.backward_D()  # calculate gradients for D
         self.optimizer_D.step()  # update D's weights
         # update G
-        self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
+        self.set_requires_grad(
+            self.netD, False
+        )  # D requires no gradients when optimizing G
         self.optimizer_G.zero_grad()  # set G's gradients to zero
         self.backward_G()  # calculate graidents for G
         self.optimizer_G.step()  # udpate G's weights

@@ -11,7 +11,9 @@ DEPLOYMENT_FILES = [
 ]
 
 cur_dir = os.path.dirname(__file__)
-DEFAULT_RESOURCE_DIR = os.path.join(cur_dir, '..', '..', '..', '..', 'resources', 'k8s', 'template')
+DEFAULT_RESOURCE_DIR = os.path.join(
+    cur_dir, '..', '..', '..', '..', 'resources', 'k8s', 'template'
+)
 
 
 def get_yaml(template: str, params: Dict) -> Dict:
@@ -71,5 +73,7 @@ def _get_device_plugins(params: Dict):
 def _get_deployment_with_device_plugins(deployment: Dict, params: Dict) -> Dict:
     device_plugins = _get_device_plugins(params['device_plugins'])
 
-    deployment['spec']['template']['spec']['containers'][0]['resources'] = device_plugins
+    deployment['spec']['template']['spec']['containers'][0][
+        'resources'
+    ] = device_plugins
     return deployment

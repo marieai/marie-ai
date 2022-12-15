@@ -78,7 +78,9 @@ class Conv2d(torch.nn.Conv2d):
             empty = _NewEmptyTensorOp.apply(x, output_shape)
             if self.training:
                 # https://github.com/pytorch/pytorch/issues/12013
-                assert not isinstance(self.norm, torch.nn.SyncBatchNorm), "SyncBatchNorm does not support empty inputs!"
+                assert not isinstance(
+                    self.norm, torch.nn.SyncBatchNorm
+                ), "SyncBatchNorm does not support empty inputs!"
 
                 # This is to make DDP happy.
                 # DDP expects all workers to have gradient w.r.t the same set of parameters.
@@ -136,19 +138,27 @@ class BatchNorm2d(torch.nn.BatchNorm2d):
         return _NewEmptyTensorOp.apply(x, output_shape)
 
 
-def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
+def interpolate(
+    input, size=None, scale_factor=None, mode="nearest", align_corners=None
+):
     """
     A wrapper around :func:`torch.nn.functional.interpolate` to support zero-size tensor.
     """
     if input.numel() > 0:
-        return torch.nn.functional.interpolate(input, size, scale_factor, mode, align_corners=align_corners)
+        return torch.nn.functional.interpolate(
+            input, size, scale_factor, mode, align_corners=align_corners
+        )
 
     def _check_size_scale_factor(dim):
         if size is None and scale_factor is None:
             raise ValueError("either size or scale_factor should be defined")
         if size is not None and scale_factor is not None:
             raise ValueError("only one of size or scale_factor should be defined")
-        if scale_factor is not None and isinstance(scale_factor, tuple) and len(scale_factor) != dim:
+        if (
+            scale_factor is not None
+            and isinstance(scale_factor, tuple)
+            and len(scale_factor) != dim
+        ):
             raise ValueError(
                 "scale_factor shape must match input shape. Input is {}D, scale_factor size is {}".format(
                     dim, len(scale_factor)
@@ -161,7 +171,9 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corne
             return size
         scale_factors = _ntuple(dim)(scale_factor)
         # math.floor might return float in py2.7
-        return [int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)]
+        return [
+            int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)
+        ]
 
     output_shape = tuple(_output_size(2))
     output_shape = input.shape[:-2] + output_shape

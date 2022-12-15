@@ -30,19 +30,25 @@ class MultiProtocolGateway(Gateway):
         def _get_response():
             return {'protocol': 'http'}
 
-        self.http_server = Server(Config(app, host=__default_host__, port=self.http_port))
+        self.http_server = Server(
+            Config(app, host=__default_host__, port=self.http_port)
+        )
 
     async def _setup_grpc_server(self):
         self.grpc_server = grpc.aio.server()
 
-        jina_pb2_grpc.add_JinaRPCServicer_to_server(self.streamer._streamer, self.grpc_server)
+        jina_pb2_grpc.add_JinaRPCServicer_to_server(
+            self.streamer._streamer, self.grpc_server
+        )
 
         service_names = (
             jina_pb2.DESCRIPTOR.services_by_name['JinaRPC'].full_name,
             reflection.SERVICE_NAME,
         )
         # Mark all services as healthy.
-        health_pb2_grpc.add_HealthServicer_to_server(self.health_servicer, self.grpc_server)
+        health_pb2_grpc.add_HealthServicer_to_server(
+            self.health_servicer, self.grpc_server
+        )
         for service in service_names:
             self.health_servicer.set(service, health_pb2.HealthCheckResponse.SERVING)
         reflection.enable_server_reflection(service_names, self.grpc_server)

@@ -34,7 +34,9 @@ class Registry(object):
         self._obj_map = {}
 
     def _do_register(self, name, obj):
-        assert name not in self._obj_map, "An object named '{}' was already registered in '{}' registry!".format(
+        assert (
+            name not in self._obj_map
+        ), "An object named '{}' was already registered in '{}' registry!".format(
             name, self._name
         )
         self._obj_map[name] = obj
@@ -60,5 +62,7 @@ class Registry(object):
     def get(self, name):
         ret = self._obj_map.get(name)
         if ret is None:
-            raise KeyError("No object named '{}' found in '{}' registry!".format(name, self._name))
+            raise KeyError(
+                "No object named '{}' found in '{}' registry!".format(name, self._name)
+            )
         return ret

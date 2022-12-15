@@ -21,7 +21,9 @@ class SemSegEvaluator(DatasetEvaluator):
     Evaluate semantic segmentation
     """
 
-    def __init__(self, dataset_name, distributed, num_classes, ignore_label=255, output_dir=None):
+    def __init__(
+        self, dataset_name, distributed, num_classes, ignore_label=255, output_dir=None
+    ):
         """
         Args:
             dataset_name (str): name of the dataset to be evaluated.
@@ -72,14 +74,16 @@ class SemSegEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int)
-            with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
+            with PathManager.open(
+                self.input_file_to_gt_file[input["file_name"]], "rb"
+            ) as f:
                 gt = np.array(Image.open(f), dtype=np.int)
 
             gt[gt == self._ignore_label] = self._num_classes
 
-            self._conf_matrix += np.bincount(self._N * pred.reshape(-1) + gt.reshape(-1), minlength=self._N**2).reshape(
-                self._N, self._N
-            )
+            self._conf_matrix += np.bincount(
+                self._N * pred.reshape(-1) + gt.reshape(-1), minlength=self._N**2
+            ).reshape(self._N, self._N)
 
             self._predictions.extend(self.encode_json_sem_seg(pred, input["file_name"]))
 
@@ -148,7 +152,9 @@ class SemSegEvaluator(DatasetEvaluator):
         json_list = []
         for label in np.unique(sem_seg):
             if self._contiguous_id_to_dataset_id is not None:
-                assert label in self._contiguous_id_to_dataset_id, "Label {} is not in the metadata info for {}".format(
+                assert (
+                    label in self._contiguous_id_to_dataset_id
+                ), "Label {} is not in the metadata info for {}".format(
                     label, self._dataset_name
                 )
                 dataset_id = self._contiguous_id_to_dataset_id[label]

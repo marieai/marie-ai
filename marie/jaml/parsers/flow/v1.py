@@ -50,7 +50,9 @@ class V1Parser(VersionedYAMLParser):
 
     version = '1'  # the version number this parser designed for
 
-    def parse(self, cls: type, data: Dict, runtime_args: Optional[Dict[str, Any]] = None) -> 'Flow':
+    def parse(
+        self, cls: type, data: Dict, runtime_args: Optional[Dict[str, Any]] = None
+    ) -> 'Flow':
         """
         :param cls: the class registered for dumping/loading
         :param data: flow yaml file loaded as python dict
@@ -68,7 +70,9 @@ class V1Parser(VersionedYAMLParser):
 
         pp = data.get('executors', data.get('deployments', []))
         for deployments in pp:
-            p_deployment_attr = {kk: expand_env_var(vv) for kk, vv in deployments.items()}
+            p_deployment_attr = {
+                kk: expand_env_var(vv) for kk, vv in deployments.items()
+            }
             # in v1 YAML, flow is an optional argument
             if p_deployment_attr.get('name', None) != GATEWAY_NAME:
                 # ignore gateway when reading, it will be added during build()
@@ -124,7 +128,9 @@ class V1Parser(VersionedYAMLParser):
 
         gateway_kwargs = {}
         gateway_parser = set_gateway_parser()
-        non_default_kw = ArgNamespace.get_non_defaults_args(data.gateway_args, gateway_parser)
+        non_default_kw = ArgNamespace.get_non_defaults_args(
+            data.gateway_args, gateway_parser
+        )
         gateway_kwargs.update(non_default_kw)
         for t in _get_taboo(gateway_parser):
             if t in gateway_kwargs:

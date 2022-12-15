@@ -37,11 +37,15 @@ class Segmentation_head(nn.Module):
         # layers----get global fused features and global context
         self.conv1x1_list = nn.ModuleList()
         for i in range(self.num_fpn_features):
-            self.conv1x1_list.append(nn.Conv2d(self.channels, self.channels, 1, padding=1, bias=False))
+            self.conv1x1_list.append(
+                nn.Conv2d(self.channels, self.channels, 1, padding=1, bias=False)
+            )
 
         self.conv3x3_list = nn.ModuleList()
         for i in range(self.num_conv3x3):
-            self.conv3x3_list.append(nn.Conv2d(self.channels, self.channels, 3, padding=1, bias=False))
+            self.conv3x3_list.append(
+                nn.Conv2d(self.channels, self.channels, 3, padding=1, bias=False)
+            )
 
         self.seg_pooler = ROIPooler(
             output_size=self.pooler_resolution,
@@ -52,10 +56,14 @@ class Segmentation_head(nn.Module):
 
         self.conv3x3_list_roi = nn.ModuleList()
         for i in range(self.num_conv3x3):
-            self.conv3x3_list_roi.append(nn.Conv2d(self.channels, self.channels, 3, padding=1, bias=False))
+            self.conv3x3_list_roi.append(
+                nn.Conv2d(self.channels, self.channels, 3, padding=1, bias=False)
+            )
 
         # layers---segmentation logits
-        self.conv1x1_seg_logits = nn.Conv2d(self.channels, self.channels, 1, padding=0, bias=False)
+        self.conv1x1_seg_logits = nn.Conv2d(
+            self.channels, self.channels, 1, padding=0, bias=False
+        )
         self.seg_logits = nn.Conv2d(self.channels, self.num_classes, 1)
 
         self.relu = nn.ReLU(inplace=True)
@@ -67,7 +75,9 @@ class Segmentation_head(nn.Module):
         # get global fused features
         for i, feature in enumerate(x):
             if i != feature_level:
-                feature = F.interpolate(feature, size=feature_shape, mode='bilinear', align_corners=True)
+                feature = F.interpolate(
+                    feature, size=feature_shape, mode='bilinear', align_corners=True
+                )
                 feature_fuse += self.conv1x1_list[i](feature)
 
         for i in range(self.num_conv3x3):
@@ -80,7 +90,9 @@ class Segmentation_head(nn.Module):
         global_context = self.relu(global_context)
 
         # get segmentation logits
-        feature_pred = F.interpolate(feature_fuse, size=image_shape, mode='bilinear', align_corners=True)
+        feature_pred = F.interpolate(
+            feature_fuse, size=image_shape, mode='bilinear', align_corners=True
+        )
         feature_pred = self.conv1x1_seg_logits(feature_pred)
         seg_logits = self.seg_logits(feature_pred)
 

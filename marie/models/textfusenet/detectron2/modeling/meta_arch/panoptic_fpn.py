@@ -32,10 +32,14 @@ class PanopticFPN(nn.Module):
         self.combine_on = cfg.MODEL.PANOPTIC_FPN.COMBINE.ENABLED
         self.combine_overlap_threshold = cfg.MODEL.PANOPTIC_FPN.COMBINE.OVERLAP_THRESH
         self.combine_stuff_area_limit = cfg.MODEL.PANOPTIC_FPN.COMBINE.STUFF_AREA_LIMIT
-        self.combine_instances_confidence_threshold = cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH
+        self.combine_instances_confidence_threshold = (
+            cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH
+        )
 
         self.backbone = build_backbone(cfg)
-        self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
+        self.proposal_generator = build_proposal_generator(
+            cfg, self.backbone.output_shape()
+        )
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
         self.sem_seg_head = build_sem_seg_head(cfg, self.backbone.output_shape())
 
@@ -92,13 +96,19 @@ class PanopticFPN(nn.Module):
         else:
             gt_instances = None
         if self.proposal_generator:
-            proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
-        detector_results, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+            proposals, proposal_losses = self.proposal_generator(
+                images, features, gt_instances
+            )
+        detector_results, detector_losses = self.roi_heads(
+            images, features, proposals, gt_instances
+        )
 
         if self.training:
             losses = {}
             losses.update(sem_seg_losses)
-            losses.update({k: v * self.instance_loss_weight for k, v in detector_losses.items()})
+            losses.update(
+                {k: v * self.instance_loss_weight for k, v in detector_losses.items()}
+            )
             losses.update(proposal_losses)
             return losses
 
@@ -155,7 +165,9 @@ def combine_semantic_and_instance_outputs(
     current_segment_id = 0
     segments_info = []
 
-    instance_masks = instance_results.pred_masks.to(dtype=torch.bool, device=panoptic_seg.device)
+    instance_masks = instance_results.pred_masks.to(
+        dtype=torch.bool, device=panoptic_seg.device
+    )
 
     # Add instances one-by-one, check for overlaps with existing ones
     for inst_id in sorted_inds:

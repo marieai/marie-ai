@@ -10,7 +10,9 @@ def test_exec_from_python():
 
 
 def test_runtime_args():
-    b = BaseExecutor.load_config('BaseExecutor', metas={'name': 'b123'}, runtime_args={'hello': 'world'})
+    b = BaseExecutor.load_config(
+        'BaseExecutor', metas={'name': 'b123'}, runtime_args={'hello': 'world'}
+    )
 
     assert b.runtime_args.hello == 'world'
     assert b.metas.name == 'b123'

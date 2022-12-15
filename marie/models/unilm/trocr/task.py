@@ -50,7 +50,9 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
         )
         # parser.add_argument('--resize-img-size', type=int,
         #                     help='the output image size of h and w (h=w) of the image transform')
-        parser.add_argument('--input-size', type=int, nargs='+', help='images input size')
+        parser.add_argument(
+            '--input-size', type=int, nargs='+', help='images input size'
+        )
         # parser.add_argument('--text-recog-gen', action="store_true",
         #                     help='if use the TextRecognitionGenerator')
         # parser.add_argument('--crop-img-output-dir', type=str, default=None,
@@ -94,7 +96,9 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
         )
 
         parser.add_argument('--repeated-aug', action='store_true')
-        parser.add_argument('--no-repeated-aug', action='store_false', dest='repeated_aug')
+        parser.add_argument(
+            '--no-repeated-aug', action='store_false', dest='repeated_aug'
+        )
         parser.set_defaults(repeated_aug=True)
 
         # * Random Erase params
@@ -111,7 +115,9 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
             default='pixel',
             help='Random erase mode (default: "pixel")',
         )
-        parser.add_argument('--recount', type=int, default=1, help='Random erase count (default: 1)')
+        parser.add_argument(
+            '--recount', type=int, default=1, help='Random erase count (default: 1)'
+        )
         parser.add_argument(
             '--resplit',
             action='store_true',
@@ -144,14 +150,18 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
                 dict_file_like = io.StringIO(dict_content)
                 target_dict = Dictionary.load(dict_file_like)
             else:
-                raise ValueError('Unknown decoder_pretrained: {}'.format(args.decoder_pretrained))
+                raise ValueError(
+                    'Unknown decoder_pretrained: {}'.format(args.decoder_pretrained)
+                )
         else:
             assert (
                 getattr(args, "dict_path_or_url", None) is not None
             ), "You must specify the dict_path_or_url when decoder_pretrained is not specified"
             if args.dict_path_or_url.startswith('http'):
                 logger.info('Load dictionary from {}'.format(args.dict_path_or_url))
-                dict_content = urllib.request.urlopen(args.dict_path_or_url).read().decode()
+                dict_content = (
+                    urllib.request.urlopen(args.dict_path_or_url).read().decode()
+                )
                 dict_file_like = io.StringIO(dict_content)
                 target_dict = Dictionary.load(dict_file_like)
             else:
@@ -193,10 +203,14 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
         # load the dataset
         if self.args.data_type == 'SROIE':
             root_dir = os.path.join(self.data_dir, split)
-            self.datasets[split] = SROIETextRecognitionDataset(root_dir, tfm, self.bpe, self.target_dict)
+            self.datasets[split] = SROIETextRecognitionDataset(
+                root_dir, tfm, self.bpe, self.target_dict
+            )
         elif self.args.data_type == 'STR':
             gt_path = os.path.join(self.data_dir, 'gt_{}.txt'.format(split))
-            self.datasets[split] = SyntheticTextRecognitionDataset(gt_path, tfm, self.bpe, self.target_dict)
+            self.datasets[split] = SyntheticTextRecognitionDataset(
+                gt_path, tfm, self.bpe, self.target_dict
+            )
         else:
             raise Exception('Not defined dataset type: ' + self.args.data_type)
 
@@ -208,7 +222,9 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
     def target_dictionary(self):
         return self.target_dict
 
-    def build_generator(self, models, args, seq_gen_cls=None, extra_gen_cls_kwargs=None):
+    def build_generator(
+        self, models, args, seq_gen_cls=None, extra_gen_cls_kwargs=None
+    ):
         if getattr(args, "score_reference", False):
             from fairseq.sequence_scorer import SequenceScorer
 
@@ -256,9 +272,13 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
         assert sampling_topp < 0 or sampling, "--sampling-topp requires --sampling"
 
         if sampling:
-            search_strategy = search.Sampling(self.target_dictionary, sampling_topk, sampling_topp)
+            search_strategy = search.Sampling(
+                self.target_dictionary, sampling_topk, sampling_topp
+            )
         elif diverse_beam_groups > 0:
-            search_strategy = search.DiverseBeamSearch(self.target_dictionary, diverse_beam_groups, diverse_beam_strength)
+            search_strategy = search.DiverseBeamSearch(
+                self.target_dictionary, diverse_beam_groups, diverse_beam_strength
+            )
         elif match_source_len:
             # this is useful for tagging applications where the output
             # length should match the input length, so we hardcode the
@@ -271,11 +291,17 @@ class SROIETextRecognitionTask(LegacyFairseqTask):
                 max_len_b=0,
             )
         elif diversity_rate > -1:
-            search_strategy = search.DiverseSiblingsSearch(self.target_dictionary, diversity_rate)
+            search_strategy = search.DiverseSiblingsSearch(
+                self.target_dictionary, diversity_rate
+            )
         elif constrained:
-            search_strategy = search.LexicallyConstrainedBeamSearch(self.target_dictionary, args.constraints)
+            search_strategy = search.LexicallyConstrainedBeamSearch(
+                self.target_dictionary, args.constraints
+            )
         elif prefix_allowed_tokens_fn:
-            search_strategy = search.PrefixConstrainedBeamSearch(self.target_dictionary, prefix_allowed_tokens_fn)
+            search_strategy = search.PrefixConstrainedBeamSearch(
+                self.target_dictionary, prefix_allowed_tokens_fn
+            )
         else:
             search_strategy = search.BeamSearch(self.target_dictionary)
 

@@ -29,7 +29,9 @@ def load_voc_instances(dirname: str, split: str):
         dirname: Contain "Annotations", "ImageSets", "JPEGImages"
         split (str): one of "train", "test", "val", "trainval"
     """
-    with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
+    with PathManager.open(
+        os.path.join(dirname, "ImageSets", "Main", split + ".txt")
+    ) as f:
         fileids = np.loadtxt(f, dtype=np.str)
 
     dicts = []
@@ -76,4 +78,6 @@ def load_voc_instances(dirname: str, split: str):
 
 def register_pascal_voc(name, dirname, split, year):
     DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split))
-    MetadataCatalog.get(name).set(thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split)
+    MetadataCatalog.get(name).set(
+        thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split
+    )

@@ -20,10 +20,14 @@ print(compose_yml)
 
 @pytest.fixture()
 def docker_compose(request):
-    os.system(f'docker-compose -f {request.param} --project-directory . up  --build -d --remove-orphans')
+    os.system(
+        f'docker-compose -f {request.param} --project-directory . up  --build -d --remove-orphans'
+    )
     time.sleep(5)
     yield
-    os.system(f'docker-compose -f {request.param} --project-directory . down --remove-orphans')
+    os.system(
+        f'docker-compose -f {request.param} --project-directory . down --remove-orphans'
+    )
 
 
 #  docker-compose -f docker-compose.yml --project-directory . up  --build  --remove-orphans
@@ -43,7 +47,9 @@ def test_storage(tmpdir):
 
     payload = {"test": "Test", "xyz": "Greg"}
 
-    dd = DocumentArray([Document(id=str(f"lbxid:{_}"), content=payload) for _ in range(10)])
+    dd = DocumentArray(
+        [Document(id=str(f"lbxid:{_}"), content=payload) for _ in range(10)]
+    )
 
     print(dd[2].content)
     handler.add(dd)

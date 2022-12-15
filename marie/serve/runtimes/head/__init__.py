@@ -60,7 +60,9 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             endpoint_polling = json.loads(polling)
             # '*' is used a wildcard and will match all endpoints, except /index, /search and explicitly defined endpoins
             default_polling = (
-                PollingType.from_string(endpoint_polling['*']) if '*' in endpoint_polling else self.DEFAULT_POLLING
+                PollingType.from_string(endpoint_polling['*'])
+                if '*' in endpoint_polling
+                else self.DEFAULT_POLLING
             )
             self._polling = self._default_polling_dict(default_polling)
             for endpoint in endpoint_polling:
@@ -71,7 +73,11 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
                 )
         except (ValueError, TypeError):
             # polling args is not a valid json, try interpreting as a polling enum type
-            default_polling = polling if type(polling) == PollingType else PollingType.from_string(polling)
+            default_polling = (
+                polling
+                if type(polling) == PollingType
+                else PollingType.from_string(polling)
+            )
             self._polling = self._default_polling_dict(default_polling)
 
         if hasattr(args, 'connection_list') and args.connection_list:
@@ -98,10 +104,14 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             self.timeout_send /= 1e3  # convert ms to seconds
 
         if self.uses_before_address:
-            self.connection_pool.add_connection(deployment='uses_before', address=self.uses_before_address)
+            self.connection_pool.add_connection(
+                deployment='uses_before', address=self.uses_before_address
+            )
         self.uses_after_address = args.uses_after_address
         if self.uses_after_address:
-            self.connection_pool.add_connection(deployment='uses_after', address=self.uses_after_address)
+            self.connection_pool.add_connection(
+                deployment='uses_after', address=self.uses_after_address
+            )
         self._reduce = not args.no_reduce
         self.request_handler = HeaderRequestHandler(
             logger=self.logger,
@@ -123,9 +133,13 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             interceptors=self.aio_tracing_server_interceptors(),
         )
 
-        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(self, self._grpc_server)
+        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(
+            self, self._grpc_server
+        )
         jina_pb2_grpc.add_JinaDataRequestRPCServicer_to_server(self, self._grpc_server)
-        jina_pb2_grpc.add_JinaDiscoverEndpointsRPCServicer_to_server(self, self._grpc_server)
+        jina_pb2_grpc.add_JinaDiscoverEndpointsRPCServicer_to_server(
+            self, self._grpc_server
+        )
         jina_pb2_grpc.add_JinaInfoRPCServicer_to_server(self, self._grpc_server)
         service_names = (
             jina_pb2.DESCRIPTOR.services_by_name['JinaSingleDataRequestRPC'].full_name,
@@ -135,10 +149,14 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             reflection.SERVICE_NAME,
         )
         # Mark all services as healthy.
-        health_pb2_grpc.add_HealthServicer_to_server(self._health_servicer, self._grpc_server)
+        health_pb2_grpc.add_HealthServicer_to_server(
+            self._health_servicer, self._grpc_server
+        )
 
         for service in service_names:
-            await self._health_servicer.set(service, health_pb2.HealthCheckResponse.SERVING)
+            await self._health_servicer.set(
+                service, health_pb2.HealthCheckResponse.SERVING
+            )
         reflection.enable_server_reflection(service_names, self._grpc_server)
 
         bind_addr = f'{self.args.host}:{self.args.port}'
@@ -213,13 +231,17 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             context.set_trailing_metadata(metadata.items())
             return response
         except InternalNetworkError as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
-            return self._handle_internalnetworkerror(err=err, context=context, response=Response())
+            return self._handle_internalnetworkerror(
+                err=err, context=context, response=Response()
+            )
         except (
             RuntimeError,
             Exception,
         ) as ex:  # some other error, keep streaming going just add error info
             self.logger.error(
-                f'{ex!r}' + f'\n add "--quiet-error" to suppress the exception details' if not self.args.quiet_error else '',
+                f'{ex!r}' + f'\n add "--quiet-error" to suppress the exception details'
+                if not self.args.quiet_error
+                else '',
                 exc_info=not self.args.quiet_error,
             )
             requests[0].add_exception(ex, executor=None)
@@ -240,13 +262,17 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
                 (
                     uses_before_response,
                     _,
-                ) = await self.connection_pool.send_discover_endpoint(deployment='uses_before', head=False)
+                ) = await self.connection_pool.send_discover_endpoint(
+                    deployment='uses_before', head=False
+                )
                 response.endpoints.extend(uses_before_response.endpoints)
             if self.uses_after_address:
                 (
                     uses_after_response,
                     _,
-                ) = await self.connection_pool.send_discover_endpoint(deployment='uses_after', head=False)
+                ) = await self.connection_pool.send_discover_endpoint(
+                    deployment='uses_after', head=False
+                )
                 response.endpoints.extend(uses_after_response.endpoints)
 
             worker_response, _ = await self.connection_pool.send_discover_endpoint(
@@ -254,7 +280,9 @@ class HeadRuntime(AsyncNewLoopRuntime, ABC):
             )
             response.endpoints.extend(worker_response.endpoints)
         except InternalNetworkError as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
-            return self._handle_internalnetworkerror(err=err, context=context, response=response)
+            return self._handle_internalnetworkerror(
+                err=err, context=context, response=response
+            )
 
         return response
 

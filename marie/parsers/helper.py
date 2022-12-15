@@ -49,7 +49,9 @@ class KVAppendAction(argparse.Action):
                 try:
                     k, v = re.split(r'[:=]\s*', value, maxsplit=1)
                 except ValueError:
-                    raise argparse.ArgumentTypeError(f'could not parse argument \"{values[0]}\" as k=v format')
+                    raise argparse.ArgumentTypeError(
+                        f'could not parse argument \"{values[0]}\" as k=v format'
+                    )
                 d[k] = parse_arg(v)
         setattr(args, self.dest, d)
 
@@ -80,7 +82,9 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
                 from marie.helper import colored
 
                 current_indent = self.formatter._current_indent
-                captial_heading = ' '.join(v[0].upper() + v[1:] for v in self.heading.split(' '))
+                captial_heading = ' '.join(
+                    v[0].upper() + v[1:] for v in self.heading.split(' ')
+                )
                 heading = '%*s%s\n' % (
                     current_indent,
                     '',
@@ -109,7 +113,13 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
                     help_string = colored(
                         'default: %s'
-                        % ('enabled' if action.default else (f'disabled, use "{action.option_strings[0]}" to enable it')),
+                        % (
+                            'enabled'
+                            if action.default
+                            else (
+                                f'disabled, use "{action.option_strings[0]}" to enable it'
+                            )
+                        ),
                         attrs=['dark'],
                     )
                 elif action.choices:
@@ -119,7 +129,9 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
                         attrs=['dark'],
                     )
                 elif action.option_strings or action.nargs in defaulting_nargs:
-                    help_string = colored('type: %(type)s; default: %(default)s', attrs=['dark'])
+                    help_string = colored(
+                        'type: %(type)s; default: %(default)s', attrs=['dark']
+                    )
         return f'''
         
         {help_string}
@@ -129,7 +141,9 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         '''
 
     def _join_parts(self, part_strings):
-        return '\n' + ''.join([part for part in part_strings if part and part is not argparse.SUPPRESS])
+        return '\n' + ''.join(
+            [part for part in part_strings if part and part is not argparse.SUPPRESS]
+        )
 
     def _get_default_metavar_for_optional(self, action):
         return ''
@@ -271,7 +285,9 @@ def _set_gateway_uses(args: 'argparse.Namespace'):
 
             args.uses = CompositeGateway.__name__
         else:
-            raise ValueError('You need to specify as much protocols as ports if you want to use a jina built-in gateway')
+            raise ValueError(
+                'You need to specify as much protocols as ports if you want to use a jina built-in gateway'
+            )
 
 
 def _update_gateway_args(args: 'argparse.Namespace'):
@@ -307,7 +323,9 @@ def _port_to_int(port):
     try:
         return int(port)
     except ValueError:
-        default_logger.warning(f'port {port} is not an integer and cannot be cast to one')
+        default_logger.warning(
+            f'port {port} is not an integer and cannot be cast to one'
+        )
         return port
 
 

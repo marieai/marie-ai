@@ -47,12 +47,18 @@ class BatchQueue:
         self._timer_task: Optional[Task] = None
 
     def _cancel_timer_if_pending(self):
-        if self._timer_task and not self._timer_task.done() and not self._timer_task.cancelled():
+        if (
+            self._timer_task
+            and not self._timer_task.done()
+            and not self._timer_task.cancelled()
+        ):
             self._timer_task.cancel()
 
     def _start_timer(self):
         self._cancel_timer_if_pending()
-        self._timer_task = asyncio.create_task(self._sleep_then_set(self._flush_trigger))
+        self._timer_task = asyncio.create_task(
+            self._sleep_then_set(self._flush_trigger)
+        )
         self._timer_started = True
 
     async def _sleep_then_set(self, event: Event):
@@ -139,9 +145,13 @@ class BatchQueue:
             left = consumed_count
             right = consumed_count + request_len
             if return_docs:
-                request.data.set_docs_convert_arrays(return_docs[left:right], ndarray_type=self._output_array_type)
+                request.data.set_docs_convert_arrays(
+                    return_docs[left:right], ndarray_type=self._output_array_type
+                )
             else:
-                request.data.set_docs_convert_arrays(self._big_doc[left:right], ndarray_type=self._output_array_type)
+                request.data.set_docs_convert_arrays(
+                    self._big_doc[left:right], ndarray_type=self._output_array_type
+                )
             consumed_count += request_len
 
     async def close(self):

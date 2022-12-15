@@ -64,13 +64,19 @@ class FrozenBatchNorm2d(nn.Module):
             # No running_mean/var in early versions
             # This will silent the warnings
             if prefix + "running_mean" not in state_dict:
-                state_dict[prefix + "running_mean"] = torch.zeros_like(self.running_mean)
+                state_dict[prefix + "running_mean"] = torch.zeros_like(
+                    self.running_mean
+                )
             if prefix + "running_var" not in state_dict:
                 state_dict[prefix + "running_var"] = torch.ones_like(self.running_var)
 
         if version is not None and version < 3:
             logger = logging.getLogger(__name__)
-            logger.info("FrozenBatchNorm {} is upgraded to version 3.".format(prefix.rstrip(".")))
+            logger.info(
+                "FrozenBatchNorm {} is upgraded to version 3.".format(
+                    prefix.rstrip(".")
+                )
+            )
             # In version < 3, running_var are used without +eps.
             state_dict[prefix + "running_var"] -= self.eps
 
@@ -85,7 +91,9 @@ class FrozenBatchNorm2d(nn.Module):
         )
 
     def __repr__(self):
-        return "FrozenBatchNorm2d(num_features={}, eps={})".format(self.num_features, self.eps)
+        return "FrozenBatchNorm2d(num_features={}, eps={})".format(
+            self.num_features, self.eps
+        )
 
     @classmethod
     def convert_frozen_batchnorm(cls, module):

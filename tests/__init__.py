@@ -34,9 +34,13 @@ def random_docs(
             if sparse_embedding:
                 from scipy.sparse import coo_matrix
 
-                d.embedding = coo_matrix((np.array([1, 1, 1]), (np.array([0, 1, 2]), np.array([1, 2, 1]))))
+                d.embedding = coo_matrix(
+                    (np.array([1, 1, 1]), (np.array([0, 1, 2]), np.array([1, 2, 1])))
+                )
             else:
-                d.embedding = np.random.random([embed_dim + np.random.randint(0, jitter)])
+                d.embedding = np.random.random(
+                    [embed_dim + np.random.randint(0, jitter)]
+                )
 
         for _ in range(chunks_per_doc):
             chunk_doc_id = str(next_chunk_doc_id)
@@ -44,7 +48,9 @@ def random_docs(
             c = Document(id=chunk_doc_id)
             c.text = 'i\'m chunk %s from doc %s' % (chunk_doc_id, doc_id)
             if embedding:
-                c.embedding = np.random.random([embed_dim + np.random.randint(0, jitter)])
+                c.embedding = np.random.random(
+                    [embed_dim + np.random.randint(0, jitter)]
+                )
             c.tags['parent_id'] = doc_id
             c.tags['id'] = chunk_doc_id
             d.chunks.append(c)

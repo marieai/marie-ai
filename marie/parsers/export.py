@@ -59,7 +59,9 @@ def mixin_base_io_parser(parser):
     :param parser: the parser configure
 
     """
-    parser.add_argument('flowpath', type=str, metavar='INPUT', help='The input file path of a Flow YAML')
+    parser.add_argument(
+        'flowpath', type=str, metavar='INPUT', help='The input file path of a Flow YAML'
+    )
     parser.add_argument(
         'outpath',
         type=str,
