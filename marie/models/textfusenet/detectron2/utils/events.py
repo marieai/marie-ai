@@ -5,7 +5,6 @@ import logging
 import os
 from collections import defaultdict
 from contextlib import contextmanager
-
 import torch
 from fvcore.common.file_io import PathManager
 from fvcore.common.history_buffer import HistoryBuffer
@@ -156,9 +155,7 @@ class CommonMetricPrinter(EventWriter):
         try:
             data_time = storage.history("data_time").avg(20)
             time = storage.history("time").global_avg()
-            eta_seconds = storage.history("time").median(1000) * (
-                self._max_iter - iteration
-            )
+            eta_seconds = storage.history("time").median(1000) * (self._max_iter - iteration)
             eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
         except KeyError:  # they may not exist in the first few iterations (due to warmup)
             pass
@@ -190,13 +187,9 @@ lr: {lr}  {memory}\
                     ]
                 ),
                 time="time: {:.4f}".format(time) if time is not None else "",
-                data_time="data_time: {:.4f}".format(data_time)
-                if data_time is not None
-                else "",
+                data_time="data_time: {:.4f}".format(data_time) if data_time is not None else "",
                 lr=lr,
-                memory="max_mem: {:.0f}M".format(max_mem_mb)
-                if max_mem_mb is not None
-                else "",
+                memory="max_mem: {:.0f}M".format(max_mem_mb) if max_mem_mb is not None else "",
             )
         )
 
@@ -292,9 +285,7 @@ class EventStorage:
         """
         result = {}
         for k, v in self._latest_scalars.items():
-            result[k] = (
-                self._history[k].median(window_size) if self._smoothing_hints[k] else v
-            )
+            result[k] = self._history[k].median(window_size) if self._smoothing_hints[k] else v
         return result
 
     def smoothing_hints(self):

@@ -4,16 +4,16 @@ import glob
 import json
 import logging
 import multiprocessing as mp
+import numpy as np
 import os
 from itertools import chain
-
-import numpy as np
 import pycocotools.mask as mask_util
-from detectron2.structures import BoxMode
-from detectron2.utils.comm import get_world_size
-from detectron2.utils.logger import setup_logger
-from fvcore.common.file_io import PathManager
 from PIL import Image
+
+from detectron2.structures import BoxMode
+from detectron2.utils.logger import setup_logger
+from detectron2.utils.comm import get_world_size
+from fvcore.common.file_io import PathManager
 
 try:
     import cv2  # noqa
@@ -36,27 +36,22 @@ def load_cityscapes_instances(image_dir, gt_dir, from_json=True, to_polygons=Tru
         `Using Custom Datasets </tutorials/datasets.html>`_ )
     """
     if from_json:
-        assert (
-            to_polygons
-        ), "Cityscapes's json annotations are in polygon format. Converting to mask format is not supported now."
+        assert to_polygons, (
+            "Cityscapes's json annotations are in polygon format. "
+            "Converting to mask format is not supported now."
+        )
     files = []
     for image_file in glob.glob(os.path.join(image_dir, "**/*.png")):
         suffix = "leftImg8bit.png"
         assert image_file.endswith(suffix)
         prefix = image_dir
-        instance_file = (
-            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_instanceIds.png"
-        )
+        instance_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_instanceIds.png"
         assert os.path.isfile(instance_file), instance_file
 
-        label_file = (
-            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelIds.png"
-        )
+        label_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelIds.png"
         assert os.path.isfile(label_file), label_file
 
-        json_file = (
-            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
-        )
+        json_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
         files.append((image_file, instance_file, label_file, json_file))
     assert len(files), "No images found in {}".format(image_dir)
 
@@ -67,9 +62,7 @@ def load_cityscapes_instances(image_dir, gt_dir, from_json=True, to_polygons=Tru
     pool = mp.Pool(processes=max(mp.cpu_count() // get_world_size() // 2, 4))
 
     ret = pool.map(
-        functools.partial(
-            cityscapes_files_to_dict, from_json=from_json, to_polygons=to_polygons
-        ),
+        functools.partial(cityscapes_files_to_dict, from_json=from_json, to_polygons=to_polygons),
         files,
     )
     logger.info("Loaded {} images from {}".format(len(ret), image_dir))
@@ -101,16 +94,12 @@ def load_cityscapes_semantic(image_dir, gt_dir):
         assert image_file.endswith(suffix)
         prefix = image_dir
 
-        label_file = (
-            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelTrainIds.png"
-        )
+        label_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_labelTrainIds.png"
         assert os.path.isfile(
             label_file
         ), "Please generate labelTrainIds.png with cityscapesscripts/preparation/createTrainIdLabelImgs.py"  # noqa
 
-        json_file = (
-            gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
-        )
+        json_file = gt_dir + image_file[len(prefix) : -len(suffix)] + "gtFine_polygons.json"
 
         with PathManager.open(json_file, "r") as f:
             jsonobj = json.load(f)
@@ -209,9 +198,7 @@ def cityscapes_files_to_dict(files, from_json, to_polygons):
             elif isinstance(poly_wo_overlaps, MultiPolygon):
                 poly_list = poly_wo_overlaps.geoms
             else:
-                raise NotImplementedError(
-                    "Unknown geometric structure {}".format(poly_wo_overlaps)
-                )
+                raise NotImplementedError("Unknown geometric structure {}".format(poly_wo_overlaps))
 
             poly_coord = []
             for poly_el in poly_list:
@@ -265,9 +252,9 @@ def cityscapes_files_to_dict(files, from_json, to_polygons):
             if to_polygons:
                 # This conversion comes from D4809743 and D5171122,
                 # when Mask-RCNN was first developed.
-                contours = cv2.findContours(
-                    mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-                )[-2]
+                contours = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[
+                    -2
+                ]
                 polygons = [c.reshape(-1).tolist() for c in contours if len(c) >= 3]
                 # opencv's can produce invalid polygons
                 if len(polygons) == 0:
@@ -295,9 +282,9 @@ if __name__ == "__main__":
     parser.add_argument("gt_dir")
     parser.add_argument("--type", choices=["instance", "semantic"], default="instance")
     args = parser.parse_args()
-    from cityscapesscripts.helpers.labels import labels
     from detectron2.data.catalog import Metadata
     from detectron2.utils.visualizer import Visualizer
+    from cityscapesscripts.helpers.labels import labels
 
     logger = setup_logger(name=__name__)
 
@@ -310,9 +297,7 @@ if __name__ == "__main__":
         )
         logger.info("Done loading {} samples.".format(len(dicts)))
 
-        thing_classes = [
-            k.name for k in labels if k.hasInstances and not k.ignoreInEval
-        ]
+        thing_classes = [k.name for k in labels if k.hasInstances and not k.ignoreInEval]
         meta = Metadata().set(thing_classes=thing_classes)
 
     else:

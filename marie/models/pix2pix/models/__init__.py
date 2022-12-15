@@ -19,7 +19,6 @@ See our template model class 'template_model.py' for more details.
 """
 
 import importlib
-
 from .base_model import BaseModel
 from .test_model import TestModel
 
@@ -33,7 +32,10 @@ def find_model_using_name(model_name):
     """
 
     # FIXME : this needs to be fixes as the import_module is not working
-    mapping = {'test': TestModel, 'base': BaseModel}
+    mapping = {
+        'test': TestModel,
+        'base': BaseModel
+    }
 
     return mapping[model_name]
 
@@ -42,14 +44,12 @@ def find_model_using_name(model_name):
     model = None
     target_model_name = model_name.replace('_', '') + 'model'
     for name, cls in modellib.__dict__.items():
-        if name.lower() == target_model_name.lower() and issubclass(cls, BaseModel):
+        if name.lower() == target_model_name.lower() \
+           and issubclass(cls, BaseModel):
             model = cls
 
     if model is None:
-        print(
-            "In %s.py, there should be a subclass of BaseModel with class name that matches %s in lowercase."
-            % (model_filename, target_model_name)
-        )
+        print("In %s.py, there should be a subclass of BaseModel with class name that matches %s in lowercase." % (model_filename, target_model_name))
         exit(0)
 
     return model

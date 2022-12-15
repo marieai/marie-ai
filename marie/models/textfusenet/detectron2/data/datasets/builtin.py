@@ -19,13 +19,13 @@ To add new dataset, refer to the tutorial "docs/DATASETS.md".
 
 import os
 
-from detectron2.data import DatasetCatalog, MetadataCatalog
-
-from .builtin_meta import _get_builtin_metadata
-from .cityscapes import load_cityscapes_instances, load_cityscapes_semantic
-from .lvis import get_lvis_instances_meta, register_lvis_instances
-from .pascal_voc import register_pascal_voc
+from detectron2.data import MetadataCatalog, DatasetCatalog
 from .register_coco import register_coco_instances, register_coco_panoptic_separated
+from .lvis import register_lvis_instances, get_lvis_instances_meta
+from .cityscapes import load_cityscapes_instances, load_cityscapes_semantic
+from .pascal_voc import register_pascal_voc
+from .builtin_meta import _get_builtin_metadata
+
 
 # ==== Predefined datasets and splits for COCO ==========
 
@@ -33,14 +33,8 @@ _PREDEFINED_SPLITS_COCO = {}
 _PREDEFINED_SPLITS_COCO["coco"] = {
     "coco_2014_train": ("coco/train2014", "coco/annotations/instances_train2014.json"),
     "coco_2014_val": ("coco/val2014", "coco/annotations/instances_val2014.json"),
-    "coco_2014_minival": (
-        "coco/val2014",
-        "coco/annotations/instances_minival2014.json",
-    ),
-    "coco_2014_minival_100": (
-        "coco/val2014",
-        "coco/annotations/instances_minival2014_100.json",
-    ),
+    "coco_2014_minival": ("coco/val2014", "coco/annotations/instances_minival2014.json"),
+    "coco_2014_minival_100": ("coco/val2014", "coco/annotations/instances_minival2014_100.json"),
     "coco_2014_valminusminival": (
         "coco/val2014",
         "coco/annotations/instances_valminusminival2014.json",
@@ -48,23 +42,16 @@ _PREDEFINED_SPLITS_COCO["coco"] = {
     "coco_2017_train": ("coco/train2017", "coco/annotations/instances_train2017.json"),
     "coco_2017_val": ("coco/val2017", "coco/annotations/instances_val2017.json"),
     "coco_2017_test": ("coco/test2017", "coco/annotations/image_info_test2017.json"),
-    "coco_2017_test-dev": (
-        "coco/test2017",
-        "coco/annotations/image_info_test-dev2017.json",
-    ),
-    "coco_2017_val_100": (
-        "coco/val2017",
-        "coco/annotations/instances_val2017_100.json",
-    ),
-    # ocr datasets register
-    "totaltext": ("totaltext/train_images", "totaltext/train.json"),
-    "ctw1500": ("ctw1500/train_images", "ctw1500/train.json"),
-    "icdar2013": ("icdar2013/train_images", "icdar2013/train.json"),
-    "icdar2015XX": ("icdar2015/train_images", "icdar2015/train.json"),
-    "icdar2015": (
-        "/home/gbugaj/devio/TextFuseNet/data/sample001/images/coco-text",
-        "/home/gbugaj/devio/TextFuseNet/data/sample001/annotations/instances_default.json",
-    ),
+    "coco_2017_test-dev": ("coco/test2017", "coco/annotations/image_info_test-dev2017.json"),
+    "coco_2017_val_100": ("coco/val2017", "coco/annotations/instances_val2017_100.json"),
+
+    # ocr datasets register    
+    "totaltext":("totaltext/train_images", "totaltext/train.json"),
+    "ctw1500":("ctw1500/train_images", "ctw1500/train.json"),
+    "icdar2013":("icdar2013/train_images", "icdar2013/train.json"),
+    "icdar2015XX":("icdar2015/train_images", "icdar2015/train.json"),
+    "icdar2015":("/home/gbugaj/devio/TextFuseNet/data/sample001/images/coco-text", "/home/gbugaj/devio/TextFuseNet/data/sample001/annotations/instances_default.json"),
+
     # "icdar2015":("/home/gbugaj/devio/TextFuseNet/data/ch4_training_images", "/home/gbugaj/devio/TextFuseNet/data/train_gt.json"),
 }
 
@@ -73,10 +60,7 @@ _PREDEFINED_SPLITS_COCO["coco_person"] = {
         "coco/train2014",
         "coco/annotations/person_keypoints_train2014.json",
     ),
-    "keypoints_coco_2014_val": (
-        "coco/val2014",
-        "coco/annotations/person_keypoints_val2014.json",
-    ),
+    "keypoints_coco_2014_val": ("coco/val2014", "coco/annotations/person_keypoints_val2014.json"),
     "keypoints_coco_2014_minival": (
         "coco/val2014",
         "coco/annotations/person_keypoints_minival2014.json",
@@ -93,10 +77,7 @@ _PREDEFINED_SPLITS_COCO["coco_person"] = {
         "coco/train2017",
         "coco/annotations/person_keypoints_train2017.json",
     ),
-    "keypoints_coco_2017_val": (
-        "coco/val2017",
-        "coco/annotations/person_keypoints_val2017.json",
-    ),
+    "keypoints_coco_2017_val": ("coco/val2017", "coco/annotations/person_keypoints_val2017.json"),
     "keypoints_coco_2017_val_100": (
         "coco/val2017",
         "coco/annotations/person_keypoints_val2017_100.json",
@@ -187,18 +168,9 @@ def register_all_lvis(root="datasets"):
 
 
 _RAW_CITYSCAPES_SPLITS = {
-    "cityscapes_fine_{task}_train": (
-        "cityscapes/leftImg8bit/train",
-        "cityscapes/gtFine/train",
-    ),
-    "cityscapes_fine_{task}_val": (
-        "cityscapes/leftImg8bit/val",
-        "cityscapes/gtFine/val",
-    ),
-    "cityscapes_fine_{task}_test": (
-        "cityscapes/leftImg8bit/test",
-        "cityscapes/gtFine/test",
-    ),
+    "cityscapes_fine_{task}_train": ("cityscapes/leftImg8bit/train", "cityscapes/gtFine/train"),
+    "cityscapes_fine_{task}_val": ("cityscapes/leftImg8bit/val", "cityscapes/gtFine/val"),
+    "cityscapes_fine_{task}_test": ("cityscapes/leftImg8bit/test", "cityscapes/gtFine/test"),
 }
 
 

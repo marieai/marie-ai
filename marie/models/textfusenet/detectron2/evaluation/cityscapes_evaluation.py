@@ -4,11 +4,11 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
-
 import torch
+from PIL import Image
+
 from detectron2.data import MetadataCatalog
 from detectron2.utils import comm
-from PIL import Image
 
 from .evaluator import DatasetEvaluator
 
@@ -42,9 +42,7 @@ class CityscapesEvaluator(DatasetEvaluator):
         if self._temp_dir != self._working_dir.name:
             self._working_dir.cleanup()
         self._logger.info(
-            "Writing cityscapes results to temporary directory {} ...".format(
-                self._temp_dir
-            )
+            "Writing cityscapes results to temporary directory {} ...".format(self._temp_dir)
         )
 
     def process(self, inputs, outputs):
@@ -69,11 +67,7 @@ class CityscapesEvaluator(DatasetEvaluator):
                     )
 
                     Image.fromarray(mask * 255).save(png_filename)
-                    fout.write(
-                        "{} {} {}\n".format(
-                            os.path.basename(png_filename), class_id, score
-                        )
-                    )
+                    fout.write("{} {} {}\n".format(os.path.basename(png_filename), class_id, score))
 
     def evaluate(self):
         """
@@ -97,9 +91,7 @@ class CityscapesEvaluator(DatasetEvaluator):
         cityscapes_eval.args.predictionWalk = None
         cityscapes_eval.args.JSONOutput = False
         cityscapes_eval.args.colorized = False
-        cityscapes_eval.args.gtInstancesFile = os.path.join(
-            self._temp_dir, "gtInstances.json"
-        )
+        cityscapes_eval.args.gtInstancesFile = os.path.join(self._temp_dir, "gtInstances.json")
 
         # These lines are adopted from
         # https://github.com/mcordts/cityscapesScripts/blob/master/cityscapesscripts/evaluation/evalInstanceLevelSemanticLabeling.py # noqa
@@ -111,9 +103,7 @@ class CityscapesEvaluator(DatasetEvaluator):
         )
         predictionImgList = []
         for gt in groundTruthImgList:
-            predictionImgList.append(
-                cityscapes_eval.getPrediction(gt, cityscapes_eval.args)
-            )
+            predictionImgList.append(cityscapes_eval.getPrediction(gt, cityscapes_eval.args))
         results = cityscapes_eval.evaluateImgLists(
             predictionImgList, groundTruthImgList, cityscapes_eval.args
         )["averages"]

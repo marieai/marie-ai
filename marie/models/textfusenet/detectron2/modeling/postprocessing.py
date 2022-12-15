@@ -1,7 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+from torch.nn import functional as F
+
 from detectron2.layers import paste_masks_in_image
 from detectron2.structures import Instances
-from torch.nn import functional as F
 
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
@@ -23,10 +24,7 @@ def detector_postprocess(results, output_height, output_width, mask_threshold=0.
     Returns:
         Instances: the resized output from the model, based on the output resolution
     """
-    scale_x, scale_y = (
-        output_width / results.image_size[1],
-        output_height / results.image_size[0],
-    )
+    scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
     results = Instances((output_height, output_width), **results.get_fields())
 
     if results.has("pred_boxes"):

@@ -2,12 +2,12 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import logging
+import numpy as np
 import time
 import weakref
+import torch
 
 import detectron2.utils.comm as comm
-import numpy as np
-import torch
 from detectron2.utils.events import EventStorage
 
 __all__ = ["HookBase", "TrainerBase", "SimpleTrainer"]
@@ -261,8 +261,7 @@ class SimpleTrainer(TrainerBase):
 
             # average the rest metrics
             metrics_dict = {
-                k: np.mean([x[k] for x in all_metrics_dict])
-                for k in all_metrics_dict[0].keys()
+                k: np.mean([x[k] for x in all_metrics_dict]) for k in all_metrics_dict[0].keys()
             }
             total_losses_reduced = sum(loss for loss in metrics_dict.values())
 

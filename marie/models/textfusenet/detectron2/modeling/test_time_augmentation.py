@@ -1,14 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import copy
+import numpy as np
 from contextlib import contextmanager
 from itertools import count
-
-import numpy as np
 import torch
+from torch import nn
+
 from detectron2.data.detection_utils import read_image
 from detectron2.data.transforms import ResizeShortestEdge
 from detectron2.structures import Instances
-from torch import nn
 
 from .meta_arch import GeneralizedRCNN
 from .postprocessing import detector_postprocess
@@ -85,9 +85,7 @@ class GeneralizedRCNNWithTTA(nn.Module):
         super().__init__()
         assert isinstance(
             model, GeneralizedRCNN
-        ), "TTA is only supported on GeneralizedRCNN. Got a model of type {}".format(
-            type(model)
-        )
+        ), "TTA is only supported on GeneralizedRCNN. Got a model of type {}".format(type(model))
         self.cfg = cfg.clone()
         assert not self.cfg.MODEL.KEYPOINT_ON, "TTA for keypoint is not supported yet"
         assert (
@@ -123,9 +121,7 @@ class GeneralizedRCNNWithTTA(nn.Module):
             yield
             setattr(roi_heads, attr, old)
 
-    def _batch_inference(
-        self, batched_inputs, detected_instances=None, do_postprocess=True
-    ):
+    def _batch_inference(self, batched_inputs, detected_instances=None, do_postprocess=True):
         """
         Execute inference on a list of inputs,
         using batch size = self.batch_size, instead of the length of the list.
@@ -226,9 +222,7 @@ class GeneralizedRCNNWithTTA(nn.Module):
             pred_boxes.tensor[:, 0::2] *= scale_x
             pred_boxes.tensor[:, 1::2] *= scale_y
             if do_hflip[idx]:
-                pred_boxes.tensor[:, [0, 2]] = (
-                    actual_width - pred_boxes.tensor[:, [2, 0]]
-                )
+                pred_boxes.tensor[:, [0, 2]] = actual_width - pred_boxes.tensor[:, [2, 0]]
 
             aug_instances = Instances(
                 image_size=(actual_height, actual_width),
@@ -238,9 +232,7 @@ class GeneralizedRCNNWithTTA(nn.Module):
             )
             augmented_instances.append(aug_instances)
         # 2.2: run forward on the detected boxes
-        outputs = self._batch_inference(
-            augmented_inputs, augmented_instances, do_postprocess=False
-        )
+        outputs = self._batch_inference(augmented_inputs, augmented_instances, do_postprocess=False)
         for idx, output in enumerate(outputs):
             if do_hflip[idx]:
                 output.pred_masks = output.pred_masks.flip(dims=[3])

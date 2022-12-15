@@ -1,11 +1,12 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import fvcore.nn.weight_init as weight_init
 import torch
+from torch import nn
+from torch.nn import functional as F
+
 from detectron2.layers import Conv2d, ConvTranspose2d, ShapeSpec, cat, get_norm
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
-from torch import nn
-from torch.nn import functional as F
 
 ROI_MASK_HEAD_REGISTRY = Registry("ROI_MASK_HEAD")
 ROI_MASK_HEAD_REGISTRY.__doc__ = """
@@ -36,9 +37,7 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     cls_agnostic_mask = pred_mask_logits.size(1) == 1
     total_num_masks = pred_mask_logits.size(0)
     mask_side_len = pred_mask_logits.size(2)
-    assert pred_mask_logits.size(2) == pred_mask_logits.size(
-        3
-    ), "Mask prediction must be square!"
+    assert pred_mask_logits.size(2) == pred_mask_logits.size(3), "Mask prediction must be square!"
 
     gt_classes = []
     gt_masks = []
@@ -80,9 +79,7 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     false_positive = (mask_incorrect & ~gt_masks_bool).sum().item() / max(
         gt_masks_bool.numel() - num_positive, 1.0
     )
-    false_negative = (mask_incorrect & gt_masks_bool).sum().item() / max(
-        num_positive, 1.0
-    )
+    false_negative = (mask_incorrect & gt_masks_bool).sum().item() / max(num_positive, 1.0)
 
     storage = get_event_storage()
     storage.put_scalar("mask_rcnn/accuracy", mask_accuracy)
@@ -185,9 +182,7 @@ class MaskRCNNConvUpsampleHead(nn.Module):
         )
 
         num_mask_classes = 1 if cls_agnostic_mask else num_classes
-        self.predictor = Conv2d(
-            conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0
-        )
+        self.predictor = Conv2d(conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0)
 
         for layer in self.conv_norm_relus + [self.deconv]:
             weight_init.c2_msra_fill(layer)

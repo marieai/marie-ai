@@ -9,7 +9,6 @@ is implemented
 """
 
 import math
-
 import torch
 from torch.nn.modules.utils import _ntuple
 
@@ -67,11 +66,7 @@ class Conv2d(torch.nn.Conv2d):
             output_shape = [
                 (i + 2 * p - (di * (k - 1) + 1)) // s + 1
                 for i, p, di, k, s in zip(
-                    x.shape[-2:],
-                    self.padding,
-                    self.dilation,
-                    self.kernel_size,
-                    self.stride,
+                    x.shape[-2:], self.padding, self.dilation, self.kernel_size, self.stride
                 )
             ]
             output_shape = [x.shape[0], self.weight.shape[0]] + output_shape
@@ -138,9 +133,7 @@ class BatchNorm2d(torch.nn.BatchNorm2d):
         return _NewEmptyTensorOp.apply(x, output_shape)
 
 
-def interpolate(
-    input, size=None, scale_factor=None, mode="nearest", align_corners=None
-):
+def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
     """
     A wrapper around :func:`torch.nn.functional.interpolate` to support zero-size tensor.
     """
@@ -160,9 +153,8 @@ def interpolate(
             and len(scale_factor) != dim
         ):
             raise ValueError(
-                "scale_factor shape must match input shape. Input is {}D, scale_factor size is {}".format(
-                    dim, len(scale_factor)
-                )
+                "scale_factor shape must match input shape. "
+                "Input is {}D, scale_factor size is {}".format(dim, len(scale_factor))
             )
 
     def _output_size(dim):
@@ -171,9 +163,7 @@ def interpolate(
             return size
         scale_factors = _ntuple(dim)(scale_factor)
         # math.floor might return float in py2.7
-        return [
-            int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)
-        ]
+        return [int(math.floor(input.size(i + 2) * scale_factors[i])) for i in range(dim)]
 
     output_shape = tuple(_output_size(2))
     output_shape = input.shape[:-2] + output_shape

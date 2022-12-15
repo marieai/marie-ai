@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from typing import Any, Dict, List
-
 import torch
+
 from detectron2.config import CfgNode
 
 from .lr_scheduler import WarmupCosineLR, WarmupMultiStepLR

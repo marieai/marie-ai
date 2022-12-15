@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import itertools
 import logging
-
 import torch
+
 from detectron2.layers import batched_nms_rotated, cat
 from detectron2.structures import Instances, RotatedBoxes, pairwise_iou_rotated
 
@@ -103,9 +103,7 @@ def find_top_rrpn_proposals(
 
         topk_proposals.append(topk_proposals_i)
         topk_scores.append(topk_scores_i)
-        level_ids.append(
-            torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device)
-        )
+        level_ids.append(torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device))
 
     # 2. Concat all levels together
     topk_scores = cat(topk_scores, dim=1)
@@ -123,11 +121,7 @@ def find_top_rrpn_proposals(
         keep = boxes.nonempty(threshold=min_box_side_len)
         lvl = level_ids
         if keep.sum().item() != len(boxes):
-            boxes, scores_per_img, lvl = (
-                boxes[keep],
-                scores_per_img[keep],
-                level_ids[keep],
-            )
+            boxes, scores_per_img, lvl = (boxes[keep], scores_per_img[keep], level_ids[keep])
 
         keep = batched_nms_rotated(boxes.tensor, scores_per_img, lvl, nms_thresh)
         # In Detectron1, there was different behavior during training vs. testing.
@@ -215,25 +209,19 @@ class RRPNOutputs(RPNOutputs):
         gt_anchor_deltas = []
         # Concatenate anchors from all feature maps into a single RotatedBoxes per image
         anchors = [RotatedBoxes.cat(anchors_i) for anchors_i in self.anchors]
-        for image_size_i, anchors_i, gt_boxes_i in zip(
-            self.image_sizes, anchors, self.gt_boxes
-        ):
+        for image_size_i, anchors_i, gt_boxes_i in zip(self.image_sizes, anchors, self.gt_boxes):
             """
             image_size_i: (h, w) for the i-th image
             anchors_i: anchors for i-th image
             gt_boxes_i: ground-truth boxes for i-th image
             """
             match_quality_matrix = pairwise_iou_rotated(gt_boxes_i, anchors_i)
-            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(
-                match_quality_matrix
-            )
+            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(match_quality_matrix)
 
             if self.boundary_threshold >= 0:
                 # Discard anchors that go out of the boundaries of the image
                 # NOTE: This is legacy functionality that is turned off by default in Detectron2
-                anchors_inside_image = anchors_i.inside_box(
-                    image_size_i, self.boundary_threshold
-                )
+                anchors_inside_image = anchors_i.inside_box(image_size_i, self.boundary_threshold)
                 gt_objectness_logits_i[~anchors_inside_image] = -1
 
             if len(gt_boxes_i) == 0:

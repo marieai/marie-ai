@@ -1,9 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import pickle
-
-import detectron2.utils.comm as comm
 from fvcore.common.checkpoint import Checkpointer
 from fvcore.common.file_io import PathManager
+
+import detectron2.utils.comm as comm
 
 from .c2_model_loading import align_and_update_state_dicts
 
@@ -37,11 +37,7 @@ class DetectionCheckpointer(Checkpointer):
                     # Detection models have "blobs", but ImageNet models don't
                     data = data["blobs"]
                 data = {k: v for k, v in data.items() if not k.endswith("_momentum")}
-                return {
-                    "model": data,
-                    "__author__": "Caffe2",
-                    "matching_heuristics": True,
-                }
+                return {"model": data, "__author__": "Caffe2", "matching_heuristics": True}
 
         loaded = super()._load_file(filename)  # load native pth checkpoint
         if "model" not in loaded:

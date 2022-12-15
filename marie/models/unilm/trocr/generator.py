@@ -1,12 +1,13 @@
+import torch
 import math
+
 from typing import Dict, List, Optional
 
-import torch
 from fairseq.sequence_generator import SequenceGenerator
 from torch import Tensor
 
-
 class TextRecognitionGenerator(SequenceGenerator):
+
     def _generate(
         self,
         sample: Dict[str, Dict[str, Tensor]],
@@ -24,17 +25,16 @@ class TextRecognitionGenerator(SequenceGenerator):
         net_input = sample["net_input"]
         device = sample["net_input"]["imgs"].device
 
-        # compute the encoder output for each beam
-        # "encoder_out": [x],  # T x B x C
-        # "encoder_padding_mask": [encoder_padding_mask],  # B x T
-        # "encoder_embedding": [encoder_embedding],  # B x T x C
-        # "encoder_states": [],  # List[T x B x C]
-        # "src_tokens": [],
-        # "src_lengths": [],
+
+        # compute the encoder output for each beam        
+            # "encoder_out": [x],  # T x B x C
+            # "encoder_padding_mask": [encoder_padding_mask],  # B x T
+            # "encoder_embedding": [encoder_embedding],  # B x T x C
+            # "encoder_states": [],  # List[T x B x C]
+            # "src_tokens": [],
+            # "src_lengths": [],        
         encoder_outs = self.model.forward_encoder(net_input)  # T x B x C
-        src_lengths = (
-            encoder_outs[0]['encoder_padding_mask'][0].eq(0).long().sum(dim=1)
-        )  # B
+        src_lengths = encoder_outs[0]['encoder_padding_mask'][0].eq(0).long().sum(dim=1) # B
         src_tokens = encoder_outs[0]['encoder_padding_mask'][0]  # B x T
 
         # bsz: total number of sentences in beam
@@ -62,6 +62,7 @@ class TextRecognitionGenerator(SequenceGenerator):
         assert (
             self.min_len <= max_len
         ), "min_len cannot be larger than max_len, please adjust these!"
+
 
         # placeholder of indices for bsz * beam_size to hold tokens and accumulative scores
         new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
@@ -371,3 +372,4 @@ class TextRecognitionGenerator(SequenceGenerator):
                 List[Dict[str, Tensor]], finalized[sent]
             )
         return finalized
+

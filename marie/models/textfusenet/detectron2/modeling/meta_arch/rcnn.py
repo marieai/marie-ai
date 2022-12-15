@@ -1,10 +1,10 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
-
 import torch
+from torch import nn
+
 from detectron2.structures import ImageList
 from detectron2.utils.logger import log_first_n
-from torch import nn
 
 from ..backbone import build_backbone
 from ..postprocessing import detector_postprocess
@@ -29,19 +29,13 @@ class GeneralizedRCNN(nn.Module):
 
         self.device = torch.device(cfg.MODEL.DEVICE)
         self.backbone = build_backbone(cfg)
-        self.proposal_generator = build_proposal_generator(
-            cfg, self.backbone.output_shape()
-        )
+        self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
 
         assert len(cfg.MODEL.PIXEL_MEAN) == len(cfg.MODEL.PIXEL_STD)
         num_channels = len(cfg.MODEL.PIXEL_MEAN)
-        pixel_mean = (
-            torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(num_channels, 1, 1)
-        )
-        pixel_std = (
-            torch.Tensor(cfg.MODEL.PIXEL_STD).to(self.device).view(num_channels, 1, 1)
-        )
+        pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(num_channels, 1, 1)
+        pixel_std = torch.Tensor(cfg.MODEL.PIXEL_STD).to(self.device).view(num_channels, 1, 1)
         self.normalizer = lambda x: (x - pixel_mean) / pixel_std
         self.to(self.device)
 
@@ -76,9 +70,7 @@ class GeneralizedRCNN(nn.Module):
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         elif "targets" in batched_inputs[0]:
             log_first_n(
-                logging.WARN,
-                "'targets' in the model inputs is now renamed to 'instances'!",
-                n=10,
+                logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
             )
             gt_instances = [x["targets"].to(self.device) for x in batched_inputs]
         else:
@@ -87,9 +79,7 @@ class GeneralizedRCNN(nn.Module):
         features = self.backbone(images.tensor)
 
         if self.proposal_generator:
-            proposals, proposal_losses = self.proposal_generator(
-                images, features, gt_instances
-            )
+            proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
         else:
             assert "proposals" in batched_inputs[0]
             proposals = [x["proposals"].to(self.device) for x in batched_inputs]
@@ -134,9 +124,7 @@ class GeneralizedRCNN(nn.Module):
             results, _ = self.roi_heads(images, features, proposals, None)
         else:
             detected_instances = [x.to(self.device) for x in detected_instances]
-            results = self.roi_heads.forward_with_given_boxes(
-                features, detected_instances
-            )
+            results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
 
         if do_postprocess:
             processed_results = []
@@ -168,9 +156,7 @@ class ProposalNetwork(nn.Module):
         self.device = torch.device(cfg.MODEL.DEVICE)
 
         self.backbone = build_backbone(cfg)
-        self.proposal_generator = build_proposal_generator(
-            cfg, self.backbone.output_shape()
-        )
+        self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
 
         pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(-1, 1, 1)
         pixel_std = torch.Tensor(cfg.MODEL.PIXEL_STD).to(self.device).view(-1, 1, 1)
@@ -196,16 +182,12 @@ class ProposalNetwork(nn.Module):
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         elif "targets" in batched_inputs[0]:
             log_first_n(
-                logging.WARN,
-                "'targets' in the model inputs is now renamed to 'instances'!",
-                n=10,
+                logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
             )
             gt_instances = [x["targets"].to(self.device) for x in batched_inputs]
         else:
             gt_instances = None
-        proposals, proposal_losses = self.proposal_generator(
-            images, features, gt_instances
-        )
+        proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
         # In training, the proposals are not useful at all but we generate them anyway.
         # This makes RPN-only models about 5% slower.
         if self.training:

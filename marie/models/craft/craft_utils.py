@@ -6,10 +6,11 @@ MIT License
 import math
 import os
 
-import cv2
-
 # -*- coding: utf-8 -*-
 import numpy as np
+
+import cv2
+
 
 """ auxilary functions """
 # unwarp corodinates
@@ -39,10 +40,7 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
     if True:
         cv2.imwrite(os.path.join("/tmp/fragments/", "linkmap.png"), linkmap * 255)
         cv2.imwrite(os.path.join("/tmp/fragments/", "textmap.png"), textmap * 255)
-        cv2.imwrite(
-            os.path.join("/tmp/fragments/", "text_score_comb.png"),
-            text_score_comb * 255,
-        )
+        cv2.imwrite(os.path.join("/tmp/fragments/", "text_score_comb.png"), text_score_comb * 255)
 
     det = []
     mapper = []
@@ -77,11 +75,7 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
         segmap[sy:ey, sx:ex] = cv2.dilate(segmap[sy:ey, sx:ex], kernel)
 
         # make box
-        np_contours = (
-            np.roll(np.array(np.where(segmap != 0)), 1, axis=0)
-            .transpose()
-            .reshape(-1, 2)
-        )
+        np_contours = np.roll(np.array(np.where(segmap != 0)), 1, axis=0).transpose().reshape(-1, 2)
         rectangle = cv2.minAreaRect(np_contours)
         box = cv2.boxPoints(rectangle)
 
@@ -115,9 +109,7 @@ def getPoly_core(boxes, labels, mapper, linkmap):
     polys = []
     for k, box in enumerate(boxes):
         # size filter for small instance
-        w, h = int(np.linalg.norm(box[0] - box[1]) + 1), int(
-            np.linalg.norm(box[1] - box[2]) + 1
-        )
+        w, h = int(np.linalg.norm(box[0] - box[1]) + 1), int(np.linalg.norm(box[1] - box[2]) + 1)
         if w < 10 or h < 10:
             polys.append(None)
             continue
@@ -170,10 +162,7 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                 # average previous segment
                 if num_sec == 0:
                     break
-                cp_section[seg_num] = [
-                    cp_section[seg_num][0] / num_sec,
-                    cp_section[seg_num][1] / num_sec,
-                ]
+                cp_section[seg_num] = [cp_section[seg_num][0] / num_sec, cp_section[seg_num][1] / num_sec]
                 num_sec = 0
 
                 # reset variables
@@ -183,10 +172,7 @@ def getPoly_core(boxes, labels, mapper, linkmap):
             # accumulate center points
             cy = (sy + ey) * 0.5
             cur_h = ey - sy + 1
-            cp_section[seg_num] = [
-                cp_section[seg_num][0] + x,
-                cp_section[seg_num][1] + cy,
-            ]
+            cp_section[seg_num] = [cp_section[seg_num][0] + x, cp_section[seg_num][1] + cy]
             num_sec += 1
 
             if seg_num % 2 == 0:
@@ -223,46 +209,24 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
         # get edge points to cover character heatmaps
         isSppFound, isEppFound = False, False
-        grad_s = (pp[1][1] - pp[0][1]) / (pp[1][0] - pp[0][0]) + (
-            pp[2][1] - pp[1][1]
-        ) / (pp[2][0] - pp[1][0])
-        grad_e = (pp[-2][1] - pp[-1][1]) / (pp[-2][0] - pp[-1][0]) + (
-            pp[-3][1] - pp[-2][1]
-        ) / (pp[-3][0] - pp[-2][0])
+        grad_s = (pp[1][1] - pp[0][1]) / (pp[1][0] - pp[0][0]) + (pp[2][1] - pp[1][1]) / (pp[2][0] - pp[1][0])
+        grad_e = (pp[-2][1] - pp[-1][1]) / (pp[-2][0] - pp[-1][0]) + (pp[-3][1] - pp[-2][1]) / (pp[-3][0] - pp[-2][0])
         for r in np.arange(0.5, max_r, step_r):
             dx = 2 * half_char_h * r
             if not isSppFound:
                 line_img = np.zeros(word_label.shape, dtype=np.uint8)
                 dy = grad_s * dx
                 p = np.array(new_pp[0]) - np.array([dx, dy, dx, dy])
-                cv2.line(
-                    line_img,
-                    (int(p[0]), int(p[1])),
-                    (int(p[2]), int(p[3])),
-                    1,
-                    thickness=1,
-                )
-                if (
-                    np.sum(np.logical_and(word_label, line_img)) == 0
-                    or r + 2 * step_r >= max_r
-                ):
+                cv2.line(line_img, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), 1, thickness=1)
+                if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
                     spp = p
                     isSppFound = True
             if not isEppFound:
                 line_img = np.zeros(word_label.shape, dtype=np.uint8)
                 dy = grad_e * dx
                 p = np.array(new_pp[-1]) + np.array([dx, dy, dx, dy])
-                cv2.line(
-                    line_img,
-                    (int(p[0]), int(p[1])),
-                    (int(p[2]), int(p[3])),
-                    1,
-                    thickness=1,
-                )
-                if (
-                    np.sum(np.logical_and(word_label, line_img)) == 0
-                    or r + 2 * step_r >= max_r
-                ):
+                cv2.line(line_img, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), 1, thickness=1)
+                if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
                     epp = p
                     isEppFound = True
             if isSppFound and isEppFound:
@@ -291,9 +255,7 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
 
 def getDetBoxes(textmap, linkmap, text_threshold, link_threshold, low_text, poly=False):
-    boxes, labels, mapper = getDetBoxes_core(
-        textmap, linkmap, text_threshold, link_threshold, low_text
-    )
+    boxes, labels, mapper = getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
 
     if poly:
         polys = getPoly_core(boxes, labels, mapper, linkmap)

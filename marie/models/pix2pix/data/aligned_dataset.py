@@ -1,10 +1,8 @@
 import os
-
+from util.util import tensor2im
 from data.base_dataset import BaseDataset, get_params, get_transform
 from data.image_folder import make_dataset
 from PIL import Image
-from util.util import tensor2im
-
 
 class AlignedDataset(BaseDataset):
     """A dataset class for paired image dataset.
@@ -21,18 +19,10 @@ class AlignedDataset(BaseDataset):
         """
         BaseDataset.__init__(self, opt)
         self.dir_AB = os.path.join(opt.dataroot, opt.phase)  # get the image directory
-        self.AB_paths = sorted(
-            make_dataset(self.dir_AB, opt.max_dataset_size)
-        )  # get image paths
-        assert (
-            self.opt.load_size >= self.opt.crop_size
-        )  # crop_size should be smaller than the size of loaded image
-        self.input_nc = (
-            self.opt.output_nc if self.opt.direction == 'BtoA' else self.opt.input_nc
-        )
-        self.output_nc = (
-            self.opt.input_nc if self.opt.direction == 'BtoA' else self.opt.output_nc
-        )
+        self.AB_paths = sorted(make_dataset(self.dir_AB, opt.max_dataset_size))  # get image paths
+        assert(self.opt.load_size >= self.opt.crop_size)   # crop_size should be smaller than the size of loaded image
+        self.input_nc = self.opt.output_nc if self.opt.direction == 'BtoA' else self.opt.input_nc
+        self.output_nc = self.opt.input_nc if self.opt.direction == 'BtoA' else self.opt.output_nc
 
     def __getitem__(self, index):
         """Return a data point and its metadata information.
@@ -69,16 +59,12 @@ class AlignedDataset(BaseDataset):
 
         # apply the same transform to both A and B
         transform_params = get_params(self.opt, A.size)
-        A_transform = get_transform(
-            self.opt, transform_params, grayscale=(self.input_nc == 1), src=True
-        )
-        B_transform = get_transform(
-            self.opt, transform_params, grayscale=(self.output_nc == 1), src=False
-        )
+        A_transform = get_transform(self.opt, transform_params, grayscale=(self.input_nc == 1),src=True)
+        B_transform = get_transform(self.opt, transform_params, grayscale=(self.output_nc == 1),src=False)
 
         A = A_transform(A)
         B = B_transform(B)
-
+        
         # # So we need to reshape it to (H, W, C):
         # AA = A.permute(1,2,0)
         # npimg = AA.numpy()

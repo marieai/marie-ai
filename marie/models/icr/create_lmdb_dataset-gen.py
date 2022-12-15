@@ -3,10 +3,11 @@
 import glob
 import os
 
-import cv2
 import fire
-import lmdb
 import numpy as np
+
+import cv2
+import lmdb
 
 
 def checkImageIsValid(imageBin):
@@ -25,14 +26,12 @@ def writeCache(env, cache):
         for k, v in cache.items():
             txn.put(k, v)
 
-
 def imwrite(path, img):
     try:
         print(path)
         cv2.imwrite(path, img)
     except Exception as ident:
         print(ident)
-
 
 def createDataset(inputPath, gtFile, outputPath, checkValid=True):
     """
@@ -59,7 +58,7 @@ def createDataset(inputPath, gtFile, outputPath, checkValid=True):
         # imagePath = os.path.join(inputPath, imagePath)
         line = datalist[i]
         start = line.find(' ')
-        imagePath = line[:start]
+        imagePath = line[: start] 
         label = line[start:].lstrip()
         label = label.replace('\n', '')
 
@@ -106,7 +105,7 @@ def createDataset(inputPath, gtFile, outputPath, checkValid=True):
             cache = {}
             print('Written %d / %d' % (cnt, nSamples))
         cnt += 1
-    nSamples = cnt - 1
+    nSamples = cnt-1
     cache['num-samples'.encode()] = str(nSamples).encode()
     writeCache(env, cache)
     print('Created dataset with %d samples' % nSamples)
@@ -117,12 +116,10 @@ def create_labels_file(inputPath, gtFile, outputPath):
     root = inputPath
     _labels = ''
     # labels_src = os.path.join(root, labels)
-    label_files = glob.glob(root + '/**/labels.txt', recursive=True)
+    label_files = glob.glob(root + '/**/labels.txt', recursive = True)
     print(label_files)
 
-    class BreakOutOfALoop(Exception):
-        pass
-
+    class BreakOutOfALoop(Exception): pass  
     _parent = inputPath.split("/")[-1]
 
     # os.path.join(inputPath, 'labels-aggro.txt')
@@ -137,21 +134,20 @@ def create_labels_file(inputPath, gtFile, outputPath):
                         if line == '\n|\r':
                             continue
                         start = line.find(' ')
-                        fname = line[:start]
+                        fname = line[:start] 
                         value = line[start:].lstrip()
                         # value = value.replace('\n', '')
                         # print('Name = {} : {}'.format(fname, value))
                         if _parent == pid:
                             img_in = "{}".format(fname)
                         else:
-                            img_in = os.path.join(pid, "{}".format(fname))
-                        idx = idx + 1
+                            img_in = os.path.join(pid, "{}".format(fname))                              
+                        idx=idx+1
                         f_aggro.write(img_in)
                         f_aggro.write(' ')
                         f_aggro.write(value)
             except BreakOutOfALoop:
-                break
-
+                    break
 
 if __name__ == '__main__':
 

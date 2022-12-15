@@ -1,15 +1,14 @@
-import os
-
 import dominate
-from dominate.tags import a, br, h3, img, meta, p, table, td, tr
+from dominate.tags import meta, h3, table, tr, td, p, a, img, br
+import os
 
 
 class HTML:
     """This HTML class allows us to save images and write texts into a single HTML file.
 
-    It consists of functions such as <add_header> (add a text header to the HTML file),
-    <add_images> (add a row of images to the HTML file), and <save> (save the HTML to the disk).
-    It is based on Python library 'dominate', a Python library for creating and manipulating HTML documents using a DOM API.
+     It consists of functions such as <add_header> (add a text header to the HTML file),
+     <add_images> (add a row of images to the HTML file), and <save> (save the HTML to the disk).
+     It is based on Python library 'dominate', a Python library for creating and manipulating HTML documents using a DOM API.
     """
 
     def __init__(self, web_dir, title, refresh=0):
@@ -59,15 +58,10 @@ class HTML:
         with self.t:
             with tr():
                 for im, txt, link in zip(ims, txts, links):
-                    with td(
-                        style="word-wrap: break-word;", halign="center", valign="top"
-                    ):
+                    with td(style="word-wrap: break-word;", halign="center", valign="top"):
                         with p():
                             with a(href=os.path.join('images', link)):
-                                img(
-                                    style="width:%dpx" % width,
-                                    src=os.path.join('images', im),
-                                )
+                                img(style="width:%dpx" % width, src=os.path.join('images', im))
                             br()
                             p(txt)
 
