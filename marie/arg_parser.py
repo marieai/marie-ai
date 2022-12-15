@@ -20,9 +20,15 @@ class ArgParser(object):
         parser = argparse.ArgumentParser(prog="marie", description="MarieAI Server")
 
         sub_parse = parser.add_mutually_exclusive_group(required=False)
-        sub_parse.add_argument("-v", "--version", action="store_true", help="Return Version")
-        sub_parse.add_argument("--start", action="store_true", help="Start the model-server")
-        sub_parse.add_argument("--stop", action="store_true", help="Stop the model-server")
+        sub_parse.add_argument(
+            "-v", "--version", action="store_true", help="Return Version"
+        )
+        sub_parse.add_argument(
+            "--start", action="store_true", help="Start the model-server"
+        )
+        sub_parse.add_argument(
+            "--stop", action="store_true", help="Stop the model-server"
+        )
 
         parser.add_argument(
             "--model-store",
@@ -45,7 +51,9 @@ class ArgParser(object):
             help="Enable encryption",
         )
 
-        parser.add_argument("--tls-cert", required=False, dest="tls_cert", help="Certificate location")
+        parser.add_argument(
+            "--tls-cert", required=False, dest="tls_cert", help="Certificate location"
+        )
 
         parser.add_argument(
             "--config",

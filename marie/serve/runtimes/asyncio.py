@@ -34,7 +34,9 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, InstrumentationMixin, AB
     def __init__(
         self,
         args: 'argparse.Namespace',
-        cancel_event: Optional[Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']] = None,
+        cancel_event: Optional[
+            Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
+        ] = None,
         **kwargs,
     ):
         super().__init__(args, **kwargs)
@@ -176,8 +178,12 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, InstrumentationMixin, AB
         try:
             from grpc_health.v1 import health_pb2, health_pb2_grpc
 
-            response = GrpcConnectionPool.send_health_check_sync(ctrl_address, timeout=timeout)
-            return response.status == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+            response = GrpcConnectionPool.send_health_check_sync(
+                ctrl_address, timeout=timeout
+            )
+            return (
+                response.status == health_pb2.HealthCheckResponse.ServingStatus.SERVING
+            )
         except RpcError:
             return False
 
@@ -210,7 +216,9 @@ class AsyncNewLoopRuntime(BaseRuntime, MonitoringMixin, InstrumentationMixin, AB
         self._log_data_request(request)
 
     def _log_data_request(self, request: DataRequest):
-        self.logger.debug(f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}')
+        self.logger.debug(
+            f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
+        )
 
     @property
     def _entity_id(self):

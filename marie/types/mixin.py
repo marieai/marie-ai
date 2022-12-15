@@ -30,7 +30,9 @@ class ProtoTypeMixin:
         """
         from google.protobuf.json_format import MessageToJson
 
-        return MessageToJson(self.proto, preserving_proto_field_name=True, sort_keys=True)
+        return MessageToJson(
+            self.proto, preserving_proto_field_name=True, sort_keys=True
+        )
 
     def to_dict(self, **kwargs) -> Dict:
         """Return the object in Python dictionary.

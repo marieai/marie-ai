@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=18.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+# iSort
+[tool.isort]
+profile = "black"
+line_length = 127
+multi_line_output = 3
+include_trailing_comma = true
+virtual_env = "venv"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+preview = false
+skip-string-normalization = true
+
+exclude = '''
+/(
+      .eggs         # exclude a few common directories in the
+    | .git          # root of the project
+    | .hg
+    | .mypy_cache
+    | .tox
+    | venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+'''

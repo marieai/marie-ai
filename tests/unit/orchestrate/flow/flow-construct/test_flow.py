@@ -139,21 +139,38 @@ def test_dry_run_with_two_pathways_diverging_at_gateway():
 
 
 def test_dry_run_with_two_pathways_diverging_at_non_gateway():
-    f = Flow().add(name='r1').add(name='r2').add(name='r3', needs='r1').needs(['r2', 'r3'])
+    f = (
+        Flow()
+        .add(name='r1')
+        .add(name='r2')
+        .add(name='r3', needs='r1')
+        .needs(['r2', 'r3'])
+    )
 
     with f:
         _validate_flow(f)
 
 
 def test_refactor_num_part():
-    f = Flow().add(name='r1', needs='gateway').add(name='r2', needs='gateway').needs(['r1', 'r2'])
+    f = (
+        Flow()
+        .add(name='r1', needs='gateway')
+        .add(name='r2', needs='gateway')
+        .needs(['r1', 'r2'])
+    )
 
     with f:
         _validate_flow(f)
 
 
 def test_refactor_num_part_proxy():
-    f = Flow().add(name='r1').add(name='r2', needs='r1').add(name='r3', needs='r1').needs(['r2', 'r3'])
+    f = (
+        Flow()
+        .add(name='r1')
+        .add(name='r2', needs='r1')
+        .add(name='r3', needs='r1')
+        .needs(['r2', 'r3'])
+    )
 
     with f:
         _validate_flow(f)
@@ -414,7 +431,12 @@ def test_single_document_flow_index():
 
 
 def test_flow_equalities():
-    f1 = Flow().add(name='executor0').add(name='executor1', needs='gateway').needs_all(name='joiner')
+    f1 = (
+        Flow()
+        .add(name='executor0')
+        .add(name='executor1', needs='gateway')
+        .needs_all(name='joiner')
+    )
     f2 = (
         Flow()
         .add(name='executor0')
@@ -550,7 +572,9 @@ def _extract_route_entries(gateway_entry, routes):
 
 
 def test_flow_load_executor_yaml_extra_search_paths():
-    f = Flow(extra_search_paths=[os.path.join(cur_dir, 'executor')]).add(uses='config.yml')
+    f = Flow(extra_search_paths=[os.path.join(cur_dir, 'executor')]).add(
+        uses='config.yml'
+    )
     with f:
         da = f.post('/', inputs=Document())
     assert da[0].text == 'done'
@@ -575,7 +599,11 @@ def test_gateway_only_flows_no_error(capsys, protocol):
 @pytest.mark.slow
 def test_load_flow_with_custom_gateway(tmpdir):
     # flow params are overridden by gateway params here
-    f = Flow(protocol='grpc', port=12344).config_gateway(uses='HTTPGateway', protocol='http', port=12345).add(name='executor')
+    f = (
+        Flow(protocol='grpc', port=12344)
+        .config_gateway(uses='HTTPGateway', protocol='http', port=12345)
+        .add(name='executor')
+    )
 
     with f:
         _validate_flow(f)
@@ -608,7 +636,10 @@ def _validate_flow(f):
     addresses = f._get_deployments_addresses()
     for name, pod in f:
         if name != 'gateway':
-            assert addresses[name][0] == f'{pod.protocol}://{pod.host}:{pod.head_port if pod.head_port else pod.port}'
+            assert (
+                addresses[name][0]
+                == f'{pod.protocol}://{pod.host}:{pod.head_port if pod.head_port else pod.port}'
+            )
             for n in pod.needs:
                 assert name in graph_dict[n if n != 'gateway' else 'start-gateway']
         else:
@@ -633,9 +664,13 @@ def test_set_deployment_grpc_metadata():
         k8s_metadata = f._get_k8s_deployments_metadata()
         assert metadata == k8s_metadata
 
-        assert f._deployment_nodes['gateway'].args.deployments_metadata == json.dumps(metadata)
+        assert f._deployment_nodes['gateway'].args.deployments_metadata == json.dumps(
+            metadata
+        )
 
-        assert f._deployment_nodes['my_exec'].pod_args['pods'][0][0].grpc_metadata == {'key': 'value'}
+        assert f._deployment_nodes['my_exec'].pod_args['pods'][0][0].grpc_metadata == {
+            'key': 'value'
+        }
 
         f.post('/', inputs=Document())
 

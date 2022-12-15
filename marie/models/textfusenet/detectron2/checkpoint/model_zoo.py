@@ -28,10 +28,14 @@ class ModelCatalog(object):
         "FAIR/X-152-32x8d-IN5k": "ImageNetPretrained/25093814/X-152-32x8d-IN5k.pkl",
     }
 
-    C2_DETECTRON_PATH_FORMAT = "{prefix}/{url}/output/train/{dataset}/{type}/model_final.pkl"  # noqa B950
+    C2_DETECTRON_PATH_FORMAT = (
+        "{prefix}/{url}/output/train/{dataset}/{type}/model_final.pkl"  # noqa B950
+    )
 
     C2_DATASET_COCO = "coco_2014_train%3Acoco_2014_valminusminival"
-    C2_DATASET_COCO_KEYPOINTS = "keypoints_coco_2014_train%3Akeypoints_coco_2014_valminusminival"
+    C2_DATASET_COCO_KEYPOINTS = (
+        "keypoints_coco_2014_train%3Akeypoints_coco_2014_valminusminival"
+    )
 
     # format: {model_name} -> part of the url
     C2_DETECTRON_MODELS = {

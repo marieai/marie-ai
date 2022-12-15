@@ -86,7 +86,9 @@ def find_top_rrpn_proposals(
     topk_proposals = []
     level_ids = []  # #lvl Tensor, each of shape (topk,)
     batch_idx = torch.arange(num_images, device=device)
-    for level_id, proposals_i, logits_i in zip(itertools.count(), proposals, pred_objectness_logits):
+    for level_id, proposals_i, logits_i in zip(
+        itertools.count(), proposals, pred_objectness_logits
+    ):
         Hi_Wi_A = logits_i.shape[1]
         num_proposals_i = min(pre_nms_topk, Hi_Wi_A)
 
@@ -101,7 +103,9 @@ def find_top_rrpn_proposals(
 
         topk_proposals.append(topk_proposals_i)
         topk_scores.append(topk_scores_i)
-        level_ids.append(torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device))
+        level_ids.append(
+            torch.full((num_proposals_i,), level_id, dtype=torch.int64, device=device)
+        )
 
     # 2. Concat all levels together
     topk_scores = cat(topk_scores, dim=1)
@@ -211,19 +215,25 @@ class RRPNOutputs(RPNOutputs):
         gt_anchor_deltas = []
         # Concatenate anchors from all feature maps into a single RotatedBoxes per image
         anchors = [RotatedBoxes.cat(anchors_i) for anchors_i in self.anchors]
-        for image_size_i, anchors_i, gt_boxes_i in zip(self.image_sizes, anchors, self.gt_boxes):
+        for image_size_i, anchors_i, gt_boxes_i in zip(
+            self.image_sizes, anchors, self.gt_boxes
+        ):
             """
             image_size_i: (h, w) for the i-th image
             anchors_i: anchors for i-th image
             gt_boxes_i: ground-truth boxes for i-th image
             """
             match_quality_matrix = pairwise_iou_rotated(gt_boxes_i, anchors_i)
-            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(match_quality_matrix)
+            matched_idxs, gt_objectness_logits_i = self.anchor_matcher(
+                match_quality_matrix
+            )
 
             if self.boundary_threshold >= 0:
                 # Discard anchors that go out of the boundaries of the image
                 # NOTE: This is legacy functionality that is turned off by default in Detectron2
-                anchors_inside_image = anchors_i.inside_box(image_size_i, self.boundary_threshold)
+                anchors_inside_image = anchors_i.inside_box(
+                    image_size_i, self.boundary_threshold
+                )
                 gt_objectness_logits_i[~anchors_inside_image] = -1
 
             if len(gt_boxes_i) == 0:
@@ -232,7 +242,9 @@ class RRPNOutputs(RPNOutputs):
             else:
                 # TODO wasted computation for ignored boxes
                 matched_gt_boxes = gt_boxes_i[matched_idxs]
-                gt_anchor_deltas_i = self.box2box_transform.get_deltas(anchors_i.tensor, matched_gt_boxes.tensor)
+                gt_anchor_deltas_i = self.box2box_transform.get_deltas(
+                    anchors_i.tensor, matched_gt_boxes.tensor
+                )
 
             gt_objectness_logits.append(gt_objectness_logits_i)
             gt_anchor_deltas.append(gt_anchor_deltas_i)

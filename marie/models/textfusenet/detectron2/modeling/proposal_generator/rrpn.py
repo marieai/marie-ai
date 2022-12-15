@@ -25,7 +25,9 @@ class RRPN(RPN):
 
     def __init__(self, cfg, input_shape: Dict[str, ShapeSpec]):
         super().__init__(cfg, input_shape)
-        self.box2box_transform = Box2BoxTransformRotated(weights=cfg.MODEL.RPN.BBOX_REG_WEIGHTS)
+        self.box2box_transform = Box2BoxTransformRotated(
+            weights=cfg.MODEL.RPN.BBOX_REG_WEIGHTS
+        )
 
     def forward(self, images, features, gt_instances=None):
         """
@@ -42,7 +44,9 @@ class RRPN(RPN):
             proposals: list[Instances] or None
             loss: dict[Tensor]
         """
-        gt_boxes = [x.gt_boxes for x in gt_instances] if gt_instances is not None else None
+        gt_boxes = (
+            [x.gt_boxes for x in gt_instances] if gt_instances is not None else None
+        )
         del gt_instances
         features = [features[f] for f in self.in_features]
         pred_objectness_logits, pred_anchor_deltas = self.rpn_head(features)

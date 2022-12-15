@@ -29,8 +29,12 @@ class TPS_SpatialTransformerNetwork(nn.Module):
 
     def forward(self, batch_I):
         batch_C_prime = self.LocalizationNetwork(batch_I)  # batch_size x K x 2
-        build_P_prime = self.GridGenerator.build_P_prime(batch_C_prime)  # batch_size x n (= I_r_width x I_r_height) x 2
-        build_P_prime_reshape = build_P_prime.reshape([build_P_prime.size(0), self.I_r_size[0], self.I_r_size[1], 2])
+        build_P_prime = self.GridGenerator.build_P_prime(
+            batch_C_prime
+        )  # batch_size x n (= I_r_width x I_r_height) x 2
+        build_P_prime_reshape = build_P_prime.reshape(
+            [build_P_prime.size(0), self.I_r_size[0], self.I_r_size[1], 2]
+        )
 
         if torch.__version__ > "1.2.0":
             batch_I_r = F.grid_sample(
@@ -40,7 +44,9 @@ class TPS_SpatialTransformerNetwork(nn.Module):
                 align_corners=True,
             )
         else:
-            batch_I_r = F.grid_sample(batch_I, build_P_prime_reshape, padding_mode='border')
+            batch_I_r = F.grid_sample(
+                batch_I, build_P_prime_reshape, padding_mode='border'
+            )
 
         return batch_I_r
 
@@ -90,7 +96,9 @@ class LocalizationNetwork(nn.Module):
         ctrl_pts_top = np.stack([ctrl_pts_x, ctrl_pts_y_top], axis=1)
         ctrl_pts_bottom = np.stack([ctrl_pts_x, ctrl_pts_y_bottom], axis=1)
         initial_bias = np.concatenate([ctrl_pts_top, ctrl_pts_bottom], axis=0)
-        self.localization_fc2.bias.data = torch.from_numpy(initial_bias).float().view(-1)
+        self.localization_fc2.bias.data = (
+            torch.from_numpy(initial_bias).float().view(-1)
+        )
 
     def forward(self, batch_I):
         """
@@ -99,7 +107,9 @@ class LocalizationNetwork(nn.Module):
         """
         batch_size = batch_I.size(0)
         features = self.conv(batch_I).view(batch_size, -1)
-        batch_C_prime = self.localization_fc2(self.localization_fc1(features)).view(batch_size, self.F, 2)
+        batch_C_prime = self.localization_fc2(self.localization_fc1(features)).view(
+            batch_size, self.F, 2
+        )
         return batch_C_prime
 
 
@@ -115,8 +125,12 @@ class GridGenerator(nn.Module):
         self.C = self._build_C(self.F)  # F x 2
         self.P = self._build_P(self.I_r_width, self.I_r_height)
         ## for multi-gpu, you need register buffer
-        self.register_buffer("inv_delta_C", torch.tensor(self._build_inv_delta_C(self.F, self.C)).float())  # F+3 x F+3
-        self.register_buffer("P_hat", torch.tensor(self._build_P_hat(self.F, self.C, self.P)).float())  # n x F+3
+        self.register_buffer(
+            "inv_delta_C", torch.tensor(self._build_inv_delta_C(self.F, self.C)).float()
+        )  # F+3 x F+3
+        self.register_buffer(
+            "P_hat", torch.tensor(self._build_P_hat(self.F, self.C, self.P)).float()
+        )  # n x F+3
         ## for fine-tuning with different image width, you may use below instead of self.register_buffer
         # self.inv_delta_C = torch.tensor(self._build_inv_delta_C(self.F, self.C)).float().cuda()  # F+3 x F+3
         # self.P_hat = torch.tensor(self._build_P_hat(self.F, self.C, self.P)).float().cuda()  # n x F+3
@@ -154,14 +168,22 @@ class GridGenerator(nn.Module):
         return inv_delta_C  # F+3 x F+3
 
     def _build_P(self, I_r_width, I_r_height):
-        I_r_grid_x = (np.arange(-I_r_width, I_r_width, 2) + 1.0) / I_r_width  # self.I_r_width
-        I_r_grid_y = (np.arange(-I_r_height, I_r_height, 2) + 1.0) / I_r_height  # self.I_r_height
-        P = np.stack(np.meshgrid(I_r_grid_x, I_r_grid_y), axis=2)  # self.I_r_width x self.I_r_height x 2
+        I_r_grid_x = (
+            np.arange(-I_r_width, I_r_width, 2) + 1.0
+        ) / I_r_width  # self.I_r_width
+        I_r_grid_y = (
+            np.arange(-I_r_height, I_r_height, 2) + 1.0
+        ) / I_r_height  # self.I_r_height
+        P = np.stack(
+            np.meshgrid(I_r_grid_x, I_r_grid_y), axis=2
+        )  # self.I_r_width x self.I_r_height x 2
         return P.reshape([-1, 2])  # n (= self.I_r_width x self.I_r_height) x 2
 
     def _build_P_hat(self, F, C, P):
         n = P.shape[0]  # n (= self.I_r_width x self.I_r_height)
-        P_tile = np.tile(np.expand_dims(P, axis=1), (1, F, 1))  # n x 2 -> n x 1 x 2 -> n x F x 2
+        P_tile = np.tile(
+            np.expand_dims(P, axis=1), (1, F, 1)
+        )  # n x 2 -> n x 1 x 2 -> n x F x 2
         C_tile = np.expand_dims(C, axis=0)  # 1 x F x 2
         P_diff = P_tile - C_tile  # n x F x 2
         rbf_norm = np.linalg.norm(P_diff, ord=2, axis=2, keepdims=False)  # n x F
@@ -177,6 +199,8 @@ class GridGenerator(nn.Module):
         batch_C_prime_with_zeros = torch.cat(
             (batch_C_prime, torch.zeros(batch_size, 3, 2).float().to(device)), dim=1
         )  # batch_size x F+3 x 2
-        batch_T = torch.bmm(batch_inv_delta_C, batch_C_prime_with_zeros)  # batch_size x F+3 x 2
+        batch_T = torch.bmm(
+            batch_inv_delta_C, batch_C_prime_with_zeros
+        )  # batch_size x F+3 x 2
         batch_P_prime = torch.bmm(batch_P_hat, batch_T)  # batch_size x n x 2
         return batch_P_prime  # batch_size x n x 2

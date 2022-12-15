@@ -39,12 +39,18 @@ class UniLMMultiheadAttention(MultiheadAttention):
             qn_block_size=qn_block_size,
         )
 
-        self.k_proj = quant_noise(nn.Linear(self.kdim, embed_dim, bias=True), q_noise, qn_block_size)
-        self.k_proj.bias = nn.Parameter(torch.zeros_like(self.k_proj.bias, requires_grad=False))
+        self.k_proj = quant_noise(
+            nn.Linear(self.kdim, embed_dim, bias=True), q_noise, qn_block_size
+        )
+        self.k_proj.bias = nn.Parameter(
+            torch.zeros_like(self.k_proj.bias, requires_grad=False)
+        )
 
 
 class UniLMDecoderLayer(TransformerDecoderLayerBase):
-    def build_self_attention(self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False):
+    def build_self_attention(
+        self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False
+    ):
         return UniLMMultiheadAttention(
             embed_dim,
             cfg.decoder.attention_heads,
@@ -90,7 +96,11 @@ class UniLMDecoder(UniLMDecoderBase):
         )
 
     def build_output_projection(self, args, dictionary, embed_tokens):
-        super().build_output_projection(TransformerConfig.from_namespace(args), dictionary, embed_tokens)
+        super().build_output_projection(
+            TransformerConfig.from_namespace(args), dictionary, embed_tokens
+        )
 
     def build_decoder_layer(self, args, no_encoder_attn=False):
-        return super().build_decoder_layer(TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn)
+        return super().build_decoder_layer(
+            TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn
+        )

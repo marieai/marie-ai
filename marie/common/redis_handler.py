@@ -34,5 +34,7 @@ class RedisHandler(PathHandler):
     def _isfile(self, path: str, **kwargs: Any) -> bool:
         raise Exception("Operation not supported")
 
-    def _copy(self, src_path: str, dst_path: str, overwrite: bool = False, **kwargs: Any) -> bool:
+    def _copy(
+        self, src_path: str, dst_path: str, overwrite: bool = False, **kwargs: Any
+    ) -> bool:
         raise Exception("Operation not supported")

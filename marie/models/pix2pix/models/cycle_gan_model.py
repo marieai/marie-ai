@@ -95,7 +95,9 @@ class CycleGANModel(BaseModel):
             visual_names_A.append('idt_B')
             visual_names_B.append('idt_A')
 
-        self.visual_names = visual_names_A + visual_names_B  # combine visualizations for A and B
+        self.visual_names = (
+            visual_names_A + visual_names_B
+        )  # combine visualizations for A and B
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>.
         if self.isTrain:
             self.model_names = ['G_A', 'G_B', 'D_A', 'D_B']
@@ -151,12 +153,20 @@ class CycleGANModel(BaseModel):
             )
 
         if self.isTrain:
-            if opt.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
+            if (
+                opt.lambda_identity > 0.0
+            ):  # only works when input and output images have the same number of channels
                 assert opt.input_nc == opt.output_nc
-            self.fake_A_pool = ImagePool(opt.pool_size)  # create image buffer to store previously generated images
-            self.fake_B_pool = ImagePool(opt.pool_size)  # create image buffer to store previously generated images
+            self.fake_A_pool = ImagePool(
+                opt.pool_size
+            )  # create image buffer to store previously generated images
+            self.fake_B_pool = ImagePool(
+                opt.pool_size
+            )  # create image buffer to store previously generated images
             # define loss functions
-            self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # define GAN loss.
+            self.criterionGAN = networks.GANLoss(opt.gan_mode).to(
+                self.device
+            )  # define GAN loss.
             self.criterionCycle = torch.nn.L1Loss()
             self.criterionIdt = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
@@ -234,10 +244,14 @@ class CycleGANModel(BaseModel):
         if lambda_idt > 0:
             # G_A should be identity if real_B is fed: ||G_A(B) - B||
             self.idt_A = self.netG_A(self.real_B)
-            self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
+            self.loss_idt_A = (
+                self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
+            )
             # G_B should be identity if real_A is fed: ||G_B(A) - A||
             self.idt_B = self.netG_B(self.real_A)
-            self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
+            self.loss_idt_B = (
+                self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
+            )
         else:
             self.loss_idt_A = 0
             self.loss_idt_B = 0
@@ -251,7 +265,14 @@ class CycleGANModel(BaseModel):
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = (
+            self.loss_G_A
+            + self.loss_G_B
+            + self.loss_cycle_A
+            + self.loss_cycle_B
+            + self.loss_idt_A
+            + self.loss_idt_B
+        )
         self.loss_G.backward()
 
     def optimize_parameters(self):
@@ -259,7 +280,9 @@ class CycleGANModel(BaseModel):
         # forward
         self.forward()  # compute fake images and reconstruction images.
         # G_A and G_B
-        self.set_requires_grad([self.netD_A, self.netD_B], False)  # Ds require no gradients when optimizing Gs
+        self.set_requires_grad(
+            [self.netD_A, self.netD_B], False
+        )  # Ds require no gradients when optimizing Gs
         self.optimizer_G.zero_grad()  # set G_A and G_B's gradients to zero
         self.backward_G()  # calculate gradients for G_A and G_B
         self.optimizer_G.step()  # update G_A and G_B's weights

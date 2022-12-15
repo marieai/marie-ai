@@ -17,7 +17,13 @@ import marie.models.craft.craft_utils
 import marie.models.craft.file_utils
 import marie.models.craft.imgproc
 from marie import __model_path__
-from marie.boxes.box_processor import BoxProcessor, PSMode, copyStateDict, create_dirs, estimate_character_width
+from marie.boxes.box_processor import (
+    BoxProcessor,
+    PSMode,
+    copyStateDict,
+    create_dirs,
+    estimate_character_width,
+)
 from marie.lang import Object
 from marie.models import craft
 from marie.models.craft.craft import CRAFT
@@ -116,7 +122,9 @@ def get_prediction(
     t1 = time.time()
 
     # Post-processing
-    boxes, polys = craft.craft_utils.getDetBoxes(score_text, score_link, text_threshold, link_threshold, low_text, poly)
+    boxes, polys = craft.craft_utils.getDetBoxes(
+        score_text, score_link, text_threshold, link_threshold, low_text, poly
+    )
 
     # coordinate adjustment
     boxes = craft.craft_utils.adjustResultCoordinates(boxes, ratio_w, ratio_h)
@@ -152,18 +160,26 @@ def get_prediction(
         text_score_comb = link_score * 255
 
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        line_img = cv2.morphologyEx(text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1)
+        line_img = cv2.morphologyEx(
+            text_score_comb, cv2.MORPH_CLOSE, kernel, iterations=1
+        )
 
         if True:
             cv2.imwrite("/tmp/fragments/lines-morph-craft.png", line_img)
-            cv2.imwrite(os.path.join("/tmp/fragments/", "h-linkmap-craft.png"), linkmap * 255)
-            cv2.imwrite(os.path.join("/tmp/fragments/", "h-textmap-craft.png"), textmap * 255)
+            cv2.imwrite(
+                os.path.join("/tmp/fragments/", "h-linkmap-craft.png"), linkmap * 255
+            )
+            cv2.imwrite(
+                os.path.join("/tmp/fragments/", "h-textmap-craft.png"), textmap * 255
+            )
             cv2.imwrite(
                 os.path.join("/tmp/fragments/", "h-text_score_comb-craft.png"),
                 text_score_comb * 255,
             )
 
-        nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(line_img.astype(np.uint8), connectivity=4)
+        nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            line_img.astype(np.uint8), connectivity=4
+        )
 
         h, w = line_img.shape
         overlay = np.ones((h, w, 3), dtype=np.uint8) * 255
@@ -255,7 +271,9 @@ class BoxProcessorCraft(BoxProcessor):
         if cuda:
             net.load_state_dict(copyStateDict(torch.load(args.trained_model)))
         else:
-            net.load_state_dict(copyStateDict(torch.load(args.trained_model, map_location="cpu")))
+            net.load_state_dict(
+                copyStateDict(torch.load(args.trained_model, map_location="cpu"))
+            )
 
         if cuda:
             net = net.cuda()
@@ -271,13 +289,21 @@ class BoxProcessorCraft(BoxProcessor):
             from craft.refinenet import RefineNet
 
             refine_net = RefineNet()
-            print("Loading weights of refiner from checkpoint (" + args.refiner_model + ")")
+            print(
+                "Loading weights of refiner from checkpoint ("
+                + args.refiner_model
+                + ")"
+            )
             if cuda:
-                refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model)))
+                refine_net.load_state_dict(
+                    copyStateDict(torch.load(args.refiner_model))
+                )
                 refine_net = refine_net.cuda()
                 refine_net = torch.nn.DataParallel(refine_net)
             else:
-                refine_net.load_state_dict(copyStateDict(torch.load(args.refiner_model, map_location="cpu")))
+                refine_net.load_state_dict(
+                    copyStateDict(torch.load(args.refiner_model, map_location="cpu"))
+                )
 
             refine_net.eval()
             args.poly = True
@@ -406,7 +432,9 @@ class BoxProcessorCraft(BoxProcessor):
         if img is None:
             raise Exception("Input image can't be empty")
         try:
-            crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(self.work_dir, _id, key)
+            crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
+                self.work_dir, _id, key
+            )
             image = copy.deepcopy(img)
             w = image.shape[1]  # 1280
             lines_bboxes = []
@@ -454,7 +482,9 @@ class BoxProcessorCraft(BoxProcessor):
 
             # deepcopy image so that original is not altered
             image = copy.deepcopy(image)
-            pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0))
+            pil_image = Image.new(
+                "RGB", (image.shape[1], image.shape[0]), color=(255, 255, 255, 0)
+            )
 
             rect_from_poly = []
             rect_line_numbers = []

@@ -39,7 +39,9 @@ async def request_generator(
     try:
         if data is None:
             # this allows empty inputs, i.e. a data request with only parameters
-            yield _new_data_request(endpoint=exec_endpoint, target=target_executor, parameters=parameters)
+            yield _new_data_request(
+                endpoint=exec_endpoint, target=target_executor, parameters=parameters
+            )
         else:
             with ImportExtensions(required=True):
                 import aiostream

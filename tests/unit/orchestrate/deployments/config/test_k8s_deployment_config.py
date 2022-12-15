@@ -11,7 +11,9 @@ from jina.parsers import set_deployment_parser, set_gateway_parser
 from jina.serve.networking import GrpcConnectionPool
 
 
-def namespace_equal(n1: Union[Namespace, Dict], n2: Union[Namespace, Dict], skip_attr: Tuple = ()) -> bool:
+def namespace_equal(
+    n1: Union[Namespace, Dict], n2: Union[Namespace, Dict], skip_attr: Tuple = ()
+) -> bool:
     """
     Checks that two `Namespace` object have equal public attributes.
     It skips attributes that start with a underscore and additional `skip_attr`.
@@ -70,29 +72,63 @@ def test_parse_args(
                 'port_monitoring',
             ),
         )
-        assert deployment_config.deployment_args['head_deployment'].k8s_namespace == 'default-namespace'
-        assert deployment_config.deployment_args['head_deployment'].name == 'executor/head'
-        assert deployment_config.deployment_args['head_deployment'].runtime_cls == 'HeadRuntime'
+        assert (
+            deployment_config.deployment_args['head_deployment'].k8s_namespace
+            == 'default-namespace'
+        )
+        assert (
+            deployment_config.deployment_args['head_deployment'].name == 'executor/head'
+        )
+        assert (
+            deployment_config.deployment_args['head_deployment'].runtime_cls
+            == 'HeadRuntime'
+        )
         assert deployment_config.deployment_args['head_deployment'].uses is None
-        assert deployment_config.deployment_args['head_deployment'].uses_before == uses_before
-        assert deployment_config.deployment_args['head_deployment'].uses_after == uses_after
+        assert (
+            deployment_config.deployment_args['head_deployment'].uses_before
+            == uses_before
+        )
+        assert (
+            deployment_config.deployment_args['head_deployment'].uses_after
+            == uses_after
+        )
         assert deployment_config.deployment_args['head_deployment'].uses_metas is None
         assert deployment_config.deployment_args['head_deployment'].uses_with is None
         if uses_before is None:
-            assert deployment_config.deployment_args['head_deployment'].uses_before_address is None
+            assert (
+                deployment_config.deployment_args['head_deployment'].uses_before_address
+                is None
+            )
         else:
-            assert deployment_config.deployment_args['head_deployment'].uses_before_address == '127.0.0.1:8081'
+            assert (
+                deployment_config.deployment_args['head_deployment'].uses_before_address
+                == '127.0.0.1:8081'
+            )
         if uses_after is None:
-            assert deployment_config.deployment_args['head_deployment'].uses_after_address is None
+            assert (
+                deployment_config.deployment_args['head_deployment'].uses_after_address
+                is None
+            )
         else:
-            assert deployment_config.deployment_args['head_deployment'].uses_after_address == '127.0.0.1:8082'
-        candidate_connection_list = {str(i): f'executor-{i}.default-namespace.svc:8080' for i in range(shards)}
-        assert deployment_config.deployment_args['head_deployment'].connection_list == json.dumps(candidate_connection_list)
+            assert (
+                deployment_config.deployment_args['head_deployment'].uses_after_address
+                == '127.0.0.1:8082'
+            )
+        candidate_connection_list = {
+            str(i): f'executor-{i}.default-namespace.svc:8080' for i in range(shards)
+        }
+        assert deployment_config.deployment_args[
+            'head_deployment'
+        ].connection_list == json.dumps(candidate_connection_list)
 
     for i, depl_arg in enumerate(deployment_config.deployment_args['deployments']):
         import copy
 
-        assert depl_arg.name == f'executor-{i}' if len(deployment_config.deployment_args['deployments']) > 1 else 'executor'
+        assert (
+            depl_arg.name == f'executor-{i}'
+            if len(deployment_config.deployment_args['deployments']) > 1
+            else 'executor'
+        )
         assert depl_arg.port_monitoring == GrpcConnectionPool.K8S_PORT_MONITORING
         cargs = copy.deepcopy(args)
         cargs.shard_id = i
@@ -131,10 +167,19 @@ def test_parse_args_custom_executor(shards: int):
     deployment_config = K8sDeploymentConfig(args, 'default-namespace')
 
     if shards > 1:
-        assert deployment_config.deployment_args['head_deployment'].runtime_cls == 'HeadRuntime'
-        assert deployment_config.deployment_args['head_deployment'].uses_before == uses_before
+        assert (
+            deployment_config.deployment_args['head_deployment'].runtime_cls
+            == 'HeadRuntime'
+        )
+        assert (
+            deployment_config.deployment_args['head_deployment'].uses_before
+            == uses_before
+        )
         assert deployment_config.deployment_args['head_deployment'].uses is None
-        assert deployment_config.deployment_args['head_deployment'].uses_after == uses_after
+        assert (
+            deployment_config.deployment_args['head_deployment'].uses_after
+            == uses_after
+        )
         assert (
             deployment_config.deployment_args['head_deployment'].uses_before_address
             == f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_BEFORE}'
@@ -147,7 +192,11 @@ def test_parse_args_custom_executor(shards: int):
     for i, depl_arg in enumerate(deployment_config.deployment_args['deployments']):
         import copy
 
-        assert depl_arg.name == f'executor-{i}' if len(deployment_config.deployment_args['deployments']) > 1 else 'executor'
+        assert (
+            depl_arg.name == f'executor-{i}'
+            if len(deployment_config.deployment_args['deployments']) > 1
+            else 'executor'
+        )
         cargs = copy.deepcopy(args)
         cargs.shard_id = i
         assert namespace_equal(
@@ -183,7 +232,9 @@ def test_parse_args_custom_executor(shards: int):
 )
 @pytest.mark.parametrize('gpus', ['0', '1'])
 def test_deployments(name: str, shards: str, gpus):
-    args = set_deployment_parser().parse_args(['--name', name, '--shards', shards, '--gpus', gpus])
+    args = set_deployment_parser().parse_args(
+        ['--name', name, '--shards', shards, '--gpus', gpus]
+    )
     deployment_config = K8sDeploymentConfig(args, 'ns')
 
     if name != 'gateway' and int(shards) > int(1):
@@ -203,7 +254,9 @@ def test_deployments(name: str, shards: str, gpus):
         assert deploy.shard_id == i
 
 
-def assert_config_map_config(config_map: Dict, base_name: str, expected_config_map_data: Dict):
+def assert_config_map_config(
+    config_map: Dict, base_name: str, expected_config_map_data: Dict
+):
     assert config_map['kind'] == 'ConfigMap'
     assert config_map['metadata'] == {
         'name': f'{base_name}-configmap',
@@ -219,9 +272,13 @@ def test_k8s_yaml_gateway(deployments_addresses, custom_gateway):
         os.environ['JINA_GATEWAY_IMAGE'] = custom_gateway
     elif 'JINA_GATEWAY_IMAGE' in os.environ:
         del os.environ['JINA_GATEWAY_IMAGE']
-    args = set_gateway_parser().parse_args(['--env', 'ENV_VAR:ENV_VALUE', '--port', '32465'])  # envs are
+    args = set_gateway_parser().parse_args(
+        ['--env', 'ENV_VAR:ENV_VALUE', '--port', '32465']
+    )  # envs are
     # ignored for gateway
-    deployment_config = K8sDeploymentConfig(args, 'default-namespace', deployments_addresses)
+    deployment_config = K8sDeploymentConfig(
+        args, 'default-namespace', deployments_addresses
+    )
     yaml_configs = deployment_config.to_kubernetes_yaml()
     assert len(yaml_configs) == 1
     name, configs = yaml_configs[0]
@@ -288,7 +345,9 @@ def test_k8s_yaml_gateway(deployments_addresses, custom_gateway):
     assert (
         container['image'] == custom_gateway
         if custom_gateway
-        else (f'jinaai/jina:{deployment_config.worker_deployments[0].version}-py38-standard')
+        else (
+            f'jinaai/jina:{deployment_config.worker_deployments[0].version}-py38-standard'
+        )
     )
     assert container['imagePullPolicy'] == 'IfNotPresent'
     assert container['command'] == ['jina']
@@ -301,7 +360,9 @@ def test_k8s_yaml_gateway(deployments_addresses, custom_gateway):
     assert '--env' not in args
     if deployments_addresses is not None:
         assert '--deployments-addresses' in args
-        assert args[args.index('--deployments-addresses') + 1] == json.dumps(deployments_addresses)
+        assert args[args.index('--deployments-addresses') + 1] == json.dumps(
+            deployments_addresses
+        )
 
 
 def assert_port_config(port_dict: Dict, name: str, port: int):
@@ -312,7 +373,9 @@ def assert_port_config(port_dict: Dict, name: str, port: int):
 
 
 @pytest.mark.parametrize('shards', [3, 1])
-@pytest.mark.parametrize('uses', ['jinahub+docker://HubExecutor', 'docker://docker_image:latest'])
+@pytest.mark.parametrize(
+    'uses', ['jinahub+docker://HubExecutor', 'docker://docker_image:latest']
+)
 @pytest.mark.parametrize('uses_before', [None, 'jinahub+docker://HubBeforeExecutor'])
 @pytest.mark.parametrize('uses_after', [None, 'jinahub+docker://HubAfterExecutor'])
 @pytest.mark.parametrize('uses_with', ['{"paramkey": "paramvalue"}', None])
@@ -386,7 +449,9 @@ def test_k8s_yaml_regular_deployment(
     if shards > 1:
         head_name, head_configs = yaml_configs[0]
         assert head_name == 'executor-head'
-        assert len(head_configs) == 3  # 3 configs per yaml (configmap, service and deployment)
+        assert (
+            len(head_configs) == 3
+        )  # 3 configs per yaml (configmap, service and deployment)
         config_map = head_configs[0]
         assert_config_map_config(
             config_map,
@@ -424,7 +489,9 @@ def test_k8s_yaml_regular_deployment(
             'type': 'RollingUpdate',
             'rollingUpdate': {'maxSurge': 1, 'maxUnavailable': 0},
         }
-        assert head_spec_deployment['selector'] == {'matchLabels': {'app': 'executor-head'}}
+        assert head_spec_deployment['selector'] == {
+            'matchLabels': {'app': 'executor-head'}
+        }
         head_template = head_spec_deployment['template']
         assert head_template['metadata'] == {
             'labels': {
@@ -439,10 +506,15 @@ def test_k8s_yaml_regular_deployment(
 
         head_spec = head_template['spec']
         head_containers = head_spec['containers']
-        assert len(head_containers) == 1 + (1 if uses_before is not None else 0) + (1 if uses_after is not None else 0)
+        assert len(head_containers) == 1 + (1 if uses_before is not None else 0) + (
+            1 if uses_after is not None else 0
+        )
         head_runtime_container = head_containers[0]
         assert head_runtime_container['name'] == 'executor'
-        assert head_runtime_container['image'] == f'jinaai/jina:{deployment_config.head_deployment.version}-py38-standard'
+        assert (
+            head_runtime_container['image']
+            == f'jinaai/jina:{deployment_config.head_deployment.version}-py38-standard'
+        )
         assert head_runtime_container['imagePullPolicy'] == 'IfNotPresent'
         assert head_runtime_container['command'] == ['jina']
         head_runtime_container_args = head_runtime_container['args']
@@ -450,27 +522,58 @@ def test_k8s_yaml_regular_deployment(
         assert head_runtime_container_args[0] == 'executor'
         assert '--native' in head_runtime_container_args
         assert '--runtime-cls' in head_runtime_container_args
-        assert head_runtime_container_args[head_runtime_container_args.index('--runtime-cls') + 1] == 'HeadRuntime'
+        assert (
+            head_runtime_container_args[
+                head_runtime_container_args.index('--runtime-cls') + 1
+            ]
+            == 'HeadRuntime'
+        )
         assert '--name' in head_runtime_container_args
-        assert head_runtime_container_args[head_runtime_container_args.index('--name') + 1] == 'executor/head'
+        assert (
+            head_runtime_container_args[head_runtime_container_args.index('--name') + 1]
+            == 'executor/head'
+        )
         assert '--k8s-namespace' in head_runtime_container_args
-        assert head_runtime_container_args[head_runtime_container_args.index('--k8s-namespace') + 1] == 'default-namespace'
+        assert (
+            head_runtime_container_args[
+                head_runtime_container_args.index('--k8s-namespace') + 1
+            ]
+            == 'default-namespace'
+        )
         assert '--port' in head_runtime_container_args
-        assert head_runtime_container_args[head_runtime_container_args.index('--port') + 1] == '8080'
+        assert (
+            head_runtime_container_args[head_runtime_container_args.index('--port') + 1]
+            == '8080'
+        )
         assert '--env' not in head_runtime_container_args
         assert '--pod-role' in head_runtime_container_args
-        assert head_runtime_container_args[head_runtime_container_args.index('--pod-role') + 1] == 'HEAD'
+        assert (
+            head_runtime_container_args[
+                head_runtime_container_args.index('--pod-role') + 1
+            ]
+            == 'HEAD'
+        )
         assert '--connection-list' in head_runtime_container_args
-        connection_list_string = head_runtime_container_args[head_runtime_container_args.index('--connection-list') + 1]
+        connection_list_string = head_runtime_container_args[
+            head_runtime_container_args.index('--connection-list') + 1
+        ]
         assert connection_list_string == json.dumps(
-            {str(shard_id): f'executor-{shard_id}.default-namespace.svc:8080' for shard_id in range(shards)}
+            {
+                str(shard_id): f'executor-{shard_id}.default-namespace.svc:8080'
+                for shard_id in range(shards)
+            }
         )
 
         if polling == 'ANY':
             assert '--polling' not in head_runtime_container_args
         else:
             assert '--polling' in head_runtime_container_args
-            assert head_runtime_container_args[head_runtime_container_args.index('--polling') + 1] == 'ALL'
+            assert (
+                head_runtime_container_args[
+                    head_runtime_container_args.index('--polling') + 1
+                ]
+                == 'ALL'
+            )
 
         if uses_before is not None:
             uses_before_container = head_containers[1]
@@ -484,16 +587,25 @@ def test_k8s_yaml_regular_deployment(
             assert '--native' in uses_before_runtime_container_args
             assert '--name' in uses_before_runtime_container_args
             assert (
-                uses_before_runtime_container_args[uses_before_runtime_container_args.index('--name') + 1]
+                uses_before_runtime_container_args[
+                    uses_before_runtime_container_args.index('--name') + 1
+                ]
                 == 'executor/uses-before'
             )
             assert '--k8s-namespace' in uses_before_runtime_container_args
             assert (
-                uses_before_runtime_container_args[uses_before_runtime_container_args.index('--k8s-namespace') + 1]
+                uses_before_runtime_container_args[
+                    uses_before_runtime_container_args.index('--k8s-namespace') + 1
+                ]
                 == 'default-namespace'
             )
             assert '--port' in uses_before_runtime_container_args
-            assert uses_before_runtime_container_args[uses_before_runtime_container_args.index('--port') + 1] == '8081'
+            assert (
+                uses_before_runtime_container_args[
+                    uses_before_runtime_container_args.index('--port') + 1
+                ]
+                == '8081'
+            )
             assert '--env' not in uses_before_runtime_container_args
             assert '--connection-list' not in uses_before_runtime_container_args
 
@@ -509,23 +621,34 @@ def test_k8s_yaml_regular_deployment(
             assert '--native' in uses_after_runtime_container_args
             assert '--name' in uses_after_runtime_container_args
             assert (
-                uses_after_runtime_container_args[uses_after_runtime_container_args.index('--name') + 1]
+                uses_after_runtime_container_args[
+                    uses_after_runtime_container_args.index('--name') + 1
+                ]
                 == 'executor/uses-after'
             )
             assert '--k8s-namespace' in uses_after_runtime_container_args
             assert (
-                uses_after_runtime_container_args[uses_after_runtime_container_args.index('--k8s-namespace') + 1]
+                uses_after_runtime_container_args[
+                    uses_after_runtime_container_args.index('--k8s-namespace') + 1
+                ]
                 == 'default-namespace'
             )
             assert '--port' in uses_after_runtime_container_args
-            assert uses_after_runtime_container_args[uses_after_runtime_container_args.index('--port') + 1] == '8082'
+            assert (
+                uses_after_runtime_container_args[
+                    uses_after_runtime_container_args.index('--port') + 1
+                ]
+                == '8082'
+            )
             assert '--env' not in uses_after_runtime_container_args
             assert '--connection-list' not in uses_after_runtime_container_args
 
     for i, (shard_name, shard_configs) in enumerate(yaml_configs[1:]):
         name = f'executor-{i}' if shards > 1 else 'executor'
         assert shard_name == name
-        assert len(shard_configs) == 3  # 3 configs per yaml (configmap, service and deployment
+        assert (
+            len(shard_configs) == 3
+        )  # 3 configs per yaml (configmap, service and deployment
         config_map = shard_configs[0]
         assert_config_map_config(
             config_map,
@@ -591,21 +714,35 @@ def test_k8s_yaml_regular_deployment(
         assert shard_container_runtime_container_args[0] == 'executor'
         assert '--native' in shard_container_runtime_container_args
         assert '--name' in shard_container_runtime_container_args
-        assert shard_container_runtime_container_args[shard_container_runtime_container_args.index('--name') + 1] == name
+        assert (
+            shard_container_runtime_container_args[
+                shard_container_runtime_container_args.index('--name') + 1
+            ]
+            == name
+        )
         assert '--k8s-namespace' in shard_container_runtime_container_args
         assert (
-            shard_container_runtime_container_args[shard_container_runtime_container_args.index('--k8s-namespace') + 1]
+            shard_container_runtime_container_args[
+                shard_container_runtime_container_args.index('--k8s-namespace') + 1
+            ]
             == 'default-namespace'
         )
         assert '--port' in shard_container_runtime_container_args
-        assert shard_container_runtime_container_args[shard_container_runtime_container_args.index('--port') + 1] == '8080'
+        assert (
+            shard_container_runtime_container_args[
+                shard_container_runtime_container_args.index('--port') + 1
+            ]
+            == '8080'
+        )
         assert '--env' not in shard_container_runtime_container_args
         assert '--connection-list' not in shard_container_runtime_container_args
 
         if uses_with is not None:
             assert '--uses-with' in shard_container_runtime_container_args
             assert (
-                shard_container_runtime_container_args[shard_container_runtime_container_args.index('--uses-with') + 1]
+                shard_container_runtime_container_args[
+                    shard_container_runtime_container_args.index('--uses-with') + 1
+                ]
                 == uses_with
             )
         else:
@@ -630,5 +767,13 @@ def test_executor_with_volumes_stateful_set():
     sset = list(yaml_configs[0][1])[-1]
     assert sset['kind'] == 'StatefulSet'
     assert 'volumeClaimTemplates' in list(sset['spec'].keys())
-    assert sset['spec']['template']['spec']['containers'][0]['volumeMounts'][0]['name'] == 'executor-volume'
-    assert sset['spec']['template']['spec']['containers'][0]['volumeMounts'][0]['mountPath'] == 'path/volumes'
+    assert (
+        sset['spec']['template']['spec']['containers'][0]['volumeMounts'][0]['name']
+        == 'executor-volume'
+    )
+    assert (
+        sset['spec']['template']['spec']['containers'][0]['volumeMounts'][0][
+            'mountPath'
+        ]
+        == 'path/volumes'
+    )

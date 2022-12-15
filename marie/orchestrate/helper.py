@@ -15,7 +15,9 @@ def generate_default_volume_and_workspace(workspace_id=''):
     container_addr = '/app'
     if default_workspace:  # use default workspace provided in env var
         host_addr = default_workspace
-        workspace = os.path.relpath(path=os.path.abspath(default_workspace), start=Path.home())
+        workspace = os.path.relpath(
+            path=os.path.abspath(default_workspace), start=Path.home()
+        )
     else:  # fallback if no custom volume and no default workspace
         workspace = os.path.join(__cache_path__, 'executor-workspace')
         host_addr = os.path.join(

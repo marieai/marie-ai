@@ -21,7 +21,9 @@ if __name__ == '__main__':
     box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft')
     icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
 
-    boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, 'field', snippet, PSMode.WORD)
+    boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
+        key, 'field', snippet, PSMode.WORD
+    )
 
     print(boxes)
     icr.recognize(key, 'test', snippet, boxes, img_fragments, lines)

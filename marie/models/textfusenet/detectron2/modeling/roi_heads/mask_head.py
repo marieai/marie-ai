@@ -36,7 +36,9 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     cls_agnostic_mask = pred_mask_logits.size(1) == 1
     total_num_masks = pred_mask_logits.size(0)
     mask_side_len = pred_mask_logits.size(2)
-    assert pred_mask_logits.size(2) == pred_mask_logits.size(3), "Mask prediction must be square!"
+    assert pred_mask_logits.size(2) == pred_mask_logits.size(
+        3
+    ), "Mask prediction must be square!"
 
     gt_classes = []
     gt_masks = []
@@ -75,15 +77,21 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     mask_incorrect = (pred_mask_logits > 0.0) != gt_masks_bool
     mask_accuracy = 1 - (mask_incorrect.sum().item() / max(mask_incorrect.numel(), 1.0))
     num_positive = gt_masks_bool.sum().item()
-    false_positive = (mask_incorrect & ~gt_masks_bool).sum().item() / max(gt_masks_bool.numel() - num_positive, 1.0)
-    false_negative = (mask_incorrect & gt_masks_bool).sum().item() / max(num_positive, 1.0)
+    false_positive = (mask_incorrect & ~gt_masks_bool).sum().item() / max(
+        gt_masks_bool.numel() - num_positive, 1.0
+    )
+    false_negative = (mask_incorrect & gt_masks_bool).sum().item() / max(
+        num_positive, 1.0
+    )
 
     storage = get_event_storage()
     storage.put_scalar("mask_rcnn/accuracy", mask_accuracy)
     storage.put_scalar("mask_rcnn/false_positive", false_positive)
     storage.put_scalar("mask_rcnn/false_negative", false_negative)
 
-    mask_loss = F.binary_cross_entropy_with_logits(pred_mask_logits, gt_masks.to(dtype=torch.float32), reduction="mean")
+    mask_loss = F.binary_cross_entropy_with_logits(
+        pred_mask_logits, gt_masks.to(dtype=torch.float32), reduction="mean"
+    )
     return mask_loss
 
 
@@ -177,7 +185,9 @@ class MaskRCNNConvUpsampleHead(nn.Module):
         )
 
         num_mask_classes = 1 if cls_agnostic_mask else num_classes
-        self.predictor = Conv2d(conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0)
+        self.predictor = Conv2d(
+            conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0
+        )
 
         for layer in self.conv_norm_relus + [self.deconv]:
             weight_init.c2_msra_fill(layer)

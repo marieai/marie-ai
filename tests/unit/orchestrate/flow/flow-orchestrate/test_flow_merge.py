@@ -31,7 +31,9 @@ def validate(da):
     assert len(chunk_ids) == 80
 
 
-@pytest.mark.skip('this should fail as explained in https://github.com/jina-ai/jina/pull/730')
+@pytest.mark.skip(
+    'this should fail as explained in https://github.com/jina-ai/jina/pull/730'
+)
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_this_will_fail(protocol):
     f = (

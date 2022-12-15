@@ -12,18 +12,50 @@ import uuid
 import warnings
 from collections import OrderedDict
 from contextlib import ExitStack
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Type, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Type,
+    Union,
+    overload,
+)
 
 from rich import print
 from rich.panel import Panel
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from marie import __default_host__, __docker_host__, __windows__, helper
 from marie.clients import Client
-from marie.clients.mixin import AsyncPostMixin, HealthCheckMixin, PostMixin, ProfileMixin
-from marie.enums import DeploymentRoleType, FlowBuildLevel, FlowInspectType, GatewayProtocolType
-from marie.excepts import FlowMissingDeploymentError, FlowTopologyError, PortAlreadyUsed, RuntimeFailToStart
+from marie.clients.mixin import (
+    AsyncPostMixin,
+    HealthCheckMixin,
+    PostMixin,
+    ProfileMixin,
+)
+from marie.enums import (
+    DeploymentRoleType,
+    FlowBuildLevel,
+    FlowInspectType,
+    GatewayProtocolType,
+)
+from marie.excepts import (
+    FlowMissingDeploymentError,
+    FlowTopologyError,
+    PortAlreadyUsed,
+    RuntimeFailToStart,
+)
 from marie.helper import (
     GATEWAY_NAME,
     ArgNamespace,
@@ -40,7 +72,11 @@ from marie.jaml import JAMLCompatible
 from marie.logging.logger import MarieLogger
 from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.flow.builder import _hanging_deployments, allowed_levels
-from marie.parsers import set_client_cli_parser, set_deployment_parser, set_gateway_parser
+from marie.parsers import (
+    set_client_cli_parser,
+    set_deployment_parser,
+    set_gateway_parser,
+)
 from marie.parsers.flow import set_flow_parser
 from marie.serve.networking import host_is_local, in_docker
 
@@ -463,11 +499,15 @@ class Flow(
         self._inspect_deployments = {}  # type: Dict[str, str]
         self._endpoints_mapping = {}  # type: Dict[str, Dict]
         self._build_level = FlowBuildLevel.EMPTY
-        self._last_changed_deployment = [GATEWAY_NAME]  #: default first deployment is gateway, will add when build()
+        self._last_changed_deployment = [
+            GATEWAY_NAME
+        ]  #: default first deployment is gateway, will add when build()
         self._update_args(args, **kwargs)
 
         if isinstance(self.args, argparse.Namespace):
-            self.logger = MarieLogger(self.__class__.__name__, **vars(self.args), **self._common_kwargs)
+            self.logger = MarieLogger(
+                self.__class__.__name__, **vars(self.args), **self._common_kwargs
+            )
         else:
             self.logger = MarieLogger(self.__class__.__name__, **self._common_kwargs)
 
@@ -477,24 +517,36 @@ class Flow(
 
         _flow_parser = set_flow_parser()
         if args is None:
-            args = ArgNamespace.kwargs2namespace(kwargs, _flow_parser, True, fallback_parsers=FALLBACK_PARSERS)
+            args = ArgNamespace.kwargs2namespace(
+                kwargs, _flow_parser, True, fallback_parsers=FALLBACK_PARSERS
+            )
         self.args = args
         # common args should be the ones that can not be parsed by _flow_parser
         known_keys = vars(args)
         self._common_kwargs = {k: v for k, v in kwargs.items() if k not in known_keys}
 
         # gateway args inherit from flow args
-        self._gateway_kwargs = {k: v for k, v in self._common_kwargs.items() if k not in GATEWAY_ARGS_BLACKLIST}
+        self._gateway_kwargs = {
+            k: v
+            for k, v in self._common_kwargs.items()
+            if k not in GATEWAY_ARGS_BLACKLIST
+        }
 
-        self._kwargs = ArgNamespace.get_non_defaults_args(args, _flow_parser)  #: for yaml dump
+        self._kwargs = ArgNamespace.get_non_defaults_args(
+            args, _flow_parser
+        )  #: for yaml dump
 
-        if self._common_kwargs.get('asyncio', False) and not isinstance(self, AsyncPostMixin):
+        if self._common_kwargs.get('asyncio', False) and not isinstance(
+            self, AsyncPostMixin
+        ):
             from marie.orchestrate.flow.asyncio import AsyncFlow
 
             self.__class__ = AsyncFlow
 
     @staticmethod
-    def _parse_endpoints(op_flow, deployment_name, endpoint, connect_to_last_deployment=False) -> Set:
+    def _parse_endpoints(
+        op_flow, deployment_name, endpoint, connect_to_last_deployment=False
+    ) -> Set:
         # parsing needs
         if isinstance(endpoint, str):
             endpoint = [endpoint]
@@ -507,7 +559,9 @@ class Flow(
         if isinstance(endpoint, (list, tuple)):
             for idx, s in enumerate(endpoint):
                 if s == deployment_name:
-                    raise FlowTopologyError('the income/output of a deployment can not be itself')
+                    raise FlowTopologyError(
+                        'the income/output of a deployment can not be itself'
+                    )
         else:
             raise ValueError(f'endpoint={endpoint} is not parsable')
 
@@ -576,7 +630,9 @@ class Flow(
         args = ArgNamespace.kwargs2namespace(kwargs, set_gateway_parser())
 
         # We need to check later if the port was manually set or randomly
-        args.default_port = kwargs.get('port', None) is None and kwargs.get('port_expose', None) is None
+        args.default_port = (
+            kwargs.get('port', None) is None and kwargs.get('port_expose', None) is None
+        )
 
         if not args.port:
             args.port = helper.random_ports(len(args.protocol))
@@ -594,7 +650,9 @@ class Flow(
         :return: a dictionary of deployment name and its metadata
         """
         return {
-            name: deployment.grpc_metadata for name, deployment in self._deployment_nodes.items() if deployment.grpc_metadata
+            name: deployment.grpc_metadata
+            for name, deployment in self._deployment_nodes.items()
+            if deployment.grpc_metadata
         }
 
     def _get_deployments_addresses(self) -> Dict[str, List[str]]:
@@ -604,19 +662,30 @@ class Flow(
                 continue
             if deployment.head_args:
                 # add head information
-                graph_dict[node] = [f'{deployment.protocol}://{deployment.host}:{deployment.head_port}']
+                graph_dict[node] = [
+                    f'{deployment.protocol}://{deployment.host}:{deployment.head_port}'
+                ]
             else:
                 # there is no head, add the worker connection information instead
                 ports = deployment.ports
                 hosts = [
-                    __docker_host__ if host_is_local(host) and in_docker() and deployment.dockerized_uses else host
+                    __docker_host__
+                    if host_is_local(host)
+                    and in_docker()
+                    and deployment.dockerized_uses
+                    else host
                     for host in deployment.hosts
                 ]
-                graph_dict[node] = [f'{deployment.protocol}://{host}:{port}' for host, port in zip(hosts, ports)]
+                graph_dict[node] = [
+                    f'{deployment.protocol}://{host}:{port}'
+                    for host, port in zip(hosts, ports)
+                ]
 
         return graph_dict
 
-    def _get_k8s_deployments_addresses(self, k8s_namespace: str) -> Dict[str, List[str]]:
+    def _get_k8s_deployments_addresses(
+        self, k8s_namespace: str
+    ) -> Dict[str, List[str]]:
         graph_dict = {}
         from marie.orchestrate.deployments.config.helper import to_compatible_name
         from marie.serve.networking import GrpcConnectionPool
@@ -628,9 +697,13 @@ class Flow(
             if v.external:
                 deployment_k8s_address = f'{v.host}'
             elif v.head_args:
-                deployment_k8s_address = f'{to_compatible_name(v.head_args.name)}.{k8s_namespace}.svc'
+                deployment_k8s_address = (
+                    f'{to_compatible_name(v.head_args.name)}.{k8s_namespace}.svc'
+                )
             else:
-                deployment_k8s_address = f'{to_compatible_name(v.name)}.{k8s_namespace}.svc'
+                deployment_k8s_address = (
+                    f'{to_compatible_name(v.name)}.{k8s_namespace}.svc'
+                )
 
             external_port = v.head_port if v.head_port else v.port
             graph_dict[node] = [
@@ -658,17 +731,25 @@ class Flow(
                 continue
 
             if v.external:
-                deployment_docker_compose_address = [f'{v.protocol}://{v.host}:{v.port}']
+                deployment_docker_compose_address = [
+                    f'{v.protocol}://{v.host}:{v.port}'
+                ]
             elif v.head_args:
-                deployment_docker_compose_address = [f'{to_compatible_name(v.head_args.name)}:{port}']
+                deployment_docker_compose_address = [
+                    f'{to_compatible_name(v.head_args.name)}:{port}'
+                ]
             else:
                 if v.args.replicas == 1:
-                    deployment_docker_compose_address = [f'{to_compatible_name(v.name)}:{port}']
+                    deployment_docker_compose_address = [
+                        f'{to_compatible_name(v.name)}:{port}'
+                    ]
                 else:
                     deployment_docker_compose_address = []
                     for rep_id in range(v.args.replicas):
                         node_name = f'{v.name}/rep-{rep_id}'
-                        deployment_docker_compose_address.append(f'{to_compatible_name(node_name)}:{port}')
+                        deployment_docker_compose_address.append(
+                            f'{to_compatible_name(node_name)}:{port}'
+                        )
             graph_dict[node] = deployment_docker_compose_address
 
         return graph_dict
@@ -715,7 +796,9 @@ class Flow(
         return graph_dict
 
     @allowed_levels([FlowBuildLevel.EMPTY])
-    def needs(self, needs: Union[Tuple[str], List[str]], name: str = 'joiner', *args, **kwargs) -> 'Flow':
+    def needs(
+        self, needs: Union[Tuple[str], List[str]], name: str = 'joiner', *args, **kwargs
+    ) -> 'Flow':
         """
         Add a blocker to the Flow, wait until all pods defined in **needs** completed.
 
@@ -728,7 +811,9 @@ class Flow(
         :return: the modified Flow
         """
         if len(needs) <= 1:
-            raise FlowTopologyError('no need to wait for a single service, need len(needs) > 1')
+            raise FlowTopologyError(
+                'no need to wait for a single service, need len(needs) > 1'
+            )
         return self.add(
             name=name,
             needs=needs,
@@ -1094,7 +1179,9 @@ class Flow(
 
         if deployment_name in op_flow._deployment_nodes:
             new_name = f'{deployment_name}{len(op_flow._deployment_nodes)}'
-            self.logger.debug(f'"{deployment_name}" is used in this Flow already! renamed it to "{new_name}"')
+            self.logger.debug(
+                f'"{deployment_name}" is used in this Flow already! renamed it to "{new_name}"'
+            )
             deployment_name = new_name
 
         if not deployment_name:
@@ -1102,10 +1189,14 @@ class Flow(
 
         if not deployment_name.isidentifier():
             # hyphen - can not be used in the name
-            raise ValueError(f'name: {deployment_name} is invalid, please follow the python variable name conventions')
+            raise ValueError(
+                f'name: {deployment_name} is invalid, please follow the python variable name conventions'
+            )
 
         # needs logic
-        needs = op_flow._parse_endpoints(op_flow, deployment_name, needs, connect_to_last_deployment=True)
+        needs = op_flow._parse_endpoints(
+            op_flow, deployment_name, needs, connect_to_last_deployment=True
+        )
 
         # set the kwargs inherit from `Flow(kwargs1=..., kwargs2=)`
         for key, value in op_flow._common_kwargs.items():
@@ -1125,7 +1216,9 @@ class Flow(
         if deployment_role == DeploymentRoleType.GATEWAY:
             parser = set_gateway_parser()
 
-        args = ArgNamespace.kwargs2namespace(kwargs, parser, True, fallback_parsers=FALLBACK_PARSERS)
+        args = ArgNamespace.kwargs2namespace(
+            kwargs, parser, True, fallback_parsers=FALLBACK_PARSERS
+        )
 
         # deployment workspace if not set then derive from flow workspace
         if args.workspace:
@@ -1141,7 +1234,9 @@ class Flow(
             args.port = port
 
         if len(needs) > 1 and args.external and args.no_reduce:
-            raise ValueError('External Executors with multiple needs have to do auto reduce.')
+            raise ValueError(
+                'External Executors with multiple needs have to do auto reduce.'
+            )
 
         op_flow._deployment_nodes[deployment_name] = Deployment(args, needs)
 
@@ -1482,7 +1577,11 @@ class Flow(
             :meth:`inspect`
 
         """
-        needs = [k for k, v in self._deployment_nodes.items() if v.role == DeploymentRoleType.INSPECT]
+        needs = [
+            k
+            for k, v in self._deployment_nodes.items()
+            if v.role == DeploymentRoleType.INSPECT
+        ]
         if needs:
             if include_last_deployment:
                 needs.append(self._last_deployment)
@@ -1509,7 +1608,9 @@ class Flow(
         )
 
     @allowed_levels([FlowBuildLevel.EMPTY])
-    def build(self, copy_flow: bool = False, disable_build_sandbox: bool = False) -> 'Flow':
+    def build(
+        self, copy_flow: bool = False, disable_build_sandbox: bool = False
+    ) -> 'Flow':
         """
         Build the current Flow and make it ready to use
 
@@ -1573,7 +1674,9 @@ class Flow(
                     removed_deployments.append(v.name)
 
             op_flow._deployment_nodes = filtered_deployment_nodes
-            reverse_inspect_map = {v: k for k, v in op_flow._inspect_deployments.items()}
+            reverse_inspect_map = {
+                v: k for k, v in op_flow._inspect_deployments.items()
+            }
             while (
                 len(op_flow._last_changed_deployment) > 0
                 and len(removed_deployments) > 0
@@ -1586,10 +1689,15 @@ class Flow(
             # but not those inspect related node
             if op_flow.args.inspect.is_keep:
                 deployment.needs = set(
-                    ep if deployment.role.is_inspect else op_flow._inspect_deployments.get(ep, ep) for ep in deployment.needs
+                    ep
+                    if deployment.role.is_inspect
+                    else op_flow._inspect_deployments.get(ep, ep)
+                    for ep in deployment.needs
                 )
             else:
-                deployment.needs = set(reverse_inspect_map.get(ep, ep) for ep in deployment.needs)
+                deployment.needs = set(
+                    reverse_inspect_map.get(ep, ep) for ep in deployment.needs
+                )
 
         hanging_deployments = _hanging_deployments(op_flow)
         if hanging_deployments:
@@ -1601,8 +1709,12 @@ class Flow(
         op_flow._build_level = FlowBuildLevel.GRAPH
         if len(removed_deployments) > 0:
             # very dirty
-            op_flow._deployment_nodes[GATEWAY_NAME].args.graph_description = json.dumps(op_flow._get_graph_representation())
-            op_flow._deployment_nodes[GATEWAY_NAME].args.deployments_addresses = json.dumps(
+            op_flow._deployment_nodes[GATEWAY_NAME].args.graph_description = json.dumps(
+                op_flow._get_graph_representation()
+            )
+            op_flow._deployment_nodes[
+                GATEWAY_NAME
+            ].args.deployments_addresses = json.dumps(
                 op_flow._get_deployments_addresses()
             )
 
@@ -1741,7 +1853,9 @@ class Flow(
             transient=True,
         )
         with progress:
-            task = progress.add_task('wait', total=len(threads), pending_str='', start=False)
+            task = progress.add_task(
+                'wait', total=len(threads), pending_str='', start=False
+            )
 
             # kick off all deployments wait-ready threads
             for k, v in self:
@@ -1758,11 +1872,15 @@ class Flow(
             # kick off ip getter thread, address, http, graphq
             all_panels = []
 
-            t_ip = threading.Thread(target=self._get_summary_table, args=(all_panels, results), daemon=True)
+            t_ip = threading.Thread(
+                target=self._get_summary_table, args=(all_panels, results), daemon=True
+            )
             threads.append(t_ip)
 
             # kick off spinner thread
-            t_m = threading.Thread(target=_polling_status, args=(progress, task), daemon=True)
+            t_m = threading.Thread(
+                target=_polling_status, args=(progress, task), daemon=True
+            )
             threads.append(t_m)
 
             for t in threads:
@@ -1773,7 +1891,9 @@ class Flow(
 
             error_deployments = [k for k, v in results.items() if v != 'done']
             if error_deployments:
-                self.logger.error(f'Flow is aborted due to {error_deployments} can not be started.')
+                self.logger.error(
+                    f'Flow is aborted due to {error_deployments} can not be started.'
+                )
                 self.close()
                 raise RuntimeFailToStart
             from rich.rule import Rule
@@ -1781,7 +1901,9 @@ class Flow(
             print(
                 Rule(':tada: Flow is ready to serve!'), *all_panels
             )  # can't use logger here see : https://github.com/Textualize/rich/discussions/2024
-        self.logger.debug(f'{self.num_deployments} Deployments (i.e. {self.num_pods} Pods) are running in this Flow')
+        self.logger.debug(
+            f'{self.num_deployments} Deployments (i.e. {self.num_pods} Pods) are running in this Flow'
+        )
 
     @property
     def num_deployments(self) -> int:
@@ -1882,15 +2004,28 @@ class Flow(
                 if self._deployment_nodes[node].external:
                     _e_role = 'EXTERNAL'
                 line_st = '-->'
-                if _s_role == DeploymentRoleType.INSPECT or _e_role == DeploymentRoleType.INSPECT:
+                if (
+                    _s_role == DeploymentRoleType.INSPECT
+                    or _e_role == DeploymentRoleType.INSPECT
+                ):
                     line_st = '-.->'
-                mermaid_graph.append(f'{need_print}:::{str(_s_role)} {line_st} {node_print}:::{str(_e_role)};')
+                mermaid_graph.append(
+                    f'{need_print}:::{str(_s_role)} {line_st} {node_print}:::{str(_e_role)};'
+                )
 
-        mermaid_graph.append(f'classDef {str(DeploymentRoleType.INSPECT)} stroke:#F29C9F')
+        mermaid_graph.append(
+            f'classDef {str(DeploymentRoleType.INSPECT)} stroke:#F29C9F'
+        )
 
-        mermaid_graph.append(f'classDef {str(DeploymentRoleType.JOIN_INSPECT)} stroke:#F29C9F')
-        mermaid_graph.append(f'classDef {str(DeploymentRoleType.GATEWAY)} fill:none,color:#000,stroke:none')
-        mermaid_graph.append(f'classDef {str(DeploymentRoleType.INSPECT_AUX_PASS)} stroke-dasharray: 2 2')
+        mermaid_graph.append(
+            f'classDef {str(DeploymentRoleType.JOIN_INSPECT)} stroke:#F29C9F'
+        )
+        mermaid_graph.append(
+            f'classDef {str(DeploymentRoleType.GATEWAY)} fill:none,color:#000,stroke:none'
+        )
+        mermaid_graph.append(
+            f'classDef {str(DeploymentRoleType.INSPECT_AUX_PASS)} stroke-dasharray: 2 2'
+        )
         mermaid_graph.append(f'classDef HEADTAIL fill:#32C8CD1D')
 
         mermaid_graph.append(f'\nclassDef EXTERNAL fill:#fff,stroke:#32C8CD')
@@ -1932,7 +2067,11 @@ class Flow(
         # deepcopy causes the below error while reusing a Flow in Jupyter
         # 'Pickling an AuthenticationString object is disallowed for security reasons'
         # no need to deep copy if the Graph is built because no change will be made to the Flow
-        op_flow = copy.deepcopy(self) if (copy_flow and self._build_level.value == FlowBuildLevel.EMPTY) else self
+        op_flow = (
+            copy.deepcopy(self)
+            if (copy_flow and self._build_level.value == FlowBuildLevel.EMPTY)
+            else self
+        )
 
         if build and op_flow._build_level.value == FlowBuildLevel.EMPTY:
             op_flow.build(copy_flow=False, disable_build_sandbox=True)
@@ -1966,7 +2105,9 @@ class Flow(
 
     def _ipython_display_(self):
         """Displays the object in IPython as a side effect"""
-        self.plot(inline_display=True, build=(self._build_level != FlowBuildLevel.GRAPH))
+        self.plot(
+            inline_display=True, build=(self._build_level != FlowBuildLevel.GRAPH)
+        )
 
     def _mermaid_to_url(self, mermaid_str: str, img_type: str) -> str:
         """
@@ -1988,7 +2129,9 @@ class Flow(
         if GATEWAY_NAME in self._deployment_nodes:
             res = self._deployment_nodes[GATEWAY_NAME].port
         else:
-            res = self._gateway_kwargs.get('port', None) or self._gateway_kwargs.get('ports', None)
+            res = self._gateway_kwargs.get('port', None) or self._gateway_kwargs.get(
+                'ports', None
+            )
         if not isinstance(res, list):
             return res
         elif len(res) == 1:
@@ -2085,7 +2228,9 @@ class Flow(
         return self._deployment_nodes.items().__iter__()
 
     def _init_table(self):
-        table = Table(title=None, box=None, highlight=True, show_header=False, min_width=40)
+        table = Table(
+            title=None, box=None, highlight=True, show_header=False, min_width=40
+        )
         table.add_column('', justify='left')
         table.add_column('', justify='right')
         table.add_column('', justify='right')
@@ -2110,7 +2255,9 @@ class Flow(
         for _port, _protocol in zip(_ports, _protocols):
             if self.gateway_args.ssl_certfile and self.gateway_args.ssl_keyfile:
                 _protocol = f'{_protocol}S'
-                address_table.add_row(':chains:', 'Protocol', f':closed_lock_with_key: {_protocol}')
+                address_table.add_row(
+                    ':chains:', 'Protocol', f':closed_lock_with_key: {_protocol}'
+                )
 
             else:
                 address_table.add_row(':chains:', 'Protocol', _protocol)
@@ -2151,7 +2298,9 @@ class Flow(
                 f'[link={_protocol}://{self.address_private}:{self.port}/docs]Private[/]',
             ]
             if self.address_public:
-                _address.append(f'[link={_protocol}://{self.address_public}:{self.port}/docs]Public[/]')
+                _address.append(
+                    f'[link={_protocol}://{self.address_public}:{self.port}/docs]Public[/]'
+                )
             http_ext_table.add_row(
                 ':speech_balloon:',
                 'Swagger UI',
@@ -2164,7 +2313,9 @@ class Flow(
             ]
 
             if self.address_public:
-                _address.append(f'[link={_protocol}://{self.address_public}:{self.port}/redoc]Public[/]')
+                _address.append(
+                    f'[link={_protocol}://{self.address_public}:{self.port}/redoc]Public[/]'
+                )
 
             http_ext_table.add_row(
                 ':books:',
@@ -2179,7 +2330,9 @@ class Flow(
                 ]
 
                 if self.address_public:
-                    _address.append(f'[link={_protocol}://{self.address_public}:{self.port}/graphql]Public[/]')
+                    _address.append(
+                        f'[link={_protocol}://{self.address_public}:{self.port}/graphql]Public[/]'
+                    )
 
                 http_ext_table.add_row(
                     ':strawberry:',
@@ -2209,9 +2362,15 @@ class Flow(
                         ]
 
                         if self.address_public:
-                            _address.append(f'[link=http://{self.address_public}:{deployment.args.port_monitoring}]Public[/]')
+                            _address.append(
+                                f'[link=http://{self.address_public}:{deployment.args.port_monitoring}]Public[/]'
+                            )
 
-                        _name = name if len(deployment.pod_args['pods'][0]) == 1 else replica.name
+                        _name = (
+                            name
+                            if len(deployment.pod_args['pods'][0]) == 1
+                            else replica.name
+                        )
 
                         monitor_ext_table.add_row(
                             ':flashlight:',  # upstream issue: they dont have :torch: emoji, so we use :flashlight:
@@ -2233,7 +2392,9 @@ class Flow(
         return all_panels
 
     @allowed_levels([FlowBuildLevel.RUNNING])
-    def block(self, stop_event: Optional[Union[threading.Event, multiprocessing.Event]] = None):
+    def block(
+        self, stop_event: Optional[Union[threading.Event, multiprocessing.Event]] = None
+    ):
         """Block the Flow until `stop_event` is set or user hits KeyboardInterrupt
 
         :param stop_event: a threading event or a multiprocessing event that onces set will resume the control Flow
@@ -2241,14 +2402,18 @@ class Flow(
         """
 
         def _restart_flow(changed_file):
-            self.logger.info(f'change in Flow YAML {changed_file} observed, restarting Flow')
+            self.logger.info(
+                f'change in Flow YAML {changed_file} observed, restarting Flow'
+            )
             self.__exit__(None, None, None)
             new_flow = Flow.load_config(changed_file)
             self.__dict__ = new_flow.__dict__
             self.__enter__()
 
         def _restart_deployment(deployment, changed_file):
-            self.logger.info(f'change in Executor configuration YAML {changed_file} observed, restarting Executor deployment')
+            self.logger.info(
+                f'change in Executor configuration YAML {changed_file} observed, restarting Executor deployment'
+            )
             deployment.__exit__(None, None, None)
             old_args, old_needs = deployment.args, deployment.needs
             new_deployment = Deployment(old_args, old_needs)
@@ -2257,7 +2422,10 @@ class Flow(
 
         try:
             watch_changes = self.args.restart or any(
-                [deployment.args.restart for deployment in list(self._deployment_nodes.values())]
+                [
+                    deployment.args.restart
+                    for deployment in list(self._deployment_nodes.values())
+                ]
             )
             watch_files_from_deployments = {}
             for name, deployment in self._deployment_nodes.items():
@@ -2303,7 +2471,9 @@ class Flow(
                                     _restart_flow(changed_file)
                             else:
                                 _restart_deployment(
-                                    self._deployment_nodes[watch_files_from_deployments[changed_file]],
+                                    self._deployment_nodes[
+                                        watch_files_from_deployments[changed_file]
+                                    ],
                                     changed_file,
                                 )
             else:
@@ -2358,9 +2528,13 @@ class Flow(
         elif isinstance(value, GatewayProtocolType):
             self._gateway_kwargs['protocol'] = [value]
         elif isinstance(value, list):
-            self._gateway_kwargs['protocol'] = GatewayProtocolType.from_string_list(value)
+            self._gateway_kwargs['protocol'] = GatewayProtocolType.from_string_list(
+                value
+            )
         else:
-            raise TypeError(f'{value} must be either `str` or `GatewayProtocolType` or list of protocols')
+            raise TypeError(
+                f'{value} must be either `str` or `GatewayProtocolType` or list of protocols'
+            )
 
         # Flow is build to graph already
         if self._build_level >= FlowBuildLevel.GRAPH:
@@ -2401,7 +2575,9 @@ class Flow(
 
 
         .. # noqa: DAR201"""
-        return {k: p.args.workspace_id for k, p in self if hasattr(p.args, 'workspace_id')}
+        return {
+            k: p.args.workspace_id for k, p in self if hasattr(p.args, 'workspace_id')
+        }
 
     @workspace_id.setter
     def workspace_id(self, value: str):
@@ -2415,7 +2591,9 @@ class Flow(
                 p.args.workspace_id = value
                 args = getattr(p, 'pod_args', getattr(p, 'shards_args', None))
                 if args is None:
-                    raise ValueError(f'could not find "pod_args" or "shards_args" on {p}')
+                    raise ValueError(
+                        f'could not find "pod_args" or "shards_args" on {p}'
+                    )
                 values = None
                 if isinstance(args, dict):
                     values = args.values()
@@ -2540,7 +2718,9 @@ class Flow(
                 v.first_pod_args.port = GrpcConnectionPool.K8S_PORT
 
                 v.args.port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
-                v.first_pod_args.port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
+                v.first_pod_args.port_monitoring = (
+                    GrpcConnectionPool.K8S_PORT_MONITORING
+                )
 
                 v.args.default_port = False
 
@@ -2548,8 +2728,14 @@ class Flow(
             k8s_deployment = K8sDeploymentConfig(
                 args=v.args,
                 k8s_namespace=k8s_namespace,
-                k8s_deployments_addresses=self._get_k8s_deployments_addresses(k8s_namespace) if node == 'gateway' else None,
-                k8s_deployments_metadata=self._get_k8s_deployments_metadata() if node == 'gateway' else None,
+                k8s_deployments_addresses=self._get_k8s_deployments_addresses(
+                    k8s_namespace
+                )
+                if node == 'gateway'
+                else None,
+                k8s_deployments_metadata=self._get_k8s_deployments_metadata()
+                if node == 'gateway'
+                else None,
             )
             configs = k8s_deployment.to_kubernetes_yaml()
             for name, k8s_objects in configs:
@@ -2588,7 +2774,9 @@ class Flow(
         output_path = output_path or 'docker-compose.yml'
         network_name = network_name or 'jina-network'
 
-        from marie.orchestrate.deployments.config.docker_compose import DockerComposeConfig
+        from marie.orchestrate.deployments.config.docker_compose import (
+            DockerComposeConfig,
+        )
 
         docker_compose_dict = {
             'version': '3.3',
@@ -2614,7 +2802,11 @@ class Flow(
         with open(output_path, 'w+') as fp:
             yaml.dump(docker_compose_dict, fp, sort_keys=False)
 
-        command = 'docker-compose up' if output_path is None else f'docker-compose -f {output_path} up'
+        command = (
+            'docker-compose up'
+            if output_path is None
+            else f'docker-compose -f {output_path} up'
+        )
 
         self.logger.info(
             f'Docker compose file has been created under [b]{output_path}[/b]. You can use it by running [b]{command}[/b]'

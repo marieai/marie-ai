@@ -43,7 +43,9 @@ to_2tuple = _ntuple(2)
 class PatchEmbedForApe(nn.Module):
     """Image to Patch Embedding"""
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, ape=False):
+    def __init__(
+        self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, ape=False
+    ):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -52,7 +54,9 @@ class PatchEmbedForApe(nn.Module):
         self.patch_size = patch_size
         self.num_patches = num_patches
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
+        )
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -117,7 +121,11 @@ class DistilledVisionTransformer(VisionTransformer):
         )
         num_patches = self.patch_embed.num_patches if not self.ape else 576
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, self.embed_dim))
-        self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
+        self.head_dist = (
+            nn.Linear(self.embed_dim, self.num_classes)
+            if self.num_classes > 0
+            else nn.Identity()
+        )
 
         trunc_normal_(self.dist_token, std=0.02)
         trunc_normal_(self.pos_embed, std=0.02)
@@ -135,7 +143,9 @@ class DistilledVisionTransformer(VisionTransformer):
                 self.pos_embed.shape[0], 24, 24, self.pos_embed.shape[-1]
             )  # B 24 24 768
             adapt_pos_embed = adapt_pos_embed.permute(0, 3, 1, 2)
-            absolute_pos_embed = F.interpolate(adapt_pos_embed, size=(Wh, Ww), mode='bicubic')
+            absolute_pos_embed = F.interpolate(
+                adapt_pos_embed, size=(Wh, Ww), mode='bicubic'
+            )
             x = x.flatten(2).transpose(1, 2)  # B Wh*Ww C
             if self.mask_ratio != 0:
                 probability_matrix = torch.full(x.shape[:2], self.mask_ratio)
@@ -150,7 +160,9 @@ class DistilledVisionTransformer(VisionTransformer):
                 masked_indices = torch.bernoulli(probability_matrix).bool()
                 x[masked_indices] = 0
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(
+            B, -1, -1
+        )  # stole cls_tokens impl from Phil Wang, thanks
         dist_token = self.dist_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, dist_token, x), dim=1)
 
@@ -231,7 +243,9 @@ class AdaptedVisionTransformer(VisionTransformer):
                 self.pos_embed.shape[0], 24, 24, self.pos_embed.shape[-1]
             )  # B 24 24 768
             adapt_pos_embed = adapt_pos_embed.permute(0, 3, 1, 2)
-            absolute_pos_embed = F.interpolate(adapt_pos_embed, size=(Wh, Ww), mode='bicubic')
+            absolute_pos_embed = F.interpolate(
+                adapt_pos_embed, size=(Wh, Ww), mode='bicubic'
+            )
             x = x.flatten(2).transpose(1, 2)  # B Wh*Ww C
             if self.mask_ratio != 0:
                 probability_matrix = torch.full(x.shape[:2], self.mask_ratio)
@@ -246,7 +260,9 @@ class AdaptedVisionTransformer(VisionTransformer):
                 masked_indices = torch.bernoulli(probability_matrix).bool()
                 x[masked_indices] = 0
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(
+            B, -1, -1
+        )  # stole cls_tokens impl from Phil Wang, thanks
         x = torch.cat((cls_tokens, x), dim=1)
 
         if not self.ape:
@@ -404,10 +420,16 @@ def deit_small_distilled_patch16_384(pretrained=False, **kwargs):
         # adapt 224 model to 384
         model_seq_len = model.state_dict()['pos_embed'].shape[1]
         ckpt_seq_len = checkpoint['model']['pos_embed'].shape[1]
-        logger.warning('Deit load {:d} seq len to {:d} APE {}'.format(ckpt_seq_len, model_seq_len, str(model.ape)))
+        logger.warning(
+            'Deit load {:d} seq len to {:d} APE {}'.format(
+                ckpt_seq_len, model_seq_len, str(model.ape)
+            )
+        )
         if not model.ape:
             if model_seq_len <= ckpt_seq_len:
-                checkpoint['model']['pos_embed'] = checkpoint['model']['pos_embed'][:, :model_seq_len, :]
+                checkpoint['model']['pos_embed'] = checkpoint['model']['pos_embed'][
+                    :, :model_seq_len, :
+                ]
             else:
                 t = model.state_dict()['pos_embed']
                 t[:, :ckpt_seq_len, :] = checkpoint['model']['pos_embed']
@@ -512,10 +534,16 @@ def deit_base_distilled_patch16_custom_size(pretrained=False, img_size=384, **kw
         # ape torch.Size([1, 578, 768]) from checkpoint, the shape in current model is torch.Size([1, 1026, 768]).
         model_seq_len = model.state_dict()['pos_embed'].shape[1]
         ckpt_seq_len = checkpoint['model']['pos_embed'].shape[1]
-        logger.warning('Deit load {:d} seq len to {:d} APE {}'.format(ckpt_seq_len, model_seq_len, str(model.ape)))
+        logger.warning(
+            'Deit load {:d} seq len to {:d} APE {}'.format(
+                ckpt_seq_len, model_seq_len, str(model.ape)
+            )
+        )
         if not model.ape:
             if model_seq_len <= ckpt_seq_len:
-                checkpoint['model']['pos_embed'] = checkpoint['model']['pos_embed'][:, :model_seq_len, :]
+                checkpoint['model']['pos_embed'] = checkpoint['model']['pos_embed'][
+                    :, :model_seq_len, :
+                ]
             else:
                 t = model.state_dict()['pos_embed']
                 t[:, :ckpt_seq_len, :] = checkpoint['model']['pos_embed']

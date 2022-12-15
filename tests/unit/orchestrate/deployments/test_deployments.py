@@ -69,7 +69,9 @@ def test_name(pod_args):
         assert pod.name == 'test'
 
 
-@pytest.mark.parametrize('runtime_cls', ['GatewayRuntime', 'WorkerRuntime', 'HeadRuntime'])
+@pytest.mark.parametrize(
+    'runtime_cls', ['GatewayRuntime', 'WorkerRuntime', 'HeadRuntime']
+)
 @pytest.mark.parametrize('hostname', ['localhost', '127.0.0.1', '0.0.0.0'])
 def test_host(hostname, runtime_cls):
     with Deployment(get_deployment_args_with_host(hostname, runtime_cls)) as pod:
@@ -77,10 +79,14 @@ def test_host(hostname, runtime_cls):
         assert pod.head_host is None
 
 
-@pytest.mark.parametrize('runtime_cls', ['GatewayRuntime', 'WorkerRuntime', 'HeadRuntime'])
+@pytest.mark.parametrize(
+    'runtime_cls', ['GatewayRuntime', 'WorkerRuntime', 'HeadRuntime']
+)
 def test_wrong_hostname(runtime_cls):
     with pytest.raises(RuntimeFailToStart):
-        with Deployment(get_deployment_args_with_host('inexisting.hostname.local', runtime_cls)) as pod:
+        with Deployment(
+            get_deployment_args_with_host('inexisting.hostname.local', runtime_cls)
+        ) as pod:
             pass
 
 
@@ -120,8 +126,14 @@ def test_uses_before_after(pod_args, shards):
     pod_args.uses = 'ChildDummyExecutor'
     with Deployment(pod_args) as pod:
         if shards == 2:
-            assert pod.head_args.uses_before_address == f'{pod.uses_before_args.host}:{pod.uses_before_args.port}'
-            assert pod.head_args.uses_after_address == f'{pod.uses_after_args.host}:{pod.uses_after_args.port}'
+            assert (
+                pod.head_args.uses_before_address
+                == f'{pod.uses_before_args.host}:{pod.uses_before_args.port}'
+            )
+            assert (
+                pod.head_args.uses_after_address
+                == f'{pod.uses_after_args.host}:{pod.uses_after_args.port}'
+            )
         else:
             assert pod.head_args is None
 
@@ -324,7 +336,9 @@ def test_pod_args_remove_uses_ba():
     with Deployment(args) as p:
         assert p.num_pods == 1
 
-    args = set_deployment_parser().parse_args(['--uses-before', __default_executor__, '--uses-after', __default_executor__])
+    args = set_deployment_parser().parse_args(
+        ['--uses-before', __default_executor__, '--uses-after', __default_executor__]
+    )
     with Deployment(args) as p:
         assert p.num_pods == 1
 
@@ -391,7 +405,9 @@ def test_dynamic_polling_with_config(polling):
             f'{pod.head_args.host}:{pod.head_args.port}',
             endpoint='/any',
         )
-        assert len(response.docs) == 1 + 1  # 1 source doc + 1 doc added by the one shard
+        assert (
+            len(response.docs) == 1 + 1
+        )  # 1 source doc + 1 doc added by the one shard
 
         response = GrpcConnectionPool.send_request_sync(
             _create_test_data_message(endpoint='/no_polling'),
@@ -399,9 +415,13 @@ def test_dynamic_polling_with_config(polling):
             endpoint='/no_polling',
         )
         if polling == 'any':
-            assert len(response.docs) == 1 + 1  # 1 source doc + 1 doc added by the one shard
+            assert (
+                len(response.docs) == 1 + 1
+            )  # 1 source doc + 1 doc added by the one shard
         else:
-            assert len(response.docs) == 1 + 2  # 1 source doc + 1 doc added by the two shards
+            assert (
+                len(response.docs) == 1 + 2
+            )  # 1 source doc + 1 doc added by the two shards
 
 
 class DynamicPollingExecutorDefaultNames(Executor):
@@ -470,18 +490,24 @@ def test_dynamic_polling_overwrite_default_config(polling):
             f'{pod.head_args.host}:{pod.head_args.port}',
             endpoint='/search',
         )
-        assert len(response.docs) == 1 + 1  # 1 source doc + 1 doc added by the one shard
+        assert (
+            len(response.docs) == 1 + 1
+        )  # 1 source doc + 1 doc added by the one shard
 
         response = GrpcConnectionPool.send_request_sync(
             _create_test_data_message(endpoint='/index'),
             f'{pod.head_args.host}:{pod.head_args.port}',
             endpoint='/index',
         )
-        assert len(response.docs) == 1 + 1  # 1 source doc + 1 doc added by the one shard
+        assert (
+            len(response.docs) == 1 + 1
+        )  # 1 source doc + 1 doc added by the one shard
 
 
 def _create_test_data_message(endpoint='/'):
-    return list(request_generator(endpoint, DocumentArray([Document(text='client')])))[0]
+    return list(request_generator(endpoint, DocumentArray([Document(text='client')])))[
+        0
+    ]
 
 
 @pytest.mark.parametrize('num_shards, num_replicas', [(1, 1), (1, 2), (2, 1), (3, 2)])

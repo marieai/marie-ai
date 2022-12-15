@@ -15,7 +15,9 @@ __all__ = ['GatewayStreamer']
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor
-    from opentelemetry.instrumentation.grpc._client import OpenTelemetryClientInterceptor
+    from opentelemetry.instrumentation.grpc._client import (
+        OpenTelemetryClientInterceptor,
+    )
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry
 
@@ -89,7 +91,9 @@ class GatewayStreamer:
         request_handler = GatewayRequestHandler(metrics_registry, meter, runtime_name)
 
         self._streamer = RequestStreamer(
-            request_handler=request_handler.handle_request(graph=topology_graph, connection_pool=self._connection_pool),
+            request_handler=request_handler.handle_request(
+                graph=topology_graph, connection_pool=self._connection_pool
+            ),
             result_handler=request_handler.handle_result(),
             prefetch=prefetch,
             logger=logger,
@@ -118,7 +122,9 @@ class GatewayStreamer:
         )
         for deployment_name, addresses in deployments_addresses.items():
             for address in addresses:
-                connection_pool.add_connection(deployment=deployment_name, address=address, head=True)
+                connection_pool.add_connection(
+                    deployment=deployment_name, address=address, head=True
+                )
 
         return connection_pool
 
@@ -168,7 +174,9 @@ class GatewayStreamer:
                     req.parameters = parameters
                 yield req
 
-        async for resp in self.stream(request_iterator=_req_generator(), results_in_order=results_in_order):
+        async for resp in self.stream(
+            request_iterator=_req_generator(), results_in_order=results_in_order
+        ):
             if return_results:
                 yield resp
             else:
@@ -183,7 +191,9 @@ class GatewayStreamer:
 
     Call = stream
 
-    async def process_single_data(self, request: DataRequest, context=None) -> DataRequest:
+    async def process_single_data(
+        self, request: DataRequest, context=None
+    ) -> DataRequest:
         """Implements request and response handling of a single DataRequest
         :param request: DataRequest from Client
         :param context: grpc context

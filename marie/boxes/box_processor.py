@@ -94,7 +94,9 @@ def estimate_character_width(src_img, bounding_boxes):
     cv2.imwrite("/tmp/fragments/esw_points.png", points)
 
     # we should calculat this for each bouding_box separately
-    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(points.astype(np.uint8), connectivity=4)
+    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        points.astype(np.uint8), connectivity=4
+    )
     total_chars = n_labels - 1
     total_width = 0
     # convert the bounding boxes points (polys) into a box
@@ -150,9 +152,15 @@ class PSMode(Enum):
 
 
 def create_dirs(work_dir, _id, key):
-    debug_dir = ensure_exists(os.path.join(work_dir, _id, "bounding_boxes", key, "debug"))
-    crops_dir = ensure_exists(os.path.join(work_dir, _id, "bounding_boxes", key, "crop"))
-    lines_dir = ensure_exists(os.path.join(work_dir, _id, "bounding_boxes", key, "lines"))
+    debug_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "debug")
+    )
+    crops_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "crop")
+    )
+    lines_dir = ensure_exists(
+        os.path.join(work_dir, _id, "bounding_boxes", key, "lines")
+    )
     mask_dir = ensure_exists(os.path.join(work_dir, _id, "bounding_boxes", key, "mask"))
 
     return crops_dir, debug_dir, lines_dir, mask_dir
@@ -181,7 +189,9 @@ class BoxProcessor(BaseHandler):
         self.work_dir = work_dir
 
     @abstractmethod
-    def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE) -> Tuple[Any, Any, Any, Any, Any]:
+    def extract_bounding_boxes(
+        self, _id, key, img, psm=PSMode.SPARSE
+    ) -> Tuple[Any, Any, Any, Any, Any]:
         """Extract bounding boxes for specific image, try to predict line number representing each bounding box.
         Args:
             _id:  Unique Image ID

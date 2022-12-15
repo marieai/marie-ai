@@ -30,13 +30,17 @@ async def test_runtimes_trivial_topology(port_generator):
     pod_addresses = f'{{"pod0": ["0.0.0.0:{head_port}"]}}'
 
     # create a single worker runtime
-    worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port,))
+    worker_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(worker_port,)
+    )
     worker_process.start()
 
     # create a single head runtime
     connection_list_dict = {'0': [f'127.0.0.1:{worker_port}']}
 
-    head_process = multiprocessing.Process(target=_create_head_runtime, args=(head_port, connection_list_dict))
+    head_process = multiprocessing.Process(
+        target=_create_head_runtime, args=(head_port, connection_list_dict)
+    )
     head_process.start()
 
     # create a single gateway runtime
@@ -110,13 +114,19 @@ def complete_graph_dict():
 @pytest.mark.parametrize('uses_before', [True, False])
 @pytest.mark.parametrize('uses_after', [True, False])
 # test gateway, head and worker runtime by creating them manually in a more Flow like topology with branching/merging
-async def test_runtimes_flow_topology(complete_graph_dict, uses_before, uses_after, port_generator):
-    pods = [pod_name for pod_name in complete_graph_dict.keys() if 'gateway' not in pod_name]
+async def test_runtimes_flow_topology(
+    complete_graph_dict, uses_before, uses_after, port_generator
+):
+    pods = [
+        pod_name for pod_name in complete_graph_dict.keys() if 'gateway' not in pod_name
+    ]
     runtime_processes = []
     pod_addresses = '{'
     for pod in pods:
         if uses_before:
-            uses_before_port, uses_before_process = await _create_worker(pod, port_generator, type='uses_before')
+            uses_before_port, uses_before_process = await _create_worker(
+                pod, port_generator, type='uses_before'
+            )
             AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
                 timeout=5.0,
                 ready_or_shutdown_event=threading.Event(),
@@ -124,7 +134,9 @@ async def test_runtimes_flow_topology(complete_graph_dict, uses_before, uses_aft
             )
             runtime_processes.append(uses_before_process)
         if uses_after:
-            uses_after_port, uses_after_process = await _create_worker(pod, port_generator, type='uses_after')
+            uses_after_port, uses_after_process = await _create_worker(
+                pod, port_generator, type='uses_after'
+            )
             AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
                 timeout=5.0,
                 ready_or_shutdown_event=threading.Event(),
@@ -222,7 +234,9 @@ async def test_runtimes_shards(polling, port_generator):
         # create worker
         worker_port = port_generator()
         # create a single worker runtime
-        worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port, f'pod0/shard/{i}'))
+        worker_process = multiprocessing.Process(
+            target=_create_worker_runtime, args=(worker_port, f'pod0/shard/{i}')
+        )
         shard_processes.append(worker_process)
         worker_process.start()
 
@@ -294,7 +308,9 @@ async def test_runtimes_replicas(port_generator):
         # create worker
         worker_port = port_generator()
         # create a single worker runtime
-        worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port, f'pod0/{i}'))
+        worker_process = multiprocessing.Process(
+            target=_create_worker_runtime, args=(worker_port, f'pod0/{i}')
+        )
         replica_processes.append(worker_process)
         worker_process.start()
 
@@ -303,7 +319,9 @@ async def test_runtimes_replicas(port_generator):
         connection_list_dict[0].append(f'127.0.0.1:{worker_port}')
 
     # create a single head runtime
-    head_process = multiprocessing.Process(target=_create_head_runtime, args=(head_port, connection_list_dict, 'head'))
+    head_process = multiprocessing.Process(
+        target=_create_head_runtime, args=(head_port, connection_list_dict, 'head')
+    )
     head_process.start()
 
     # create a single gateway runtime
@@ -444,7 +462,9 @@ async def test_runtimes_gateway_worker_direct_connection(port_generator):
     pod_addresses = f'{{"pod0": ["0.0.0.0:{worker_port}"]}}'
 
     # create the shards
-    worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port, f'pod0'))
+    worker_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(worker_port, f'pod0')
+    )
     worker_process.start()
 
     await asyncio.sleep(0.1)
@@ -508,7 +528,9 @@ async def test_runtimes_with_replicas_advance_faster(port_generator):
         connection_list_dict[i].append(f'127.0.0.1:{worker_port}')
 
     # create a single head runtime
-    head_process = multiprocessing.Process(target=_create_head_runtime, args=(head_port, connection_list_dict, 'head'))
+    head_process = multiprocessing.Process(
+        target=_create_head_runtime, args=(head_port, connection_list_dict, 'head')
+    )
     head_process.start()
 
     # create a single gateway runtime
@@ -569,7 +591,9 @@ async def test_runtimes_gateway_to_gateway(port_generator):
     worker_addresses = f'{{"pod0": ["0.0.0.0:{worker_port}"]}}'
 
     # create a single worker runtime
-    worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port,))
+    worker_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(worker_port,)
+    )
     worker_process.start()
 
     # create the "external" gateway runtime
@@ -651,7 +675,9 @@ class FastSlowExecutor(Executor):
 
 async def _create_worker(pod, port_generator, type='worker', executor=None):
     worker_port = port_generator()
-    worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port, f'{pod}/{type}', executor))
+    worker_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(worker_port, f'{pod}/{type}', executor)
+    )
     worker_process.start()
     return worker_port, worker_process
 
@@ -690,7 +716,9 @@ def _create_head_runtime(
         runtime.run_forever()
 
 
-def _create_gateway_runtime(graph_description, pod_addresses, port, protocol='grpc', retries=-1):
+def _create_gateway_runtime(
+    graph_description, pod_addresses, port, protocol='grpc', retries=-1
+):
     with GatewayRuntime(
         set_gateway_parser().parse_args(
             [
@@ -727,7 +755,9 @@ async def test_head_runtime_with_offline_shards(port_generator):
         # create worker
         worker_port = port_generator()
         # create a single worker runtime
-        worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port, f'pod0/shard/{i}'))
+        worker_process = multiprocessing.Process(
+            target=_create_worker_runtime, args=(worker_port, f'pod0/shard/{i}')
+        )
         shard_processes.append(worker_process)
         worker_process.start()
 
@@ -803,7 +833,9 @@ def test_runtime_slow_processing_readiness(port_generator):
             ) as channel:
                 stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
                 resp, _ = stub.process_single_data.with_call(
-                    list(request_generator('/', DocumentArray([Document(text='abc')])))[0]
+                    list(request_generator('/', DocumentArray([Document(text='abc')])))[
+                        0
+                    ]
                 )
                 assert resp.docs[0].text == 'abc'
 

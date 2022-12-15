@@ -122,9 +122,13 @@ class FastAPIBaseGateway(BaseGateway):
 def _install_health_check(app: 'FastAPI', logger):
     health_check_exists = False
     for route in app.routes:
-        if getattr(route, 'path', None) == '/' and 'GET' in getattr(route, 'methods', None):
+        if getattr(route, 'path', None) == '/' and 'GET' in getattr(
+            route, 'methods', None
+        ):
             health_check_exists = True
-            logger.warning('endpoint GET on "/" is used for health checks, make sure it\'s still accessible')
+            logger.warning(
+                'endpoint GET on "/" is used for health checks, make sure it\'s still accessible'
+            )
 
     if not health_check_exists:
         from marie.serve.runtimes.gateway.http.models import JinaHealthModel

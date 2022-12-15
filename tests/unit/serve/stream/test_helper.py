@@ -60,7 +60,9 @@ async def test_iter_requests_with_prefetch():
             yield i
 
     consume_task = asyncio.create_task(consume_requests())
-    async for _ in AsyncRequestsIterator(req_iterator(max_amount_requests), counter, 10):
+    async for _ in AsyncRequestsIterator(
+        req_iterator(max_amount_requests), counter, 10
+    ):
         pass
 
     consume_task.cancel()

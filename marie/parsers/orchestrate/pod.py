@@ -6,7 +6,12 @@ from typing import Dict
 
 from marie import helper
 from marie.enums import PodRoleType
-from marie.parsers.helper import _SHOW_ALL_ARGS, CastToIntAction, KVAppendAction, add_arg_group
+from marie.parsers.helper import (
+    _SHOW_ALL_ARGS,
+    CastToIntAction,
+    KVAppendAction,
+    add_arg_group,
+)
 
 
 @dataclass
@@ -20,7 +25,9 @@ class PodTypeParams:
 POD_PARAMS_MAPPING: Dict[str, PodTypeParams] = {
     'worker': PodTypeParams(runtime_cls='WorkerRuntime', role_type=PodRoleType.WORKER),
     'head': PodTypeParams(runtime_cls='HeadRuntime', role_type=PodRoleType.HEAD),
-    'gateway': PodTypeParams(runtime_cls='GatewayRuntime', role_type=PodRoleType.GATEWAY),
+    'gateway': PodTypeParams(
+        runtime_cls='GatewayRuntime', role_type=PodRoleType.GATEWAY
+    ),
 }
 
 
@@ -70,7 +77,9 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
         type=PodRoleType.from_string,
         choices=list(PodRoleType),
         default=POD_PARAMS_MAPPING[pod_type].role_type,
-        help='The role of this Pod in a Deployment' if _SHOW_ALL_ARGS else argparse.SUPPRESS,
+        help='The role of this Pod in a Deployment'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
     )
 
     gp.add_argument(

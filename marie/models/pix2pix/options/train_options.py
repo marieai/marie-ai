@@ -22,7 +22,9 @@ class TrainOptions(BaseOptions):
             default=4,
             help='if positive, display all images in a single visdom web panel with certain number of images per row.',
         )
-        parser.add_argument('--display_id', type=int, default=1, help='window id of the web display')
+        parser.add_argument(
+            '--display_id', type=int, default=1, help='window id of the web display'
+        )
         parser.add_argument(
             '--display_server',
             type=str,
@@ -87,7 +89,9 @@ class TrainOptions(BaseOptions):
             default=1,
             help='the starting epoch count, we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>, ...',
         )
-        parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
+        parser.add_argument(
+            '--phase', type=str, default='train', help='train, val, test, etc'
+        )
         # training parameters
         parser.add_argument(
             '--n_epochs',
@@ -101,8 +105,12 @@ class TrainOptions(BaseOptions):
             default=100,
             help='number of epochs to linearly decay learning rate to zero',
         )
-        parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
-        parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
+        parser.add_argument(
+            '--beta1', type=float, default=0.5, help='momentum term of adam'
+        )
+        parser.add_argument(
+            '--lr', type=float, default=0.0002, help='initial learning rate for adam'
+        )
         parser.add_argument(
             '--gan_mode',
             type=str,

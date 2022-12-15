@@ -264,7 +264,9 @@ def main():
             "to be {} in default, to avoid your system being overloaded, "
             "please further tune the variable for optimal performance in "
             "your application as needed. \n"
-            "*****************************************".format(current_env["OMP_NUM_THREADS"])
+            "*****************************************".format(
+                current_env["OMP_NUM_THREADS"]
+            )
         )
 
     for local_rank in range(0, args.nproc_per_node):
@@ -282,9 +284,13 @@ def main():
                 cmd.append("-m")
         else:
             if not args.use_env:
-                raise ValueError("When using the '--no_python' flag, you must also set the '--use_env' flag.")
+                raise ValueError(
+                    "When using the '--no_python' flag, you must also set the '--use_env' flag."
+                )
             if args.module:
-                raise ValueError("Don't use both the '--no_python' flag and the '--module' flag at the same time.")
+                raise ValueError(
+                    "Don't use both the '--no_python' flag and the '--module' flag at the same time."
+                )
 
         cmd.append(args.training_script)
 

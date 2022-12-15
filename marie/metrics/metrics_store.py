@@ -21,7 +21,9 @@ class MetricsStore(object):
         self.model_name = model_name
         self.cache = {}
 
-    def _add_or_update(self, name, value, req_id, unit, metrics_method=None, dimensions=None):
+    def _add_or_update(
+        self, name, value, req_id, unit, metrics_method=None, dimensions=None
+    ):
         """
         Add a metric key value pair
 
@@ -138,7 +140,9 @@ class MetricsStore(object):
             list of dimensions for the metric
         """
         if unit not in ['MB', 'kB', 'GB', 'B']:
-            raise ValueError("The unit for size based metric is one of ['MB','kB', 'GB', 'B']")
+            raise ValueError(
+                "The unit for size based metric is one of ['MB','kB', 'GB', 'B']"
+            )
         req_id = self._get_req(idx)
         self._add_or_update(name, value, req_id, unit, dimensions)
 

@@ -31,7 +31,11 @@ def _get_run_args(print_args: bool = True):
             from marie import __resources_path__
 
             p = parser._actions[-1].choices[sys.argv[1]]
-            default_args = {a.dest: a.default for a in p._actions if isinstance(a, (_StoreAction, _StoreTrueAction))}
+            default_args = {
+                a.dest: a.default
+                for a in p._actions
+                if isinstance(a, (_StoreAction, _StoreTrueAction))
+            }
 
             with open(os.path.join(__resources_path__, 'marie.logo')) as fp:
                 logo_str = fp.read()

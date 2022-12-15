@@ -24,7 +24,11 @@ class DockerComposeFlow:
         self.timeout_second = timeout_second
 
     def __enter__(self):
-        subprocess.run(f'docker-compose -f {self.dump_path} up --build -d --remove-orphans'.split(' '))
+        subprocess.run(
+            f'docker-compose -f {self.dump_path} up --build -d --remove-orphans'.split(
+                ' '
+            )
+        )
 
         container_ids = (
             subprocess.run(
@@ -54,7 +58,9 @@ class DockerComposeFlow:
             raise RuntimeError('Docker containers are not healthy')
 
     @staticmethod
-    def _are_all_container_healthy(container_ids: List[str], client: docker.client.DockerClient) -> bool:
+    def _are_all_container_healthy(
+        container_ids: List[str], client: docker.client.DockerClient
+    ) -> bool:
 
         for id_ in container_ids:
             status = client.containers.get(id_).attrs['State']['Health']['Status']
@@ -64,7 +70,9 @@ class DockerComposeFlow:
         return True
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        subprocess.run(f'docker-compose -f {self.dump_path} down --remove-orphans'.split(' '))
+        subprocess.run(
+            f'docker-compose -f {self.dump_path} down --remove-orphans'.split(' ')
+        )
 
 
 async def run_test(flow, endpoint, num_docs=10, request_size=10):
@@ -177,8 +185,12 @@ async def test_flow_with_needs(logger, flow_with_needs, tmpdir, docker_images):
         docs = resp[0].docs
         assert len(docs) == 10
         for doc in docs:
-            path_1 = set(doc.tags['traversed-executors']) == expected_traversed_executors_0
-            path_2 = set(doc.tags['traversed-executors']) == expected_traversed_executors_1
+            path_1 = (
+                set(doc.tags['traversed-executors']) == expected_traversed_executors_0
+            )
+            path_2 = (
+                set(doc.tags['traversed-executors']) == expected_traversed_executors_1
+            )
             assert path_1 or path_2
 
 
@@ -194,7 +206,9 @@ async def test_flow_monitoring(logger, tmpdir, docker_images, port_generator):
     port1 = port_generator()
     port2 = port_generator()
 
-    flow = Flow(name='test-flow-monitoring', monitoring=True, port_monitoring=port1).add(
+    flow = Flow(
+        name='test-flow-monitoring', monitoring=True, port_monitoring=port1
+    ).add(
         name='segmenter',
         uses=f'docker://{docker_images[0]}',
         monitoring=True,
@@ -220,7 +234,9 @@ async def test_flow_with_sharding(flow_with_sharding, polling, tmpdir):
     flow_with_sharding.to_docker_compose_yaml(dump_path)
 
     with DockerComposeFlow(dump_path):
-        resp = await run_test(flow=flow_with_sharding, endpoint='/debug', num_docs=10, request_size=1)
+        resp = await run_test(
+            flow=flow_with_sharding, endpoint='/debug', num_docs=10, request_size=1
+        )
 
     assert len(resp) == 10
     docs = resp[0].docs
@@ -259,7 +275,9 @@ async def test_flow_with_sharding(flow_with_sharding, polling, tmpdir):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.asyncio
-@pytest.mark.parametrize('docker_images', [['test-executor', 'jinaai/jina']], indirect=True)
+@pytest.mark.parametrize(
+    'docker_images', [['test-executor', 'jinaai/jina']], indirect=True
+)
 async def test_flow_with_configmap(flow_configmap, docker_images, tmpdir):
     dump_path = os.path.join(str(tmpdir), 'docker-compose-flow-configmap.yml')
     flow_configmap.to_docker_compose_yaml(dump_path)
@@ -286,7 +304,9 @@ async def test_flow_with_configmap(flow_configmap, docker_images, tmpdir):
     indirect=True,
 )
 async def test_flow_with_workspace(logger, docker_images, tmpdir):
-    flow = Flow(name='docker-compose-flow-with_workspace', port=9090, protocol='http').add(
+    flow = Flow(
+        name='docker-compose-flow-with_workspace', port=9090, protocol='http'
+    ).add(
         name='test_executor',
         uses=f'docker://{docker_images[0]}',
         workspace='/shared',
@@ -369,7 +389,9 @@ def test_flow_with_multiprotocol_gateway(logger, docker_images, tmpdir):
         protocol=['http', 'grpc'],
     )
 
-    dump_path = os.path.join(str(tmpdir), 'docker-compose-flow-multiprotocol-gateway.yml')
+    dump_path = os.path.join(
+        str(tmpdir), 'docker-compose-flow-multiprotocol-gateway.yml'
+    )
     flow.to_docker_compose_yaml(dump_path)
 
     with DockerComposeFlow(dump_path):

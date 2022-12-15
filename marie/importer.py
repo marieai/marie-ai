@@ -45,7 +45,12 @@ class ImportExtensions:
             missing_module = self._pkg_name or exc_val.name
             with open(os.path.join(__resources_path__, 'extra-requirements.txt')) as fp:
                 for v in fp:
-                    if v.strip() and not v.startswith('#') and v.startswith(missing_module) and ':' in v:
+                    if (
+                        v.strip()
+                        and not v.startswith('#')
+                        and v.startswith(missing_module)
+                        and ':' in v
+                    ):
                         missing_module, install_tags = v.split(':')
                         self._tags.append(missing_module)
                         self._tags.extend(vv.strip() for vv in install_tags.split(','))
@@ -60,7 +65,9 @@ class ImportExtensions:
                 err_msg = f'''Python package "{colored(missing_module, attrs='bold')}" is not installed, {req_msg}.
                     You are trying to use a feature not enabled by your current Jina installation.'''
 
-                avail_tags = ' '.join(colored(f'[{tag}]', attrs='bold') for tag in self._tags)
+                avail_tags = ' '.join(
+                    colored(f'[{tag}]', attrs='bold') for tag in self._tags
+                )
                 err_msg += (
                     '\n\nTo enable this feature, use'
                     f' {colored("pip install jina[TAG]", attrs="bold")}, where'

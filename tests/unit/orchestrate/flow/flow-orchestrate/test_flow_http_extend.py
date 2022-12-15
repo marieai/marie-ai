@@ -10,7 +10,9 @@ class MyExec(Executor):
 
 
 def test_flow_debug_endpoints():
-    f1 = Flow(protocol='http', no_debug_endpoints=True, no_crud_endpoints=True).add(uses=MyExec)
+    f1 = Flow(protocol='http', no_debug_endpoints=True, no_crud_endpoints=True).add(
+        uses=MyExec
+    )
 
     with pytest.raises(BadClient):
         with f1:
@@ -22,7 +24,9 @@ def test_flow_debug_endpoints():
 
 
 def test_flow_expose_endpoints():
-    f1 = Flow(protocol='http', no_debug_endpoints=True, no_crud_endpoints=True).add(uses=MyExec)
+    f1 = Flow(protocol='http', no_debug_endpoints=True, no_crud_endpoints=True).add(
+        uses=MyExec
+    )
     import requests
 
     with f1:

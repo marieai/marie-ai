@@ -64,7 +64,9 @@ class Box2BoxTransform(object):
         dh = wh * torch.log(target_heights / src_heights)
 
         deltas = torch.stack((dx, dy, dw, dh), dim=1)
-        assert (src_widths > 0).all().item(), "Input boxes to Box2BoxTransform are not valid!"
+        assert (
+            (src_widths > 0).all().item()
+        ), "Input boxes to Box2BoxTransform are not valid!"
         return deltas
 
     def apply_deltas(self, deltas, boxes):
@@ -77,7 +79,9 @@ class Box2BoxTransform(object):
                 box transformations for the single box boxes[i].
             boxes (Tensor): boxes to transform, of shape (N, 4)
         """
-        assert torch.isfinite(deltas).all().item(), "Box regression deltas become infinite or NaN!"
+        assert (
+            torch.isfinite(deltas).all().item()
+        ), "Box regression deltas become infinite or NaN!"
         boxes = boxes.to(deltas.dtype)
 
         widths = boxes[:, 2] - boxes[:, 0]
@@ -144,7 +148,9 @@ class Box2BoxTransformRotated(object):
         assert isinstance(src_boxes, torch.Tensor), type(src_boxes)
         assert isinstance(target_boxes, torch.Tensor), type(target_boxes)
 
-        src_ctr_x, src_ctr_y, src_widths, src_heights, src_angles = torch.unbind(src_boxes, dim=1)
+        src_ctr_x, src_ctr_y, src_widths, src_heights, src_angles = torch.unbind(
+            src_boxes, dim=1
+        )
 
         (
             target_ctr_x,
@@ -169,7 +175,9 @@ class Box2BoxTransformRotated(object):
         da *= wa * math.pi / 180.0
 
         deltas = torch.stack((dx, dy, dw, dh, da), dim=1)
-        assert (src_widths > 0).all().item(), "Input boxes to Box2BoxTransformRotated are not valid!"
+        assert (
+            (src_widths > 0).all().item()
+        ), "Input boxes to Box2BoxTransformRotated are not valid!"
         return deltas
 
     def apply_deltas(self, deltas, boxes):
@@ -182,7 +190,9 @@ class Box2BoxTransformRotated(object):
             boxes (Tensor): boxes to transform, of shape (N, 5)
         """
         assert deltas.shape[1] == 5 and boxes.shape[1] == 5
-        assert torch.isfinite(deltas).all().item(), "Box regression deltas become infinite or NaN!"
+        assert (
+            torch.isfinite(deltas).all().item()
+        ), "Box regression deltas become infinite or NaN!"
 
         boxes = boxes.to(deltas.dtype)
 

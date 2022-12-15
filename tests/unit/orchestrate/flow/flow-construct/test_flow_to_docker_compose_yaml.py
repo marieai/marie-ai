@@ -103,9 +103,14 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor1_head_args = executor1_head_service['command']
     assert executor1_head_args[0] == 'executor'
     assert '--name' in executor1_head_args
-    assert executor1_head_args[executor1_head_args.index('--name') + 1] == 'executor1/head'
+    assert (
+        executor1_head_args[executor1_head_args.index('--name') + 1] == 'executor1/head'
+    )
     assert '--runtime-cls' in executor1_head_args
-    assert executor1_head_args[executor1_head_args.index('--runtime-cls') + 1] == 'HeadRuntime'
+    assert (
+        executor1_head_args[executor1_head_args.index('--runtime-cls') + 1]
+        == 'HeadRuntime'
+    )
     assert '--pod-role' in executor1_head_args
     assert executor1_head_args[executor1_head_args.index('--pod-role') + 1] == 'HEAD'
     assert '--native' in executor1_head_args
@@ -127,9 +132,15 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor1_shard0_args = executor1_0_service['command']
     assert executor1_shard0_args[0] == 'executor'
     assert '--name' in executor1_shard0_args
-    assert executor1_shard0_args[executor1_shard0_args.index('--name') + 1] == 'executor1-0'
+    assert (
+        executor1_shard0_args[executor1_shard0_args.index('--name') + 1]
+        == 'executor1-0'
+    )
     assert '--uses-with' in executor1_shard0_args
-    assert executor1_shard0_args[executor1_shard0_args.index('--uses-with') + 1] == '{"param": 0}'
+    assert (
+        executor1_shard0_args[executor1_shard0_args.index('--uses-with') + 1]
+        == '{"param": 0}'
+    )
     assert '--uses-metas' in executor1_shard0_args
     assert '--native' in executor1_shard0_args
     assert '--pod-role' not in executor1_shard0_args
@@ -144,9 +155,15 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor1_shard1_args = executor1_1_service['command']
     assert executor1_shard1_args[0] == 'executor'
     assert '--name' in executor1_shard1_args
-    assert executor1_shard1_args[executor1_shard1_args.index('--name') + 1] == 'executor1-1'
+    assert (
+        executor1_shard1_args[executor1_shard1_args.index('--name') + 1]
+        == 'executor1-1'
+    )
     assert '--uses-with' in executor1_shard1_args
-    assert executor1_shard1_args[executor1_shard1_args.index('--uses-with') + 1] == '{"param": 0}'
+    assert (
+        executor1_shard1_args[executor1_shard1_args.index('--uses-with') + 1]
+        == '{"param": 0}'
+    )
     assert '--uses-metas' in executor1_shard1_args
     assert '--native' in executor1_shard1_args
     assert '--pod-role' not in executor1_shard1_args
@@ -161,9 +178,14 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor2_head_args = executor2_head_service['command']
     assert executor2_head_args[0] == 'executor'
     assert '--name' in executor2_head_args
-    assert executor2_head_args[executor2_head_args.index('--name') + 1] == 'executor2/head'
+    assert (
+        executor2_head_args[executor2_head_args.index('--name') + 1] == 'executor2/head'
+    )
     assert '--runtime-cls' in executor2_head_args
-    assert executor2_head_args[executor2_head_args.index('--runtime-cls') + 1] == 'HeadRuntime'
+    assert (
+        executor2_head_args[executor2_head_args.index('--runtime-cls') + 1]
+        == 'HeadRuntime'
+    )
     assert '--pod-role' in executor2_head_args
     assert executor2_head_args[executor2_head_args.index('--pod-role') + 1] == 'HEAD'
     assert '--native' in executor2_head_args
@@ -179,9 +201,15 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     assert '--uses-after' not in executor2_head_args
     assert '--envs' not in executor2_head_args
     assert '--uses-before-address' in executor2_head_args
-    assert executor2_head_args[executor2_head_args.index('--uses-before-address') + 1] == 'executor2-uses-before:8081'
+    assert (
+        executor2_head_args[executor2_head_args.index('--uses-before-address') + 1]
+        == 'executor2-uses-before:8081'
+    )
     assert '--uses-after-address' in executor2_head_args
-    assert executor2_head_args[executor2_head_args.index('--uses-after-address') + 1] == 'executor2-uses-after:8081'
+    assert (
+        executor2_head_args[executor2_head_args.index('--uses-after-address') + 1]
+        == 'executor2-uses-after:8081'
+    )
 
     executor2_0_rep_0_service = services['executor2-0-rep-0']
     assert executor2_0_rep_0_service['entrypoint'] == ['jina']
@@ -189,9 +217,15 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor2_0_rep_0_args = executor2_0_rep_0_service['command']
     assert executor2_0_rep_0_args[0] == 'executor'
     assert '--name' in executor2_0_rep_0_args
-    assert executor2_0_rep_0_args[executor2_0_rep_0_args.index('--name') + 1] == 'executor2-0/rep-0'
+    assert (
+        executor2_0_rep_0_args[executor2_0_rep_0_args.index('--name') + 1]
+        == 'executor2-0/rep-0'
+    )
     assert '--uses-with' in executor2_0_rep_0_args
-    assert executor2_0_rep_0_args[executor2_0_rep_0_args.index('--uses-with') + 1] == '{"param": 0}'
+    assert (
+        executor2_0_rep_0_args[executor2_0_rep_0_args.index('--uses-with') + 1]
+        == '{"param": 0}'
+    )
     assert '--native' in executor2_0_rep_0_args
     assert '--pod-role' not in executor2_0_rep_0_args
     assert '--runtime-cls' not in executor2_0_rep_0_args
@@ -205,9 +239,15 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     executor2_0_rep_1_args = executor2_0_rep_1_service['command']
     assert executor2_0_rep_1_args[0] == 'executor'
     assert '--name' in executor2_0_rep_1_args
-    assert executor2_0_rep_1_args[executor2_0_rep_1_args.index('--name') + 1] == 'executor2-0/rep-1'
+    assert (
+        executor2_0_rep_1_args[executor2_0_rep_1_args.index('--name') + 1]
+        == 'executor2-0/rep-1'
+    )
     assert '--uses-with' in executor2_0_rep_1_args
-    assert executor2_0_rep_1_args[executor2_0_rep_1_args.index('--uses-with') + 1] == '{"param": 0}'
+    assert (
+        executor2_0_rep_1_args[executor2_0_rep_1_args.index('--uses-with') + 1]
+        == '{"param": 0}'
+    )
     assert '--native' in executor2_0_rep_1_args
     assert '--pod-role' not in executor2_0_rep_1_args
     assert '--runtime-cls' not in executor2_0_rep_1_args
@@ -221,10 +261,16 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     assert 'expose' not in executor2_uses_before_service
     executor2_uses_before_args = executor2_uses_before_service['command']
     assert '--name' in executor2_uses_before_args
-    assert executor2_uses_before_args[executor2_uses_before_args.index('--name') + 1] == 'executor2/uses-before'
+    assert (
+        executor2_uses_before_args[executor2_uses_before_args.index('--name') + 1]
+        == 'executor2/uses-before'
+    )
     assert '--uses-with' not in executor2_uses_before_args
     assert '--uses-metas' in executor2_uses_before_args
-    assert executor2_uses_before_args[executor2_uses_before_args.index('--uses-metas') + 1] == '{}'
+    assert (
+        executor2_uses_before_args[executor2_uses_before_args.index('--uses-metas') + 1]
+        == '{}'
+    )
     assert '--native' in executor2_uses_before_args
     assert '--pod-role' not in executor2_uses_before_args
     assert '--runtime-cls' not in executor2_uses_before_args
@@ -238,10 +284,16 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     assert 'expose' not in executor2_uses_after_service
     executor2_uses_after_args = executor2_uses_after_service['command']
     assert '--name' in executor2_uses_after_args
-    assert executor2_uses_after_args[executor2_uses_after_args.index('--name') + 1] == 'executor2/uses-after'
+    assert (
+        executor2_uses_after_args[executor2_uses_after_args.index('--name') + 1]
+        == 'executor2/uses-after'
+    )
     assert '--uses-with' not in executor2_uses_after_args
     assert '--uses-metas' in executor2_uses_after_args
-    assert executor2_uses_after_args[executor2_uses_after_args.index('--uses-metas') + 1] == '{}'
+    assert (
+        executor2_uses_after_args[executor2_uses_after_args.index('--uses-metas') + 1]
+        == '{}'
+    )
     assert '--native' in executor2_uses_after_args
     assert '--pod-role' not in executor2_uses_after_args
     assert '--runtime-cls' not in executor2_uses_after_args
@@ -284,7 +336,9 @@ def test_docker_compose_set_volume(tmpdir):
     assert configuration['version'] == '3.3'
     assert configuration['networks'] == {'jina-network': {'driver': 'bridge'}}
     services = configuration['services']
-    assert len(services) == 4  # gateway, executor0-head, executor0, executor1-head, executor1, executor2-head, executor2
+    assert (
+        len(services) == 4
+    )  # gateway, executor0-head, executor0, executor1-head, executor1, executor2-head, executor2
     assert set(services.keys()) == {
         'gateway',
         'executor0',
@@ -297,7 +351,9 @@ def test_docker_compose_set_volume(tmpdir):
     assert services['executor0']['volumes'][0].endswith(':/app')
     assert '--workspace' in services['executor0']['command']
     wsp_index = services['executor0']['command'].index('--workspace') + 1
-    assert services['executor0']['command'][wsp_index] == '/app/' + os.path.relpath(path=default_workspace, start=Path.home())
+    assert services['executor0']['command'][wsp_index] == '/app/' + os.path.relpath(
+        path=default_workspace, start=Path.home()
+    )
 
     # check default volume, but respect custom workspace
     assert services['executor1']['volumes'][0].startswith(default_workspace_abspath)
@@ -312,7 +368,9 @@ def test_docker_compose_set_volume(tmpdir):
 
 
 def test_disable_auto_volume(tmpdir):
-    flow = Flow(name='test-flow', port=9090).add(uses='docker://image', name='executor0', disable_auto_volume=True)
+    flow = Flow(name='test-flow', port=9090).add(
+        uses='docker://image', name='executor0', disable_auto_volume=True
+    )
 
     dump_path = os.path.join(str(tmpdir), 'test_flow_docker_compose_volume.yml')
 
@@ -335,7 +393,9 @@ def test_disable_auto_volume(tmpdir):
 
 
 def test_flow_to_docker_compose_sandbox(tmpdir):
-    flow = Flow(name='test-flow', port=8080).add(uses=f'jinahub+sandbox://DummyHubExecutor')
+    flow = Flow(name='test-flow', port=8080).add(
+        uses=f'jinahub+sandbox://DummyHubExecutor'
+    )
 
     dump_path = os.path.join(str(tmpdir), 'test_flow_docker_compose.yml')
 
@@ -351,7 +411,9 @@ def test_flow_to_docker_compose_sandbox(tmpdir):
     gateway_service = services['gateway']
     gateway_args = gateway_service['command']
 
-    deployment_addresses = json.loads(gateway_args[gateway_args.index('--deployments-addresses') + 1])
+    deployment_addresses = json.loads(
+        gateway_args[gateway_args.index('--deployments-addresses') + 1]
+    )
     assert deployment_addresses['executor0'][0].startswith('grpcs://')
 
 
@@ -371,5 +433,11 @@ def test_flow_to_docker_compose_gpus(tmpdir, count):
     services = configuration['services']
     encoder_service = services['encoder']
     assert encoder_service['deploy'] == {
-        'resources': {'reservations': {'devices': [{'driver': 'nvidia', 'count': count, 'capabilities': ['gpu']}]}}
+        'resources': {
+            'reservations': {
+                'devices': [
+                    {'driver': 'nvidia', 'count': count, 'capabilities': ['gpu']}
+                ]
+            }
+        }
     }

@@ -45,13 +45,17 @@ class IcrProcessor(BaseHandler):
         """
 
         logger.debug("ICR processing : {}, {}".format(_id, key))
-        results = self.recognize_from_boxes([image], [0, 0, image.shape[1], image.shape[0]])
+        results = self.recognize_from_boxes(
+            [image], [0, 0, image.shape[1], image.shape[0]]
+        )
         if len(results) == 1:
             r = results[0]
             return r["text"], r["confidence"]
         return None, 0
 
-    def recognize_from_boxes(self, image, boxes, **kwargs) -> typing.List[typing.Dict[str, any]]:
+    def recognize_from_boxes(
+        self, image, boxes, **kwargs
+    ) -> typing.List[typing.Dict[str, any]]:
         """Recognize text from image using lists of bounding boxes.
 
         Args:
@@ -82,8 +86,12 @@ class IcrProcessor(BaseHandler):
         """
 
         logger.debug(f"ICR recognize : {_id}, {key}")
-        assert len(boxes) == len(fragments), "You must provide the same number of box groups as images."
-        assert len(boxes) == len(lines), "You must provide the same number of lines as boxes."
+        assert len(boxes) == len(
+            fragments
+        ), "You must provide the same number of box groups as images."
+        assert len(boxes) == len(
+            lines
+        ), "You must provide the same number of lines as boxes."
         encode_fragments = False
 
         try:
@@ -221,7 +229,9 @@ class IcrProcessor(BaseHandler):
             }
 
             if len(words) != len(aligned_words):
-                raise Exception(f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}")
+                raise Exception(
+                    f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}"
+                )
 
             if False:
                 with open("/tmp/icr/data.json", "w") as f:

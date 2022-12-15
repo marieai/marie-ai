@@ -31,8 +31,12 @@ class TemplateDataset(BaseDataset):
         Returns:
             the modified parser.
         """
-        parser.add_argument('--new_dataset_option', type=float, default=1.0, help='new dataset option')
-        parser.set_defaults(max_dataset_size=10, new_dataset_option=2.0)  # specify dataset-specific default values
+        parser.add_argument(
+            '--new_dataset_option', type=float, default=1.0, help='new dataset option'
+        )
+        parser.set_defaults(
+            max_dataset_size=10, new_dataset_option=2.0
+        )  # specify dataset-specific default values
         return parser
 
     def __init__(self, opt):

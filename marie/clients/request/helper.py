@@ -7,7 +7,9 @@ from marie.enums import DataInputType
 from marie.types.request.data import DataRequest
 
 
-def _new_data_request_from_batch(_kwargs, batch, data_type, endpoint, target, parameters):
+def _new_data_request_from_batch(
+    _kwargs, batch, data_type, endpoint, target, parameters
+):
     req = _new_data_request(endpoint, target, parameters)
 
     # add docs fields
@@ -30,7 +32,9 @@ def _new_data_request(endpoint, target, parameters):
     return req
 
 
-def _new_doc_from_data(data, data_type: DataInputType, **kwargs) -> Tuple['Document', 'DataInputType']:
+def _new_doc_from_data(
+    data, data_type: DataInputType, **kwargs
+) -> Tuple['Document', 'DataInputType']:
     def _build_doc_from_content():
         return Document(content=data, **kwargs), DataInputType.CONTENT
 

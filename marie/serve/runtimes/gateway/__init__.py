@@ -35,7 +35,9 @@ class GatewayRuntime(AsyncNewLoopRuntime):
     def __init__(
         self,
         args: argparse.Namespace,
-        cancel_event: Optional[Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']] = None,
+        cancel_event: Optional[
+            Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
+        ] = None,
         **kwargs,
     ):
         # this order is intentional: The timeout is needed in _create_topology_graph(), called by super
@@ -121,7 +123,9 @@ class GatewayRuntime(AsyncNewLoopRuntime):
     async def _wait_for_cancel(self):
         """Do NOT override this method when inheriting from :class:`GatewayPod`"""
         # handle terminate signals
-        while not self.is_cancel.is_set() and not getattr(self.gateway, '_should_exit', False):
+        while not self.is_cancel.is_set() and not getattr(
+            self.gateway, '_should_exit', False
+        ):
             await asyncio.sleep(0.1)
 
         await self.async_cancel()
@@ -160,11 +164,17 @@ class GatewayRuntime(AsyncNewLoopRuntime):
         :return: True if status is ready else False.
         """
 
-        if protocol is None or protocol == GatewayProtocolType.GRPC or protocol == 'grpc':
+        if (
+            protocol is None
+            or protocol == GatewayProtocolType.GRPC
+            or protocol == 'grpc'
+        ):
             res = AsyncNewLoopRuntime.is_ready(ctrl_address)
         else:
             try:
-                conn = urllib.request.urlopen(url=f'http://{ctrl_address}', timeout=timeout)
+                conn = urllib.request.urlopen(
+                    url=f'http://{ctrl_address}', timeout=timeout
+                )
                 res = conn.code == HTTPStatus.OK
             except:
                 res = False

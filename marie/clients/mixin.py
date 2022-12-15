@@ -56,7 +56,9 @@ class MutateMixin:
             proto = 'https' if self.args.tls else 'http'
             graphql_url = f'{proto}://{self.args.host}:{self.args.port}/graphql'
             endpoint = SgqlcHTTPEndpoint(graphql_url)
-            res = endpoint(mutation, variables=variables, timeout=timeout, extra_headers=headers)
+            res = endpoint(
+                mutation, variables=variables, timeout=timeout, extra_headers=headers
+            )
             if 'errors' in res and res['errors']:
                 msg = 'GraphQL mutation returned the following errors: '
                 for err in res['errors']:
@@ -83,7 +85,9 @@ class AsyncMutateMixin(MutateMixin):
         :param headers: HTTP headers
         :return: dict containing the optional keys ``data`` and ``errors``, for response data and errors.
         """
-        return await get_or_reuse_loop().run_in_executor(None, super().mutate, mutation, variables, timeout, headers)
+        return await get_or_reuse_loop().run_in_executor(
+            None, super().mutate, mutation, variables, timeout, headers
+        )
 
 
 class HealthCheckMixin:
@@ -119,19 +123,25 @@ def _render_response_table(r, st, ed, show_table: bool = True):
 
     elapsed = (ed - st) * 1000
     route = r.routes
-    gateway_time = route[0].end_time.ToMilliseconds() - route[0].start_time.ToMilliseconds()
+    gateway_time = (
+        route[0].end_time.ToMilliseconds() - route[0].start_time.ToMilliseconds()
+    )
     exec_time = {}
 
     if len(route) > 1:
         for r in route[1:]:
-            exec_time[r.executor] = r.end_time.ToMilliseconds() - r.start_time.ToMilliseconds()
+            exec_time[r.executor] = (
+                r.end_time.ToMilliseconds() - r.start_time.ToMilliseconds()
+            )
     network_time = elapsed - gateway_time
     server_network = gateway_time - sum(exec_time.values())
     from rich.table import Table
 
     def make_table(_title, _time, _percent):
         table = Table(show_header=False, box=None)
-        table.add_row(_title, f'[b]{_time:.0f}[/b]ms', f'[dim]{_percent * 100:.0f}%[/dim]')
+        table.add_row(
+            _title, f'[b]{_time:.0f}[/b]ms', f'[dim]{_percent * 100:.0f}%[/dim]'
+        )
         return table
 
     from rich.tree import Tree
@@ -139,7 +149,11 @@ def _render_response_table(r, st, ed, show_table: bool = True):
     t = Tree(make_table('Roundtrip', elapsed, 1))
     t.add(make_table('Client-server network', network_time, network_time / elapsed))
     t2 = t.add(make_table('Server', gateway_time, gateway_time / elapsed))
-    t2.add(make_table('Gateway-executors network', server_network, server_network / gateway_time))
+    t2.add(
+        make_table(
+            'Gateway-executors network', server_network, server_network / gateway_time
+        )
+    )
     for _name, _time in exec_time.items():
         t2.add(make_table(_name, _time, _time / gateway_time))
 

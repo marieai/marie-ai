@@ -8,7 +8,12 @@ from docarray.document.pydantic_model import PydanticDocument, PydanticDocumentA
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from pydantic import BaseConfig, BaseModel, Field, create_model, root_validator
 
-from marie.proto.jina_pb2 import DataRequestProto, JinaInfoProto, RouteProto, StatusProto
+from marie.proto.jina_pb2 import (
+    DataRequestProto,
+    JinaInfoProto,
+    RouteProto,
+    StatusProto,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from google.protobuf.pyext.cpp_message import GeneratedProtocolMessageType
@@ -35,7 +40,9 @@ PROTOBUF_TO_PYTHON_TYPE = {
 }
 
 DESCRIPTION_DATA = 'Data to send, a list of dict/string/bytes that can be converted into a list of `Document` objects'
-DESCRIPTION_TARGET_EXEC = 'A regex string representing the specific pods/deployments targeted by the request.'
+DESCRIPTION_TARGET_EXEC = (
+    'A regex string representing the specific pods/deployments targeted by the request.'
+)
 DESCRIPTION_PARAMETERS = 'A dictionary of parameters to be sent to the executor.'
 DESCRIPTION_EXEC_ENDPOINT = (
     'The endpoint string, by convention starts with `/`. '
@@ -63,7 +70,9 @@ def _get_oneof_validator(oneof_fields: List, oneof_key: str) -> Callable:
 
     def oneof_validator(cls, values):
         if len(set(oneof_fields).intersection(set(values))) > 1:
-            raise ValueError(f'only one field among {oneof_fields} can be set for key {oneof_key}!')
+            raise ValueError(
+                f'only one field among {oneof_fields} can be set for key {oneof_key}!'
+            )
         return values
 
     oneof_validator.__qualname__ = 'validate_' + oneof_key
@@ -83,7 +92,10 @@ def _get_oneof_setter(oneof_fields: List, oneof_key: str) -> Callable:
 
     def oneof_setter(cls, values):
         for oneof_field in oneof_fields:
-            if oneof_field in values and values[oneof_field] == cls.__fields__[oneof_field].default:
+            if (
+                oneof_field in values
+                and values[oneof_field] == cls.__fields__[oneof_field].default
+            ):
                 values.pop(oneof_field)
         return values
 
@@ -91,7 +103,9 @@ def _get_oneof_setter(oneof_fields: List, oneof_key: str) -> Callable:
     return root_validator(pre=False, allow_reuse=True)(oneof_setter)
 
 
-def protobuf_to_pydantic_model(protobuf_model: Union[Descriptor, 'GeneratedProtocolMessageType']) -> BaseModel:
+def protobuf_to_pydantic_model(
+    protobuf_model: Union[Descriptor, 'GeneratedProtocolMessageType']
+) -> BaseModel:
     """
     Converts Protobuf messages to Pydantic model for jsonschema creation/validattion
 
@@ -107,12 +121,18 @@ def protobuf_to_pydantic_model(protobuf_model: Union[Descriptor, 'GeneratedProto
     oneof_fields = defaultdict(list)
     oneof_field_validators = {}
 
-    desc = protobuf_model if isinstance(protobuf_model, Descriptor) else getattr(protobuf_model, 'DESCRIPTOR', None)
+    desc = (
+        protobuf_model
+        if isinstance(protobuf_model, Descriptor)
+        else getattr(protobuf_model, 'DESCRIPTOR', None)
+    )
     if desc:
         model_name = desc.name
         protobuf_fields = desc.fields
     else:
-        raise ValueError(f'protobuf_model is of type {type(protobuf_model)} and has no attribute "DESCRIPTOR"')
+        raise ValueError(
+            f'protobuf_model is of type {type(protobuf_model)} and has no attribute "DESCRIPTOR"'
+        )
 
     if model_name in vars(PROTO_TO_PYDANTIC_MODELS):
         return PROTO_TO_PYDANTIC_MODELS.__getattribute__(model_name)
@@ -163,7 +183,9 @@ def protobuf_to_pydantic_model(protobuf_model: Union[Descriptor, 'GeneratedProto
 
         all_fields[field_name] = (
             field_type,
-            Field(default_factory=default_factory) if default_factory else Field(default=default_value),
+            Field(default_factory=default_factory)
+            if default_factory
+            else Field(default=default_value),
         )
 
     # Post-processing (Handle oneof fields)
@@ -171,7 +193,9 @@ def protobuf_to_pydantic_model(protobuf_model: Union[Descriptor, 'GeneratedProto
         oneof_field_validators[f'oneof_validator_{oneof_k}'] = _get_oneof_validator(
             oneof_fields=oneof_v_list, oneof_key=oneof_k
         )
-        oneof_field_validators[f'oneof_setter_{oneof_k}'] = _get_oneof_setter(oneof_fields=oneof_v_list, oneof_key=oneof_k)
+        oneof_field_validators[f'oneof_setter_{oneof_k}'] = _get_oneof_setter(
+            oneof_fields=oneof_v_list, oneof_key=oneof_k
+        )
 
     CustomConfig.fields = camel_case_fields
     if model_name == 'DocumentProto':
@@ -226,7 +250,12 @@ class JinaRequestModel(BaseModel):
 
     # the dict one is only for compatibility.
     # So we will accept data: {[Doc1.to_dict, Doc2...]} and data: {docs: [[Doc1.to_dict, Doc2...]}
-    data: Optional[Union[PydanticDocumentArray, Dict[str, PydanticDocumentArray],]] = Field(
+    data: Optional[
+        Union[
+            PydanticDocumentArray,
+            Dict[str, PydanticDocumentArray],
+        ]
+    ] = Field(
         None,
         example=[
             {'text': 'hello, world!'},

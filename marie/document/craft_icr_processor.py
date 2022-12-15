@@ -30,7 +30,9 @@ class CraftIcrProcessor(IcrProcessor):
         super().__init__(work_dir, cuda)
         print("CRAFT ICR processor [cuda={}]".format(cuda))
 
-        saved_model = os.path.join(models_dir, "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft", "best_accuracy.pth")
+        saved_model = os.path.join(
+            models_dir, "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft", "best_accuracy.pth"
+        )
 
         if True:
             opt = Object()
@@ -63,7 +65,9 @@ class CraftIcrProcessor(IcrProcessor):
             opt.Prediction = "Attn"
             opt.saved_model = "./models/icr/TPS-ResNet-BiLSTM-Attn/best_accuracy.pth"
             # opt.saved_model = './models/icr/TPS-ResNet-BiLSTM-Attn-case-sensitive/TPS-ResNet-BiLSTM-Attn-case-sensitive.pth'
-            opt.saved_model = "./models/icr/TPS-ResNet-BiLSTM-Attn/TPS-ResNet-BiLSTM-Attn.pth"
+            opt.saved_model = (
+                "./models/icr/TPS-ResNet-BiLSTM-Attn/TPS-ResNet-BiLSTM-Attn.pth"
+            )
             opt.sensitive = False
             opt.imgH = 32
             opt.imgW = 100
@@ -145,7 +149,9 @@ class CraftIcrProcessor(IcrProcessor):
 
         return converter, model
 
-    def recognize_from_fragments(self, images, **kwargs) -> typing.List[typing.Dict[str, any]]:
+    def recognize_from_fragments(
+        self, images, **kwargs
+    ) -> typing.List[typing.Dict[str, any]]:
         """Recognize text from image fragments
 
         Args:
@@ -164,7 +170,9 @@ class CraftIcrProcessor(IcrProcessor):
             opt.batch_size = 192  #
 
             # setup data
-            AlignCollate_data = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+            AlignCollate_data = AlignCollate(
+                imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+            )
             eval_data = MemoryDataset(images=images, opt=opt)
 
             eval_loader = torch.utils.data.DataLoader(
@@ -186,8 +194,14 @@ class CraftIcrProcessor(IcrProcessor):
                     image = image_tensors.to(device)
 
                     # For max length prediction
-                    length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
-                    text_for_pred = torch.LongTensor(batch_size, opt.batch_max_length + 1).fill_(0).to(device)
+                    length_for_pred = torch.IntTensor(
+                        [opt.batch_max_length] * batch_size
+                    ).to(device)
+                    text_for_pred = (
+                        torch.LongTensor(batch_size, opt.batch_max_length + 1)
+                        .fill_(0)
+                        .to(device)
+                    )
 
                     if "CTC" in opt.Prediction:
                         preds = model(image, text_for_pred)
@@ -213,10 +227,14 @@ class CraftIcrProcessor(IcrProcessor):
                     preds_prob = F.softmax(preds, dim=2)
                     preds_max_prob, _ = preds_prob.max(dim=2)
 
-                    for img_name, pred, pred_max_prob in zip(image_labels, preds_str, preds_max_prob):
+                    for img_name, pred, pred_max_prob in zip(
+                        image_labels, preds_str, preds_max_prob
+                    ):
                         if "Attn" in opt.Prediction:
                             pred_EOS = pred.find("[s]")
-                            pred = pred[:pred_EOS]  # prune after "end of sentence" token ([s])
+                            pred = pred[
+                                :pred_EOS
+                            ]  # prune after "end of sentence" token ([s])
                             pred_max_prob = pred_max_prob[:pred_EOS]
 
                         # calculate confidence score (= multiply of pred_max_prob)
@@ -224,10 +242,14 @@ class CraftIcrProcessor(IcrProcessor):
                         # get value from the TensorFloat
                         confidence = confidence_score.item()
                         txt = pred
-                        results.append({"confidence": confidence, "text": txt, "id": img_name})
+                        results.append(
+                            {"confidence": confidence, "text": txt, "id": img_name}
+                        )
 
                         print(f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}")
-                        log.write(f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n")
+                        log.write(
+                            f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n"
+                        )
                     log.close()
 
         except Exception as ex:

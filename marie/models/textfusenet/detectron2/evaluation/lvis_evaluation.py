@@ -87,7 +87,9 @@ class LVISEvaluator(DatasetEvaluator):
                     # use RLE to encode the masks, because they are too large and takes memory
                     # since this evaluator stores outputs of the entire dataset
                     rles = [
-                        mask_util.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
+                        mask_util.encode(
+                            np.array(mask[:, :, None], order="F", dtype="uint8")
+                        )[0]
                         for mask in instances.pred_masks
                     ]
                     for rle in rles:
@@ -99,7 +101,9 @@ class LVISEvaluator(DatasetEvaluator):
                     instances.pred_masks_rle = rles
                     instances.remove("pred_masks")
 
-                prediction["instances"] = instances_to_json(instances, input["image_id"])
+                prediction["instances"] = instances_to_json(
+                    instances, input["image_id"]
+                )
             if "proposals" in output:
                 prediction["proposals"] = output["proposals"].to(self._cpu_device)
             self._predictions.append(prediction)
@@ -137,7 +141,9 @@ class LVISEvaluator(DatasetEvaluator):
         Fill self._results with the metrics of the tasks.
         """
         self._logger.info("Preparing results in the LVIS format ...")
-        self._lvis_results = list(itertools.chain(*[x["instances"] for x in self._predictions]))
+        self._lvis_results = list(
+            itertools.chain(*[x["instances"] for x in self._predictions])
+        )
 
         # unmap the category ids for LVIS (from 0-indexed to 1-indexed)
         for result in self._lvis_results:
@@ -177,7 +183,9 @@ class LVISEvaluator(DatasetEvaluator):
             for prediction in self._predictions:
                 ids.append(prediction["image_id"])
                 boxes.append(prediction["proposals"].proposal_boxes.tensor.numpy())
-                objectness_logits.append(prediction["proposals"].objectness_logits.numpy())
+                objectness_logits.append(
+                    prediction["proposals"].objectness_logits.numpy()
+                )
 
             proposal_data = {
                 "boxes": boxes,
@@ -185,7 +193,9 @@ class LVISEvaluator(DatasetEvaluator):
                 "ids": ids,
                 "bbox_mode": bbox_mode,
             }
-            with PathManager.open(os.path.join(self._output_dir, "box_proposals.pkl"), "wb") as f:
+            with PathManager.open(
+                os.path.join(self._output_dir, "box_proposals.pkl"), "wb"
+            ) as f:
                 pickle.dump(proposal_data, f)
 
         if not self._do_evaluation:
@@ -197,7 +207,9 @@ class LVISEvaluator(DatasetEvaluator):
         areas = {"all": "", "small": "s", "medium": "m", "large": "l"}
         for limit in [100, 1000]:
             for area, suffix in areas.items():
-                stats = _evaluate_box_proposals(self._predictions, self._lvis_api, area=area, limit=limit)
+                stats = _evaluate_box_proposals(
+                    self._predictions, self._lvis_api, area=area, limit=limit
+                )
                 key = "AR{}@{:d}".format(suffix, limit)
                 res[key] = float(stats["ar"].item() * 100)
         self._logger.info("Proposal metrics: \n" + create_small_table(res))
@@ -206,7 +218,9 @@ class LVISEvaluator(DatasetEvaluator):
 
 # inspired from Detectron:
 # https://github.com/facebookresearch/Detectron/blob/a6a835f5b8208c45d0dce217ce9bbda915f44df7/detectron/datasets/json_dataset_evaluator.py#L255 # noqa
-def _evaluate_box_proposals(dataset_predictions, lvis_api, thresholds=None, area="all", limit=None):
+def _evaluate_box_proposals(
+    dataset_predictions, lvis_api, thresholds=None, area="all", limit=None
+):
     """
     Evaluate detection proposal recall metrics. This function is a much
     faster alternative to the official LVIS API recall evaluation code. However,
@@ -249,7 +263,10 @@ def _evaluate_box_proposals(dataset_predictions, lvis_api, thresholds=None, area
 
         ann_ids = lvis_api.get_ann_ids(img_ids=[prediction_dict["image_id"]])
         anno = lvis_api.load_anns(ann_ids)
-        gt_boxes = [BoxMode.convert(obj["bbox"], BoxMode.XYWH_ABS, BoxMode.XYXY_ABS) for obj in anno]
+        gt_boxes = [
+            BoxMode.convert(obj["bbox"], BoxMode.XYWH_ABS, BoxMode.XYXY_ABS)
+            for obj in anno
+        ]
         gt_boxes = torch.as_tensor(gt_boxes).reshape(-1, 4)  # guard against no boxes
         gt_boxes = Boxes(gt_boxes)
         gt_areas = torch.as_tensor([obj["area"] for obj in anno])
@@ -352,5 +369,7 @@ def _evaluate_predictions_on_lvis(lvis_gt, lvis_results, iou_type, class_names=N
     # Pull the standard metrics from the LVIS results
     results = lvis_eval.get_results()
     results = {metric: float(results[metric] * 100) for metric in metrics}
-    logger.info("Evaluation results for {}: \n".format(iou_type) + create_small_table(results))
+    logger.info(
+        "Evaluation results for {}: \n".format(iou_type) + create_small_table(results)
+    )
     return results

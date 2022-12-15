@@ -63,7 +63,9 @@ class CoordinateFormat(Enum):
         return CoordinateFormat.XYWH
 
     @staticmethod
-    def convert(box: np.ndarray, from_mode: "CoordinateFormat", to_mode: "CoordinateFormat") -> np.ndarray:
+    def convert(
+        box: np.ndarray, from_mode: "CoordinateFormat", to_mode: "CoordinateFormat"
+    ) -> np.ndarray:
         """
         Args:
             box: can be a 4-tuple,
@@ -155,7 +157,9 @@ class TextExtractionExecutor(Executor):
             w = img.shape[1]
             # allow for small padding around the component
             padding = 0
-            overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            overlay = (
+                np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+            )
 
             overlay[padding : h + padding, padding : w + padding] = img
 
@@ -165,9 +169,13 @@ class TextExtractionExecutor(Executor):
                 lines,
                 _,
                 line_bboxes,
-            ) = self.box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
+            ) = self.box_processor.extract_bounding_boxes(
+                queue_id, checksum, overlay, pms_mode
+            )
 
-            result, overlay_image = self.icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
+            result, overlay_image = self.icr_processor.recognize(
+                queue_id, checksum, overlay, boxes, img_fragments, lines
+            )
             # change from xywh -> xyxy
             if CoordinateFormat.XYXY == coordinate_format:
                 logger.info("Changing coordinate format from xywh -> xyxy")
@@ -190,15 +198,23 @@ class TextExtractionExecutor(Executor):
 
         return results
 
-    def __process_extract_regions(self, frames, queue_id, checksum, pms_mode, regions, **kwargs):
+    def __process_extract_regions(
+        self, frames, queue_id, checksum, pms_mode, regions, **kwargs
+    ):
         """Process region based extract"""
-        filter_snippets = bool(strtobool(kwargs["filter_snippets"])) if "filter_snippets" in kwargs else False
+        filter_snippets = (
+            bool(strtobool(kwargs["filter_snippets"]))
+            if "filter_snippets" in kwargs
+            else False
+        )
         output = []
         extended = []
 
         for region in regions:
             # validate required fields
-            if not all(key in region for key in ("id", "pageIndex", "x", "y", "w", "h")):
+            if not all(
+                key in region for key in ("id", "pageIndex", "x", "y", "w", "h")
+            ):
                 raise Exception(f"Required key missing in region : {region}")
 
         # allow for small padding around the component
@@ -219,7 +235,10 @@ class TextExtractionExecutor(Executor):
                 overlay = img
 
                 if padding != 0:
-                    overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
+                    overlay = (
+                        np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8)
+                        * 255
+                    )
                     overlay[padding : h + padding, padding : w + padding] = img
 
                 # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
@@ -229,9 +248,13 @@ class TextExtractionExecutor(Executor):
                     lines,
                     _,
                     lines_bboxes,
-                ) = self.box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
+                ) = self.box_processor.extract_bounding_boxes(
+                    queue_id, checksum, overlay, pms_mode
+                )
 
-                result, overlay_image = self.icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
+                result, overlay_image = self.icr_processor.recognize(
+                    queue_id, checksum, overlay, boxes, img_fragments, lines
+                )
 
                 if not filter_snippets:
                     result["overlay_b64"] = encodeToBase64(overlay_image)
@@ -305,15 +328,23 @@ class TextExtractionExecutor(Executor):
 
             pms_mode = PSMode.from_value(payload["mode"] if "mode" in payload else "")
 
-            coordinate_format = CoordinateFormat.from_value(payload["format"] if "format" in payload else "xywh")
-            output_format = OutputFormat.from_value(payload["output"] if "output" in payload else "json")
+            coordinate_format = CoordinateFormat.from_value(
+                payload["format"] if "format" in payload else "xywh"
+            )
+            output_format = OutputFormat.from_value(
+                payload["output"] if "output" in payload else "json"
+            )
 
             regions = payload["regions"] if "regions" in payload else []
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             if "args" in payload:
-                pms_mode = PSMode.from_value(payload["args"]["mode"] if "mode" in payload["args"] else "")
-                output_format = OutputFormat.from_value(payload["args"]["output"] if "output" in payload["args"] else "json")
+                pms_mode = PSMode.from_value(
+                    payload["args"]["mode"] if "mode" in payload["args"] else ""
+                )
+                output_format = OutputFormat.from_value(
+                    payload["args"]["output"] if "output" in payload["args"] else "json"
+                )
 
             frames = array_from_docs(docs)
             frame_len = len(frames)
@@ -330,9 +361,13 @@ class TextExtractionExecutor(Executor):
             )
 
             if len(regions) == 0:
-                results = self.__process_extract_fullpage(frames, queue_id, checksum, pms_mode, coordinate_format)
+                results = self.__process_extract_fullpage(
+                    frames, queue_id, checksum, pms_mode, coordinate_format
+                )
             else:
-                results = self.__process_extract_regions(frames, queue_id, checksum, pms_mode, regions)
+                results = self.__process_extract_regions(
+                    frames, queue_id, checksum, pms_mode, regions
+                )
 
             output = None
 

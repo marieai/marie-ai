@@ -35,9 +35,13 @@ class BaseModel(ABC):
         self.gpu_ids = opt.gpu_ids
         self.isTrain = opt.isTrain
         self.device = (
-            torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu')
+            torch.device('cuda:{}'.format(self.gpu_ids[0]))
+            if self.gpu_ids
+            else torch.device('cpu')
         )  # get device name: CPU or GPU
-        self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)  # save all the checkpoints to save_dir
+        self.save_dir = os.path.join(
+            opt.checkpoints_dir, opt.name
+        )  # save all the checkpoints to save_dir
         if (
             opt.preprocess != 'scale_width'
         ):  # with [scale_width], input images might have different sizes, which hurts the performance of cudnn.benchmark.
@@ -88,7 +92,9 @@ class BaseModel(ABC):
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
         """
         if self.isTrain:
-            self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
+            self.schedulers = [
+                networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers
+            ]
         if not self.isTrain or opt.continue_train:
             load_suffix = 'iter_%d' % opt.load_iter if opt.load_iter > 0 else opt.epoch
             self.load_networks(load_suffix)
@@ -172,13 +178,19 @@ class BaseModel(ABC):
         """Fix InstanceNorm checkpoints incompatibility (prior to 0.4)"""
         key = keys[i]
         if i + 1 == len(keys):  # at the end, pointing to a parameter/buffer
-            if module.__class__.__name__.startswith('InstanceNorm') and (key == 'running_mean' or key == 'running_var'):
+            if module.__class__.__name__.startswith('InstanceNorm') and (
+                key == 'running_mean' or key == 'running_var'
+            ):
                 if getattr(module, key) is None:
                     state_dict.pop('.'.join(keys))
-            if module.__class__.__name__.startswith('InstanceNorm') and (key == 'num_batches_tracked'):
+            if module.__class__.__name__.startswith('InstanceNorm') and (
+                key == 'num_batches_tracked'
+            ):
                 state_dict.pop('.'.join(keys))
         else:
-            self.__patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
+            self.__patch_instance_norm_state_dict(
+                state_dict, getattr(module, key), keys, i + 1
+            )
 
     def load_networks(self, epoch):
         """Load all the networks from the disk.
@@ -201,8 +213,12 @@ class BaseModel(ABC):
                     del state_dict._metadata
 
                 # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
-                    self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
+                for key in list(
+                    state_dict.keys()
+                ):  # need to copy keys here because we mutate in loop
+                    self.__patch_instance_norm_state_dict(
+                        state_dict, net, key.split('.')
+                    )
                 net.load_state_dict(state_dict)
 
     def print_networks(self, verbose):
@@ -220,7 +236,10 @@ class BaseModel(ABC):
                     num_params += param.numel()
                 if verbose:
                     print(net)
-                print('[Network %s] Total number of parameters : %.3f M' % (name, num_params / 1e6))
+                print(
+                    '[Network %s] Total number of parameters : %.3f M'
+                    % (name, num_params / 1e6)
+                )
         print('-----------------------------------------------')
 
     def set_requires_grad(self, nets, requires_grad=False):

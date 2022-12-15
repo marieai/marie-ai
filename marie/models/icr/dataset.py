@@ -25,11 +25,17 @@ class Batch_Balanced_Dataset(object):
         dashed_line = '-' * 80
         print(dashed_line)
         log.write(dashed_line + '\n')
-        print(f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}')
-        log.write(f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}\n')
+        print(
+            f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}'
+        )
+        log.write(
+            f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}\n'
+        )
         assert len(opt.select_data) == len(opt.batch_ratio)
 
-        _AlignCollate = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
+        _AlignCollate = AlignCollate(
+            imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD
+        )
         self.data_loader_list = []
         self.dataloader_iter_list = []
         batch_size_list = []
@@ -38,7 +44,9 @@ class Batch_Balanced_Dataset(object):
             _batch_size = max(round(opt.batch_size * float(batch_ratio_d)), 1)
             print(dashed_line)
             log.write(dashed_line + '\n')
-            _dataset, _dataset_log = hierarchical_dataset(root=opt.train_data, opt=opt, select_data=[selected_d])
+            _dataset, _dataset_log = hierarchical_dataset(
+                root=opt.train_data, opt=opt, select_data=[selected_d]
+            )
             total_number_dataset = len(_dataset)
             log.write(_dataset_log)
 
@@ -47,7 +55,9 @@ class Batch_Balanced_Dataset(object):
             ex) opt.total_data_usage_ratio = 1 indicates 100% usage, and 0.2 indicates 20% usage.
             See 4.2 section in our paper.
             """
-            number_dataset = int(total_number_dataset * float(opt.total_data_usage_ratio))
+            number_dataset = int(
+                total_number_dataset * float(opt.total_data_usage_ratio)
+            )
             dataset_split = [number_dataset, total_number_dataset - number_dataset]
             indices = range(total_number_dataset)
             _dataset, _ = [
@@ -81,7 +91,9 @@ class Batch_Balanced_Dataset(object):
 
         Total_batch_size_log = f'{dashed_line}\n'
         batch_size_sum = '+'.join(batch_size_list)
-        Total_batch_size_log += f'Total_batch_size: {batch_size_sum} = {Total_batch_size}\n'
+        Total_batch_size_log += (
+            f'Total_batch_size: {batch_size_sum} = {Total_batch_size}\n'
+        )
         Total_batch_size_log += f'{dashed_line}'
         opt.batch_size = Total_batch_size
 
@@ -254,7 +266,9 @@ class RawDataset(Dataset):
 
         try:
             if self.opt.rgb:
-                img = Image.open(self.image_path_list[index]).convert('RGB')  # for color image
+                img = Image.open(self.image_path_list[index]).convert(
+                    'RGB'
+                )  # for color image
             else:
                 img = Image.open(self.image_path_list[index]).convert('L')
 
@@ -296,7 +310,9 @@ class NormalizePAD(object):
         Pad_img = torch.FloatTensor(*self.max_size).fill_(0)
         Pad_img[:, :, :w] = img  # right pad
         if self.max_size[2] != w:  # add border Pad
-            Pad_img[:, :, w:] = img[:, :, w - 1].unsqueeze(2).expand(c, h, self.max_size[2] - w)
+            Pad_img[:, :, w:] = (
+                img[:, :, w - 1].unsqueeze(2).expand(c, h, self.max_size[2] - w)
+            )
 
         return Pad_img
 

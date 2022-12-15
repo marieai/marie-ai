@@ -34,7 +34,9 @@ def register_coco_instances(name, metadata, json_file, image_root):
 
     # 2. Optionally, add metadata about this dataset,
     # since they might be useful in evaluation, visualization or logging
-    MetadataCatalog.get(name).set(json_file=json_file, image_root=image_root, evaluator_type="coco", **metadata)
+    MetadataCatalog.get(name).set(
+        json_file=json_file, image_root=image_root, evaluator_type="coco", **metadata
+    )
 
 
 def register_coco_panoptic_separated(
@@ -98,7 +100,9 @@ def register_coco_panoptic_separated(
     )
 
     semantic_name = name + "_stuffonly"
-    DatasetCatalog.register(semantic_name, lambda: load_sem_seg(sem_seg_root, image_root))
+    DatasetCatalog.register(
+        semantic_name, lambda: load_sem_seg(sem_seg_root, image_root)
+    )
     MetadataCatalog.get(semantic_name).set(
         sem_seg_root=sem_seg_root,
         image_root=image_root,

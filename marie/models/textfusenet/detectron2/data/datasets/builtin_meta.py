@@ -294,11 +294,15 @@ def _get_coco_panoptic_separated_meta():
 
     # 54 names for COCO stuff categories (including "things")
     stuff_classes = ["things"] + [
-        k["name"].replace("-other", "").replace("-merged", "") for k in COCO_CATEGORIES if k["isthing"] == 0
+        k["name"].replace("-other", "").replace("-merged", "")
+        for k in COCO_CATEGORIES
+        if k["isthing"] == 0
     ]
 
     # NOTE: I randomly picked a color for things
-    stuff_colors = [[82, 18, 128]] + [k["color"] for k in COCO_CATEGORIES if k["isthing"] == 0]
+    stuff_colors = [[82, 18, 128]] + [
+        k["color"] for k in COCO_CATEGORIES if k["isthing"] == 0
+    ]
     ret = {
         "stuff_dataset_id_to_contiguous_id": stuff_dataset_id_to_contiguous_id,
         "stuff_classes": stuff_classes,

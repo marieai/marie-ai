@@ -26,11 +26,18 @@ class BadExecutor(Executor):
 @pytest.mark.parametrize('protocol', ['http', 'grpc', 'websocket'])
 def test_bad_flow(mocker, protocol):
     def validate(req):
-        bad_routes = [r for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR]
+        bad_routes = [
+            r for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR
+        ]
         assert req.status.code == jina_pb2.StatusProto.ERROR
         assert bad_routes[0].executor == 'r1'
 
-    f = Flow(protocol=protocol).add(name='r1', uses=BadExecutor).add(name='r2').add(name='r3')
+    f = (
+        Flow(protocol=protocol)
+        .add(name='r1', uses=BadExecutor)
+        .add(name='r2')
+        .add(name='r3')
+    )
 
     on_error_mock = mocker.Mock()
 
@@ -46,12 +53,19 @@ def test_bad_flow(mocker, protocol):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_bad_flow_customized(mocker, protocol):
     def validate(req):
-        bad_routes = [r for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR]
+        bad_routes = [
+            r for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR
+        ]
         assert req.status.code == jina_pb2.StatusProto.ERROR
         assert bad_routes[0].executor == 'r2'
         assert bad_routes[0].status.exception.name == 'ZeroDivisionError'
 
-    f = Flow(protocol=protocol).add(name='r1').add(name='r2', uses='!DummyCrafterExcept').add(name='r3', uses='!BaseExecutor')
+    f = (
+        Flow(protocol=protocol)
+        .add(name='r1')
+        .add(name='r2', uses='!DummyCrafterExcept')
+        .add(name='r3', uses='!BaseExecutor')
+    )
 
     with f:
         pass
@@ -77,7 +91,9 @@ class NotImplementedExecutor(Executor):
 def test_except_with_shards(mocker, protocol):
     def validate(req):
         assert req.status.code == jina_pb2.StatusProto.ERROR
-        err_routes = [r.status for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR]
+        err_routes = [
+            r.status for r in req.routes if r.status.code == jina_pb2.StatusProto.ERROR
+        ]
         assert len(err_routes) == 1
         assert err_routes[0].exception.executor == 'DummyCrafterExcept'
         assert err_routes[0].exception.name == 'ZeroDivisionError'
@@ -110,7 +126,11 @@ def test_on_error_callback(mocker, protocol):
         badones = [r for r in x if r.status.code == jina_pb2.StatusProto.ERROR]
         assert badones[0].executor == 'r3'
 
-    f = Flow(protocol=protocol).add(name='r1').add(name='r3', uses=NotImplementedExecutor)
+    f = (
+        Flow(protocol=protocol)
+        .add(name='r1')
+        .add(name='r3', uses=NotImplementedExecutor)
+    )
 
     on_error_mock = mocker.Mock()
 

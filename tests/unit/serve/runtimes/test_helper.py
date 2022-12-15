@@ -56,6 +56,8 @@ def test_parse_specific_param(param, parsed_param, executor_name):
     assert _parse_specific_params(param, executor_name) == parsed_param
 
 
-@pytest.mark.parametrize('name_w_replicas,name', [('exec1/rep-0', 'exec1'), ('exec1', 'exec1')])
+@pytest.mark.parametrize(
+    'name_w_replicas,name', [('exec1/rep-0', 'exec1'), ('exec1', 'exec1')]
+)
 def test_get_name_from_replicas(name_w_replicas, name):
     assert _get_name_from_replicas_name(name_w_replicas) == name

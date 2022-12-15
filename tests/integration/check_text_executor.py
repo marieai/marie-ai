@@ -45,8 +45,12 @@ if __name__ == "__main__":
     visualize_icr(frames, results)
 
     renderer = TextRenderer(config={"preserve_interword_spaces": True})
-    renderer.render(frames, results, output_filename=os.path.join(work_dir_icr, "results.txt"))
+    renderer.render(
+        frames, results, output_filename=os.path.join(work_dir_icr, "results.txt")
+    )
 
     if True:
         renderer = PdfRenderer(config={})
-        renderer.render(frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf"))
+        renderer.render(
+            frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf")
+        )

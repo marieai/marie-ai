@@ -31,7 +31,14 @@ def Client(
     traces_exporter_port: Optional[int] = None,
     tracing: Optional[bool] = False,
     **kwargs,
-) -> Union['AsyncWebSocketClient', 'WebSocketClient', 'AsyncGRPCClient', 'GRPCClient', 'HTTPClient', 'AsyncHTTPClient',]:
+) -> Union[
+    'AsyncWebSocketClient',
+    'WebSocketClient',
+    'AsyncGRPCClient',
+    'GRPCClient',
+    'HTTPClient',
+    'AsyncHTTPClient',
+]:
     """Create a Client. Client is how user interact with Flow
 
     :param asyncio: If set, then the input and output of this Client work in an asynchronous manner.
@@ -57,7 +64,14 @@ def Client(
 
 def Client(
     args: Optional['argparse.Namespace'] = None, **kwargs
-) -> Union['AsyncWebSocketClient', 'WebSocketClient', 'AsyncGRPCClient', 'GRPCClient', 'HTTPClient', 'AsyncHTTPClient',]:
+) -> Union[
+    'AsyncWebSocketClient',
+    'WebSocketClient',
+    'AsyncGRPCClient',
+    'GRPCClient',
+    'HTTPClient',
+    'AsyncHTTPClient',
+]:
     # implementation_stub_inject_start_client
 
     """Convenience function that returns client instance for given protocol.
@@ -102,7 +116,9 @@ def Client(
     ):  # we need to parse the kwargs as soon as possible otherwise to get the gateway type
         args = parse_client(kwargs)
 
-    protocol = args.protocol if args else kwargs.get('protocol', GatewayProtocolType.GRPC)
+    protocol = (
+        args.protocol if args else kwargs.get('protocol', GatewayProtocolType.GRPC)
+    )
     if isinstance(protocol, str):
         protocol = GatewayProtocolType.from_string(protocol)
 

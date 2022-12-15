@@ -38,7 +38,9 @@ def setup_cfg(args):
     # Set score_threshold for builtin models
     cfg.MODEL.RETINANET.SCORE_THRESH_TEST = args.confidence_threshold
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = args.confidence_threshold
-    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
+    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = (
+        args.confidence_threshold
+    )
     cfg.freeze()
     return cfg
 
@@ -120,8 +122,12 @@ class BoxProcessorTextFuseNet(BoxProcessor):
     def extract_bounding_boxes(self, _id, key, src_img, psm=PSMode.SPARSE):
 
         start_time = time.time()
-        debug_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug"))
-        crops_dir = ensure_exists(os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop"))
+        debug_dir = ensure_exists(
+            os.path.join(self.work_dir, _id, "bounding_boxes", key, "debug")
+        )
+        crops_dir = ensure_exists(
+            os.path.join(self.work_dir, _id, "bounding_boxes", key, "crop")
+        )
 
         # deepcopy image so that original is not altered
         img = copy.deepcopy(src_img)

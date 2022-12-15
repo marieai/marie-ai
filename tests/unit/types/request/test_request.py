@@ -182,7 +182,9 @@ def test_send_data_request_wo_data():  # check that when sending a DataRequestWo
     assert deserialized_request.parameters is not None
     assert deserialized_request.is_decompressed_wo_data
 
-    final_request = DataRequestProto.FromString(DataRequestProto.SerializeToString(deserialized_request))
+    final_request = DataRequestProto.FromString(
+        DataRequestProto.SerializeToString(deserialized_request)
+    )
 
     assert len(final_request.docs) == doc_count
     assert final_request.docs == r.docs
@@ -199,13 +201,19 @@ def test_delete_of_pb2_wo_data():  # ensure that pb2_wo_data is destroyed when a
 
     deserialized_request = DataRequest(byte_array)
 
-    assert deserialized_request.parameters is not None  # access the parameters and create the proto wo data
+    assert (
+        deserialized_request.parameters is not None
+    )  # access the parameters and create the proto wo data
     assert deserialized_request.is_decompressed_wo_data
     assert not deserialized_request.is_decompressed_with_data
 
-    assert deserialized_request.docs == r.docs  # access docs, it should destroy the proto wo data
+    assert (
+        deserialized_request.docs == r.docs
+    )  # access docs, it should destroy the proto wo data
 
-    assert not deserialized_request.is_decompressed_wo_data  # check that it is destroyed
+    assert (
+        not deserialized_request.is_decompressed_wo_data
+    )  # check that it is destroyed
     assert deserialized_request.is_decompressed_with_data
 
 
@@ -223,7 +231,9 @@ def test_change_only_params():  # check that when sending a DataRequestWoData th
     assert deserialized_request.parameters is not None
     assert deserialized_request.is_decompressed_wo_data
 
-    final_request = DataRequestProto.FromString(DataRequestProto.SerializeToString(deserialized_request))
+    final_request = DataRequestProto.FromString(
+        DataRequestProto.SerializeToString(deserialized_request)
+    )
 
     assert len(final_request.docs) == doc_count
     assert final_request.docs == r.docs
@@ -237,7 +247,8 @@ def test_proto_wo_data_to_data(request_proto_bytes):
     proto_data.ParseFromString(request_proto_bytes)
 
     assert (  # check that once we serialize both proto have the same content
-        proto_wo_data.SerializePartialToString() == proto_data.SerializePartialToString()
+        proto_wo_data.SerializePartialToString()
+        == proto_data.SerializePartialToString()
     )
 
 
@@ -264,7 +275,8 @@ def test_proto_wo_data_to_param_change_data(request_proto_bytes):
         proto.parameters.update({'b': 1})
 
     assert (  # check that once we serialize both proto have the same content
-        proto_wo_data.SerializePartialToString() == proto_data.SerializePartialToString()
+        proto_wo_data.SerializePartialToString()
+        == proto_data.SerializePartialToString()
     )
 
 

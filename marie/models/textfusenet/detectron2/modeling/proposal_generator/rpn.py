@@ -50,15 +50,23 @@ class StandardRPNHead(nn.Module):
         anchor_generator = build_anchor_generator(cfg, input_shape)
         num_cell_anchors = anchor_generator.num_cell_anchors
         box_dim = anchor_generator.box_dim
-        assert len(set(num_cell_anchors)) == 1, "Each level must have the same number of cell anchors"
+        assert (
+            len(set(num_cell_anchors)) == 1
+        ), "Each level must have the same number of cell anchors"
         num_cell_anchors = num_cell_anchors[0]
 
         # 3x3 conv for the hidden representation
-        self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(
+            in_channels, in_channels, kernel_size=3, stride=1, padding=1
+        )
         # 1x1 conv for predicting objectness logits
-        self.objectness_logits = nn.Conv2d(in_channels, num_cell_anchors, kernel_size=1, stride=1)
+        self.objectness_logits = nn.Conv2d(
+            in_channels, num_cell_anchors, kernel_size=1, stride=1
+        )
         # 1x1 conv for predicting box2box transform deltas
-        self.anchor_deltas = nn.Conv2d(in_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1)
+        self.anchor_deltas = nn.Conv2d(
+            in_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1
+        )
 
         for l in [self.conv, self.objectness_logits, self.anchor_deltas]:
             nn.init.normal_(l.weight, std=0.01)
@@ -108,8 +116,12 @@ class RPN(nn.Module):
         }
         self.boundary_threshold = cfg.MODEL.RPN.BOUNDARY_THRESH
 
-        self.anchor_generator = build_anchor_generator(cfg, [input_shape[f] for f in self.in_features])
-        self.box2box_transform = Box2BoxTransform(weights=cfg.MODEL.RPN.BBOX_REG_WEIGHTS)
+        self.anchor_generator = build_anchor_generator(
+            cfg, [input_shape[f] for f in self.in_features]
+        )
+        self.box2box_transform = Box2BoxTransform(
+            weights=cfg.MODEL.RPN.BBOX_REG_WEIGHTS
+        )
         self.anchor_matcher = Matcher(
             cfg.MODEL.RPN.IOU_THRESHOLDS,
             cfg.MODEL.RPN.IOU_LABELS,
@@ -132,7 +144,9 @@ class RPN(nn.Module):
             proposals: list[Instances] or None
             loss: dict[Tensor]
         """
-        gt_boxes = [x.gt_boxes for x in gt_instances] if gt_instances is not None else None
+        gt_boxes = (
+            [x.gt_boxes for x in gt_instances] if gt_instances is not None else None
+        )
         del gt_instances
         features = [features[f] for f in self.in_features]
         pred_objectness_logits, pred_anchor_deltas = self.rpn_head(features)

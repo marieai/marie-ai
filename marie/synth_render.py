@@ -32,7 +32,9 @@ def setup_cfg(args):
     # Set score_threshold for builtin models
     cfg.MODEL.RETINANET.SCORE_THRESH_TEST = args.confidence_threshold
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = args.confidence_threshold
-    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
+    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = (
+        args.confidence_threshold
+    )
     cfg.freeze()
     return cfg
 
@@ -103,7 +105,9 @@ def render_boxes(img, boxes, scores, classes):
 
     boxes = _convert_boxes(boxes)
     num_instances = len(boxes)
-    assigned_colors = np.array([random_color(rgb=True, maximum=255) for _ in range(num_instances)])
+    assigned_colors = np.array(
+        [random_color(rgb=True, maximum=255) for _ in range(num_instances)]
+    )
     print(f"Number of boxes : {num_instances}")
     # Display in largest to smallest order to reduce occlusion.
     areas = np.prod(boxes[:, 2:] - boxes[:, :2], axis=1)

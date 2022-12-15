@@ -34,9 +34,15 @@ def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
     # this has more operations but is faster on COCO-scale dataset.
     device = masks.device
     if skip_empty:
-        x0_int, y0_int = torch.clamp(boxes.min(dim=0).values.floor()[:2] - 1, min=0).to(dtype=torch.int32)
-        x1_int = torch.clamp(boxes[:, 2].max().ceil() + 1, max=img_w).to(dtype=torch.int32)
-        y1_int = torch.clamp(boxes[:, 3].max().ceil() + 1, max=img_h).to(dtype=torch.int32)
+        x0_int, y0_int = torch.clamp(boxes.min(dim=0).values.floor()[:2] - 1, min=0).to(
+            dtype=torch.int32
+        )
+        x1_int = torch.clamp(boxes[:, 2].max().ceil() + 1, max=img_w).to(
+            dtype=torch.int32
+        )
+        y1_int = torch.clamp(boxes[:, 3].max().ceil() + 1, max=img_h).to(
+            dtype=torch.int32
+        )
     else:
         x0_int, y0_int = 0, 0
         x1_int, y1_int = img_w, img_h
@@ -83,7 +89,9 @@ def paste_masks_in_image(masks, boxes, image_shape, threshold=0.5):
         number of detected object instances and Himage, Wimage are the image width
         and height. img_masks[i] is a binary mask for object instance i.
     """
-    assert masks.shape[-1] == masks.shape[-2], "Only square mask predictions are supported"
+    assert (
+        masks.shape[-1] == masks.shape[-2]
+    ), "Only square mask predictions are supported"
     N = len(masks)
     if N == 0:
         return masks.new_empty((0,) + image_shape, dtype=torch.uint8)
@@ -103,7 +111,9 @@ def paste_masks_in_image(masks, boxes, image_shape, threshold=0.5):
     else:
         # GPU benefits from parallelism for larger chunks, but may have memory issue
         num_chunks = int(np.ceil(N * img_h * img_w * BYTES_PER_FLOAT / GPU_MEM_LIMIT))
-        assert num_chunks <= N, "Default GPU_MEM_LIMIT in mask_ops.py is too small; try increasing it"
+        assert (
+            num_chunks <= N
+        ), "Default GPU_MEM_LIMIT in mask_ops.py is too small; try increasing it"
     chunks = torch.chunk(torch.arange(N, device=device), num_chunks)
 
     img_masks = torch.zeros(
@@ -186,7 +196,9 @@ def paste_mask_in_image_old(mask, box, img_h, img_w, threshold):
     y_0 = max(box[1], 0)
     y_1 = min(box[3] + 1, img_h)
 
-    im_mask[y_0:y_1, x_0:x_1] = mask[(y_0 - box[1]) : (y_1 - box[1]), (x_0 - box[0]) : (x_1 - box[0])]
+    im_mask[y_0:y_1, x_0:x_1] = mask[
+        (y_0 - box[1]) : (y_1 - box[1]), (x_0 - box[0]) : (x_1 - box[0])
+    ]
     return im_mask
 
 

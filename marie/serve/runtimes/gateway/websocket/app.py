@@ -55,21 +55,31 @@ def get_fastapi_app(
         def get_subprotocol(self, headers: Dict):
             try:
                 if 'sec-websocket-protocol' in headers:
-                    subprotocol = WebsocketSubProtocols(headers['sec-websocket-protocol'])
+                    subprotocol = WebsocketSubProtocols(
+                        headers['sec-websocket-protocol']
+                    )
                 elif b'sec-websocket-protocol' in headers:
-                    subprotocol = WebsocketSubProtocols(headers[b'sec-websocket-protocol'].decode())
+                    subprotocol = WebsocketSubProtocols(
+                        headers[b'sec-websocket-protocol'].decode()
+                    )
                 else:
                     subprotocol = WebsocketSubProtocols.JSON
-                    logger.debug(f'no protocol headers passed. Choosing default subprotocol {WebsocketSubProtocols.JSON}')
+                    logger.debug(
+                        f'no protocol headers passed. Choosing default subprotocol {WebsocketSubProtocols.JSON}'
+                    )
             except Exception as e:
-                logger.debug(f'got an exception while setting user\'s subprotocol, defaulting to JSON {e}')
+                logger.debug(
+                    f'got an exception while setting user\'s subprotocol, defaulting to JSON {e}'
+                )
                 subprotocol = WebsocketSubProtocols.JSON
             return subprotocol
 
         async def connect(self, websocket: WebSocket):
             await websocket.accept()
             subprotocol = self.get_subprotocol(dict(websocket.scope['headers']))
-            logger.info(f'client {websocket.client.host}:{websocket.client.port} connected with subprotocol {subprotocol}')
+            logger.info(
+                f'client {websocket.client.host}:{websocket.client.port} connected with subprotocol {subprotocol}'
+            )
             self.active_connections.append(websocket)
             self.protocol_dict[self.get_client(websocket)] = subprotocol
 
@@ -91,7 +101,9 @@ def get_fastapi_app(
             except WebSocketDisconnect:
                 pass
 
-        async def send(self, websocket: WebSocket, data: Union[DataRequest, StatusMessage]) -> None:
+        async def send(
+            self, websocket: WebSocket, data: Union[DataRequest, StatusMessage]
+        ) -> None:
             subprotocol = self.protocol_dict[self.get_client(websocket)]
             if subprotocol == WebsocketSubProtocols.JSON:
                 return await websocket.send_json(data.to_dict(), mode='text')
@@ -158,7 +170,9 @@ def get_fastapi_app(
                         req_generator_input = JinaEndpointRequestModel(**request).dict()
                         req_generator_input['data_type'] = DataInputType.DICT
                         if request['data'] is not None and 'docs' in request['data']:
-                            req_generator_input['data'] = req_generator_input['data']['docs']
+                            req_generator_input['data'] = req_generator_input['data'][
+                                'docs'
+                            ]
 
                         # you can't do `yield from` inside an async function
                         for data_request in request_generator(**req_generator_input):
@@ -179,11 +193,15 @@ def get_fastapi_app(
             fallback_msg = (
                 f'Connection to deployment at {err.dest_addr} timed out. You can adjust `timeout_send` attribute.'
                 if err.code() == grpc.StatusCode.DEADLINE_EXCEEDED
-                else (f'Network error while connecting to deployment at {err.dest_addr}. It may be down.')
+                else (
+                    f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
+                )
             )
             msg = (
                 err.details()
-                if _fits_ws_close_msg(err.details())  # some messages are too long for ws closing message
+                if _fits_ws_close_msg(
+                    err.details()
+                )  # some messages are too long for ws closing message
                 else fallback_msg
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
@@ -268,7 +286,9 @@ def get_fastapi_app(
             msg = (
                 err.details()
                 if _fits_ws_close_msg(err.details())  # some messages are too long
-                else (f'Network error while connecting to deployment at {err.dest_addr}. It may be down.')
+                else (
+                    f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
+                )
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
         except WebSocketDisconnect:

@@ -233,7 +233,9 @@ class SimpleTrainer(TrainerBase):
     def _detect_anomaly(self, losses, loss_dict):
         if not torch.isfinite(losses).all():
             raise FloatingPointError(
-                "Loss became infinite or NaN at iteration={}!\nloss_dict = {}".format(self.iter, loss_dict)
+                "Loss became infinite or NaN at iteration={}!\nloss_dict = {}".format(
+                    self.iter, loss_dict
+                )
             )
 
     def _write_metrics(self, metrics_dict: dict):
@@ -242,7 +244,8 @@ class SimpleTrainer(TrainerBase):
             metrics_dict (dict): dict of scalar metrics
         """
         metrics_dict = {
-            k: v.detach().cpu().item() if isinstance(v, torch.Tensor) else float(v) for k, v in metrics_dict.items()
+            k: v.detach().cpu().item() if isinstance(v, torch.Tensor) else float(v)
+            for k, v in metrics_dict.items()
         }
         # gather metrics among all workers for logging
         # This assumes we do DDP-style training, which is currently the only
@@ -257,7 +260,10 @@ class SimpleTrainer(TrainerBase):
                 self.storage.put_scalar("data_time", data_time)
 
             # average the rest metrics
-            metrics_dict = {k: np.mean([x[k] for x in all_metrics_dict]) for k in all_metrics_dict[0].keys()}
+            metrics_dict = {
+                k: np.mean([x[k] for x in all_metrics_dict])
+                for k in all_metrics_dict[0].keys()
+            }
             total_losses_reduced = sum(loss for loss in metrics_dict.values())
 
             self.storage.put_scalar("total_loss", total_losses_reduced)

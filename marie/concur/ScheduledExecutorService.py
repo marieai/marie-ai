@@ -66,7 +66,9 @@ class ScheduledExecutorService:
         pass
 
     @abstractmethod
-    def schedule_at_fixed_rate(self, func: Callable, delay: int, unit: TimeUnit, *args, **kwargs):
+    def schedule_at_fixed_rate(
+        self, func: Callable, delay: int, unit: TimeUnit, *args, **kwargs
+    ):
         pass
 
     @abstractmethod
@@ -93,7 +95,9 @@ async def repeat(interval: float, func: Callable, *args, **kwargs):
 
 
 class ScheduledTask:
-    def __init__(self, interval: float, func: Callable, task_name: str, *args, **kwargs):
+    def __init__(
+        self, interval: float, func: Callable, task_name: str, *args, **kwargs
+    ):
         self.interval = interval
         self.func = func
         self.args = args
@@ -147,14 +151,20 @@ class ScheduledTask:
                             t.cancel()
 
         while True:
-            await asyncio.gather(self.func(*self.args, **self.kwargs), asyncio.sleep(self.interval))
+            await asyncio.gather(
+                self.func(*self.args, **self.kwargs), asyncio.sleep(self.interval)
+            )
 
         # return repeat(self.interval, self.func, *self.args, **self.kwargs)
 
 
 async def shutdown(sig, loop):
     print("caught {0}".format(sig.name))
-    tasks = [task for task in asyncio.Task.all_tasks() if task is not asyncio.tasks.Task.current_task()]
+    tasks = [
+        task
+        for task in asyncio.Task.all_tasks()
+        if task is not asyncio.tasks.Task.current_task()
+    ]
     list(map(lambda task: task.cancel(), tasks))
     results = await asyncio.gather(*tasks, return_exceptions=True)
     print("finished awaiting cancelled tasks, results: {0}".format(results))
@@ -184,7 +194,9 @@ class ScheduledAsyncioExecutorService(ScheduledExecutorService):
                 # )
                 self._loop.add_signal_handler(
                     getattr(signal, signame),
-                    functools.partial(asyncio.ensure_future, shutdown(signal.SIGTERM, self._loop)),
+                    functools.partial(
+                        asyncio.ensure_future, shutdown(signal.SIGTERM, self._loop)
+                    ),
                 )
         except (ValueError, RuntimeError) as exc:
             self.logger.warning(
@@ -239,13 +251,17 @@ class ScheduledAsyncioExecutorService(ScheduledExecutorService):
 
         raise NotImplementedError
 
-    def schedule_at_fixed_rate(self, func: Callable, interval: float, unit: TimeUnit, *args, **kwargs) -> ScheduledTask:
+    def schedule_at_fixed_rate(
+        self, func: Callable, interval: float, unit: TimeUnit, *args, **kwargs
+    ) -> ScheduledTask:
         if not iscoroutinefunction(func):
             raise RuntimeError
         # task = asyncio.ensure_future(repeat(interval, func, *args, **kwargs))
         # return task
 
-        scheduled_task = ScheduledTask(interval, func, f"scheduled-task-{len(self.tasks)}", *args, **kwargs)
+        scheduled_task = ScheduledTask(
+            interval, func, f"scheduled-task-{len(self.tasks)}", *args, **kwargs
+        )
 
         scheduled_task.start()
 

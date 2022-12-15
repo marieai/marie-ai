@@ -128,13 +128,17 @@ def SROIETask2(root_dir: str, bpe, target_dict, crop_img_output_dir=None):
 
             if not (crop_w > 0 and crop_h > 0):
                 logger.warning(
-                    'Error occurs during image cropping: {} has a zero area bbox.'.format(os.path.basename(jpg_path))
+                    'Error occurs during image cropping: {} has a zero area bbox.'.format(
+                        os.path.basename(jpg_path)
+                    )
                 )
                 continue
             crop_img_id += 1
             crop_im = im.crop(ann['bbox'])
             if crop_img_output_dir:
-                crop_im.save(os.path.join(crop_img_output_dir, '{:d}.jpg'.format(crop_img_id)))
+                crop_im.save(
+                    os.path.join(crop_img_output_dir, '{:d}.jpg'.format(crop_img_id))
+                )
             crop_img_dict = {
                 'img': crop_im,
                 'file_name': jpg_path,
@@ -149,12 +153,16 @@ def SROIETask2(root_dir: str, bpe, target_dict, crop_img_output_dir=None):
 
 
 class SROIETextRecognitionDataset(FairseqDataset):
-    def __init__(self, root_dir, tfm, bpe_parser, target_dict, crop_img_output_dir=None):
+    def __init__(
+        self, root_dir, tfm, bpe_parser, target_dict, crop_img_output_dir=None
+    ):
         self.root_dir = root_dir
         self.tfm = tfm
         self.target_dict = target_dict
         # self.bpe_parser = bpe_parser
-        self.ori_data, self.data = SROIETask2(root_dir, bpe_parser, target_dict, crop_img_output_dir)
+        self.ori_data, self.data = SROIETask2(
+            root_dir, bpe_parser, target_dict, crop_img_output_dir
+        )
 
     def __len__(self):
         return len(self.data)

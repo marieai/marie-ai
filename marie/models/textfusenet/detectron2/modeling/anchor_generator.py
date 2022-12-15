@@ -40,8 +40,12 @@ class BufferList(nn.Module):
 
 def _create_grid_offsets(size, stride, device):
     grid_height, grid_width = size
-    shifts_x = torch.arange(0, grid_width * stride, step=stride, dtype=torch.float32, device=device)
-    shifts_y = torch.arange(0, grid_height * stride, step=stride, dtype=torch.float32, device=device)
+    shifts_x = torch.arange(
+        0, grid_width * stride, step=stride, dtype=torch.float32, device=device
+    )
+    shifts_y = torch.arange(
+        0, grid_height * stride, step=stride, dtype=torch.float32, device=device
+    )
     shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
     shift_x = shift_x.reshape(-1)
     shift_y = shift_y.reshape(-1)
@@ -88,7 +92,10 @@ class DefaultAnchorGenerator(nn.Module):
         assert self.num_features == len(sizes)
         assert self.num_features == len(aspect_ratios)
 
-        cell_anchors = [self.generate_cell_anchors(s, a).float() for s, a in zip(sizes, aspect_ratios)]
+        cell_anchors = [
+            self.generate_cell_anchors(s, a).float()
+            for s, a in zip(sizes, aspect_ratios)
+        ]
 
         return BufferList(cell_anchors)
 
@@ -116,15 +123,21 @@ class DefaultAnchorGenerator(nn.Module):
 
     def grid_anchors(self, grid_sizes):
         anchors = []
-        for size, stride, base_anchors in zip(grid_sizes, self.strides, self.cell_anchors):
+        for size, stride, base_anchors in zip(
+            grid_sizes, self.strides, self.cell_anchors
+        ):
             shift_x, shift_y = _create_grid_offsets(size, stride, base_anchors.device)
             shifts = torch.stack((shift_x, shift_y, shift_x, shift_y), dim=1)
 
-            anchors.append((shifts.view(-1, 1, 4) + base_anchors.view(1, -1, 4)).reshape(-1, 4))
+            anchors.append(
+                (shifts.view(-1, 1, 4) + base_anchors.view(1, -1, 4)).reshape(-1, 4)
+            )
 
         return anchors
 
-    def generate_cell_anchors(self, sizes=(32, 64, 128, 256, 512), aspect_ratios=(0.5, 1, 2)):
+    def generate_cell_anchors(
+        self, sizes=(32, 64, 128, 256, 512), aspect_ratios=(0.5, 1, 2)
+    ):
         """
         Generate a tensor storing anchor boxes, which are continuous geometric rectangles
         centered on one feature map point sample. We can later build the set of anchors
@@ -201,7 +214,9 @@ class RotatedAnchorGenerator(nn.Module):
         # fmt: on
 
         self.num_features = len(self.strides)
-        self.cell_anchors = self._calculate_anchors(sizes, aspect_ratios, angles, self.strides)
+        self.cell_anchors = self._calculate_anchors(
+            sizes, aspect_ratios, angles, self.strides
+        )
 
     def _calculate_anchors(self, sizes, aspect_ratios, angles, feature_strides):
         """
@@ -269,12 +284,16 @@ class RotatedAnchorGenerator(nn.Module):
 
     def grid_anchors(self, grid_sizes):
         anchors = []
-        for size, stride, base_anchors in zip(grid_sizes, self.strides, self.cell_anchors):
+        for size, stride, base_anchors in zip(
+            grid_sizes, self.strides, self.cell_anchors
+        ):
             shift_x, shift_y = _create_grid_offsets(size, stride, base_anchors.device)
             zeros = torch.zeros_like(shift_x)
             shifts = torch.stack((shift_x, shift_y, zeros, zeros, zeros), dim=1)
 
-            anchors.append((shifts.view(-1, 1, 5) + base_anchors.view(1, -1, 5)).reshape(-1, 5))
+            anchors.append(
+                (shifts.view(-1, 1, 5) + base_anchors.view(1, -1, 5)).reshape(-1, 5)
+            )
 
         return anchors
 

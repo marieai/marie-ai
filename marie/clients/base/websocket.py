@@ -46,7 +46,9 @@ class WebSocketBaseClient(BaseClient):
                         async for response in iolet.recv_dry_run():
                             return response
                     except Exception as exc:
-                        self.logger.error(f'Error while fetching response from Websocket server {exc!r}')
+                        self.logger.error(
+                            f'Error while fetching response from Websocket server {exc!r}'
+                        )
                         raise
 
                 async def _send():
@@ -55,7 +57,9 @@ class WebSocketBaseClient(BaseClient):
                 receive_task = asyncio.create_task(_receive())
 
                 if receive_task.done():
-                    raise RuntimeError('receive task not running, can not send messages')
+                    raise RuntimeError(
+                        'receive task not running, can not send messages'
+                    )
                 try:
                     send_task = asyncio.create_task(_send())
                     _, response_result = await asyncio.gather(send_task, receive_task)
@@ -67,7 +71,9 @@ class WebSocketBaseClient(BaseClient):
                     await receive_task
 
             except Exception as e:
-                self.logger.error(f'Error while getting response from websocket server {e!r}')
+                self.logger.error(
+                    f'Error while getting response from websocket server {e!r}'
+                )
             return False
 
     async def _get_results(
@@ -103,7 +109,9 @@ class WebSocketBaseClient(BaseClient):
         request_iterator = self._get_requests(**kwargs)
 
         async with AsyncExitStack() as stack:
-            cm1 = ProgressBar(total_length=self._inputs_length, disable=not (self.show_progress))
+            cm1 = ProgressBar(
+                total_length=self._inputs_length, disable=not (self.show_progress)
+            )
             p_bar = stack.enter_context(cm1)
 
             proto = 'wss' if self.args.tls else 'ws'
@@ -121,7 +129,9 @@ class WebSocketBaseClient(BaseClient):
                 )
             )
 
-            request_buffer: Dict[str, asyncio.Future] = dict()  # maps request_ids to futures (tasks)
+            request_buffer: Dict[
+                str, asyncio.Future
+            ] = dict()  # maps request_ids to futures (tasks)
 
             def _result_handler(result):
                 return result
@@ -132,7 +142,9 @@ class WebSocketBaseClient(BaseClient):
                         future = request_buffer.pop(response.header.request_id)
                         future.set_result(response)
                     else:
-                        self.logger.warning(f'discarding unexpected response with request id {response.header.request_id}')
+                        self.logger.warning(
+                            f'discarding unexpected response with request id {response.header.request_id}'
+                        )
 
                 """Await messages from WebsocketGateway and process them in the request buffer"""
                 try:
@@ -140,7 +152,9 @@ class WebSocketBaseClient(BaseClient):
                         _response_handler(response)
                 finally:
                     if request_buffer:
-                        self.logger.warning(f'{self.__class__.__name__} closed, cancelling all outstanding requests')
+                        self.logger.warning(
+                            f'{self.__class__.__name__} closed, cancelling all outstanding requests'
+                        )
                         for future in request_buffer.values():
                             future.cancel()
                         request_buffer.clear()
@@ -182,7 +196,9 @@ class WebSocketBaseClient(BaseClient):
             if receive_task.done():
                 raise RuntimeError('receive task not running, can not send messages')
             try:
-                async for response in streamer.stream(request_iterator=request_iterator, results_in_order=results_in_order):
+                async for response in streamer.stream(
+                    request_iterator=request_iterator, results_in_order=results_in_order
+                ):
                     callback_exec(
                         response=response,
                         on_error=on_error,

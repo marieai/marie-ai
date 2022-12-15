@@ -102,14 +102,20 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         self.resolved_models = {}
         self.discovered = False
 
-    def _resolve(self, _name_or_path: Union[str, os.PathLike], **kwargs) -> Tuple[os.PathLike, Dict[str, str]]:
+    def _resolve(
+        self, _name_or_path: Union[str, os.PathLike], **kwargs
+    ) -> Tuple[os.PathLike, Dict[str, str]]:
 
         if os.path.isdir(_name_or_path):
             config = os.path.join(_name_or_path, "marie.json")
         elif os.path.isfile(_name_or_path):
             config = _name_or_path
         else:
-            model_root = kwargs.pop("__model_path__") if "__model_path__" in kwargs else __model_path__
+            model_root = (
+                kwargs.pop("__model_path__")
+                if "__model_path__" in kwargs
+                else __model_path__
+            )
             config = os.path.join(model_root, _name_or_path, "marie.json")
             if not os.path.exists(config):
                 raise RuntimeError(f"Invalid resolution source : {_name_or_path}")
@@ -121,7 +127,11 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
             return os.path.dirname(config), data
 
     def _discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
-        model_root = kwargs.pop("__model_path__") if "__model_path__" in kwargs else __model_path__
+        model_root = (
+            kwargs.pop("__model_path__")
+            if "__model_path__" in kwargs
+            else __model_path__
+        )
 
         self._check_kwargs(kwargs)
         logger.info(f"Resolving native model from : {model_root}")
@@ -132,12 +142,16 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
                 if file == "marie.json":
                     config_path, data = self._resolve(root_dir)
                     if name_key not in data:
-                        logger.warning(f"Key '{name_key}' not found in discovered config")
+                        logger.warning(
+                            f"Key '{name_key}' not found in discovered config"
+                        )
                         continue
                     name = data[name_key]
                     if name in resolved:
                         resolve_val = resolved[name]
-                        raise ValueError(f"Model name '{name_key}' already registered from : {resolve_val}")
+                        raise ValueError(
+                            f"Model name '{name_key}' already registered from : {resolve_val}"
+                        )
 
                     resolved[name] = config_path
         self.resolved_models = resolved
@@ -253,7 +267,9 @@ class ModelRegistry:
         Discover all models from registered handlers
         """
         resolved = {}
-        handlers = [ModelRegistry._PATH_HANDLERS[p] for p in ModelRegistry._PATH_HANDLERS.keys()]
+        handlers = [
+            ModelRegistry._PATH_HANDLERS[p] for p in ModelRegistry._PATH_HANDLERS.keys()
+        ]
         handlers.append(ModelRegistry._NATIVE_PATH_HANDLER)
         for handler in handlers:
             try:

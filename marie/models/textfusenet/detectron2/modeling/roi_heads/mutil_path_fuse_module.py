@@ -47,14 +47,26 @@ class Mutil_Path_Fuse_Module(nn.Module):
 
         self.channels = cfg.MODEL.TEXTFUSENET_SEG_HEAD.CHANNELS
 
-        self.char_conv3x3 = nn.Conv2d(self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.char_conv1x1 = nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.char_conv3x3 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.char_conv1x1 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False
+        )
 
-        self.text_conv3x3 = nn.Conv2d(self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.text_conv1x1 = nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.text_conv3x3 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.text_conv1x1 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False
+        )
 
-        self.conv3x3 = nn.Conv2d(self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv1x1 = nn.Conv2d(self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv3x3 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.conv1x1 = nn.Conv2d(
+            self.channels, self.channels, kernel_size=1, stride=1, padding=0, bias=False
+        )
         self.bn = nn.BatchNorm2d(self.channels)
         self.relu = nn.ReLU(inplace=False)
 
@@ -71,7 +83,9 @@ class Mutil_Path_Fuse_Module(nn.Module):
         if len(proposal_boxes) == 0:
             return x
 
-        self_area, inter_area = get_selfarea_and_interarea(proposal_boxes, proposal_boxes)
+        self_area, inter_area = get_selfarea_and_interarea(
+            proposal_boxes, proposal_boxes
+        )
         self_area = self_area.reshape(1, self_area.shape[0])
         self_area = self_area.repeat(len(proposal_boxes), 1)
         inter_percent = inter_area / self_area
@@ -88,13 +102,17 @@ class Mutil_Path_Fuse_Module(nn.Module):
                 if torch.sum(char_pos[i]) > 1:
                     text = x[char_pos[i]]
                     text = torch.sum(text, dim=0) / (text.shape[0])
-                    text = text.reshape([1, text.shape[0], text.shape[1], text.shape[2]])
+                    text = text.reshape(
+                        [1, text.shape[0], text.shape[1], text.shape[2]]
+                    )
                     text = self.text_conv3x3(text)
                     text = self.text_conv1x1(text)
                     result.append(text)
                 else:
                     text = x[i]
-                    text = text.reshape([1, text.shape[0], text.shape[1], text.shape[2]])
+                    text = text.reshape(
+                        [1, text.shape[0], text.shape[1], text.shape[2]]
+                    )
                     text = self.text_conv3x3(text)
                     text = self.text_conv1x1(text)
                     result.append(text)

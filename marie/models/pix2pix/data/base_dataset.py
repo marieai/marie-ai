@@ -80,7 +80,9 @@ def get_params(opt, size):
     return {'crop_pos': (x, y), 'flip': flip}
 
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, src=False):
+def get_transform(
+    opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, src=False
+):
     transform_list = []
 
     # raise Exception
@@ -90,25 +92,37 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
         osize = [opt.load_size, opt.load_size]
         transform_list.append(transforms.Resize(osize, method))
     elif 'scale_width' in opt.preprocess:
-        transform_list.append(transforms.Lambda(lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)))
+        transform_list.append(
+            transforms.Lambda(
+                lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)
+            )
+        )
 
     if 'crop' in opt.preprocess:
         if params is None:
             transform_list.append(transforms.RandomCrop(opt.crop_size))
         else:
-            transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.crop_size)))
+            transform_list.append(
+                transforms.Lambda(
+                    lambda img: __crop(img, params['crop_pos'], opt.crop_size)
+                )
+            )
 
     if src:
         transform_list.append(transforms.Lambda(lambda img: __augment(img)))
 
     if opt.preprocess == 'none':
-        transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method)))
+        transform_list.append(
+            transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method))
+        )
 
     if not opt.no_flip:
         if params is None:
             transform_list.append(transforms.RandomHorizontalFlip())
         elif params['flip']:
-            transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
+            transform_list.append(
+                transforms.Lambda(lambda img: __flip(img, params['flip']))
+            )
 
     transform_list.append(transforms.Lambda(lambda img: __convert_3_channels(img)))
 

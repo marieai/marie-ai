@@ -32,7 +32,9 @@ def build_optimizer(cfg: CfgNode, model: torch.nn.Module) -> torch.optim.Optimiz
     return optimizer
 
 
-def build_lr_scheduler(cfg: CfgNode, optimizer: torch.optim.Optimizer) -> torch.optim.lr_scheduler._LRScheduler:
+def build_lr_scheduler(
+    cfg: CfgNode, optimizer: torch.optim.Optimizer
+) -> torch.optim.lr_scheduler._LRScheduler:
     """
     Build a LR scheduler from config.
     """

@@ -23,7 +23,9 @@ if os.environ.get("MARIE_IPEX_ENABLE", "false") == "true":
 
         ipex_enabled = True
     except ImportError as error:
-        logger.warning("IPEX is enabled but intel-extension-for-pytorch is not installed. Proceeding without IPEX.")
+        logger.warning(
+            "IPEX is enabled but intel-extension-for-pytorch is not installed. Proceeding without IPEX."
+        )
 
 
 class BaseHandler(metaclass=RegistryHolder):
@@ -140,7 +142,9 @@ class BaseHandler(metaclass=RegistryHolder):
                     output = self.explain_handle(data_preprocess, data)
 
         stop_time = time.time()
-        metrics.add_time("HandlerTime", round((stop_time - start_time) * 1000, 2), None, "ms")
+        metrics.add_time(
+            "HandlerTime", round((stop_time - start_time) * 1000, 2), None, "ms"
+        )
         return output
 
     def _infer_with_profiler(self, data):
@@ -172,8 +176,12 @@ class BaseHandler(metaclass=RegistryHolder):
                 logging.debug("Model name not found in config")
 
             result_path = os.path.join(result_path, dir_name)
-            self.profiler_args["on_trace_ready"] = torch.profiler.tensorboard_trace_handler(result_path)
-            logger.info("Saving chrome trace to : ", result_path)  # pylint: disable=logging-too-many-args
+            self.profiler_args[
+                "on_trace_ready"
+            ] = torch.profiler.tensorboard_trace_handler(result_path)
+            logger.info(
+                "Saving chrome trace to : ", result_path
+            )  # pylint: disable=logging-too-many-args
 
         with profile(**self.profiler_args) as prof:
             with record_function("preprocess"):

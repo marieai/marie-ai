@@ -35,7 +35,9 @@ class LocalEnhancer(nn.Module):
             n_blocks_global,
             norm_layer,
         ).model
-        model_global = [model_global[i] for i in range(len(model_global) - 3)]  # get rid of final convolution layers
+        model_global = [
+            model_global[i] for i in range(len(model_global) - 3)
+        ]  # get rid of final convolution layers
         self.model = nn.Sequential(*model_global)
 
         ###### local enhancer layers #####
@@ -47,14 +49,20 @@ class LocalEnhancer(nn.Module):
                 nn.Conv2d(input_nc, ngf_global, kernel_size=7, padding=0),
                 norm_layer(ngf_global),
                 nn.ReLU(True),
-                nn.Conv2d(ngf_global, ngf_global * 2, kernel_size=3, stride=2, padding=1),
+                nn.Conv2d(
+                    ngf_global, ngf_global * 2, kernel_size=3, stride=2, padding=1
+                ),
                 norm_layer(ngf_global * 2),
                 nn.ReLU(True),
             ]
             ### residual blocks
             model_upsample = []
             for i in range(n_blocks_local):
-                model_upsample += [ResnetBlock(ngf_global * 2, padding_type=padding_type, norm_layer=norm_layer)]
+                model_upsample += [
+                    ResnetBlock(
+                        ngf_global * 2, padding_type=padding_type, norm_layer=norm_layer
+                    )
+                ]
 
             ### upsample
             model_upsample += [
@@ -81,7 +89,9 @@ class LocalEnhancer(nn.Module):
             setattr(self, 'model' + str(n) + '_1', nn.Sequential(*model_downsample))
             setattr(self, 'model' + str(n) + '_2', nn.Sequential(*model_upsample))
 
-        self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+        self.downsample = nn.AvgPool2d(
+            3, stride=2, padding=[1, 1], count_include_pad=False
+        )
 
     def forward(self, input):
         ### create input pyramid
@@ -125,7 +135,11 @@ class GlobalGenerator(nn.Module):
         for i in range(n_downsampling):
             mult = 2**i
             model += [
-                nn.utils.spectral_norm(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)),
+                nn.utils.spectral_norm(
+                    nn.Conv2d(
+                        ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1
+                    )
+                ),
                 norm_layer(ngf * mult * 2),
                 activation,
             ]
@@ -172,9 +186,13 @@ class GlobalGenerator(nn.Module):
 
 # Define a resnet block
 class ResnetBlock(nn.Module):
-    def __init__(self, dim, padding_type, norm_layer, activation=nn.ReLU(True), use_dropout=False):
+    def __init__(
+        self, dim, padding_type, norm_layer, activation=nn.ReLU(True), use_dropout=False
+    ):
         super(ResnetBlock, self).__init__()
-        self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, activation, use_dropout)
+        self.conv_block = self.build_conv_block(
+            dim, padding_type, norm_layer, activation, use_dropout
+        )
 
     def build_conv_block(self, dim, padding_type, norm_layer, activation, use_dropout):
         conv_block = []
@@ -234,7 +252,9 @@ class MultiscaleDiscriminator(nn.Module):
         self.getIntermFeat = getIntermFeat
 
         for i in range(num_D):
-            netD = NLayerDiscriminator(input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
+            netD = NLayerDiscriminator(
+                input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat
+            )
             if getIntermFeat:
                 for j in range(n_layers + 2):
                     setattr(
@@ -245,7 +265,9 @@ class MultiscaleDiscriminator(nn.Module):
             else:
                 setattr(self, 'layer' + str(i), netD.model)
 
-        self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+        self.downsample = nn.AvgPool2d(
+            3, stride=2, padding=[1, 1], count_include_pad=False
+        )
 
     def singleD_forward(self, model, input):
         if self.getIntermFeat:
@@ -262,7 +284,10 @@ class MultiscaleDiscriminator(nn.Module):
         input_downsampled = input
         for i in range(num_D):
             if self.getIntermFeat:
-                model = [getattr(self, 'scale' + str(num_D - 1 - i) + '_layer' + str(j)) for j in range(self.n_layers + 2)]
+                model = [
+                    getattr(self, 'scale' + str(num_D - 1 - i) + '_layer' + str(j))
+                    for j in range(self.n_layers + 2)
+                ]
             else:
                 model = getattr(self, 'layer' + str(num_D - 1 - i))
             result.append(self.singleD_forward(model, input_downsampled))

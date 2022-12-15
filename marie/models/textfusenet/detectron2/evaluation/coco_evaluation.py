@@ -53,7 +53,9 @@ class COCOEvaluator(DatasetEvaluator):
 
         self._metadata = MetadataCatalog.get(dataset_name)
         if not hasattr(self._metadata, "json_file"):
-            self._logger.warning(f"json_file was not found in MetaDataCatalog for '{dataset_name}'")
+            self._logger.warning(
+                f"json_file was not found in MetaDataCatalog for '{dataset_name}'"
+            )
 
             cache_path = convert_to_coco_json(dataset_name, output_dir)
             self._metadata.json_file = cache_path
@@ -104,7 +106,9 @@ class COCOEvaluator(DatasetEvaluator):
                     # since this evaluator stores outputs of the entire dataset
                     # Our model may predict bool array, but cocoapi expects uint8
                     rles = [
-                        mask_util.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
+                        mask_util.encode(
+                            np.array(mask[:, :, None], order="F", dtype="uint8")
+                        )[0]
                         for mask in instances.pred_masks
                     ]
                     for rle in rles:
@@ -116,7 +120,9 @@ class COCOEvaluator(DatasetEvaluator):
                     instances.pred_masks_rle = rles
                     instances.remove("pred_masks")
 
-                prediction["instances"] = instances_to_json(instances, input["image_id"])
+                prediction["instances"] = instances_to_json(
+                    instances, input["image_id"]
+                )
             if "proposals" in output:
                 prediction["proposals"] = output["proposals"].to(self._cpu_device)
             self._predictions.append(prediction)
@@ -154,11 +160,16 @@ class COCOEvaluator(DatasetEvaluator):
         Fill self._results with the metrics of the tasks.
         """
         self._logger.info("Preparing results for COCO format ...")
-        self._coco_results = list(itertools.chain(*[x["instances"] for x in self._predictions]))
+        self._coco_results = list(
+            itertools.chain(*[x["instances"] for x in self._predictions])
+        )
 
         # unmap the category ids for COCO
         if hasattr(self._metadata, "thing_dataset_id_to_contiguous_id"):
-            reverse_id_mapping = {v: k for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()}
+            reverse_id_mapping = {
+                v: k
+                for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()
+            }
             for result in self._coco_results:
                 result["category_id"] = reverse_id_mapping[result["category_id"]]
 
@@ -186,7 +197,9 @@ class COCOEvaluator(DatasetEvaluator):
                 else None  # cocoapi does not handle empty results very well
             )
 
-            res = self._derive_coco_results(coco_eval, task, class_names=self._metadata.get("thing_classes"))
+            res = self._derive_coco_results(
+                coco_eval, task, class_names=self._metadata.get("thing_classes")
+            )
             self._results[task] = res
 
     def _eval_box_proposals(self):
@@ -202,7 +215,9 @@ class COCOEvaluator(DatasetEvaluator):
             for prediction in self._predictions:
                 ids.append(prediction["image_id"])
                 boxes.append(prediction["proposals"].proposal_boxes.tensor.numpy())
-                objectness_logits.append(prediction["proposals"].objectness_logits.numpy())
+                objectness_logits.append(
+                    prediction["proposals"].objectness_logits.numpy()
+                )
 
             proposal_data = {
                 "boxes": boxes,
@@ -210,7 +225,9 @@ class COCOEvaluator(DatasetEvaluator):
                 "ids": ids,
                 "bbox_mode": bbox_mode,
             }
-            with PathManager.open(os.path.join(self._output_dir, "box_proposals.pkl"), "wb") as f:
+            with PathManager.open(
+                os.path.join(self._output_dir, "box_proposals.pkl"), "wb"
+            ) as f:
                 pickle.dump(proposal_data, f)
 
         if not self._do_evaluation:
@@ -222,7 +239,9 @@ class COCOEvaluator(DatasetEvaluator):
         areas = {"all": "", "small": "s", "medium": "m", "large": "l"}
         for limit in [100, 1000]:
             for area, suffix in areas.items():
-                stats = _evaluate_box_proposals(self._predictions, self._coco_api, area=area, limit=limit)
+                stats = _evaluate_box_proposals(
+                    self._predictions, self._coco_api, area=area, limit=limit
+                )
                 key = "AR{}@{:d}".format(suffix, limit)
                 res[key] = float(stats["ar"].item() * 100)
         self._logger.info("Proposal metrics: \n" + create_small_table(res))
@@ -253,8 +272,14 @@ class COCOEvaluator(DatasetEvaluator):
             return {metric: -1 for metric in metrics}
 
         # the standard metrics
-        results = {metric: float(coco_eval.stats[idx] * 100) for idx, metric in enumerate(metrics)}
-        self._logger.info("Evaluation results for {}: \n".format(iou_type) + create_small_table(results))
+        results = {
+            metric: float(coco_eval.stats[idx] * 100)
+            for idx, metric in enumerate(metrics)
+        }
+        self._logger.info(
+            "Evaluation results for {}: \n".format(iou_type)
+            + create_small_table(results)
+        )
 
         if class_names is None or len(class_names) <= 1:
             return results
@@ -276,7 +301,9 @@ class COCOEvaluator(DatasetEvaluator):
         # tabulate it
         N_COLS = min(6, len(results_per_category) * 2)
         results_flatten = list(itertools.chain(*results_per_category))
-        results_2d = itertools.zip_longest(*[results_flatten[i::N_COLS] for i in range(N_COLS)])
+        results_2d = itertools.zip_longest(
+            *[results_flatten[i::N_COLS] for i in range(N_COLS)]
+        )
         table = tabulate(
             results_2d,
             tablefmt="pipe",
@@ -333,7 +360,9 @@ def instances_to_json(instances, img_id):
 
 # inspired from Detectron:
 # https://github.com/facebookresearch/Detectron/blob/a6a835f5b8208c45d0dce217ce9bbda915f44df7/detectron/datasets/json_dataset_evaluator.py#L255 # noqa
-def _evaluate_box_proposals(dataset_predictions, coco_api, thresholds=None, area="all", limit=None):
+def _evaluate_box_proposals(
+    dataset_predictions, coco_api, thresholds=None, area="all", limit=None
+):
     """
     Evaluate detection proposal recall metrics. This function is a much
     faster alternative to the official COCO API recall evaluation code. However,
@@ -376,7 +405,11 @@ def _evaluate_box_proposals(dataset_predictions, coco_api, thresholds=None, area
 
         ann_ids = coco_api.getAnnIds(imgIds=prediction_dict["image_id"])
         anno = coco_api.loadAnns(ann_ids)
-        gt_boxes = [BoxMode.convert(obj["bbox"], BoxMode.XYWH_ABS, BoxMode.XYXY_ABS) for obj in anno if obj["iscrowd"] == 0]
+        gt_boxes = [
+            BoxMode.convert(obj["bbox"], BoxMode.XYWH_ABS, BoxMode.XYXY_ABS)
+            for obj in anno
+            if obj["iscrowd"] == 0
+        ]
         gt_boxes = torch.as_tensor(gt_boxes).reshape(-1, 4)  # guard against no boxes
         gt_boxes = Boxes(gt_boxes)
         gt_areas = torch.as_tensor([obj["area"] for obj in anno if obj["iscrowd"] == 0])

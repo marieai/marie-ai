@@ -67,11 +67,15 @@ class Visualizer:
         self.name = opt.name
         self.port = opt.display_port
         self.saved = False
-        if self.display_id > 0:  # connect to a visdom server given <display_port> and <display_server>
+        if (
+            self.display_id > 0
+        ):  # connect to a visdom server given <display_port> and <display_server>
             import visdom
 
             self.ncols = opt.display_ncols
-            self.vis = visdom.Visdom(server=opt.display_server, port=opt.display_port, env=opt.display_env)
+            self.vis = visdom.Visdom(
+                server=opt.display_server, port=opt.display_port, env=opt.display_env
+            )
             if not self.vis.check_connection():
                 self.create_visdom_connections()
 
@@ -86,7 +90,9 @@ class Visualizer:
         self.log_name = os.path.join(opt.checkpoints_dir, opt.name, 'loss_log.txt')
         with open(self.log_name, "a") as log_file:
             now = time.strftime("%c")
-            log_file.write('================ Training Loss (%s) ================\n' % now)
+            log_file.write(
+                '================ Training Loss (%s) ================\n' % now
+            )
 
     def reset(self):
         """Reset the self.saved status"""
@@ -171,16 +177,22 @@ class Visualizer:
                 except VisdomExceptionBase:
                     self.create_visdom_connections()
 
-        if self.use_html and (save_result or not self.saved):  # save images to an HTML file if they haven't been saved.
+        if self.use_html and (
+            save_result or not self.saved
+        ):  # save images to an HTML file if they haven't been saved.
             self.saved = True
             # save images to the disk
             for label, image in visuals.items():
                 image_numpy = util.tensor2im(image)
-                img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
+                img_path = os.path.join(
+                    self.img_dir, 'epoch%.3d_%s.png' % (epoch, label)
+                )
                 util.save_image(image_numpy, img_path)
 
             # update website
-            webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, refresh=1)
+            webpage = html.HTML(
+                self.web_dir, 'Experiment name = %s' % self.name, refresh=1
+            )
             for n in range(epoch, 0, -1):
                 webpage.add_header('epoch [%d]' % n)
                 ims, txts, links = [], [], []
@@ -208,7 +220,9 @@ class Visualizer:
         self.plot_data['Y'].append([losses[k] for k in self.plot_data['legend']])
         try:
             self.vis.line(
-                X=np.stack([np.array(self.plot_data['X'])] * len(self.plot_data['legend']), 1),
+                X=np.stack(
+                    [np.array(self.plot_data['X'])] * len(self.plot_data['legend']), 1
+                ),
                 Y=np.array(self.plot_data['Y']),
                 opts={
                     'title': self.name + ' loss over time',

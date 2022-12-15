@@ -103,7 +103,9 @@ class AioHttpClientlet(ABC):
         with ImportExtensions(required=True):
             import aiohttp
 
-        self.session = aiohttp.ClientSession(**self._session_kwargs, trace_configs=self._trace_config)
+        self.session = aiohttp.ClientSession(
+            **self._session_kwargs, trace_configs=self._trace_config
+        )
         await self.session.__aenter__()
         return self
 
@@ -141,7 +143,8 @@ class HTTPClientlet(AioHttpClientlet):
                     wait_time = random.uniform(
                         0,
                         min(
-                            self.initial_backoff * self.backoff_multiplier ** (retry - 1),
+                            self.initial_backoff
+                            * self.backoff_multiplier ** (retry - 1),
                             self.max_backoff,
                         ),
                     )
@@ -216,7 +219,8 @@ class WebsocketClientlet(AioHttpClientlet):
                     wait_time = random.uniform(
                         0,
                         min(
-                            self.initial_backoff * self.backoff_multiplier ** (retry - 1),
+                            self.initial_backoff
+                            * self.backoff_multiplier ** (retry - 1),
                             self.max_backoff,
                         ),
                     )

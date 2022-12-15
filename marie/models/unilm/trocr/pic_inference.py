@@ -57,7 +57,9 @@ def preprocess(img_path, img_transform):
 
 
 def get_text(cfg, generator, model, sample, bpe):
-    decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
+    decoder_output = task.inference_step(
+        generator, model, sample, prefix_tokens=None, constraints=None
+    )
     decoder_output = decoder_output[0][0]  # top1
 
     hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
@@ -92,7 +94,9 @@ if __name__ == '__main__':
     print(f"format : {text}  >> {_path}")
 
     os.exit(0)
-    burst_dir = "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
+    burst_dir = (
+        "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
+    )
 
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
         sample = preprocess(_path, img_transform)

@@ -45,7 +45,9 @@ def _create_gateway(port, graph, pod_addr, protocol):
 
 
 def _create_head(port, connection_list_dict, polling='ANY'):
-    p = multiprocessing.Process(target=_create_head_runtime, args=(port, connection_list_dict, 'head', polling))
+    p = multiprocessing.Process(
+        target=_create_head_runtime, args=(port, connection_list_dict, 'head', polling)
+    )
     p.start()
     time.sleep(0.1)
     return p

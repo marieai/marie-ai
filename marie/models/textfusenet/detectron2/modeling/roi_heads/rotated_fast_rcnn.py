@@ -43,7 +43,9 @@ Naming convention:
 """
 
 
-def fast_rcnn_inference_rotated(boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image):
+def fast_rcnn_inference_rotated(
+    boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image
+):
     """
     Call `fast_rcnn_inference_single_image_rotated` for all images.
 
@@ -78,12 +80,16 @@ def fast_rcnn_inference_rotated(boxes, scores, image_shapes, score_thresh, nms_t
             nms_thresh,
             topk_per_image,
         )
-        for scores_per_image, boxes_per_image, image_shape in zip(scores, boxes, image_shapes)
+        for scores_per_image, boxes_per_image, image_shape in zip(
+            scores, boxes, image_shapes
+        )
     ]
     return tuple(list(x) for x in zip(*result_per_image))
 
 
-def fast_rcnn_inference_single_image_rotated(boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image):
+def fast_rcnn_inference_single_image_rotated(
+    boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image
+):
     """
     Single-image inference. Return rotated bounding-box detection results by thresholding
     on scores and applying rotated non-maximum suppression (Rotated NMS).
@@ -146,7 +152,9 @@ class RotatedFastRCNNOutputs(FastRCNNOutputs):
         scores = self.predict_probs()
         image_shapes = self.image_shapes
 
-        return fast_rcnn_inference_rotated(boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image)
+        return fast_rcnn_inference_rotated(
+            boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image
+        )
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -158,8 +166,12 @@ class RROIHeads(StandardROIHeads):
 
     def __init__(self, cfg, input_shape: Dict[str, ShapeSpec]):
         super().__init__(cfg, input_shape)
-        self.box2box_transform = Box2BoxTransformRotated(weights=cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_WEIGHTS)
-        assert not self.mask_on and not self.keypoint_on, "Mask/Keypoints not supported in Rotated ROIHeads."
+        self.box2box_transform = Box2BoxTransformRotated(
+            weights=cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_WEIGHTS
+        )
+        assert (
+            not self.mask_on and not self.keypoint_on
+        ), "Mask/Keypoints not supported in Rotated ROIHeads."
 
     def _init_box_head(self, cfg):
         # fmt: off
@@ -186,7 +198,9 @@ class RROIHeads(StandardROIHeads):
         )
         self.box_head = build_box_head(
             cfg,
-            ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution),
+            ShapeSpec(
+                channels=in_channels, height=pooler_resolution, width=pooler_resolution
+            ),
         )
 
         self.box_predictor = FastRCNNOutputLayers(
@@ -227,18 +241,26 @@ class RROIHeads(StandardROIHeads):
         num_bg_samples = []
         for proposals_per_image, targets_per_image in zip(proposals, targets):
             has_gt = len(targets_per_image) > 0
-            match_quality_matrix = pairwise_iou_rotated(targets_per_image.gt_boxes, proposals_per_image.proposal_boxes)
+            match_quality_matrix = pairwise_iou_rotated(
+                targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
+            )
             matched_idxs, matched_labels = self.proposal_matcher(match_quality_matrix)
-            sampled_idxs, gt_classes = self._sample_proposals(matched_idxs, matched_labels, targets_per_image.gt_classes)
+            sampled_idxs, gt_classes = self._sample_proposals(
+                matched_idxs, matched_labels, targets_per_image.gt_classes
+            )
 
             proposals_per_image = proposals_per_image[sampled_idxs]
             proposals_per_image.gt_classes = gt_classes
 
             if has_gt:
                 sampled_targets = matched_idxs[sampled_idxs]
-                proposals_per_image.gt_boxes = targets_per_image.gt_boxes[sampled_targets]
+                proposals_per_image.gt_boxes = targets_per_image.gt_boxes[
+                    sampled_targets
+                ]
             else:
-                gt_boxes = RotatedBoxes(targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 5)))
+                gt_boxes = RotatedBoxes(
+                    targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 5))
+                )
                 proposals_per_image.gt_boxes = gt_boxes
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())

@@ -41,7 +41,11 @@ class GetData(object):
     @staticmethod
     def _get_options(r):
         soup = BeautifulSoup(r.text, 'lxml')
-        options = [h.text for h in soup.find_all('a', href=True) if h.text.endswith(('.zip', 'tar.gz'))]
+        options = [
+            h.text
+            for h in soup.find_all('a', href=True)
+            if h.text.endswith(('.zip', 'tar.gz'))
+        ]
         return options
 
     def _present_options(self):
@@ -50,7 +54,9 @@ class GetData(object):
         print('Options:\n')
         for i, o in enumerate(options):
             print("{0}: {1}".format(i, o))
-        choice = input("\nPlease enter the number of the dataset above you wish to download:")
+        choice = input(
+            "\nPlease enter the number of the dataset above you wish to download:"
+        )
         return options[int(choice)]
 
     def _download_data(self, dataset_url, save_path):

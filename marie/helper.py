@@ -19,7 +19,21 @@ from datetime import datetime
 from itertools import islice
 from socket import AF_INET, SOCK_STREAM, socket
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from rich.console import Console
 
@@ -98,7 +112,9 @@ def deprecated_alias(**aliases):
             if alias in kwargs:
                 new_name, dep_level = new_arg
                 if new_name in kwargs:
-                    raise NotSupportedError(f'{func_name} received both {alias} and {new_name}')
+                    raise NotSupportedError(
+                        f'{func_name} received both {alias} and {new_name}'
+                    )
 
                 if dep_level == 0:
                     warnings.warn(
@@ -452,7 +468,9 @@ def reset_ports():
         if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
             min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '16384'))
         else:
-            min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT)))
+            min_port = int(
+                os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT))
+            )
         max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', str(MAX_PORT)))
         return set(range(min_port, max_port + 1)) - set(assigned_ports)
 
@@ -550,7 +568,9 @@ def expand_env_var(v: str) -> Optional[Union[bool, int, str, list, float]]:
         return v
 
 
-def expand_dict(d: Dict, expand_fn=expand_env_var, resolve_cycle_ref=True) -> Dict[str, Any]:
+def expand_dict(
+    d: Dict, expand_fn=expand_env_var, resolve_cycle_ref=True
+) -> Dict[str, Any]:
     """
     Expand variables from YAML file.
 
@@ -847,7 +867,9 @@ class ArgNamespace:
         return p_args
 
     @staticmethod
-    def get_non_defaults_args(args: Namespace, parser: ArgumentParser, taboo: Optional[Set[str]] = None) -> Dict:
+    def get_non_defaults_args(
+        args: Namespace, parser: ArgumentParser, taboo: Optional[Set[str]] = None
+    ) -> Dict:
         """
         Get non-default args in a dict.
 
@@ -866,7 +888,9 @@ class ArgNamespace:
         return non_defaults
 
     @staticmethod
-    def flatten_to_dict(args: Union[Dict[str, 'Namespace'], 'Namespace']) -> Dict[str, Any]:
+    def flatten_to_dict(
+        args: Union[Dict[str, 'Namespace'], 'Namespace']
+    ) -> Dict[str, Any]:
         """Convert argparse.Namespace to dict to be uploaded via REST.
 
         :param args: namespace or dict or namespace to dict.
@@ -919,7 +943,14 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     from google.protobuf.internal import api_implementation
     from grpc import _grpcio_metadata
 
-    from marie import __docarray_version__, __marie_env__, __proto_version__, __unset_msg__, __uptime__, __version__
+    from marie import (
+        __docarray_version__,
+        __marie_env__,
+        __proto_version__,
+        __unset_msg__,
+        __uptime__,
+        __version__,
+    )
     from marie.logging.predefined import default_logger
 
     try:
@@ -942,7 +973,8 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
             'session-id': str(random_uuid(use_uuid1=True)),
             'uptime': __uptime__,
             'ci-vendor': get_ci_vendor() or __unset_msg__,
-            'internal': 'marieai' in os.getenv('GITHUB_ACTION_REPOSITORY', __unset_msg__),
+            'internal': 'marieai'
+            in os.getenv('GITHUB_ACTION_REPOSITORY', __unset_msg__),
         }
 
         env_info = {k: os.getenv(k, __unset_msg__) for k in __marie_env__}
@@ -980,7 +1012,9 @@ def _update_policy():
             if not isinstance(asyncio.get_event_loop_policy(), uvloop.EventLoopPolicy):
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         except ModuleNotFoundError:
-            warnings.warn('Install `uvloop` via `pip install "jina[uvloop]"` for better performance.')
+            warnings.warn(
+                'Install `uvloop` via `pip install "jina[uvloop]"` for better performance.'
+            )
 
 
 def get_or_reuse_loop():
@@ -1289,7 +1323,9 @@ def run_async(func, *args, **kwargs):
             except AttributeError:
                 from marie.excepts import BadClient
 
-                raise BadClient('something wrong when running the eventloop, result can not be retrieved')
+                raise BadClient(
+                    'something wrong when running the eventloop, result can not be retrieved'
+                )
         else:
 
             raise RuntimeError(
@@ -1343,7 +1379,9 @@ def download_mermaid_url(mermaid_url, output) -> None:
     except:
         from marie.logging.predefined import default_logger
 
-        default_logger.error('can not download image, please check your graph and the network connections')
+        default_logger.error(
+            'can not download image, please check your graph and the network connections'
+        )
 
 
 def find_request_binding(target):
@@ -1369,7 +1407,9 @@ def find_request_binding(target):
                 req_name = __default_endpoint__
             if req_name:
                 if req_name in res:
-                    raise ValueError(f'you already bind `{res[req_name]}` with `{req_name}` request')
+                    raise ValueError(
+                        f'you already bind `{res[req_name]}` with `{req_name}` request'
+                    )
                 else:
                     res[req_name] = node.name
 
@@ -1516,10 +1556,14 @@ def parse_client(kwargs) -> Namespace:
     :return: parsed argument.
     """
     kwargs = _parse_kwargs(kwargs)
-    args = ArgNamespace.kwargs2namespace(kwargs, set_client_cli_parser(), warn_unknown=True)
+    args = ArgNamespace.kwargs2namespace(
+        kwargs, set_client_cli_parser(), warn_unknown=True
+    )
 
     if not args.port:
-        args.port = __default_port_client__ if not args.tls else __default_port_tls_client__
+        args.port = (
+            __default_port_client__ if not args.tls else __default_port_tls_client__
+        )
 
     return args
 
@@ -1664,10 +1708,14 @@ def send_telemetry_event(event: str, obj: Any, **kwargs) -> None:
 
             metas, _ = get_full_version()
             data = base64.urlsafe_b64encode(
-                json.dumps({**metas, 'event': f'{obj.__class__.__name__}.{event}', **kwargs}).encode('utf-8')
+                json.dumps(
+                    {**metas, 'event': f'{obj.__class__.__name__}.{event}', **kwargs}
+                ).encode('utf-8')
             )
 
-            req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request(
+                url, data=data, headers={'User-Agent': 'Mozilla/5.0'}
+            )
             urllib.request.urlopen(req)
 
         except:

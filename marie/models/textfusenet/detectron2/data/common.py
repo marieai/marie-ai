@@ -48,7 +48,11 @@ class MapDataset(data.Dataset):
 
             if retry_count >= 3:
                 logger = logging.getLogger(__name__)
-                logger.warning("Failed to apply `_map_func` for idx: {}, retry count: {}".format(idx, retry_count))
+                logger.warning(
+                    "Failed to apply `_map_func` for idx: {}, retry count: {}".format(
+                        idx, retry_count
+                    )
+                )
 
 
 class DatasetFromList(data.Dataset):

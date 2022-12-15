@@ -17,7 +17,10 @@ from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
 from marie.orchestrate.helper import generate_default_volume_and_workspace
 from marie.orchestrate.pods import BasePod
-from marie.orchestrate.pods.container_helper import get_docker_network, get_gpu_device_requests
+from marie.orchestrate.pods.container_helper import (
+    get_docker_network,
+    get_gpu_device_requests,
+)
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway import GatewayRuntime
 
@@ -96,13 +99,17 @@ def _docker_run(
         raise BadImageNameError(f'image: {uses_img} can not be found local & remote.')
 
     _volumes = {}
-    if not getattr(args, 'disable_auto_volume', None) and not getattr(args, 'volumes', None):
+    if not getattr(args, 'disable_auto_volume', None) and not getattr(
+        args, 'volumes', None
+    ):
         (
             generated_volumes,
             workspace_in_container,
         ) = generate_default_volume_and_workspace(workspace_id=args.workspace_id)
         args.volumes = generated_volumes
-        args.workspace = workspace_in_container if not args.workspace else args.workspace
+        args.workspace = (
+            workspace_in_container if not args.workspace else args.workspace
+        )
 
     if getattr(args, 'volumes', None):
         for p in args.volumes:
@@ -226,7 +233,9 @@ def run(
 
         def _is_ready():
             if args.pod_role == PodRoleType.GATEWAY:
-                return GatewayRuntime.is_ready(runtime_ctrl_address, protocol=args.protocol[0])
+                return GatewayRuntime.is_ready(
+                    runtime_ctrl_address, protocol=args.protocol[0]
+                )
             else:
                 return AsyncNewLoopRuntime.is_ready(runtime_ctrl_address)
 
@@ -240,7 +249,11 @@ def run(
             return True
 
         async def _check_readiness(container):
-            while _is_container_alive(container) and not _is_ready() and not cancel.is_set():
+            while (
+                _is_container_alive(container)
+                and not _is_ready()
+                and not cancel.is_set()
+            ):
                 await asyncio.sleep(0.1)
             if _is_container_alive(container):
                 is_started.set()
@@ -250,19 +263,27 @@ def run(
 
         async def _stream_starting_logs(container):
             for line in container.logs(stream=True):
-                if not is_started.is_set() and not fail_to_start.is_set() and not cancel.is_set():
+                if (
+                    not is_started.is_set()
+                    and not fail_to_start.is_set()
+                    and not cancel.is_set()
+                ):
                     await asyncio.sleep(0.01)
                 msg = line.decode().rstrip()  # type: str
                 logger.debug(re.sub(r'\u001b\[.*?[@-~]', '', msg))
 
         async def _run_async(container):
-            await asyncio.gather(*[_check_readiness(container), _stream_starting_logs(container)])
+            await asyncio.gather(
+                *[_check_readiness(container), _stream_starting_logs(container)]
+            )
 
         asyncio.run(_run_async(container))
     finally:
         client.close()
         if not is_started.is_set():
-            logger.error(f' Process terminated, the container fails to start, check the arguments or entrypoint')
+            logger.error(
+                f' Process terminated, the container fails to start, check the arguments or entrypoint'
+            )
         is_shutdown.set()
         logger.debug(f'process terminated')
 
@@ -302,7 +323,9 @@ class ContainerPod(BasePod):
             elif network:
                 # If the caller is already in a docker network, replace ctrl-host with network gateway
                 try:
-                    ctrl_host = client.networks.get(network).attrs['IPAM']['Config'][0]['Gateway']
+                    ctrl_host = client.networks.get(network).attrs['IPAM']['Config'][0][
+                        'Gateway'
+                    ]
                 except:
                     ctrl_host = __docker_host__
             else:
@@ -313,7 +336,9 @@ class ContainerPod(BasePod):
             else:
                 ctrl_address = f'{ctrl_host}:{self.args.port}'
 
-            net_node, runtime_ctrl_address = self._get_network_for_dind_linux(client, ctrl_address)
+            net_node, runtime_ctrl_address = self._get_network_for_dind_linux(
+                client, ctrl_address
+            )
         finally:
             client.close()
 

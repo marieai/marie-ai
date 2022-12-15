@@ -10,7 +10,9 @@ from torchvision.ops import RoIPool
 __all__ = ["ROIPooler"]
 
 
-def assign_boxes_to_levels(box_lists, min_level, max_level, canonical_box_size, canonical_level):
+def assign_boxes_to_levels(
+    box_lists, min_level, max_level, canonical_box_size, canonical_level
+):
     """
     Map each box in `box_lists` to a feature map level index and return the assignment
     vector.
@@ -35,7 +37,9 @@ def assign_boxes_to_levels(box_lists, min_level, max_level, canonical_box_size, 
     eps = sys.float_info.epsilon
     box_sizes = torch.sqrt(cat([boxes.area() for boxes in box_lists]))
     # Eqn.(1) in FPN paper
-    level_assignments = torch.floor(canonical_level + torch.log2(box_sizes / canonical_box_size + eps))
+    level_assignments = torch.floor(
+        canonical_level + torch.log2(box_sizes / canonical_box_size + eps)
+    )
     # clamp level to (min, max), in case the box size is too large or too small
     # for the available feature maps
     level_assignments = torch.clamp(level_assignments, min=min_level, max=max_level)
@@ -153,10 +157,15 @@ class ROIPooler(nn.Module):
                 for scale in scales
             )
         elif pooler_type == "ROIPool":
-            self.level_poolers = nn.ModuleList(RoIPool(output_size, spatial_scale=scale) for scale in scales)
+            self.level_poolers = nn.ModuleList(
+                RoIPool(output_size, spatial_scale=scale) for scale in scales
+            )
         elif pooler_type == "ROIAlignRotated":
             self.level_poolers = nn.ModuleList(
-                ROIAlignRotated(output_size, spatial_scale=scale, sampling_ratio=sampling_ratio) for scale in scales
+                ROIAlignRotated(
+                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio
+                )
+                for scale in scales
             )
         else:
             raise ValueError("Unknown pooler type: {}".format(pooler_type))
@@ -177,7 +186,9 @@ class ROIPooler(nn.Module):
         if len(scales) > 1:
             # When there is only one feature map, canonical_level is redundant and we should not
             # require it to be a sensible value. Therefore we skip this assertion
-            assert self.min_level <= canonical_level and canonical_level <= self.max_level
+            assert (
+                self.min_level <= canonical_level and canonical_level <= self.max_level
+            )
         self.canonical_level = canonical_level
         assert canonical_box_size > 0
         self.canonical_box_size = canonical_box_size
@@ -199,12 +210,18 @@ class ROIPooler(nn.Module):
         """
         num_level_assignments = len(self.level_poolers)
 
-        assert isinstance(x, list) and isinstance(box_lists, list), "Arguments to pooler must be lists"
-        assert len(x) == num_level_assignments, "unequal value, num_level_assignments={}, but x is list of {} Tensors".format(
+        assert isinstance(x, list) and isinstance(
+            box_lists, list
+        ), "Arguments to pooler must be lists"
+        assert (
+            len(x) == num_level_assignments
+        ), "unequal value, num_level_assignments={}, but x is list of {} Tensors".format(
             num_level_assignments, len(x)
         )
 
-        assert len(box_lists) == x[0].size(0), "unequal value, x[0] batch dim 0 is {}, but box_list has length {}".format(
+        assert len(box_lists) == x[0].size(
+            0
+        ), "unequal value, x[0] batch dim 0 is {}, but box_list has length {}".format(
             x[0].size(0), len(box_lists)
         )
 

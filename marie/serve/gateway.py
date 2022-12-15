@@ -12,7 +12,9 @@ __all__ = ['BaseGateway']
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor, ServerInterceptor
     from opentelemetry import trace
-    from opentelemetry.instrumentation.grpc._client import OpenTelemetryClientInterceptor
+    from opentelemetry.instrumentation.grpc._client import (
+        OpenTelemetryClientInterceptor,
+    )
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry
 
@@ -78,7 +80,9 @@ class BaseGateway(JAMLCompatible, metaclass=GatewayType):
         self.logger = MarieLogger(self.name)
         self.tracing = self.runtime_args.tracing
         self.tracer_provider = self.runtime_args.tracer_provider
-        self.grpc_tracing_server_interceptors = self.runtime_args.grpc_tracing_server_interceptors
+        self.grpc_tracing_server_interceptors = (
+            self.runtime_args.grpc_tracing_server_interceptors
+        )
 
         import json
 

@@ -114,7 +114,9 @@ if __name__ == "__main__":
         ) = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
         print(lines)
-        result, overlay_image = icr.recognize(key, "test", image, boxes, fragments, lines)
+        result, overlay_image = icr.recognize(
+            key, "test", image, boxes, fragments, lines
+        )
 
         cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
 

@@ -24,7 +24,9 @@ def split_dir(dir_src, dir_dest):
     test_size = math.ceil(size * 0.20)  # 25 percent testing size
     training_size = size - validation_size - test_size  # 70 percent training
     print(
-        "Class >>  size = {} training = {} validation = {} test = {} ".format(size, training_size, validation_size, test_size)
+        "Class >>  size = {} training = {} validation = {} test = {} ".format(
+            size, training_size, validation_size, test_size
+        )
     )
 
     validation_files = mask_filenames[:validation_size]

@@ -99,7 +99,9 @@ class FPN(Backbone):
         self.in_features = in_features
         self.bottom_up = bottom_up
         # Return feature names are "p<stage>", like ["p2", "p3", ..., "p6"]
-        self._out_feature_strides = {"p{}".format(int(math.log2(s))): s for s in in_strides}
+        self._out_feature_strides = {
+            "p{}".format(int(math.log2(s))): s for s in in_strides
+        }
         # top block output feature maps.
         if self.top_block is not None:
             for s in range(stage, stage + self.top_block.num_levels):
@@ -134,8 +136,12 @@ class FPN(Backbone):
         results = []
         prev_features = self.lateral_convs[0](x[0])
         results.append(self.output_convs[0](prev_features))
-        for features, lateral_conv, output_conv in zip(x[1:], self.lateral_convs[1:], self.output_convs[1:]):
-            top_down_features = F.interpolate(prev_features, scale_factor=2, mode="nearest")
+        for features, lateral_conv, output_conv in zip(
+            x[1:], self.lateral_convs[1:], self.output_convs[1:]
+        ):
+            top_down_features = F.interpolate(
+                prev_features, scale_factor=2, mode="nearest"
+            )
             lateral_features = lateral_conv(features)
             prev_features = lateral_features + top_down_features
             if self._fuse_type == "avg":
@@ -143,9 +149,13 @@ class FPN(Backbone):
             results.insert(0, output_conv(prev_features))
 
         if self.top_block is not None:
-            top_block_in_feature = bottom_up_features.get(self.top_block.in_feature, None)
+            top_block_in_feature = bottom_up_features.get(
+                self.top_block.in_feature, None
+            )
             if top_block_in_feature is None:
-                top_block_in_feature = results[self._out_features.index(self.top_block.in_feature)]
+                top_block_in_feature = results[
+                    self._out_features.index(self.top_block.in_feature)
+                ]
             results.extend(self.top_block(top_block_in_feature))
         assert len(self._out_features) == len(results)
         return dict(zip(self._out_features, results))
@@ -165,7 +175,9 @@ def _assert_strides_are_log2_contiguous(strides):
     Assert that each stride is 2x times its preceding stride, i.e. "contiguous in log2".
     """
     for i, stride in enumerate(strides[1:], 1):
-        assert stride == 2 * strides[i - 1], "Strides {} {} are not log2 contiguous".format(stride, strides[i - 1])
+        assert (
+            stride == 2 * strides[i - 1]
+        ), "Strides {} {} are not log2 contiguous".format(stride, strides[i - 1])
 
 
 class LastLevelMaxPool(nn.Module):

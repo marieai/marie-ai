@@ -19,7 +19,9 @@ class VersionedYAMLParser:
 
     version = 'legacy'  #: the version number this parser designed for
 
-    def parse(self, cls: type, data: Dict, runtime_args: Optional[Dict[str, Any]]) -> Union['Flow', 'BaseExecutor']:
+    def parse(
+        self, cls: type, data: Dict, runtime_args: Optional[Dict[str, Any]]
+    ) -> Union['Flow', 'BaseExecutor']:
         """Return the Flow YAML parser given the syntax version number
 
 

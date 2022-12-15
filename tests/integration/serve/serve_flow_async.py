@@ -11,7 +11,9 @@ class MyExec(Executor):
         docs[0] = 'executed MyExec'  # custom logic goes here
 
 
-flow = Flow(port=[12345, 12344, 12343], protocol=['grpc', 'http', 'websocket']).add(uses=MyExec)
+flow = Flow(port=[12345, 12344, 12343], protocol=['grpc', 'http', 'websocket']).add(
+    uses=MyExec
+)
 flow.expose_endpoint('/foo', summary='my endpoint')
 
 with flow:

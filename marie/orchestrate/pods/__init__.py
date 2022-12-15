@@ -79,7 +79,8 @@ def run(
         )
     except Exception as ex:
         logger.error(
-            f'{ex!r} during {runtime_cls!r} initialization' + f'\n add "--quiet-error" to suppress the exception details'
+            f'{ex!r} during {runtime_cls!r} initialization'
+            + f'\n add "--quiet-error" to suppress the exception details'
             if not args.quiet_error
             else '',
             exc_info=not args.quiet_error,
@@ -150,16 +151,21 @@ class BasePod(ABC):
             try:
                 self.logger.debug(f'terminate')
                 self._terminate()
-                if not self.is_shutdown.wait(timeout=self._timeout_ctrl if not __windows__ else 1.0):
+                if not self.is_shutdown.wait(
+                    timeout=self._timeout_ctrl if not __windows__ else 1.0
+                ):
                     if not __windows__:
-                        raise Exception(f'Shutdown signal was not received for {self._timeout_ctrl} seconds')
+                        raise Exception(
+                            f'Shutdown signal was not received for {self._timeout_ctrl} seconds'
+                        )
                     else:
                         self.logger.warning(
                             'Pod was forced to close after 1 second. Graceful closing is not available on Windows.'
                         )
             except Exception as ex:
                 self.logger.error(
-                    f'{ex!r} during {self.close!r}' + f'\n add "--quiet-error" to suppress the exception details'
+                    f'{ex!r} during {self.close!r}'
+                    + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
                     else '',
                     exc_info=not self.args.quiet_error,
@@ -217,7 +223,9 @@ class BasePod(ABC):
             'if your executor takes time to load, you may increase --timeout-ready'
         )
         self.close()
-        raise TimeoutError(f'{typename(self)}:{self.name} can not be initialized after {_timeout * 1e3}ms')
+        raise TimeoutError(
+            f'{typename(self)}:{self.name} can not be initialized after {_timeout * 1e3}ms'
+        )
 
     def _check_failed_to_start(self):
         """

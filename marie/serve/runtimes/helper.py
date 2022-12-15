@@ -40,7 +40,9 @@ def _is_param_for_specific_executor(key_name: str) -> bool:
     :return: return True if key_name is for specific Executor, False otherwise
     """
     if _SPECIFIC_EXECUTOR_SEPARATOR in key_name:
-        if key_name.startswith(_SPECIFIC_EXECUTOR_SEPARATOR) or key_name.endswith(_SPECIFIC_EXECUTOR_SEPARATOR):
+        if key_name.startswith(_SPECIFIC_EXECUTOR_SEPARATOR) or key_name.endswith(
+            _SPECIFIC_EXECUTOR_SEPARATOR
+        ):
             return False
         return True
     else:
@@ -101,7 +103,9 @@ def _get_grpc_server_options(option_from_args: Dict) -> List[Tuple[str, Any]]:
     """
 
     option_from_args = (
-        {**_DEFAULT_GRPC_OPTION, **option_from_args} if option_from_args else _DEFAULT_GRPC_OPTION
+        {**_DEFAULT_GRPC_OPTION, **option_from_args}
+        if option_from_args
+        else _DEFAULT_GRPC_OPTION
     )  # merge new and default args
 
     return list(option_from_args.items())

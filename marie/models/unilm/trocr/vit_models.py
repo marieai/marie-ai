@@ -36,9 +36,15 @@ class ViTTRModel(FairseqEncoderDecoderModel):
             metavar='N',
             help='the patch size of h and w (h=w) of the ViT',
         )
-        parser.add_argument('--vit-dim', type=int, metavar='N', help='the hidden size of the ViT')
-        parser.add_argument('--vit-depth', type=int, metavar='N', help='the layer num of the ViT')
-        parser.add_argument('--vit-heads', type=int, metavar='N', help='the head num of the ViT')
+        parser.add_argument(
+            '--vit-dim', type=int, metavar='N', help='the hidden size of the ViT'
+        )
+        parser.add_argument(
+            '--vit-depth', type=int, metavar='N', help='the layer num of the ViT'
+        )
+        parser.add_argument(
+            '--vit-heads', type=int, metavar='N', help='the head num of the ViT'
+        )
         parser.add_argument(
             '--vit-channels',
             type=int,
@@ -68,7 +74,11 @@ class ViTTRModel(FairseqEncoderDecoderModel):
     def build_model(cls, args, task):
         encoder = ViTTREncoder(args=args, dictionary=task.source_dictionary)
         if args.encoder_pretrained_url:
-            logger.info('load pretrianed encoder parameter from: {}'.format(args.encoder_pretrained_url))
+            logger.info(
+                'load pretrianed encoder parameter from: {}'.format(
+                    args.encoder_pretrained_url
+                )
+            )
             encoder_state_dict = load_state_dict_from_url(args.encoder_pretrained_url)
             encoder.load_state_dict(encoder_state_dict, strict=False)
 
@@ -105,7 +115,9 @@ class ViTTRModel(FairseqEncoderDecoderModel):
 
     def forward(self, imgs, prev_output_tokens, **kwargs):
         encoder_out = self.encoder(imgs, **kwargs)
-        decoder_out = self.decoder(prev_output_tokens, encoder_out=encoder_out, **kwargs)
+        decoder_out = self.decoder(
+            prev_output_tokens, encoder_out=encoder_out, **kwargs
+        )
         return decoder_out
 
 
@@ -134,7 +146,9 @@ def ViT_TR_base(args):
     args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", args.encoder_embed_dim)
-    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim)
+    args.decoder_ffn_embed_dim = getattr(
+        args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim
+    )
     args.decoder_layers = getattr(args, "decoder_layers", 6)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 8)
     args.decoder_normalize_before = getattr(args, "decoder_normalize_before", False)
@@ -145,14 +159,20 @@ def ViT_TR_base(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.adaptive_softmax_cutoff = getattr(args, "adaptive_softmax_cutoff", None)
     args.adaptive_softmax_dropout = getattr(args, "adaptive_softmax_dropout", 0)
-    args.share_decoder_input_output_embed = getattr(args, "share_decoder_input_output_embed", False)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
     args.share_all_embeddings = getattr(args, "share_all_embeddings", False)
-    args.no_token_positional_embeddings = getattr(args, "no_token_positional_embeddings", False)
+    args.no_token_positional_embeddings = getattr(
+        args, "no_token_positional_embeddings", False
+    )
     args.adaptive_input = getattr(args, "adaptive_input", False)
     args.no_cross_attention = getattr(args, "no_cross_attention", False)
     args.cross_self_attention = getattr(args, "cross_self_attention", False)
 
-    args.decoder_output_dim = getattr(args, "decoder_output_dim", args.decoder_embed_dim)
+    args.decoder_output_dim = getattr(
+        args, "decoder_output_dim", args.decoder_embed_dim
+    )
     args.decoder_input_dim = getattr(args, "decoder_input_dim", args.decoder_embed_dim)
 
     args.no_scale_embedding = getattr(args, "no_scale_embedding", False)
@@ -196,7 +216,9 @@ def large_architecture(args):
     args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", args.encoder_embed_dim)
-    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim)
+    args.decoder_ffn_embed_dim = getattr(
+        args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim
+    )
     args.decoder_layers = getattr(args, "decoder_layers", 6)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 8)
     args.decoder_normalize_before = getattr(args, "decoder_normalize_before", False)
@@ -207,14 +229,20 @@ def large_architecture(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.adaptive_softmax_cutoff = getattr(args, "adaptive_softmax_cutoff", None)
     args.adaptive_softmax_dropout = getattr(args, "adaptive_softmax_dropout", 0)
-    args.share_decoder_input_output_embed = getattr(args, "share_decoder_input_output_embed", False)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
     args.share_all_embeddings = getattr(args, "share_all_embeddings", False)
-    args.no_token_positional_embeddings = getattr(args, "no_token_positional_embeddings", False)
+    args.no_token_positional_embeddings = getattr(
+        args, "no_token_positional_embeddings", False
+    )
     args.adaptive_input = getattr(args, "adaptive_input", False)
     args.no_cross_attention = getattr(args, "no_cross_attention", False)
     args.cross_self_attention = getattr(args, "cross_self_attention", False)
 
-    args.decoder_output_dim = getattr(args, "decoder_output_dim", args.decoder_embed_dim)
+    args.decoder_output_dim = getattr(
+        args, "decoder_output_dim", args.decoder_embed_dim
+    )
     args.decoder_input_dim = getattr(args, "decoder_input_dim", args.decoder_embed_dim)
 
     args.no_scale_embedding = getattr(args, "no_scale_embedding", False)
@@ -252,7 +280,9 @@ class ViTTREncoder(FairseqEncoder):
         hybrid_backbone = None
         norm_layer = None
 
-        self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        self.num_features = (
+            self.embed_dim
+        ) = embed_dim  # num_features for consistency with other models
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
 
         if hybrid_backbone is not None:
@@ -275,7 +305,9 @@ class ViTTREncoder(FairseqEncoder):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
+        dpr = [
+            x.item() for x in torch.linspace(0, drop_path_rate, depth)
+        ]  # stochastic depth decay rule
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -311,7 +343,9 @@ class ViTTREncoder(FairseqEncoder):
         B = x.shape[0]  # bs, num_patches, dim
         x = self.patch_embed(x)
 
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        cls_tokens = self.cls_token.expand(
+            B, -1, -1
+        )  # stole cls_tokens impl from Phil Wang, thanks
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.pos_embed
 
@@ -355,8 +389,12 @@ class ViTTREncoder(FairseqEncoder):
         _encoder_embedding = encoder_out['encoder_embedding'][0]
         return {
             "encoder_out": [_encoder_out.index_select(1, new_order)],
-            "encoder_padding_mask": [_encoder_padding_mask.index_select(0, new_order)],  # B x T
-            "encoder_embedding": [_encoder_padding_mask.index_select(0, new_order)],  # B x T x C
+            "encoder_padding_mask": [
+                _encoder_padding_mask.index_select(0, new_order)
+            ],  # B x T
+            "encoder_embedding": [
+                _encoder_padding_mask.index_select(0, new_order)
+            ],  # B x T x C
             "encoder_states": [],
             "src_tokens": [],
             "src_lengths": [],

@@ -25,7 +25,9 @@ class Request(ProtoTypeMixin):
     def __getattr__(self, name: str):
         return getattr(self.proto, name)
 
-    def add_exception(self, ex: Optional['Exception'] = None, executor: 'BaseExecutor' = None) -> None:
+    def add_exception(
+        self, ex: Optional['Exception'] = None, executor: 'BaseExecutor' = None
+    ) -> None:
         """Add exception to the last route in the envelope
         :param ex: Exception to be added
         :param executor: Executor related to the exception
@@ -38,4 +40,6 @@ class Request(ProtoTypeMixin):
             d.exception.executor = executor.__class__.__name__
         d.exception.name = ex.__class__.__name__
         d.exception.args.extend([str(v) for v in ex.args])
-        d.exception.stacks.extend(traceback.format_exception(type(ex), value=ex, tb=ex.__traceback__))
+        d.exception.stacks.extend(
+            traceback.format_exception(type(ex), value=ex, tb=ex.__traceback__)
+        )

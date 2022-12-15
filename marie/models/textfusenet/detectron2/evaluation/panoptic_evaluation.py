@@ -34,8 +34,12 @@ class COCOPanopticEvaluator(DatasetEvaluator):
             output_dir (str): output directory to save results for evaluation
         """
         self._metadata = MetadataCatalog.get(dataset_name)
-        self._thing_contiguous_id_to_dataset_id = {v: k for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()}
-        self._stuff_contiguous_id_to_dataset_id = {v: k for k, v in self._metadata.stuff_dataset_id_to_contiguous_id.items()}
+        self._thing_contiguous_id_to_dataset_id = {
+            v: k for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()
+        }
+        self._stuff_contiguous_id_to_dataset_id = {
+            v: k for k, v in self._metadata.stuff_dataset_id_to_contiguous_id.items()
+        }
 
         self._predictions_json = os.path.join(output_dir, "predictions.json")
 
@@ -48,9 +52,13 @@ class COCOPanopticEvaluator(DatasetEvaluator):
             # the model produces panoptic category id directly. No more conversion needed
             return segment_info
         if isthing is True:
-            segment_info["category_id"] = self._thing_contiguous_id_to_dataset_id[segment_info["category_id"]]
+            segment_info["category_id"] = self._thing_contiguous_id_to_dataset_id[
+                segment_info["category_id"]
+            ]
         else:
-            segment_info["category_id"] = self._stuff_contiguous_id_to_dataset_id[segment_info["category_id"]]
+            segment_info["category_id"] = self._stuff_contiguous_id_to_dataset_id[
+                segment_info["category_id"]
+            ]
         return segment_info
 
     def process(self, inputs, outputs):
@@ -128,7 +136,11 @@ def _print_panoptic_results(pq_res):
     headers = ["", "PQ", "SQ", "RQ", "#categories"]
     data = []
     for name in ["All", "Things", "Stuff"]:
-        row = [name] + [pq_res[name][k] * 100 for k in ["pq", "sq", "rq"]] + [pq_res[name]["n"]]
+        row = (
+            [name]
+            + [pq_res[name][k] * 100 for k in ["pq", "sq", "rq"]]
+            + [pq_res[name]["n"]]
+        )
         data.append(row)
     table = tabulate(
         data,
