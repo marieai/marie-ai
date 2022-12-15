@@ -3,12 +3,13 @@
 It also includes common transformation functions (e.g., get_transform, __scale_width), which can be later used in subclasses.
 """
 import random
+from abc import ABC, abstractmethod
+
 import cv2
 import numpy as np
 import torch.utils.data as data
-from PIL import Image
 import torchvision.transforms as transforms
-from abc import ABC, abstractmethod
+from PIL import Image
 
 
 class BaseDataset(data.Dataset, ABC):
@@ -96,7 +97,7 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
             transform_list.append(transforms.RandomCrop(opt.crop_size))
         else:
             transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.crop_size)))
-        
+
     if src:
         transform_list.append(transforms.Lambda(lambda img: __augment(img)))
 
@@ -107,7 +108,7 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
         if params is None:
             transform_list.append(transforms.RandomHorizontalFlip())
         elif params['flip']:
-            transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))    
+            transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))
 
     transform_list.append(transforms.Lambda(lambda img: __convert_3_channels(img)))
 
@@ -120,15 +121,17 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
 
     return transforms.Compose(transform_list)
 
+
 def __convert_3_channels(img):
     # print(img.shape)
     # x3d = np.repeat(np.expand_dims(img, axis=3), 3, axis=3)
     return img.convert('RGB')
 
+
 def __make_power_2(img, base, method=Image.BICUBIC):
     ow, oh = img.size
     h = int(round(oh / base) * base)
-    w = int(round(ow / base) * base)    
+    w = int(round(ow / base) * base)
     if h == oh and w == ow:
         return img
 
@@ -149,7 +152,7 @@ def __crop(img, pos, size):
     ow, oh = img.size
     x1, y1 = pos
     tw = th = size
-    if (ow > tw or oh > th):
+    if ow > tw or oh > th:
         return img.crop((x1, y1, x1 + tw, y1 + th))
     return img
 
@@ -160,32 +163,36 @@ def __flip(img, flip):
     return img
 
 
-
 def __augment(pil_img):
     import random
     import string
+
     """Augment imag and mask"""
     import imgaug as ia
     import imgaug.augmenters as iaa
+
     sometimes = lambda aug: iaa.Sometimes(0.3, aug)
- 
+
     open_cv_image = np.array(pil_img)
     # Convert RGB to BGR
     open_cv_image = open_cv_image[:, :, ::-1].copy()
 
-    seq = iaa.Sequential([
-        # sometimes(iaa.SaltAndPepper(0.001, per_channel=False)),
-        sometimes(iaa.OneOf([
-            # iaa.GaussianBlur((0, 2.0)),
-            # iaa.AverageBlur(k=(2, 7)),
-            iaa.MedianBlur(k=(1, 3)),
-        ])),
-
-        sometimes(
-            iaa.ElasticTransformation(alpha=(0.5, 1.2), sigma=0.25)
-        ),
-
-    ], random_order=True)
+    seq = iaa.Sequential(
+        [
+            # sometimes(iaa.SaltAndPepper(0.001, per_channel=False)),
+            sometimes(
+                iaa.OneOf(
+                    [
+                        # iaa.GaussianBlur((0, 2.0)),
+                        # iaa.AverageBlur(k=(2, 7)),
+                        iaa.MedianBlur(k=(1, 3)),
+                    ]
+                )
+            ),
+            sometimes(iaa.ElasticTransformation(alpha=(0.5, 1.2), sigma=0.25)),
+        ],
+        random_order=True,
+    )
 
     image_aug = seq(image=open_cv_image)
 
@@ -195,13 +202,14 @@ def __augment(pil_img):
 
     return im_pil
 
+
 def __print_size_warning(ow, oh, w, h):
     """Print warning information about image size(only print once)"""
     if not hasattr(__print_size_warning, 'has_printed'):
-        print("The image size needs to be a multiple of 4. "
-              "The loaded image size was (%d, %d), so it was adjusted to "
-              "(%d, %d). This adjustment will be done to all images "
-              "whose sizes are not multiples of 4" % (ow, oh, w, h))
+        print(
+            "The image size needs to be a multiple of 4. "
+            "The loaded image size was (%d, %d), so it was adjusted to "
+            "(%d, %d). This adjustment will be done to all images "
+            "whose sizes are not multiples of 4" % (ow, oh, w, h)
+        )
         __print_size_warning.has_printed = True
-
-

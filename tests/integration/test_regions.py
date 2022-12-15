@@ -1,8 +1,8 @@
 import os
 
 import cv2
-from utils.utils import ensure_exists
 
+from utils.utils import ensure_exists
 
 #
 # from boxes.box_processor import BoxProcessor, PSMode

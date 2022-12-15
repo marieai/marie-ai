@@ -1,14 +1,15 @@
-import os
-import logging
 import functools
 import json
+import logging
+import os
 import time
 from datetime import datetime
 
-# from tensorboardX import SummaryWriter
-import yaml
 import cv2
 import numpy as np
+
+# from tensorboardX import SummaryWriter
+import yaml
 
 from .config import Configurable, State
 
@@ -49,8 +50,7 @@ class Logger(Configurable):
         summary_path = os.path.join(self.log_dir, self.SUMMARY_DIR_NAME)
         self.tf_board_logger = SummaryWriter(summary_path)
 
-        self.metrics_writer = open(os.path.join(
-            self.log_dir, self.METRICS_FILE_NAME), 'at')
+        self.metrics_writer = open(os.path.join(self.log_dir, self.METRICS_FILE_NAME), 'at')
 
         self.timestamp = time.time()
         self.logged = -1
@@ -59,8 +59,7 @@ class Logger(Configurable):
 
     def _make_storage(self):
         application = os.path.basename(os.getcwd())
-        storage_dir = os.path.join(
-            self.database_dir, self.log_dir, application)
+        storage_dir = os.path.join(self.database_dir, self.log_dir, application)
         if not os.path.exists(storage_dir):
             os.makedirs(storage_dir)
         if not os.path.exists(self.log_dir):
@@ -71,16 +70,13 @@ class Logger(Configurable):
 
     def _init_message_logger(self):
         message_logger = logging.getLogger('messages')
-        message_logger.setLevel(
-            logging.DEBUG if self.verbose else logging.INFO)
-        formatter = logging.Formatter(
-            '[%(levelname)s] [%(asctime)s] %(message)s')
+        message_logger.setLevel(logging.DEBUG if self.verbose else logging.INFO)
+        formatter = logging.Formatter('[%(levelname)s] [%(asctime)s] %(message)s')
         std_handler = logging.StreamHandler()
         std_handler.setLevel(message_logger.level)
         std_handler.setFormatter(formatter)
 
-        file_handler = logging.FileHandler(
-            os.path.join(self.log_dir, self.LOG_FILE_NAME))
+        file_handler = logging.FileHandler(os.path.join(self.log_dir, self.LOG_FILE_NAME))
         file_handler.setLevel(message_logger.level)
         file_handler.setFormatter(formatter)
 
@@ -112,9 +108,10 @@ class Logger(Configurable):
         minutes = (seconds - (hours * 3600)) // 60
         seconds = seconds % 60
 
-        print('%d/%d batches processed in epoch %d, ETA: %2d:%2d:%2d' %
-              (steps, total, epoch,
-               hours, minutes, seconds), end='\r')
+        print(
+            '%d/%d batches processed in epoch %d, ETA: %2d:%2d:%2d' % (steps, total, epoch, hours, minutes, seconds),
+            end='\r',
+        )
 
     def args(self, parameters=None):
         if parameters is None:
@@ -128,13 +125,7 @@ class Logger(Configurable):
         for name, a in metrics_dict.items():
             results[name] = {'count': a.count, 'value': float(a.avg)}
             self.add_scalar('metrics/' + name, a.avg, steps)
-        result_dict = {
-            str(datetime.now()): {
-                'epoch': epoch,
-                'steps': steps,
-                **results
-            }
-        }
+        result_dict = {str(datetime.now()): {'epoch': epoch, 'steps': steps, **results}}
         string_result = yaml.dump(result_dict)
         self.info(string_result)
         self.metrics_writer.write(string_result)
@@ -164,7 +155,7 @@ class Logger(Configurable):
                 result = image
             else:
                 result = np.concatenate([result, image], 0)
-        cv2.imwrite(os.path.join(self.vis_dir(), name+'.jpg'), result)
+        cv2.imwrite(os.path.join(self.vis_dir(), name + '.jpg'), result)
 
     def vis_dir(self):
         vis_dir = os.path.join(self.log_dir, self.VISUALIZE_NAME)
@@ -182,7 +173,7 @@ class Logger(Configurable):
                 actual_width = min(width, max_size)
                 actual_height = int(round(actual_width * height / width))
                 image = cv2.resize(image, (actual_width, actual_height))
-            cv2.imwrite(os.path.join(self.vis_dir(), file_name+'.jpg'), image)
+            cv2.imwrite(os.path.join(self.vis_dir(), file_name + '.jpg'), image)
 
     def __getattr__(self, name):
         message_levels = set(['debug', 'info', 'warning', 'error', 'critical'])

@@ -9,24 +9,33 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
-from nltk.metrics.distance import edit_distance
-
 from dataset import AlignCollate, hierarchical_dataset
 from model import Model
-from utils import AttnLabelConverter, Averager, CTCLabelConverter
+from nltk.metrics.distance import edit_distance
 
+from utils import AttnLabelConverter, Averager, CTCLabelConverter
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=False):
-    """ evaluation with 10 benchmark evaluation datasets """
+    """evaluation with 10 benchmark evaluation datasets"""
     # The evaluation datasets, dataset order is same with Table 1 in our paper.
-    eval_data_list = ['IIIT5k_3000', 'SVT', 'IC03_860', 'IC03_867', 'IC13_857',
-                      'IC13_1015', 'IC15_1811', 'IC15_2077', 'SVTP', 'CUTE80']
+    eval_data_list = [
+        'IIIT5k_3000',
+        'SVT',
+        'IC03_860',
+        'IC03_867',
+        'IC13_857',
+        'IC13_1015',
+        'IC15_1811',
+        'IC15_2077',
+        'SVTP',
+        'CUTE80',
+    ]
 
     # # To easily compute the total accuracy of our paper.
-    # eval_data_list = ['IIIT5k_3000', 'SVT', 'IC03_867', 
+    # eval_data_list = ['IIIT5k_3000', 'SVT', 'IC03_867',
     #                   'IC13_1015', 'IC15_2077', 'SVTP', 'CUTE80']
 
     if calculate_infer_time:
@@ -47,13 +56,24 @@ def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=Fa
         AlignCollate_evaluation = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
         eval_data, eval_data_log = hierarchical_dataset(root=eval_data_path, opt=opt)
         evaluation_loader = torch.utils.data.DataLoader(
-            eval_data, batch_size=evaluation_batch_size,
+            eval_data,
+            batch_size=evaluation_batch_size,
             shuffle=False,
             num_workers=int(opt.workers),
-            collate_fn=AlignCollate_evaluation, pin_memory=True)
+            collate_fn=AlignCollate_evaluation,
+            pin_memory=True,
+        )
 
-        _, accuracy_by_best_model, norm_ED_by_best_model, _, _, _, infer_time, length_of_data = validation(
-            model, criterion, evaluation_loader, converter, opt)
+        (
+            _,
+            accuracy_by_best_model,
+            norm_ED_by_best_model,
+            _,
+            _,
+            _,
+            infer_time,
+            length_of_data,
+        ) = validation(model, criterion, evaluation_loader, converter, opt)
         list_accuracy.append(f'{accuracy_by_best_model:0.3f}')
         total_forward_time += infer_time
         total_evaluation_data_number += len(eval_data)
@@ -81,7 +101,7 @@ def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=Fa
 
 
 def validation(model, criterion, evaluation_loader, converter, opt):
-    """ validation or evaluation """
+    """validation or evaluation"""
     n_correct = 0
     norm_ED = 0
     length_of_data = 0
@@ -107,9 +127,22 @@ def validation(model, criterion, evaluation_loader, converter, opt):
             preds_size = torch.IntTensor([preds.size(1)] * batch_size)
             # permute 'preds' to use CTCloss format
             if opt.baiduCTC:
-                cost = criterion(preds.permute(1, 0, 2), text_for_loss, preds_size, length_for_loss) / batch_size
+                cost = (
+                    criterion(
+                        preds.permute(1, 0, 2),
+                        text_for_loss,
+                        preds_size,
+                        length_for_loss,
+                    )
+                    / batch_size
+                )
             else:
-                cost = criterion(preds.log_softmax(2).permute(1, 0, 2), text_for_loss, preds_size, length_for_loss)
+                cost = criterion(
+                    preds.log_softmax(2).permute(1, 0, 2),
+                    text_for_loss,
+                    preds_size,
+                    length_for_loss,
+                )
 
             # Select max probabilty (greedy decoding) then decode index to character
             if opt.baiduCTC:
@@ -118,14 +151,17 @@ def validation(model, criterion, evaluation_loader, converter, opt):
             else:
                 _, preds_index = preds.max(2)
             preds_str = converter.decode(preds_index.data, preds_size.data)
-        
+
         else:
             preds = model(image, text_for_pred, is_train=False)
             forward_time = time.time() - start_time
 
-            preds = preds[:, :text_for_loss.shape[1] - 1, :]
+            preds = preds[:, : text_for_loss.shape[1] - 1, :]
             target = text_for_loss[:, 1:]  # without [GO] Symbol
-            cost = criterion(preds.contiguous().view(-1, preds.shape[-1]), target.contiguous().view(-1))
+            cost = criterion(
+                preds.contiguous().view(-1, preds.shape[-1]),
+                target.contiguous().view(-1),
+            )
 
             # select max probabilty (greedy decoding) then decode index to character
             _, preds_index = preds.max(2)
@@ -141,7 +177,7 @@ def validation(model, criterion, evaluation_loader, converter, opt):
         confidence_score_list = []
         for gt, pred, pred_max_prob in zip(labels, preds_str, preds_max_prob):
             if 'Attn' in opt.Prediction:
-                gt = gt[:gt.find('[s]')]
+                gt = gt[: gt.find('[s]')]
                 pred_EOS = pred.find('[s]')
                 pred = pred[:pred_EOS]  # prune after "end of sentence" token ([s])
                 pred_max_prob = pred_max_prob[:pred_EOS]
@@ -186,11 +222,20 @@ def validation(model, criterion, evaluation_loader, converter, opt):
     accuracy = n_correct / float(length_of_data) * 100
     norm_ED = norm_ED / float(length_of_data)  # ICDAR2019 Normalized Edit Distance
 
-    return valid_loss_avg.val(), accuracy, norm_ED, preds_str, confidence_score_list, labels, infer_time, length_of_data
+    return (
+        valid_loss_avg.val(),
+        accuracy,
+        norm_ED,
+        preds_str,
+        confidence_score_list,
+        labels,
+        infer_time,
+        length_of_data,
+    )
 
 
 def test(opt):
-    """ model configuration """
+    """model configuration"""
     if 'CTC' in opt.Prediction:
         converter = CTCLabelConverter(opt.character)
     else:
@@ -200,9 +245,21 @@ def test(opt):
     if opt.rgb:
         opt.input_channel = 3
     model = Model(opt)
-    print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
-          opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
-          opt.SequenceModeling, opt.Prediction)
+    print(
+        'model input parameters',
+        opt.imgH,
+        opt.imgW,
+        opt.num_fiducial,
+        opt.input_channel,
+        opt.output_channel,
+        opt.hidden_size,
+        opt.num_class,
+        opt.batch_max_length,
+        opt.Transformation,
+        opt.FeatureExtraction,
+        opt.SequenceModeling,
+        opt.Prediction,
+    )
     model = torch.nn.DataParallel(model).to(device)
 
     # load model
@@ -231,12 +288,14 @@ def test(opt):
             AlignCollate_evaluation = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
             eval_data, eval_data_log = hierarchical_dataset(root=opt.eval_data, opt=opt)
             evaluation_loader = torch.utils.data.DataLoader(
-                eval_data, batch_size=opt.batch_size,
+                eval_data,
+                batch_size=opt.batch_size,
                 shuffle=False,
                 num_workers=int(opt.workers),
-                collate_fn=AlignCollate_evaluation, pin_memory=True)
-            _, accuracy_by_best_model, _, _, _, _, _, _ = validation(
-                model, criterion, evaluation_loader, converter, opt)
+                collate_fn=AlignCollate_evaluation,
+                pin_memory=True,
+            )
+            _, accuracy_by_best_model, _, _, _, _, _, _ = validation(model, criterion, evaluation_loader, converter, opt)
             log.write(eval_data_log)
             print(f'{accuracy_by_best_model:0.3f}')
             log.write(f'{accuracy_by_best_model:0.3f}\n')
@@ -246,7 +305,11 @@ def test(opt):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval_data', required=True, help='path to evaluation dataset')
-    parser.add_argument('--benchmark_all_eval', action='store_true', help='evaluate 10 benchmark evaluation datasets')
+    parser.add_argument(
+        '--benchmark_all_eval',
+        action='store_true',
+        help='evaluate 10 benchmark evaluation datasets',
+    )
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
     parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
@@ -255,20 +318,58 @@ if __name__ == '__main__':
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
-    parser.add_argument('--character', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz', help='character label')
+    parser.add_argument(
+        '--character',
+        type=str,
+        default='0123456789abcdefghijklmnopqrstuvwxyz',
+        help='character label',
+    )
     parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
-    parser.add_argument('--PAD', action='store_true', help='whether to keep ratio then pad for image resize')
+    parser.add_argument(
+        '--PAD',
+        action='store_true',
+        help='whether to keep ratio then pad for image resize',
+    )
     parser.add_argument('--data_filtering_off', action='store_true', help='for data_filtering_off mode')
     parser.add_argument('--baiduCTC', action='store_true', help='for data_filtering_off mode')
     """ Model Architecture """
-    parser.add_argument('--Transformation', type=str, required=True, help='Transformation stage. None|TPS')
-    parser.add_argument('--FeatureExtraction', type=str, required=True, help='FeatureExtraction stage. VGG|RCNN|ResNet')
-    parser.add_argument('--SequenceModeling', type=str, required=True, help='SequenceModeling stage. None|BiLSTM')
+    parser.add_argument(
+        '--Transformation',
+        type=str,
+        required=True,
+        help='Transformation stage. None|TPS',
+    )
+    parser.add_argument(
+        '--FeatureExtraction',
+        type=str,
+        required=True,
+        help='FeatureExtraction stage. VGG|RCNN|ResNet',
+    )
+    parser.add_argument(
+        '--SequenceModeling',
+        type=str,
+        required=True,
+        help='SequenceModeling stage. None|BiLSTM',
+    )
     parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
-    parser.add_argument('--num_fiducial', type=int, default=20, help='number of fiducial points of TPS-STN')
-    parser.add_argument('--input_channel', type=int, default=1, help='the number of input channel of Feature extractor')
-    parser.add_argument('--output_channel', type=int, default=512,
-                        help='the number of output channel of Feature extractor')
+    parser.add_argument(
+        '--num_fiducial',
+        type=int,
+        default=20,
+        help='number of fiducial points of TPS-STN',
+    )
+    parser.add_argument(
+        '--input_channel',
+        type=int,
+        default=1,
+        help='the number of input channel of Feature extractor',
+    )
+    parser.add_argument(
+        '--output_channel',
+        type=int,
+        default=512,
+        help='the number of output channel of Feature extractor',
+    )
     parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
 
     opt = parser.parse_args()

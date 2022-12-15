@@ -1,17 +1,18 @@
 #!/usr/bin/env mdl
 import os
+
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-import time
 import json
 import select
-import traceback
 import socket
-from multiprocessing import Process, Pipe
+import time
+import traceback
+from multiprocessing import Pipe, Process
 
 import gevent
+from flask import Flask, abort, render_template, request
 from gevent.pywsgi import WSGIServer
 from geventwebsocket.handler import WebSocketHandler
-from flask import Flask, request, render_template, abort
 
 
 def log_important_msg(msg, *, padding=3):
@@ -25,8 +26,7 @@ def log_important_msg(msg, *, padding=3):
 
 
 def hint_url(url, port):
-    log_important_msg(
-        'The server is running at: {}'.format(url))
+    log_important_msg('The server is running at: {}'.format(url))
 
 
 def _set_server(conn, name='webcv2', port=7788):
@@ -43,7 +43,7 @@ def _set_server(conn, name='webcv2', port=7788):
     @app.route('/stream')
     def stream():
         def poll_ws(ws, delay):
-            return len(select.select([ws.stream.handler.rfile], [], [], delay / 1000.)[0]) > 0
+            return len(select.select([ws.stream.handler.rfile], [], [], delay / 1000.0)[0]) > 0
 
         if request.environ.get('wsgi.websocket'):
             ws = request.environ['wsgi.websocket']
@@ -95,10 +95,10 @@ def get_server(name='webcv2', port=7788):
         target=_set_server,
         args=(conn_server,),
         kwargs=dict(
-            name=name, port=port,
+            name=name,
+            port=port,
         ),
     )
     p_server.daemon = True
     p_server.start()
     return p_server, conn_factory
-

@@ -1,4 +1,4 @@
-from marie import Client, Executor, Flow, requests, DocumentArray, Document
+from marie import Client, Document, DocumentArray, Executor, Flow, requests
 
 
 class FooExecutor(Executor):

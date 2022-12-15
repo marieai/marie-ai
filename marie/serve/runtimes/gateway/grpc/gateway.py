@@ -42,9 +42,7 @@ class GRPCGateway(BaseGateway):
             interceptors=self.grpc_tracing_server_interceptors,
         )
 
-        jina_pb2_grpc.add_JinaRPCServicer_to_server(
-            self.streamer._streamer, self.server
-        )
+        jina_pb2_grpc.add_JinaRPCServicer_to_server(self.streamer._streamer, self.server)
 
         jina_pb2_grpc.add_JinaGatewayDryRunRPCServicer_to_server(self, self.server)
         jina_pb2_grpc.add_JinaInfoRPCServicer_to_server(self, self.server)
@@ -77,20 +75,14 @@ class GRPCGateway(BaseGateway):
                 )
             )
             self.server.add_secure_port(bind_addr, server_credentials)
-        elif (
-            self.ssl_keyfile != self.ssl_certfile
-        ):  # if we have only ssl_keyfile and not ssl_certfile or vice versa
-            raise ValueError(
-                f"you can't pass a ssl_keyfile without a ssl_certfile and vice versa"
-            )
+        elif self.ssl_keyfile != self.ssl_certfile:  # if we have only ssl_keyfile and not ssl_certfile or vice versa
+            raise ValueError(f"you can't pass a ssl_keyfile without a ssl_certfile and vice versa")
         else:
             self.server.add_insecure_port(bind_addr)
         self.logger.debug(f'start server bound to {bind_addr}')
         await self.server.start()
         for service in service_names:
-            await self.health_servicer.set(
-                service, health_pb2.HealthCheckResponse.SERVING
-            )
+            await self.health_servicer.set(service, health_pb2.HealthCheckResponse.SERVING)
 
     async def shutdown(self):
         """Free other resources allocated with the server, e.g, gateway object, ..."""
@@ -109,15 +101,13 @@ class GRPCGateway(BaseGateway):
         :param context: grpc context
         :returns: the response request
         """
-        from docarray import DocumentArray, Document
+        from docarray import Document, DocumentArray
 
         from marie.serve.executors import __dry_run_endpoint__
 
         da = DocumentArray([Document()])
         try:
-            async for _ in self.streamer.stream_docs(
-                docs=da, exec_endpoint=__dry_run_endpoint__, request_size=1
-            ):
+            async for _ in self.streamer.stream_docs(docs=da, exec_endpoint=__dry_run_endpoint__, request_size=1):
                 pass
             status_message = StatusMessage()
             status_message.set_code(jina_pb2.StatusProto.SUCCESS)

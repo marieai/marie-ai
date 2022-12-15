@@ -21,15 +21,15 @@ class AioHttpClientlet(ABC):
     """aiohttp session manager"""
 
     def __init__(
-            self,
-            url: str,
-            logger: 'MarieLogger',
-            max_attempts: int = 1,
-            initial_backoff: float = 0.5,
-            max_backoff: float = 0.1,
-            backoff_multiplier: float = 1.5,
-            tracer_provider: Optional['trace.TraceProvider'] = None,
-            **kwargs,
+        self,
+        url: str,
+        logger: 'MarieLogger',
+        max_attempts: int = 1,
+        initial_backoff: float = 0.5,
+        max_backoff: float = 0.1,
+        backoff_multiplier: float = 1.5,
+        tracer_provider: Optional['trace.TraceProvider'] = None,
+        **kwargs,
     ) -> None:
         """HTTP Client to be used with the streamer
 
@@ -103,9 +103,7 @@ class AioHttpClientlet(ABC):
         with ImportExtensions(required=True):
             import aiohttp
 
-        self.session = aiohttp.ClientSession(
-            **self._session_kwargs, trace_configs=self._trace_config
-        )
+        self.session = aiohttp.ClientSession(**self._session_kwargs, trace_configs=self._trace_config)
         await self.session.__aenter__()
         return self
 
@@ -143,8 +141,7 @@ class HTTPClientlet(AioHttpClientlet):
                     wait_time = random.uniform(
                         0,
                         min(
-                            self.initial_backoff
-                            * self.backoff_multiplier ** (retry - 1),
+                            self.initial_backoff * self.backoff_multiplier ** (retry - 1),
                             self.max_backoff,
                         ),
                     )
@@ -219,8 +216,7 @@ class WebsocketClientlet(AioHttpClientlet):
                     wait_time = random.uniform(
                         0,
                         min(
-                            self.initial_backoff
-                            * self.backoff_multiplier ** (retry - 1),
+                            self.initial_backoff * self.backoff_multiplier ** (retry - 1),
                             self.max_backoff,
                         ),
                     )

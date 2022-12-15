@@ -2,8 +2,8 @@
 import copy
 import logging
 import random
-import torch.utils.data as data
 
+import torch.utils.data as data
 from detectron2.utils.serialize import PicklableWrapper
 
 __all__ = ["MapDataset", "DatasetFromList"]
@@ -48,11 +48,7 @@ class MapDataset(data.Dataset):
 
             if retry_count >= 3:
                 logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Failed to apply `_map_func` for idx: {}, retry count: {}".format(
-                        idx, retry_count
-                    )
-                )
+                logger.warning("Failed to apply `_map_func` for idx: {}, retry count: {}".format(idx, retry_count))
 
 
 class DatasetFromList(data.Dataset):

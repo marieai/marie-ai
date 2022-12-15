@@ -23,5 +23,3 @@ class TestConfig(BaseConfig):
     DEBUG = True
     # make celery execute tasks synchronously in the same process
     CELERY_ALWAYS_EAGER = True
-
-

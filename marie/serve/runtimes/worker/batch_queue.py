@@ -47,18 +47,12 @@ class BatchQueue:
         self._timer_task: Optional[Task] = None
 
     def _cancel_timer_if_pending(self):
-        if (
-            self._timer_task
-            and not self._timer_task.done()
-            and not self._timer_task.cancelled()
-        ):
+        if self._timer_task and not self._timer_task.done() and not self._timer_task.cancelled():
             self._timer_task.cancel()
 
     def _start_timer(self):
         self._cancel_timer_if_pending()
-        self._timer_task = asyncio.create_task(
-            self._sleep_then_set(self._flush_trigger)
-        )
+        self._timer_task = asyncio.create_task(self._sleep_then_set(self._flush_trigger))
         self._timer_started = True
 
     async def _sleep_then_set(self, event: Event):
@@ -117,17 +111,21 @@ class BatchQueue:
                 if isinstance(return_docs, DocumentArray):
                     if not len(return_docs) == input_len_before_call:
                         raise ValueError(
-                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(return_docs)}'
+                            'Dynamic Batching requires input size to equal output'
+                            f' size. Expected output size {input_len_before_call}, but'
+                            f' got {len(return_docs)}'
                         )
                 elif return_docs is None:
                     if not len(self._big_doc) == input_len_before_call:
                         raise ValueError(
-                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(self._big_doc)}'
+                            'Dynamic Batching requires input size to equal output'
+                            f' size. Expected output size {input_len_before_call}, but'
+                            f' got {len(self._big_doc)}'
                         )
                 else:
                     raise TypeError(
-                        f'The return type must be DocumentArray / `None` when using dynamic batching, '
-                        f'but getting {return_docs!r}'
+                        'The return type must be DocumentArray / `None` when using'
+                        f' dynamic batching, but getting {return_docs!r}'
                     )
 
                 # We need to re-slice the big doc array into the original requests
@@ -141,13 +139,9 @@ class BatchQueue:
             left = consumed_count
             right = consumed_count + request_len
             if return_docs:
-                request.data.set_docs_convert_arrays(
-                    return_docs[left:right], ndarray_type=self._output_array_type
-                )
+                request.data.set_docs_convert_arrays(return_docs[left:right], ndarray_type=self._output_array_type)
             else:
-                request.data.set_docs_convert_arrays(
-                    self._big_doc[left:right], ndarray_type=self._output_array_type
-                )
+                request.data.set_docs_convert_arrays(self._big_doc[left:right], ndarray_type=self._output_array_type)
             consumed_count += request_len
 
     async def close(self):

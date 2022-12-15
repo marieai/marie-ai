@@ -4,13 +4,8 @@ import os
 import pytest
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
-
 from jina import __version__
-from jina.orchestrate.deployments.config.helper import (
-    get_base_executor_version,
-    get_image_name,
-    to_compatible_name,
-)
+from jina.orchestrate.deployments.config.helper import get_base_executor_version, get_image_name, to_compatible_name
 
 
 @pytest.mark.parametrize('is_master', (True, False))

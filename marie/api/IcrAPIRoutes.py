@@ -1,32 +1,33 @@
-import io
-import os
-
 import hashlib
 import imghdr
+import io
 import json
 import logging
+import os
 from distutils.util import strtobool as strtobool
 
-import numpy as np
-
 import cv2
+import numpy as np
+from flask import Blueprint, jsonify
+from flask_restful import Resource, reqparse, request
 
 import marie.conf
 import marie.executor
-
-from flask import Blueprint, jsonify
-from flask_restful import Resource, reqparse, request
-from marie.numpyencoder import NumpyEncoder
-from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
 from marie.boxes.box_processor import PSMode
 from marie.logger import setup_logger
+from marie.numpyencoder import NumpyEncoder
 from marie.utils.base64 import base64StringToBytes, encodeToBase64
 from marie.utils.network import find_open_port, get_ip_address
+from marie.utils.utils import FileSystem, current_milli_time, ensure_exists
 
 logger = setup_logger(__name__)
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
+
+# FIXME  : This is here just to satisfy the flake8 checks
+box_processor = None
+icr_processor = None
 
 
 def load_image(fname, image_type):
@@ -87,7 +88,10 @@ def status():
             {
                 "name": "marie-ai",
                 "host": host,
-                "component": [{"name": "craft", "version": "1.0.0"}, {"name": "craft-benchmark", "version": "1.0.0"}],
+                "component": [
+                    {"name": "craft", "version": "1.0.0"},
+                    {"name": "craft-benchmark", "version": "1.0.0"},
+                ],
                 "build": build,
             }
         ),
@@ -209,13 +213,11 @@ def process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
             img = frames[page_index]
             img = img[y : y + h, x : x + w].copy()
             # allow for small padding around the component
-            padding =4
+            padding = 4
             overlay = np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
             overlay[padding : h + padding, padding : w + padding] = img
 
-            boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(
-                queue_id, checksum, overlay, pms_mode
-            )
+            boxes, img_fragments, lines, _ = box_processor.extract_bounding_boxes(queue_id, checksum, overlay, pms_mode)
             result, overlay_image = icr_processor.recognize(queue_id, checksum, overlay, boxes, img_fragments, lines)
 
             cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay_image)
@@ -311,7 +313,12 @@ def extract(queue_id: str):
             result = process_extract_regions(frames, queue_id, checksum, pms_mode, regions, args)
 
         serialized = json.dumps(
-            result, sort_keys=True, separators=(",", ": "), ensure_ascii=False, indent=2, cls=NumpyEncoder
+            result,
+            sort_keys=True,
+            separators=(",", ": "),
+            ensure_ascii=False,
+            indent=2,
+            cls=NumpyEncoder,
         )
 
         return serialized, 200

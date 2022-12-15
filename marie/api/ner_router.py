@@ -2,19 +2,17 @@ import warnings
 from typing import Any
 
 from flask import jsonify
-
 from flask_restful import Resource, reqparse, request
 
+from marie import Document, DocumentArray
 from marie.api import extract_payload, value_from_payload_or_args
-from marie.conf.helper import storage_provider_config, executor_config
+from marie.conf.helper import executor_config, storage_provider_config
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
-
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
-from marie.utils.image_utils import hash_file
 from marie.utils.docs import docs_from_file
-from marie import Document, DocumentArray
+from marie.utils.image_utils import hash_file
 
 logger = default_logger
 
@@ -38,9 +36,7 @@ class NERRouter:
         _name_or_path = (
             kwargs.pop("_name_or_path")
             if "_name_or_path" in kwargs
-            else executor_config(config, NerExtractionExecutor.__name__)[
-                "_name_or_path"
-            ]
+            else executor_config(config, NerExtractionExecutor.__name__)["_name_or_path"]
         )
 
         if _name_or_path is None:

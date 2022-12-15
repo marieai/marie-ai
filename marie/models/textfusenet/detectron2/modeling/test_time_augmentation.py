@@ -1,14 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import copy
-import numpy as np
 from contextlib import contextmanager
 from itertools import count
-import torch
-from torch import nn
 
+import numpy as np
+import torch
 from detectron2.data.detection_utils import read_image
 from detectron2.data.transforms import ResizeShortestEdge
 from detectron2.structures import Instances
+from torch import nn
 
 from .meta_arch import GeneralizedRCNN
 from .postprocessing import detector_postprocess
@@ -83,14 +83,12 @@ class GeneralizedRCNNWithTTA(nn.Module):
             batch_size (int): batch the augmented images into this batch size for inference.
         """
         super().__init__()
-        assert isinstance(
-            model, GeneralizedRCNN
-        ), "TTA is only supported on GeneralizedRCNN. Got a model of type {}".format(type(model))
+        assert isinstance(model, GeneralizedRCNN), "TTA is only supported on GeneralizedRCNN. Got a model of type {}".format(
+            type(model)
+        )
         self.cfg = cfg.clone()
         assert not self.cfg.MODEL.KEYPOINT_ON, "TTA for keypoint is not supported yet"
-        assert (
-            not self.cfg.MODEL.LOAD_PROPOSALS
-        ), "TTA for pre-computed proposals is not supported yet"
+        assert not self.cfg.MODEL.LOAD_PROPOSALS, "TTA for pre-computed proposals is not supported yet"
 
         self.model = model
 

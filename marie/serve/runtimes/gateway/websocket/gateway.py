@@ -16,7 +16,7 @@ class WebSocketGateway(BaseGateway):
         ssl_certfile: Optional[str] = None,
         uvicorn_kwargs: Optional[dict] = None,
         proxy: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ):
         """Initialize the gateway
         :param ssl_keyfile: the path to the key file

@@ -37,12 +37,8 @@ def documents(start_index, end_index):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 @pytest.mark.parametrize('flow_cls', [Flow, AsyncFlow])
-@pytest.mark.parametrize(
-    'return_responses, return_class', [(True, Request), (False, DocumentArray)]
-)
-async def test_run_async_flow(
-    protocol, mocker, flow_cls, return_responses, return_class
-):
+@pytest.mark.parametrize('return_responses, return_class', [(True, Request), (False, DocumentArray)])
+async def test_run_async_flow(protocol, mocker, flow_cls, return_responses, return_class):
     r_val = mocker.Mock()
     with flow_cls(protocol=protocol, asyncio=True).add() as f:
         async for r in f.index(

@@ -2,17 +2,17 @@
 import colorsys
 import logging
 import math
-import numpy as np
 from enum import Enum, unique
+
 import cv2
 import matplotlib as mpl
 import matplotlib.colors as mplc
 import matplotlib.figure as mplfigure
+import numpy as np
 import pycocotools.mask as mask_util
 import torch
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-
 from detectron2.structures import BitMasks, Boxes, BoxMode, Keypoints, PolygonMasks, RotatedBoxes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from .colormap import random_color
 
@@ -163,9 +163,7 @@ class _PanopticPrediction:
                 empty_ids.append(id)
         if len(empty_ids) == 0:
             return np.zeros(self._seg.shape, dtype=np.uint8)
-        assert (
-            len(empty_ids) == 1
-        ), ">1 ids corresponds to no labels. This is currently not supported"
+        assert len(empty_ids) == 1, ">1 ids corresponds to no labels. This is currently not supported"
         return (self._seg != empty_ids[0]).numpy().astype(np.bool)
 
     def semantic_masks(self):
@@ -314,9 +312,7 @@ class Visualizer:
         self.cpu_device = torch.device("cpu")
 
         # too small texts are useless, therefore clamp to 9
-        self._default_font_size = max(
-            np.sqrt(self.output.height * self.output.width) // 90, 10 // scale
-        )
+        self._default_font_size = max(np.sqrt(self.output.height * self.output.width) // 90, 10 // scale)
         self._instance_mode = instance_mode
 
     def draw_instance_predictions(self, predictions):
@@ -344,9 +340,7 @@ class Visualizer:
             masks = None
 
         if self._instance_mode == ColorMode.SEGMENTATION and self.metadata.get("thing_colors"):
-            colors = [
-                self._jitter([x / 255 for x in self.metadata.thing_colors[c]]) for c in classes
-            ]
+            colors = [self._jitter([x / 255 for x in self.metadata.thing_colors[c]]) for c in classes]
             alpha = 0.8
         else:
             colors = None
@@ -354,17 +348,13 @@ class Visualizer:
 
         if self._instance_mode == ColorMode.IMAGE_BW:
             assert predictions.has("pred_masks"), "ColorMode.IMAGE_BW requires segmentations"
-            self.output.img = self._create_grayscale_image(
-                (predictions.pred_masks.any(dim=0) > 0).numpy()
-            )
+            self.output.img = self._create_grayscale_image((predictions.pred_masks.any(dim=0) > 0).numpy())
             alpha = 0.3
-
 
         ### get polygons. yejian 2020-5-6
         polygon_list = []
         for mask in masks:
             polygon_list.append(mask.polygons)
-
 
         self.overlay_instances(
             masks=masks,
@@ -411,9 +401,7 @@ class Visualizer:
             )
         return self.output
 
-    def draw_panoptic_seg_predictions(
-        self, panoptic_seg, segments_info, area_threshold=None, alpha=0.7
-    ):
+    def draw_panoptic_seg_predictions(self, panoptic_seg, segments_info, area_threshold=None, alpha=0.7):
         """
         Draw panoptic prediction results on an image.
 
@@ -499,10 +487,7 @@ class Visualizer:
             names = self.metadata.get("thing_classes", None)
             if names:
                 labels = [names[i] for i in labels]
-            labels = [
-                "{}".format(i) + ("|crowd" if a.get("iscrowd", 0) else "")
-                for i, a in zip(labels, annos)
-            ]
+            labels = ["{}".format(i) + ("|crowd" if a.get("iscrowd", 0) else "") for i, a in zip(labels, annos)]
             self.overlay_instances(labels=labels, boxes=boxes, masks=masks, keypoints=keypts)
 
         sem_seg = dic.get("sem_seg", None)
@@ -520,7 +505,7 @@ class Visualizer:
         masks=None,
         keypoints=None,
         assigned_colors=None,
-        alpha=0.5
+        alpha=0.5,
     ):
         """
         Args:
@@ -573,9 +558,7 @@ class Visualizer:
         if num_instances == 0:
             return self.output
         if boxes is not None and boxes.shape[1] == 5:
-            return self.overlay_rotated_instances(
-                boxes=boxes, labels=labels, assigned_colors=assigned_colors
-            )
+            return self.overlay_rotated_instances(boxes=boxes, labels=labels, assigned_colors=assigned_colors)
 
         # Display in largest to smallest order to reduce occlusion.
         areas = None
@@ -619,10 +602,7 @@ class Visualizer:
                     continue  # drawing the box confidence for keypoints isn't very useful.
                 # for small objects, draw text at the side to avoid occlusion
                 instance_area = (y1 - y0) * (x1 - x0)
-                if (
-                    instance_area < _SMALL_OBJECT_AREA_THRESH * self.output.scale
-                    or y1 - y0 < 40 * self.output.scale
-                ):
+                if instance_area < _SMALL_OBJECT_AREA_THRESH * self.output.scale or y1 - y0 < 40 * self.output.scale:
                     if y1 >= self.output.height - 5:
                         text_pos = (x1, y0)
                     else:
@@ -630,11 +610,7 @@ class Visualizer:
 
                 height_ratio = (y1 - y0) / np.sqrt(self.output.height * self.output.width)
                 lighter_color = self._change_color_brightness(color, brightness_factor=0.7)
-                font_size = (
-                    np.clip((height_ratio - 0.02) / 0.08 + 1, 1.2, 2)
-                    * 0.5
-                    * self._default_font_size
-                )
+                font_size = np.clip((height_ratio - 0.02) / 0.08 + 1, 1.2, 2) * 0.5 * self._default_font_size
                 self.draw_text(
                     labels[i],
                     text_pos,
@@ -684,7 +660,9 @@ class Visualizer:
 
         for i in range(num_instances):
             self.draw_rotated_box_with_label(
-                boxes[i], edge_color=colors[i], label=labels[i] if labels is not None else None
+                boxes[i],
+                edge_color=colors[i],
+                label=labels[i] if labels is not None else None,
             )
 
         return self.output
@@ -759,7 +737,7 @@ class Visualizer:
         font_size=None,
         color="g",
         horizontal_alignment="center",
-        rotation=0
+        rotation=0,
     ):
         """
         Args:
@@ -832,9 +810,7 @@ class Visualizer:
         )
         return self.output
 
-    def draw_rotated_box_with_label(
-        self, rotated_box, alpha=0.5, edge_color="g", line_style="-", label=None
-    ):
+    def draw_rotated_box_with_label(self, rotated_box, alpha=0.5, edge_color="g", line_style="-", label=None):
         """
         Args:
             rotated_box (tuple): a tuple containing (cnt_x, cnt_y, w, h, angle),
@@ -853,9 +829,7 @@ class Visualizer:
         cnt_x, cnt_y, w, h, angle = rotated_box
         area = w * h
         # use thinner lines when the box is small
-        linewidth = self._default_font_size / (
-            6 if area < _SMALL_OBJECT_AREA_THRESH * self.output.scale else 3
-        )
+        linewidth = self._default_font_size / (6 if area < _SMALL_OBJECT_AREA_THRESH * self.output.scale else 3)
 
         theta = angle * math.pi / 180.0
         c = math.cos(theta)
@@ -878,9 +852,7 @@ class Visualizer:
 
             height_ratio = h / np.sqrt(self.output.height * self.output.width)
             label_color = self._change_color_brightness(edge_color, brightness_factor=0.7)
-            font_size = (
-                np.clip((height_ratio - 0.02) / 0.08 + 1, 1.2, 2) * 0.5 * self._default_font_size
-            )
+            font_size = np.clip((height_ratio - 0.02) / 0.08 + 1, 1.2, 2) * 0.5 * self._default_font_size
             self.draw_text(label, text_pos, color=label_color, font_size=font_size, rotation=angle)
 
         return self.output
@@ -898,9 +870,7 @@ class Visualizer:
             output (VisImage): image object with box drawn.
         """
         x, y = circle_coord
-        self.output.ax.add_patch(
-            mpl.patches.Circle(circle_coord, radius=radius, fill=True, color=color)
-        )
+        self.output.ax.add_patch(mpl.patches.Circle(circle_coord, radius=radius, fill=True, color=color))
         return self.output
 
     def draw_line(self, x_data, y_data, color, linestyle="-", linewidth=None):
@@ -935,7 +905,14 @@ class Visualizer:
         return self.output
 
     def draw_binary_mask(
-        self, binary_mask, color=None, *, edge_color=None, text=None, alpha=0.5, area_threshold=4096
+        self,
+        binary_mask,
+        color=None,
+        *,
+        edge_color=None,
+        text=None,
+        alpha=0.5,
+        area_threshold=4096,
     ):
         """
         Args:

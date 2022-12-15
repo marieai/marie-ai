@@ -12,17 +12,16 @@ import torch.backends.cudnn as cudnn
 import torch.nn.init as init
 import torch.optim as optim
 import torch.utils.data
-
 from dataset import AlignCollate, Batch_Balanced_Dataset, hierarchical_dataset
 from model import Model
-from utils import AttnLabelConverter, Averager, CTCLabelConverter, CTCLabelConverterForBaiduWarpctc
 
+from utils import AttnLabelConverter, Averager, CTCLabelConverter, CTCLabelConverterForBaiduWarpctc
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 def train(opt):
-    """ dataset preparation """
+    """dataset preparation"""
     if not opt.data_filtering_off:
         print('Filtering the images containing characters which are not in opt.character')
         print('Filtering the images whose label is longer than opt.batch_max_length')
@@ -36,15 +35,18 @@ def train(opt):
     AlignCollate_valid = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
     valid_dataset, valid_dataset_log = hierarchical_dataset(root=opt.valid_data, opt=opt)
     valid_loader = torch.utils.data.DataLoader(
-        valid_dataset, batch_size=opt.batch_size,
+        valid_dataset,
+        batch_size=opt.batch_size,
         shuffle=True,  # 'True' to check training progress with validation function.
         num_workers=int(opt.workers),
-        collate_fn=AlignCollate_valid, pin_memory=True)
+        collate_fn=AlignCollate_valid,
+        pin_memory=True,
+    )
     log.write(valid_dataset_log)
     print('-' * 80)
     log.write('-' * 80 + '\n')
     log.close()
-    
+
     """ model configuration """
     if 'CTC' in opt.Prediction:
         if opt.baiduCTC:
@@ -58,9 +60,21 @@ def train(opt):
     if opt.rgb:
         opt.input_channel = 3
     model = Model(opt)
-    print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
-          opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
-          opt.SequenceModeling, opt.Prediction)
+    print(
+        'model input parameters',
+        opt.imgH,
+        opt.imgW,
+        opt.num_fiducial,
+        opt.input_channel,
+        opt.output_channel,
+        opt.hidden_size,
+        opt.num_class,
+        opt.batch_max_length,
+        opt.Transformation,
+        opt.FeatureExtraction,
+        opt.SequenceModeling,
+        opt.Prediction,
+    )
 
     # weight initialization
     for name, param in model.named_parameters():
@@ -93,7 +107,8 @@ def train(opt):
     if 'CTC' in opt.Prediction:
         if opt.baiduCTC:
             # need to install warpctc. see our guideline.
-            from warpctc_pytorch import CTCLoss 
+            from warpctc_pytorch import CTCLoss
+
             criterion = CTCLoss()
         else:
             criterion = torch.nn.CTCLoss(zero_infinity=True).to(device)
@@ -144,7 +159,7 @@ def train(opt):
     best_norm_ED = -1
     iteration = start_iter
 
-    while(True):
+    while True:
         # train part
         image_tensors, labels = train_dataset.get_batch()
         image = image_tensors.to(device)
@@ -174,29 +189,50 @@ def train(opt):
         loss_avg.add(cost)
 
         # validation part
-        if (iteration + 1) % opt.valInterval == 0 or iteration == 0: # To see training progress, we also conduct validation when 'iteration == 0' 
+        if (
+            iteration + 1
+        ) % opt.valInterval == 0 or iteration == 0:  # To see training progress, we also conduct validation when 'iteration == 0'
             elapsed_time = time.time() - start_time
             # for log
             with open(f'./saved_models/{opt.exp_name}/log_train.txt', 'a') as log:
                 model.eval()
                 with torch.no_grad():
-                    valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels, infer_time, length_of_data = validation(
-                        model, criterion, valid_loader, converter, opt)
+                    (
+                        valid_loss,
+                        current_accuracy,
+                        current_norm_ED,
+                        preds,
+                        confidence_score,
+                        labels,
+                        infer_time,
+                        length_of_data,
+                    ) = validation(model, criterion, valid_loader, converter, opt)
                 model.train()
 
                 # training loss and validation loss
-                loss_log = f'[{iteration+1}/{opt.num_iter}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
+                loss_log = (
+                    f'[{iteration+1}/{opt.num_iter}] Train loss: {loss_avg.val():0.5f},'
+                    f' Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
+                )
                 loss_avg.reset()
 
-                current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.5f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
+                current_model_log = (
+                    f'{"Current_accuracy":17s}: {current_accuracy:0.5f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
+                )
 
                 # keep best accuracy model (on valid dataset)
                 if current_accuracy > best_accuracy:
                     best_accuracy = current_accuracy
-                    torch.save(model.state_dict(), f'./saved_models/{opt.exp_name}/best_accuracy.pth')
+                    torch.save(
+                        model.state_dict(),
+                        f'./saved_models/{opt.exp_name}/best_accuracy.pth',
+                    )
                 if current_norm_ED > best_norm_ED:
                     best_norm_ED = current_norm_ED
-                    torch.save(model.state_dict(), f'./saved_models/{opt.exp_name}/best_norm_ED.pth')
+                    torch.save(
+                        model.state_dict(),
+                        f'./saved_models/{opt.exp_name}/best_norm_ED.pth',
+                    )
                 best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.5f}, {"Best_norm_ED":17s}: {best_norm_ED:0.2f}'
 
                 loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
@@ -209,8 +245,8 @@ def train(opt):
                 predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
                 for gt, pred, confidence in zip(labels[:5], preds[:5], confidence_score[:5]):
                     if 'Attn' in opt.Prediction:
-                        gt = gt[:gt.find('[s]')]
-                        pred = pred[:pred.find('[s]')]
+                        gt = gt[: gt.find('[s]')]
+                        pred = pred[: pred.find('[s]')]
 
                     predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
                 predicted_result_log += f'{dashed_line}'
@@ -218,9 +254,11 @@ def train(opt):
                 log.write(predicted_result_log + '\n')
 
         # save model per 1e+5 iter.
-        if (iteration + 1) % 1e+5 == 0:
+        if (iteration + 1) % 1e5 == 0:
             torch.save(
-                model.state_dict(), f'./saved_models/{opt.exp_name}/iter_{iteration+1}.pth')
+                model.state_dict(),
+                f'./saved_models/{opt.exp_name}/iter_{iteration+1}.pth',
+            )
 
         if (iteration + 1) == opt.num_iter:
             print('end the training')
@@ -243,37 +281,89 @@ if __name__ == '__main__':
     parser.add_argument('--adam', action='store_true', help='Whether to use adam (default is Adadelta)')
     parser.add_argument('--lr', type=float, default=1, help='learning rate, default=1.0 for Adadelta')
     parser.add_argument('--beta1', type=float, default=0.9, help='beta1 for adam. default=0.9')
-    parser.add_argument('--rho', type=float, default=0.95, help='decay rate rho for Adadelta. default=0.95')
+    parser.add_argument(
+        '--rho',
+        type=float,
+        default=0.95,
+        help='decay rate rho for Adadelta. default=0.95',
+    )
     parser.add_argument('--eps', type=float, default=1e-8, help='eps for Adadelta. default=1e-8')
     parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping value. default=5')
     parser.add_argument('--baiduCTC', action='store_true', help='for data_filtering_off mode')
     """ Data processing """
-    parser.add_argument('--select_data', type=str, default='MJ-ST',
-                        help='select training data (default is MJ-ST, which means MJ and ST used as training data)')
-    parser.add_argument('--batch_ratio', type=str, default='0.5-0.5',
-                        help='assign ratio for each selected data in the batch')
-    parser.add_argument('--total_data_usage_ratio', type=str, default='1.0',
-                        help='total data usage ratio, this ratio is multiplied to total number of data.')
+    parser.add_argument(
+        '--select_data',
+        type=str,
+        default='MJ-ST',
+        help='select training data (default is MJ-ST, which means MJ and ST used as training data)',
+    )
+    parser.add_argument(
+        '--batch_ratio',
+        type=str,
+        default='0.5-0.5',
+        help='assign ratio for each selected data in the batch',
+    )
+    parser.add_argument(
+        '--total_data_usage_ratio',
+        type=str,
+        default='1.0',
+        help='total data usage ratio, this ratio is multiplied to total number of data.',
+    )
     parser.add_argument('--batch_max_length', type=int, default=48, help='maximum-label-length')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
-    parser.add_argument('--character', type=str,
-                        default='0123456789abcdefghijklmnopqrstuvwxyz', help='character label')
+    parser.add_argument(
+        '--character',
+        type=str,
+        default='0123456789abcdefghijklmnopqrstuvwxyz',
+        help='character label',
+    )
     parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
-    parser.add_argument('--PAD', action='store_true', help='whether to keep ratio then pad for image resize')
+    parser.add_argument(
+        '--PAD',
+        action='store_true',
+        help='whether to keep ratio then pad for image resize',
+    )
     parser.add_argument('--data_filtering_off', action='store_true', help='for data_filtering_off mode')
     """ Model Architecture """
-    parser.add_argument('--Transformation', type=str, required=True, help='Transformation stage. None|TPS')
-    parser.add_argument('--FeatureExtraction', type=str, required=True,
-                        help='FeatureExtraction stage. VGG|RCNN|ResNet')
-    parser.add_argument('--SequenceModeling', type=str, required=True, help='SequenceModeling stage. None|BiLSTM')
+    parser.add_argument(
+        '--Transformation',
+        type=str,
+        required=True,
+        help='Transformation stage. None|TPS',
+    )
+    parser.add_argument(
+        '--FeatureExtraction',
+        type=str,
+        required=True,
+        help='FeatureExtraction stage. VGG|RCNN|ResNet',
+    )
+    parser.add_argument(
+        '--SequenceModeling',
+        type=str,
+        required=True,
+        help='SequenceModeling stage. None|BiLSTM',
+    )
     parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
-    parser.add_argument('--num_fiducial', type=int, default=20, help='number of fiducial points of TPS-STN')
-    parser.add_argument('--input_channel', type=int, default=1,
-                        help='the number of input channel of Feature extractor')
-    parser.add_argument('--output_channel', type=int, default=512,
-                        help='the number of output channel of Feature extractor')
+    parser.add_argument(
+        '--num_fiducial',
+        type=int,
+        default=20,
+        help='number of fiducial points of TPS-STN',
+    )
+    parser.add_argument(
+        '--input_channel',
+        type=int,
+        default=1,
+        help='the number of input channel of Feature extractor',
+    )
+    parser.add_argument(
+        '--output_channel',
+        type=int,
+        default=512,
+        help='the number of output channel of Feature extractor',
+    )
     parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
 
     opt = parser.parse_args()

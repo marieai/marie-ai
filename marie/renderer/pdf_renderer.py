@@ -1,12 +1,12 @@
 import contextlib
 import io
 from os import PathLike
-from typing import Dict, Any, Union
+from typing import Any, Dict, Union
 
 import cv2
 import numpy as np
 from PIL import Image
-from PyPDF4 import PdfFileWriter, PdfFileReader
+from PyPDF4 import PdfFileReader, PdfFileWriter
 from PyPDF4.pdf import PageObject
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -83,9 +83,7 @@ class PdfRenderer(ResultRenderer):
     def name(self):
         return "PdfRenderer"
 
-    def __render_page(
-        self, image: np.array, result: Dict[str, Any], page_index: int
-    ) -> PageObject:
+    def __render_page(self, image: np.array, result: Dict[str, Any], page_index: int) -> PageObject:
         """
         Render individual page as `PageObject`
 

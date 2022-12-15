@@ -1,7 +1,7 @@
 from __future__ import print_function
 
 import os
-from typing import List, Any
+from typing import Any, List
 
 import cv2
 import numpy as np
@@ -82,9 +82,7 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
                 s_h = box[3]
                 # check if we have candidates that are fully overlapping the source
                 if False:
-                    for m, (bi_overlap, bi_index, bi_score) in enumerate(
-                        zip(bi_overlaps, bi_indexes, bi_scores)
-                    ):
+                    for m, (bi_overlap, bi_index, bi_score) in enumerate(zip(bi_overlaps, bi_indexes, bi_scores)):
                         c_h = bboxes[bi_index][3]
                         if c_h < s_h:
                             print(f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}")
@@ -130,9 +128,7 @@ def line_merge(image, bboxes) -> List[Any]:
                 color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
                 color = list(np.random.random(size=3) * 256)
                 cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
-            cv2.imwrite(
-                os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay
-            )
+            cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay)
 
     # sort boxes by the  y-coordinate of the bounding box
     # run final pass merge fully overlapping boxes
@@ -143,11 +139,7 @@ def line_merge(image, bboxes) -> List[Any]:
             if i == j:
                 continue
             x1, y1, w1, h1 = box1
-            if (
-                ((x1 > x0) and (x1 + w1) < (x0 + w0))
-                and (y1 > y0)
-                and (y1 + h1) < (y0 + h0)
-            ):
+            if ((x1 > x0) and (x1 + w1) < (x0 + w0)) and (y1 > y0) and (y1 + h1) < (y0 + h0):
                 idx_to_remove.append(j)
 
     merged_bboxes = np.array(merged_bboxes)

@@ -1,9 +1,8 @@
-import threading
 import multiprocessing
+import threading
 import time
 
 import pytest
-
 from jina import Document, Executor, Flow, helper, requests
 
 
@@ -46,9 +45,7 @@ def test_flow_external_executor_with_gateway():
     t.start()
     time.sleep(5)  # allow exec to start
 
-    with Flow().add(
-        name='external_gateway_exec', external=True, port=external_gateway_port
-    ) as f:
+    with Flow().add(name='external_gateway_exec', external=True, port=external_gateway_port) as f:
         docs = f.search(Document())
         assert docs.texts == ['foo']
 
@@ -79,9 +76,9 @@ class AddBazExec(Executor):
 
 def test_merging_external_executor_auto_reduce():
     with Flow().add(uses=BarExec) as external_flow:
-        with Flow().add(uses=AddBazExec, name='exec1').add(
-            uses=AddBazExec, name='exec2'
-        ).add(external=True, port=external_flow.port, needs=['exec1', 'exec2']) as f:
+        with Flow().add(uses=AddBazExec, name='exec1').add(uses=AddBazExec, name='exec2').add(
+            external=True, port=external_flow.port, needs=['exec1', 'exec2']
+        ) as f:
             docs = f.search(Document(text='client'))
             assert docs.texts == ['clientbar', 'bazbar', 'bazbar']
 
@@ -89,9 +86,7 @@ def test_merging_external_executor_auto_reduce():
 def test_merging_external_executor_auto_reduce_disabled():
     with Flow().add(uses=BarExec) as external_flow:
         with pytest.raises(ValueError):
-            with Flow().add(uses=AddBazExec, name='exec1').add(
-                uses=AddBazExec, name='exec2'
-            ).add(
+            with Flow().add(uses=AddBazExec, name='exec1').add(uses=AddBazExec, name='exec2').add(
                 external=True,
                 port=external_flow.port,
                 needs=['exec1', 'exec2'],

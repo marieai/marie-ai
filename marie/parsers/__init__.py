@@ -19,9 +19,7 @@ def set_pod_parser(parser=None):
 
     from marie.parsers.orchestrate.base import mixin_scalable_deployment_parser
     from marie.parsers.orchestrate.pod import mixin_pod_parser
-    from marie.parsers.orchestrate.runtimes.container import (
-        mixin_container_runtime_parser,
-    )
+    from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
     from marie.parsers.orchestrate.runtimes.remote import mixin_remote_runtime_parser
     from marie.parsers.orchestrate.runtimes.worker import mixin_worker_runtime_parser
 
@@ -136,10 +134,7 @@ def set_client_cli_parser(parser=None):
 
         parser = set_base_parser()
 
-    from marie.parsers.client import (
-        mixin_client_features_parser,
-        mixin_client_protocol_parser,
-    )
+    from marie.parsers.client import mixin_client_features_parser, mixin_client_protocol_parser
     from marie.parsers.orchestrate.runtimes.remote import mixin_client_gateway_parser
 
     mixin_client_gateway_parser(parser)
@@ -288,9 +283,7 @@ def get_main_parser():
     set_pod_parser(
         sp.add_parser(
             'pod',
-            description='Start a Pod. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            description='Start a Pod. You should rarely use this directly unless you are doing low-level orchestration',
             formatter_class=_chf,
             **(dict(help='Start a Pod')) if _SHOW_ALL_ARGS else {},
         )
@@ -299,9 +292,7 @@ def get_main_parser():
     set_deployment_parser(
         sp.add_parser(
             'deployment',
-            description='Start a Deployment. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            description='Start a Deployment. You should rarely use this directly unless you are doing low-level orchestration',
             formatter_class=_chf,
             **(dict(help='Start a Deployment')) if _SHOW_ALL_ARGS else {},
         )

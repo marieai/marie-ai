@@ -2,10 +2,10 @@
 import logging
 import os
 
-from fvcore.common.timer import Timer
+from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.structures import BoxMode
 from fvcore.common.file_io import PathManager
-from detectron2.data import DatasetCatalog, MetadataCatalog
+from fvcore.common.timer import Timer
 
 from .lvis_v0_5_categories import LVIS_CATEGORIES
 
@@ -30,9 +30,7 @@ def register_lvis_instances(name, metadata, json_file, image_root):
         image_root (str): directory which contains all the images.
     """
     DatasetCatalog.register(name, lambda: load_lvis_json(json_file, image_root, name))
-    MetadataCatalog.get(name).set(
-        json_file=json_file, image_root=image_root, evaluator_type="lvis", **metadata
-    )
+    MetadataCatalog.get(name).set(json_file=json_file, image_root=image_root, evaluator_type="lvis", **metadata)
 
 
 def load_lvis_json(json_file, image_root, dataset_name=None):
@@ -96,9 +94,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
 
     # Sanity check that each annotation has a unique id
     ann_ids = [ann["id"] for anns_per_image in anns for ann in anns_per_image]
-    assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique".format(
-        json_file
-    )
+    assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique".format(json_file)
 
     imgs_anns = list(zip(imgs, anns))
 
@@ -106,7 +102,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
 
     dataset_dicts = []
 
-    for (img_dict, anno_dict_list) in imgs_anns:
+    for img_dict, anno_dict_list in imgs_anns:
         record = {}
         file_name = img_dict["file_name"]
         if img_dict["file_name"].startswith("COCO"):
@@ -132,9 +128,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
             segm = anno["segmentation"]  # list[list[float]]
             # filter out invalid polygons (< 3 points)
             valid_segm = [poly for poly in segm if len(poly) % 2 == 0 and len(poly) >= 6]
-            assert len(segm) == len(
-                valid_segm
-            ), "Annotation contains an invalid polygon with < 3 points"
+            assert len(segm) == len(valid_segm), "Annotation contains an invalid polygon with < 3 points"
             assert len(segm) > 0
             obj["segmentation"] = segm
             objs.append(obj)
@@ -165,9 +159,7 @@ def get_lvis_instances_meta(dataset_name):
 def _get_lvis_instances_meta_v0_5():
     assert len(LVIS_CATEGORIES) == 1230
     cat_ids = [k["id"] for k in LVIS_CATEGORIES]
-    assert min(cat_ids) == 1 and max(cat_ids) == len(
-        cat_ids
-    ), "Category ids are not in [1, #categories], as expected"
+    assert min(cat_ids) == 1 and max(cat_ids) == len(cat_ids), "Category ids are not in [1, #categories], as expected"
     # Ensure that the category list is sorted by id
     lvis_categories = [k for k in sorted(LVIS_CATEGORIES, key=lambda x: x["id"])]
     thing_classes = [k["synonyms"][0] for k in lvis_categories]
@@ -184,11 +176,12 @@ if __name__ == "__main__":
             path/to/json path/to/image_root dataset_name vis_limit
     """
     import sys
+
+    import detectron2.data.datasets  # noqa # add pre-defined metadata
     import numpy as np
     from detectron2.utils.logger import setup_logger
-    from PIL import Image
-    import detectron2.data.datasets  # noqa # add pre-defined metadata
     from detectron2.utils.visualizer import Visualizer
+    from PIL import Image
 
     logger = setup_logger(name=__name__)
     meta = MetadataCatalog.get(sys.argv[3])

@@ -1,15 +1,15 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import logging
 import copy
-import numpy as np
+import logging
 from typing import Dict
-import torch
-from torch import nn
 
+import numpy as np
+import torch
 from detectron2.layers import ShapeSpec
 from detectron2.structures import Boxes, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
+from torch import nn
 
 from ..backbone.resnet import BottleneckBlock, make_stage
 from ..box_regression import Box2BoxTransform
@@ -21,9 +21,8 @@ from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs
 from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference, keypoint_rcnn_loss
 from .mask_head import build_mask_head, mask_rcnn_inference, mask_rcnn_loss
-from .seg_head import build_seg_head, build_seg_head_loss
 from .mutil_path_fuse_module import build_mutil_path_fuse_module
-
+from .seg_head import build_seg_head, build_seg_head_loss
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
 ROI_HEADS_REGISTRY.__doc__ = """
@@ -189,7 +188,10 @@ class ROIHeads(torch.nn.Module):
             gt_classes = torch.zeros_like(matched_idxs) + self.num_classes
 
         sampled_fg_idxs, sampled_bg_idxs = subsample_labels(
-            gt_classes, self.batch_size_per_image, self.positive_sample_fraction, self.num_classes
+            gt_classes,
+            self.batch_size_per_image,
+            self.positive_sample_fraction,
+            self.num_classes,
         )
 
         sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
@@ -238,14 +240,10 @@ class ROIHeads(torch.nn.Module):
         num_bg_samples = []
         for proposals_per_image, targets_per_image in zip(proposals, targets):
             has_gt = len(targets_per_image) > 0
-            match_quality_matrix = pairwise_iou(
-                targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
-            )
+            match_quality_matrix = pairwise_iou(targets_per_image.gt_boxes, proposals_per_image.proposal_boxes)
             matched_idxs, matched_labels = self.proposal_matcher(match_quality_matrix)
 
-            sampled_idxs, gt_classes = self._sample_proposals(
-                matched_idxs, matched_labels, targets_per_image.gt_classes
-            )
+            sampled_idxs, gt_classes = self._sample_proposals(matched_idxs, matched_labels, targets_per_image.gt_classes)
 
             # Set target attributes of the sampled proposals:
             proposals_per_image = proposals_per_image[sampled_idxs]
@@ -259,13 +257,11 @@ class ROIHeads(torch.nn.Module):
                 # like masks, keypoints, etc, will filter the proposals again,
                 # (by foreground/background, or number of keypoints in the image, etc)
                 # so we essentially index the data twice.
-                for (trg_name, trg_value) in targets_per_image.get_fields().items():
+                for trg_name, trg_value in targets_per_image.get_fields().items():
                     if trg_name.startswith("gt_") and not proposals_per_image.has(trg_name):
                         proposals_per_image.set(trg_name, trg_value[sampled_targets])
             else:
-                gt_boxes = Boxes(
-                    targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4))
-                )
+                gt_boxes = Boxes(targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4)))
                 proposals_per_image.gt_boxes = gt_boxes
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
@@ -339,14 +335,16 @@ class Res5ROIHeads(ROIHeads):
         )
 
         self.res5, out_channels = self._build_res5_block(cfg)
-        self.box_predictor = FastRCNNOutputLayers(
-            out_channels, self.num_classes, self.cls_agnostic_bbox_reg
-        )
+        self.box_predictor = FastRCNNOutputLayers(out_channels, self.num_classes, self.cls_agnostic_bbox_reg)
 
         if self.mask_on:
             self.mask_head = build_mask_head(
                 cfg,
-                ShapeSpec(channels=out_channels, width=pooler_resolution, height=pooler_resolution),
+                ShapeSpec(
+                    channels=out_channels,
+                    width=pooler_resolution,
+                    height=pooler_resolution,
+                ),
             )
 
     def _build_res5_block(self, cfg):
@@ -390,9 +388,7 @@ class Res5ROIHeads(ROIHeads):
         del targets
 
         proposal_boxes = [x.proposal_boxes for x in proposals]
-        box_features = self._shared_roi_transform(
-            [features[f] for f in self.in_features], proposal_boxes
-        )
+        box_features = self._shared_roi_transform([features[f] for f in self.in_features], proposal_boxes)
         feature_pooled = box_features.mean(dim=[2, 3])  # pooled to 1x1
         pred_class_logits, pred_proposal_deltas = self.box_predictor(feature_pooled)
         del feature_pooled
@@ -409,9 +405,7 @@ class Res5ROIHeads(ROIHeads):
             del features
             losses = outputs.losses()
             if self.mask_on:
-                proposals, fg_selection_masks = select_foreground_proposals(
-                    proposals, self.num_classes
-                )
+                proposals, fg_selection_masks = select_foreground_proposals(proposals, self.num_classes)
                 # Since the ROI feature transform is shared between boxes and masks,
                 # we don't need to recompute features. The mask loss is only defined
                 # on foreground proposals, so we need to select out the foreground
@@ -423,7 +417,9 @@ class Res5ROIHeads(ROIHeads):
             return [], losses
         else:
             pred_instances, _ = outputs.inference(
-                self.test_score_thresh, self.test_nms_thresh, self.test_detections_per_img
+                self.test_score_thresh,
+                self.test_nms_thresh,
+                self.test_detections_per_img,
             )
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
@@ -477,7 +473,6 @@ class StandardROIHeads(ROIHeads):
             self._init_seg_head(cfg)
             self._init_mutil_path_fuse_module(cfg)
 
-
     def _init_box_head(self, cfg):
         # fmt: off
         pooler_resolution = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
@@ -503,11 +498,10 @@ class StandardROIHeads(ROIHeads):
         # They are used together so the "box predictor" layers should be part of the "box head".
         # New subclasses of ROIHeads do not need "box predictor"s.
         self.box_head = build_box_head(
-            cfg, ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution)
+            cfg,
+            ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution),
         )
-        self.box_predictor = FastRCNNOutputLayers(
-            self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg
-        )
+        self.box_predictor = FastRCNNOutputLayers(self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg)
 
     def _init_mask_head(self, cfg):
         # fmt: off
@@ -529,7 +523,8 @@ class StandardROIHeads(ROIHeads):
             pooler_type=pooler_type,
         )
         self.mask_head = build_mask_head(
-            cfg, ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)
+            cfg,
+            ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution),
         )
 
     def _init_keypoint_head(self, cfg):
@@ -554,7 +549,8 @@ class StandardROIHeads(ROIHeads):
             pooler_type=pooler_type,
         )
         self.keypoint_head = build_keypoint_head(
-            cfg, ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)
+            cfg,
+            ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution),
         )
 
     def _init_seg_head(self, cfg):
@@ -563,7 +559,6 @@ class StandardROIHeads(ROIHeads):
 
     def _init_mutil_path_fuse_module(self, cfg):
         self.mutil_path_fuse_module = build_mutil_path_fuse_module(cfg)
-
 
     def forward(self, images, features, proposals, targets=None):
         """
@@ -575,7 +570,6 @@ class StandardROIHeads(ROIHeads):
         if self.training:
             del images
             proposals = self.label_and_sample_proposals(proposals, targets)
-
 
         if self.training:
             losses = self._forward_box(features_list, proposals)
@@ -638,7 +632,6 @@ class StandardROIHeads(ROIHeads):
         pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features)
         del box_features
 
-
         outputs = FastRCNNOutputs(
             self.box2box_transform,
             pred_class_logits,
@@ -650,11 +643,13 @@ class StandardROIHeads(ROIHeads):
             return outputs.losses()
         else:
             pred_instances, _ = outputs.inference(
-                self.test_score_thresh, self.test_nms_thresh, self.test_detections_per_img
+                self.test_score_thresh,
+                self.test_nms_thresh,
+                self.test_detections_per_img,
             )
             return pred_instances
 
-    def _forward_mask(self, features, instances,targets=None):
+    def _forward_mask(self, features, instances, targets=None):
         """
         Forward logic of the mask prediction branch.
 
@@ -680,7 +675,9 @@ class StandardROIHeads(ROIHeads):
             ###############################################  mutil_path_fuse  ###################################################
             if self.mutil_path_fuse_on:
                 image_shape = [proposals[0].image_size[1], proposals[0].image_size[0]]
-                seg_logits, global_context = self.seg_head(features, self.fpn_features_fused_level, proposal_boxes, image_shape)
+                seg_logits, global_context = self.seg_head(
+                    features, self.fpn_features_fused_level, proposal_boxes, image_shape
+                )
                 mask_features = self.mutil_path_fuse_module(mask_features, global_context, proposals)
             #####################################################################################################################
 
@@ -689,8 +686,8 @@ class StandardROIHeads(ROIHeads):
             if self.mutil_path_fuse_on:
                 seg_loss = build_seg_head_loss()
                 return {
-                        "loss_mask": mask_rcnn_loss(mask_logits, proposals),
-                        "loss_seg": seg_loss(seg_logits, targets),
+                    "loss_mask": mask_rcnn_loss(mask_logits, proposals),
+                    "loss_seg": seg_loss(seg_logits, targets),
                 }
             else:
                 return {"loss_mask": mask_rcnn_loss(mask_logits, proposals)}
@@ -701,7 +698,7 @@ class StandardROIHeads(ROIHeads):
             ###############################################  mutil_path_fuse  ###################################################
             if self.mutil_path_fuse_on:
                 image_shape = [instances[0].image_size[1], instances[0].image_size[0]]
-                seg_logits,global_context = self.seg_head(features, self.fpn_features_fused_level, pred_boxes, image_shape)
+                seg_logits, global_context = self.seg_head(features, self.fpn_features_fused_level, pred_boxes, image_shape)
                 mask_features = self.mutil_path_fuse_module(mask_features, global_context, instances)
             ######################################################################################################################
 
@@ -737,12 +734,7 @@ class StandardROIHeads(ROIHeads):
             keypoint_features = self.keypoint_pooler(features, proposal_boxes)
             keypoint_logits = self.keypoint_head(keypoint_features)
 
-            normalizer = (
-                num_images
-                * self.batch_size_per_image
-                * self.positive_sample_fraction
-                * keypoint_logits.shape[1]
-            )
+            normalizer = num_images * self.batch_size_per_image * self.positive_sample_fraction * keypoint_logits.shape[1]
             loss = keypoint_rcnn_loss(
                 keypoint_logits,
                 proposals,

@@ -1,40 +1,37 @@
 from __future__ import absolute_import
 
-import sys
 import os
+import sys
 import traceback
-
-import torch
-import yaml
-from werkzeug.exceptions import HTTPException
+from functools import wraps
 
 import conf
+import torch
+import yaml
 from api import api
-from flask import Flask, url_for
-from functools import wraps
-from flask import Flask, redirect, jsonify
 from arg_parser import ArgParser
+from flask import Flask, jsonify, redirect, url_for
+from werkzeug.exceptions import HTTPException
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
 import marie.api.WorkflowRoutes as WorkflowRoutes
+from marie import __cache_dir__, __cache_path__
 from marie.api.icr_router import ICRRouter
 from marie.api.ner_router import NERRouter
 from marie.api.route_handler import RouteHandler
 from marie.api.sample_route import SampleRouter
-
+from marie.common.file_io import PathManager
 from marie.common.volume_handler import VolumeHandler
-from marie.conf.helper import load_yaml, executor_config
+from marie.conf.helper import executor_config, load_yaml
 from marie.executor import NerExtractionExecutor
 from marie.healthchecks.health_check_router import HealthCheckRouter
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.utils.network import find_open_port
-from marie.version import __version__
-from marie.common.file_io import PathManager
-from marie import __cache_dir__, __cache_path__
 
 # from marie.logger import setup_logger
-from marie.utils.utils import ensure_exists, FileSystem
+from marie.utils.utils import FileSystem, ensure_exists
+from marie.version import __version__
 
 # from api.IcrAPIRoutes import IcrAPIRoutes # TypeError: 'module' object is not callable
 logger = default_logger
@@ -72,7 +69,13 @@ def create_app(marie_conf):
 
         return (
             jsonify(
-                {"error": {"code": code, "name": name, "description": description,}}
+                {
+                    "error": {
+                        "code": code,
+                        "name": name,
+                        "description": description,
+                    }
+                }
             ),
             code,
             {"Content-Type": "application/json"},
@@ -156,11 +159,11 @@ if __name__ == "__main__":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
         logger.info(
             "GPU Memory Allocated: %d GB",
-            round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_allocated(0) / 1024**3, 1),
         )
         logger.info(
             "GPU Memory Cached: %d GB",
-            round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_reserved(0) / 1024**3, 1),
         )
 
     # Setting use_reloader to false prevents application from initializing twice

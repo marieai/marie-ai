@@ -4,7 +4,7 @@ from os import environ
 
 
 def max_workers():
-    return 1#cpu_count()
+    return 1  # cpu_count()
 
 
 bind = '0.0.0.0:' + environ.get('PORT', '5000')

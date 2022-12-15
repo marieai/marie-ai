@@ -3,20 +3,19 @@ from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING
 
+from marie.enums import PodRoleType
+from marie.parsers.helper import _update_gateway_args
+
 # from hubble.executor.helper import is_valid_huburi
 # from hubble.executor.hubio import HubIO
 
-from marie.enums import PodRoleType
-from marie.parsers.helper import _update_gateway_args
 
 if TYPE_CHECKING:  # pragma: no cover
     from argparse import Namespace
 
 
 def _get_event(obj) -> multiprocessing.Event:
-    if isinstance(obj, multiprocessing.Process) or isinstance(
-        obj, multiprocessing.context.ForkProcess
-    ):
+    if isinstance(obj, multiprocessing.Process) or isinstance(obj, multiprocessing.context.ForkProcess):
         return multiprocessing.Event()
     elif isinstance(obj, multiprocessing.context.SpawnProcess):
         return multiprocessing.get_context('spawn').Event()
@@ -35,9 +34,7 @@ class ConditionalEvent:
     def __init__(self, events_list):
         super().__init__()
         self.event = None
-        self.event = multiprocessing.synchronize.Event(
-            ctx=multiprocessing.get_context()
-        )
+        self.event = multiprocessing.synchronize.Event(ctx=multiprocessing.get_context())
         self.event_list = events_list
         for e in events_list:
             self._setup(e, self._state_changed)

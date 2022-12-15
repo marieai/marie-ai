@@ -3,29 +3,25 @@ import os
 import time
 import typing
 from timeit import timeit
-from typing import Tuple, Any, List, Dict
+from typing import Any, Dict, List, Tuple
 
-from torchvision.transforms import Compose, InterpolationMode
-
-from marie.lang import Object
-from marie.logging.predefined import default_logger
-from marie.models.unilm.trocr.task import SROIETextRecognitionTask
-
+import fairseq
 import numpy as np
 import torch
 import torch.utils.data
-
-from marie.document.icr_processor import IcrProcessor
-from marie.models.icr.memory_dataset import MemoryDataset
-
-import fairseq
+import torchvision.transforms as transforms
 from fairseq import utils
 from fairseq_cli import generate
-import torchvision.transforms as transforms
+from torchvision.transforms import Compose, InterpolationMode
 
+from marie import __model_path__
+from marie.document.icr_processor import IcrProcessor
+from marie.lang import Object
+from marie.logging.predefined import default_logger
+from marie.models.icr.memory_dataset import MemoryDataset
+from marie.models.unilm.trocr.task import SROIETextRecognitionTask
 from marie.timer import Timer
 from marie.utils.utils import batchify
-from marie import __model_path__
 
 logger = default_logger
 
@@ -39,9 +35,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     if device == "cpu":
         fp16 = False
 
-    decoder_pretrained: typing.Union[str, None] = os.path.join(
-        __model_path__, "assets", "gpt2_with_mask.dict.txt"
-    )
+    decoder_pretrained: typing.Union[str, None] = os.path.join(__model_path__, "assets", "gpt2_with_mask.dict.txt")
 
     if not os.path.exists(decoder_pretrained):
         logger.warning("decoder_pretrained is null, defaulting to download ")
@@ -120,9 +114,7 @@ def preprocess_samples(src_images, img_transform, device):
 
 # @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, samples, bpe):
-    results = task.inference_step(
-        generator, model, samples, prefix_tokens=None, constraints=None
-    )
+    results = task.inference_step(generator, model, samples, prefix_tokens=None, constraints=None)
     predictions = []
     scores = []
     # https://fairseq.readthedocs.io/en/latest/getting_started.html
@@ -144,9 +136,7 @@ def get_text(cfg, task, generator, model, samples, bpe):
             align_dict=None,
             tgt_dict=model[0].decoder.dictionary,
             remove_bpe=cfg.common_eval.post_process,
-            extra_symbols_to_ignore=generate.get_symbols_to_strip_from_output(
-                generator
-            ),
+            extra_symbols_to_ignore=generate.get_symbols_to_strip_from_output(generator),
         )
 
         detok_hypo_str = bpe.decode(hypo_str)
@@ -211,9 +201,7 @@ class TrOcrIcrProcessor(IcrProcessor):
 
         return self.__recognize_from_fragments(src_images, 128, **kwargs)
 
-    def __recognize_from_fragments(
-        self, src_images, batch_size=32, **kwargs
-    ) -> List[Dict[str, any]]:
+    def __recognize_from_fragments(self, src_images, batch_size=32, **kwargs) -> List[Dict[str, any]]:
         """Recognize text from image fragments synchronously.
 
         Args:
@@ -238,9 +226,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
-                logger.debug(
-                    f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}"
-                )
+                logger.debug(f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}")
                 images = batch
 
                 eval_data = MemoryDataset(images=images, opt=opt)
@@ -248,9 +234,7 @@ class TrOcrIcrProcessor(IcrProcessor):
 
                 images = [img for img, img_name in eval_data]
                 samples = preprocess_samples(images, self.img_transform, self.device)
-                predictions, scores = get_text(
-                    self.cfg, self.task, self.generator, self.model, samples, self.bpe
-                )
+                predictions, scores = get_text(self.cfg, self.task, self.generator, self.model, samples, self.bpe)
 
                 for k in range(len(predictions)):
                     text = predictions[k]

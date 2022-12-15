@@ -79,15 +79,21 @@ def mixin_gateway_streamer_parser(arg_group):
     arg_group.add_argument(
         '--compression',
         choices=['NoCompression', 'Deflate', 'Gzip'],
-        help='The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, '
-        'check https://grpc.github.io/grpc/python/grpc.html#compression.',
+        help=(
+            'The compression mechanism used when sending requests from the Head to the'
+            ' WorkerRuntimes. For more details, check'
+            ' https://grpc.github.io/grpc/python/grpc.html#compression.'
+        ),
     )
 
     arg_group.add_argument(
         '--timeout-send',
         type=int,
         default=None,
-        help='The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default',
+        help=(
+            'The timeout in milliseconds used when sending data requests to Executors,'
+            ' -1 means no timeout, disabled by default'
+        ),
     )
 
 
@@ -161,7 +167,12 @@ def mixin_gateway_protocol_parser(parser):
         type=GatewayProtocolType.from_string,
         choices=list(GatewayProtocolType),
         default=[GatewayProtocolType.GRPC],
-        help=f'Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: {[protocol.to_string() for protocol in list(GatewayProtocolType)]}.',
+        help=(
+            'Communication protocol of the server exposed by the Gateway. This can be'
+            ' a single value or a list of protocols, depending on your chosen Gateway.'
+            ' Choose the convenient protocols from:'
+            f' {[protocol.to_string() for protocol in list(GatewayProtocolType)]}.'
+        ),
     )
 
 
@@ -171,9 +182,12 @@ def _add_host(arg_group):
         '--host-in',
         type=str,
         default=__default_host__,
-        help=f'The host address of the runtime, by default it is {__default_host__}.'
-        ' In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts, separated by commas.'
-        ' Then, every resulting address will be considered as one replica of the Executor.',
+        help=(
+            f'The host address of the runtime, by default it is {__default_host__}. In'
+            ' the case of an external Executor (`--external` or `external=True`) this'
+            ' can be a list of hosts, separated by commas. Then, every resulting'
+            ' address will be considered as one replica of the Executor.'
+        ),
     )
 
 
@@ -183,9 +197,11 @@ def _add_proxy(arg_group):
         '--proxy',
         action='store_true',
         default=False,
-        help='If set, respect the http_proxy and https_proxy environment variables. '
-        'otherwise, it will unset these proxy variables before start. '
-        'gRPC seems to prefer no proxy',
+        help=(
+            'If set, respect the http_proxy and https_proxy environment variables. '
+            'otherwise, it will unset these proxy variables before start. '
+            'gRPC seems to prefer no proxy'
+        ),
     )
 
 

@@ -1,43 +1,38 @@
+import argparse
+import concurrent.futures
+import distutils.util
 import glob
 import hashlib
 import io
 import json
 import logging
+import multiprocessing as mp
 import os
 import random
 import shutil
 import string
 import sys
+import time
 import uuid
+from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
-import distutils.util
+from multiprocessing import Pool
 
 import cv2
 import numpy as np
-from PIL import Image
-from PIL import ImageDraw
-from PIL import ImageFont
+import rstr
+from faker import Faker
+from faker.providers import BaseProvider
+from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
+from marie.boxes.line_processor import find_line_number
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.timer import Timer
 from marie.utils.utils import ensure_exists
-from marie.boxes.line_processor import find_line_number
-
-from faker.providers import BaseProvider
-from faker import Faker
-import rstr
-
-import multiprocessing as mp
-from concurrent.futures.thread import ThreadPoolExecutor
-
-import concurrent.futures
-import time
-from multiprocessing import Pool
-import argparse
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
@@ -49,6 +44,7 @@ fake = Faker()
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 
 # create new provider class
+
 
 class MemberProvider(BaseProvider):
     def __init__(self, generator):
@@ -204,9 +200,7 @@ def __convert_coco_to_funsd(
             found_cat_id.append(ano["category_id"])
             # validate that we don't have duplicate question/answer mappings, we might change this down the road
             cat_name = cat_id_name[ano["category_id"]]
-            category_counts[cat_name] = (
-                1 if cat_name not in category_counts else category_counts[cat_name] + 1
-            )
+            category_counts[cat_name] = 1 if cat_name not in category_counts else category_counts[cat_name] + 1
             count = category_counts[cat_name]
             if False and count > 1:
                 msg = f"Duplicate pair found for image_id[{group_id}] : {cat_name}, {count}, {filename}"
@@ -277,9 +271,7 @@ def __convert_coco_to_funsd(
             shutil.copyfile(src_img_path, dst_img_path)
 
 
-def convert_coco_to_funsd(
-    src_dir: str, output_path: str, config: object, strip_file_name_path: bool
-) -> None:
+def convert_coco_to_funsd(src_dir: str, output_path: str, config: object, strip_file_name_path: bool) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
@@ -293,9 +285,7 @@ def convert_coco_to_funsd(
     for idx, annotations_filename in enumerate(items):
         try:
             print(f"Processing annotation : {annotations_filename}")
-            __convert_coco_to_funsd(
-                src_dir, output_path, annotations_filename, config, strip_file_name_path
-            )
+            __convert_coco_to_funsd(src_dir, output_path, annotations_filename, config, strip_file_name_path)
         except Exception as e:
             raise e
 
@@ -309,8 +299,9 @@ def normalize_bbox(bbox, size):
     ]
 
 
-from PIL import Image
 import io
+
+from PIL import Image
 
 
 def from_json_file(filename):
@@ -347,9 +338,7 @@ def extract_icr(image, boxp, icrp):
         return boxes, result
 
     key = checksum
-    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
-        key, "field", image, PSMode.SPARSE
-    )
+    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
@@ -364,9 +353,7 @@ def extract_icr(image, boxp, icrp):
         img_fragments = [image]
         lines = [1]
 
-    result, overlay_image = icrp.recognize(
-        key, "test", image, boxes, img_fragments, lines
-    )
+    result, overlay_image = icrp.recognize(key, "test", image, boxes, img_fragments, lines)
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -393,9 +380,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
     img_dir = os.path.join(src_dir, "images")
 
     if False:
-        boxp = BoxProcessorCraft(
-            work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
-        )
+        boxp = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True)
 
     boxp = BoxProcessorUlimDit(
         work_dir=work_dir_boxes,
@@ -432,9 +417,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         image, size = load_image(image_path)
         # line_numbers : line number associated with bounding box
         # lines : raw line boxes that can be used for further processing
-        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
-            file, "lines", image, PSMode.MULTI_LINE
-        )
+        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(file, "lines", image, PSMode.MULTI_LINE)
 
         for i, item in enumerate(data["form"]):
             # format : x0,y0,x1,y1
@@ -453,12 +436,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             boxes, results = extract_icr(snippet, boxp, icrp)
             results.pop("meta", None)
 
-            if (
-                results is None
-                or len(results) == 0
-                or results["lines"] is None
-                or len(results["lines"]) == 0
-            ):
+            if results is None or len(results) == 0 or results["lines"] is None or len(results["lines"]) == 0:
                 print(f"No results for : {guid}-{i}")
                 continue
 
@@ -502,9 +480,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
-            cv2.rectangle(
-                image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1
-            )
+            cv2.rectangle(image_masked, (x0, y0), (x1, y1), (255, 255, 255), thickness=-1)
             index = i + 1
 
         if debug_fragments:
@@ -648,12 +624,7 @@ def generate_text(label, width, height, font_path):
             index = 0
             space_w, _ = draw.textsize(" ", font=font)
 
-        if (
-            label == "dos_answer"
-            or label == "birthdate_answer"
-            or label == "letter_date"
-            or label == "date"
-        ):
+        if label == "dos_answer" or label == "birthdate_answer" or label == "letter_date" or label == "date":
             # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
             patterns = [
                 "%Y%m%d",
@@ -680,9 +651,7 @@ def generate_text(label, width, height, font_path):
                     label_text = f"{d1}{sel_reg}{d2}"
                 else:
                     label_text = fake.date(pattern=random.choice(patterns))
-            elif (
-                label == "birthdate_answer" or label == "letter_date" or label == "date"
-            ):
+            elif label == "birthdate_answer" or label == "letter_date" or label == "date":
                 label_text = fake.date(pattern=random.choice(patterns))
 
         if label == "pan_answer":
@@ -692,11 +661,7 @@ def generate_text(label, width, height, font_path):
         if label == "claim_number_answer":
             label_text = fake.member_id()
 
-        if (
-            label == "member_name_answer"
-            or label == "patient_name_answer"
-            or label == "provider_answer"
-        ):
+        if label == "member_name_answer" or label == "patient_name_answer" or label == "provider_answer":
             label_text = fake_names_only.name()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.upper()
@@ -716,12 +681,7 @@ def generate_text(label, width, height, font_path):
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = fake.company_email()
 
-        if (
-            label == "check_amt_answer"
-            or label == "paid_amt_answer"
-            or label == "billed_amt_answer"
-            or label == "money"
-        ):
+        if label == "check_amt_answer" or label == "paid_amt_answer" or label == "billed_amt_answer" or label == "money":
             label_text = fake.pricetag()
             if np.random.choice([0, 1], p=[0.5, 0.5]):
                 label_text = label_text.replace("$", "")
@@ -778,9 +738,7 @@ def generate_text(label, width, height, font_path):
 
 
 # @Timer(text="Aug in {:.4f} seconds")
-def __augment_decorated_process(
-    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
-):
+def __augment_decorated_process(guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
     # Faker.seed(0)
     output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
     output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
@@ -860,9 +818,7 @@ def __augment_decorated_process(
             yoffset = 0
 
             # Generate text inside image
-            font_size, label_text, segments_lines, line_heights = generate_text(
-                label, w, h, font_path
-            )
+            font_size, label_text, segments_lines, line_heights = generate_text(label, w, h, font_path)
 
             assert len(line_heights) != 0
             font = get_cached_font(font_path, font_size)
@@ -969,9 +925,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
     # slower comparing to  pool.starmap
     if False:
         futures = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=int(mp.cpu_count() * 0.75)
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(mp.cpu_count() * 0.75)) as executor:
             for guid, file in enumerate(sorted(os.listdir(ann_dir))):
                 file_path = os.path.join(ann_dir, file)
                 feature = executor.submit(
@@ -1095,9 +1049,7 @@ def resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h):
 
 
 def rescale_annotation_frame(src_json_path: str, src_image_path: str):
-    print(
-        f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}"
-    )
+    print(f"Recalling annotation : {src_json_path.split('/')[-1]}, {src_image_path.split('/')[-1]}")
 
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
@@ -1115,9 +1067,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
             item["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
             for word in item["words"]:
                 bbox = tuple(word["box"])  # np.array(item["box"]).astype(np.int32)
-                word["box"] = resize_align_bbox(
-                    bbox, orig_w, orig_h, target_w, target_h
-                )
+                word["box"] = resize_align_bbox(bbox, orig_w, orig_h, target_w, target_h)
     except Exception as ex:
         print(src_json_path)
         print(ex)
@@ -1126,9 +1076,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     return data, resized
 
 
-def __rescale_annotate_frames(
-    ann_dir_dest, img_dir_dest, filename, json_path, image_path
-):
+def __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path):
     if False and filename != "152618378_2":
         return
 
@@ -1174,9 +1122,7 @@ def rescale_annotate_frames(src_dir: str, dest_dir: str):
             json_path = os.path.join(ann_dir, file)
             filename = file.split("/")[-1].split(".")[0]
             image_path = os.path.join(img_dir, file).replace("json", "png")
-            __rescale_annotate_frames(
-                ann_dir_dest, img_dir_dest, filename, json_path, image_path
-            )
+            __rescale_annotate_frames(ann_dir_dest, img_dir_dest, filename, json_path, image_path)
 
     if True:
         args = []
@@ -1250,12 +1196,8 @@ def split_dataset(src_dir, output_path, split_percentage):
     ann_dir_out_test = os.path.join(output_path, "test", "annotations")
     img_dir_out_test = os.path.join(output_path, "test", "images")
 
-    if os.path.exists(os.path.join(output_path, "train")) or os.path.exists(
-        os.path.join(output_path, "test")
-    ):
-        raise Exception(
-            "Output directory not empty, manually remove test/train directories."
-        )
+    if os.path.exists(os.path.join(output_path, "train")) or os.path.exists(os.path.join(output_path, "test")):
+        raise Exception("Output directory not empty, manually remove test/train directories.")
 
     os.makedirs(ann_dir_out_train, exist_ok=True)
     os.makedirs(img_dir_out_train, exist_ok=True)
@@ -1319,9 +1261,7 @@ def default_augment(args: object):
     root_dir = args.dir
     src_dir = os.path.join(args.dir, f"{mode}")
     dst_dir = (
-        args.dir_output
-        if args.dir_output != "./augmented"
-        else os.path.abspath(os.path.join(root_dir, f"{mode}-augmented"))
+        args.dir_output if args.dir_output != "./augmented" else os.path.abspath(os.path.join(root_dir, f"{mode}-augmented"))
     )
 
     print(f"mode      = {mode}")
@@ -1344,9 +1284,7 @@ def default_rescale(args: object):
     src_dir = os.path.join(args.dir, f"{mode}{suffix}")
 
     dst_dir = (
-        args.dir_output
-        if args.dir_output != "./rescaled"
-        else os.path.abspath(os.path.join(root_dir, f"{mode}-rescaled"))
+        args.dir_output if args.dir_output != "./rescaled" else os.path.abspath(os.path.join(root_dir, f"{mode}-rescaled"))
     )
 
     print(f"mode    = {mode}")
@@ -1384,9 +1322,7 @@ def default_convert(args: object):
     src_dir = os.path.join(args.dir, f"{mode}{suffix}")
 
     dst_path = (
-        args.dir_converted
-        if args.dir_converted != "./converted"
-        else os.path.join(args.dir, "output", "dataset", f"{mode}")
+        args.dir_converted if args.dir_converted != "./converted" else os.path.join(args.dir, "output", "dataset", f"{mode}")
     )
 
     if not os.path.exists(args.config):
@@ -1468,17 +1404,11 @@ def extract_args(args=None) -> object:
 
     PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py --mode test --step augment --strip_file_name_path true --dir ~/dataset/private/corr-indexer --config ~/dataset/private/corr-indexer/config.json --aug-count 2
     """
-    parser = argparse.ArgumentParser(
-        prog="coco_funsd_converter", description="COCO to FUNSD conversion utility"
-    )
+    parser = argparse.ArgumentParser(prog="coco_funsd_converter", description="COCO to FUNSD conversion utility")
 
-    subparsers = parser.add_subparsers(
-        dest='command', help='Commands to run', required=True
-    )
+    subparsers = parser.add_subparsers(dest='command', help='Commands to run', required=True)
 
-    convert_parser = subparsers.add_parser(
-        "convert", help="Convert documents from COCO to FUNSD-Like intermediate format"
-    )
+    convert_parser = subparsers.add_parser("convert", help="Convert documents from COCO to FUNSD-Like intermediate format")
 
     convert_parser.set_defaults(func=default_convert)
 
@@ -1532,9 +1462,7 @@ def extract_args(args=None) -> object:
         help="Configuration file used for conversion",
     )
 
-    decorate_parser = subparsers.add_parser(
-        "decorate", help="Decorate documents(Box detection, ICR)"
-    )
+    decorate_parser = subparsers.add_parser("decorate", help="Decorate documents(Box detection, ICR)")
     decorate_parser.set_defaults(func=default_decorate)
 
     decorate_parser.add_argument(
@@ -1583,9 +1511,7 @@ def extract_args(args=None) -> object:
         help="Number of augmentations per annotation",
     )
 
-    rescale_parser = subparsers.add_parser(
-        "rescale", help="Rescale/Normalize documents to be used by UNILM"
-    )
+    rescale_parser = subparsers.add_parser("rescale", help="Rescale/Normalize documents to be used by UNILM")
     rescale_parser.set_defaults(func=default_rescale)
 
     rescale_parser.add_argument(
@@ -1640,9 +1566,7 @@ def extract_args(args=None) -> object:
         help="Configuration file used for conversion",
     )
 
-    split_parser = subparsers.add_parser(
-        "split", help="Split COCO dataset into train/test"
-    )
+    split_parser = subparsers.add_parser("split", help="Split COCO dataset into train/test")
     split_parser.set_defaults(func=default_split)
 
     split_parser.add_argument(

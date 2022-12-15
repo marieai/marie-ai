@@ -1,20 +1,16 @@
 import json
+import os
+import re
+import shutil
+import subprocess
 
+import psutil
 from flask import jsonify, url_for
 from flask_restful import Resource, reqparse, request
 
 from marie.api import extract_payload
 from marie.logging.logger import MarieLogger
 from marie.utils.network import get_ip_address
-
-import shutil
-import os
-import psutil
-import os
-import shutil
-import psutil
-import subprocess
-import re
 
 logger = MarieLogger("")
 

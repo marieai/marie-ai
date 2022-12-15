@@ -12,20 +12,11 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Type, Union
 
 from marie import __args_executor_init__, __cache_path__, __default_endpoint__
 from marie.enums import BetterEnum
-from marie.helper import (
-    ArgNamespace,
-    T,
-    get_or_reuse_loop,
-    iscoroutinefunction,
-    typename,
-)
+from marie.helper import ArgNamespace, T, get_or_reuse_loop, iscoroutinefunction, typename
 from marie.importer import ImportExtensions
 from marie.jaml import JAML, JAMLCompatible, env_var_regex, internal_var_regex
 from marie.logging.logger import MarieLogger
-from marie.serve.executors.decorators import (
-    _init_requests_by_class,
-    avoid_concurrent_lock_cls,
-)
+from marie.serve.executors.decorators import _init_requests_by_class, avoid_concurrent_lock_cls
 from marie.serve.executors.metas import get_executor_taboo
 from marie.serve.helper import store_init_kwargs, wrap_func
 from marie.serve.instrumentation import MetricsTimer
@@ -67,12 +58,11 @@ class ExecutorType(type(JAMLCompatible), type):
         if cls_id not in reg_cls_set:
             arg_spec = inspect.getfullargspec(cls.__init__)
 
-            if not arg_spec.varkw and not __args_executor_init__.issubset(
-                arg_spec.args
-            ):
+            if not arg_spec.varkw and not __args_executor_init__.issubset(arg_spec.args):
                 raise TypeError(
-                    f'{cls.__init__} does not follow the full signature of `Executor.__init__`, '
-                    f'please add `**kwargs` to your __init__ function'
+                    f'{cls.__init__} does not follow the full signature of'
+                    ' `Executor.__init__`, please add `**kwargs` to your __init__'
+                    ' function'
                 )
             taboo = get_executor_taboo()
 
@@ -157,8 +147,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             self.requests[__dry_run_endpoint__] = self._dry_run_func
         else:
             self.logger.warning(
-                f' Endpoint {__dry_run_endpoint__} is defined by the Executor. Be aware that this endpoint is usually reserved to enable health checks from the Client through the gateway.'
-                f' So it is recommended not to expose this endpoint. '
+                f' Endpoint {__dry_run_endpoint__} is defined by the Executor. Be aware'
+                ' that this endpoint is usually reserved to enable health checks from'
+                ' the Client through the gateway. So it is recommended not to expose'
+                ' this endpoint. '
             )
         if type(self) == BaseExecutor:
             self.requests[__default_endpoint__] = self._dry_run_func
@@ -174,13 +166,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         pass
 
     def _init_monitoring(self):
-        if (
-                hasattr(self.runtime_args, 'metrics_registry')
-                and self.runtime_args.metrics_registry
-        ):
+        if hasattr(self.runtime_args, 'metrics_registry') and self.runtime_args.metrics_registry:
             with ImportExtensions(
-                    required=True,
-                    help_text='You need to install the `prometheus_client` to use the montitoring functionality of marie',
+                required=True,
+                help_text='You need to install the `prometheus_client` to use the montitoring functionality of marie',
             ):
                 from prometheus_client import Summary
 
@@ -202,9 +191,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 name='jina_process_request_seconds',
                 description='Time spent when calling the executor request method',
             )
-            self._histogram_buffer = {
-                'jina_process_request_seconds': self._process_request_histogram
-            }
+            self._histogram_buffer = {'jina_process_request_seconds': self._process_request_histogram}
         else:
             self._process_request_histogram = None
             self._histogram_buffer = None
@@ -267,9 +254,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                     # the target function is already decorated with `@requests`, need unwrap with `.fn`
                     self.requests[endpoint] = _func.fn
                 else:
-                    raise TypeError(
-                        f'expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}'
-                    )
+                    raise TypeError(f'expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}')
 
     def _add_dynamic_batching(self, _dynamic_batching: Optional[Dict]):
         if _dynamic_batching:
@@ -290,10 +275,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         for k, v in tmp.items():
             if k == 'workspace' and not (v is None or v == ''):
                 warnings.warn(
-                    'Setting `workspace` via `metas.workspace` is deprecated. '
-                    'Instead, use `f.add(..., workspace=...)` when defining a a Flow in Python; '
-                    'the `workspace` parameter when defining a Flow using YAML; '
-                    'or `--workspace` when starting an Executor using the CLI.',
+                    'Setting `workspace` via `metas.workspace` is deprecated. Instead,'
+                    ' use `f.add(..., workspace=...)` when defining a a Flow in Python;'
+                    ' the `workspace` parameter when defining a Flow using YAML; or'
+                    ' `--workspace` when starting an Executor using the CLI.',
                     category=DeprecationWarning,
                 )
             if not hasattr(target, k):
@@ -315,14 +300,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             for k, v in new_metas.items():
                 if not hasattr(target, k):
                     if isinstance(v, str):
-                        if not (
-                            env_var_regex.findall(v) or internal_var_regex.findall(v)
-                        ):
+                        if not (env_var_regex.findall(v) or internal_var_regex.findall(v)):
                             setattr(target, k, v)
                         else:
-                            raise ValueError(
-                                f'{k}={v} is not substitutable or badly referred'
-                            )
+                            raise ValueError(f'{k}={v} is not substitutable or badly referred')
                     else:
                         setattr(target, k, v)
         # `name` is important as it serves as an identifier of the executor
@@ -347,13 +328,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         # noqa: DAR201
         """
         if req_endpoint in self.requests:
-            return self.requests[req_endpoint](
-                self, **kwargs
-            )  # unbound method, self is required
+            return self.requests[req_endpoint](self, **kwargs)  # unbound method, self is required
         elif __default_endpoint__ in self.requests:
-            return self.requests[__default_endpoint__](
-                self, **kwargs
-            )  # unbound method, self is required
+            return self.requests[__default_endpoint__](self, **kwargs)  # unbound method, self is required
 
     async def __acall__(self, req_endpoint: str, **kwargs):
         """
@@ -367,14 +344,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         elif __default_endpoint__ in self.requests:
             return await self.__acall_endpoint__(__default_endpoint__, **kwargs)
 
-    async def __acall_endpoint__(
-        self, req_endpoint, tracing_context: Optional['Context'], **kwargs
-    ):
+    async def __acall_endpoint__(self, req_endpoint, tracing_context: Optional['Context'], **kwargs):
         func = self.requests[req_endpoint]
 
-        async def exec_func(
-            summary, histogram, histogram_metric_labels, tracing_context
-        ):
+        async def exec_func(summary, histogram, histogram_metric_labels, tracing_context):
             with MetricsTimer(summary, histogram, histogram_metric_labels):
                 if iscoroutinefunction(func):
                     return await func(self, tracing_context=tracing_context, **kwargs)
@@ -382,21 +355,13 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                     async with self._lock:
                         return await get_or_reuse_loop().run_in_executor(
                             None,
-                            functools.partial(
-                                func, self, tracing_context=tracing_context, **kwargs
-                            ),
+                            functools.partial(func, self, tracing_context=tracing_context, **kwargs),
                         )
 
-        runtime_name = (
-            self.runtime_args.name if hasattr(self.runtime_args, 'name') else None
-        )
+        runtime_name = self.runtime_args.name if hasattr(self.runtime_args, 'name') else None
 
         _summary = (
-            self._summary_method.labels(
-                self.__class__.__name__, req_endpoint, runtime_name
-            )
-            if self._summary_method
-            else None
+            self._summary_method.labels(self.__class__.__name__, req_endpoint, runtime_name) if self._summary_method else None
         )
         _histogram_metric_labels = {
             'executor': self.__class__.__name__,
@@ -405,13 +370,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         }
 
         if self.tracer:
-            with self.tracer.start_as_current_span(
-                req_endpoint, context=tracing_context
-            ):
+            with self.tracer.start_as_current_span(req_endpoint, context=tracing_context):
                 from opentelemetry.propagate import extract
-                from opentelemetry.trace.propagation.tracecontext import (
-                    TraceContextTextMapPropagator,
-                )
+                from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
                 tracing_carrier_context = {}
                 TraceContextTextMapPropagator().inject(tracing_carrier_context)
@@ -509,8 +470,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if not _source or _source.startswith('docker://'):
             raise ValueError(
-                f'Can not construct a native Executor from {uri}. Looks like you want to use it as a '
-                f'Docker container, you may want to use it in the Flow via `.add(uses={uri})` instead.'
+                f'Can not construct a native Executor from {uri}. Looks like you want'
+                ' to use it as a Docker container, you may want to use it in the Flow'
+                f' via `.add(uses={uri})` instead.'
             )
         return cls.load_config(
             _source,
@@ -570,9 +532,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         uses: str,
         output_base_path: str,
         k8s_namespace: Optional[str] = None,
-        executor_type: Optional[
-            StandaloneExecutorType
-        ] = StandaloneExecutorType.EXTERNAL,
+        executor_type: Optional[StandaloneExecutorType] = StandaloneExecutorType.EXTERNAL,
         uses_with: Optional[Dict] = None,
         uses_metas: Optional[Dict] = None,
         uses_requests: Optional[Dict] = None,
@@ -606,8 +566,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         ).to_kubernetes_yaml(
             output_base_path=output_base_path,
             k8s_namespace=k8s_namespace,
-            include_gateway=executor_type
-            == BaseExecutor.StandaloneExecutorType.EXTERNAL,
+            include_gateway=executor_type == BaseExecutor.StandaloneExecutorType.EXTERNAL,
         )
 
     to_k8s_yaml = to_kubernetes_yaml
@@ -617,9 +576,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         uses: str,
         output_path: Optional[str] = None,
         network_name: Optional[str] = None,
-        executor_type: Optional[
-            StandaloneExecutorType
-        ] = StandaloneExecutorType.EXTERNAL,
+        executor_type: Optional[StandaloneExecutorType] = StandaloneExecutorType.EXTERNAL,
         uses_with: Optional[Dict] = None,
         uses_metas: Optional[Dict] = None,
         uses_requests: Optional[Dict] = None,
@@ -650,13 +607,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         f.to_docker_compose_yaml(
             output_path=output_path,
             network_name=network_name,
-            include_gateway=executor_type
-            == BaseExecutor.StandaloneExecutorType.EXTERNAL,
+            include_gateway=executor_type == BaseExecutor.StandaloneExecutorType.EXTERNAL,
         )
 
-    def monitor(
-        self, name: Optional[str] = None, documentation: Optional[str] = None
-    ) -> Optional[MetricsTimer]:
+    def monitor(self, name: Optional[str] = None, documentation: Optional[str] = None) -> Optional[MetricsTimer]:
         """
         Get a given prometheus metric, if it does not exist yet, it will create it and store it in a buffer.
         :param name: the name of the metrics
@@ -664,12 +618,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         :return: the given prometheus metrics or None if monitoring is not enable.
         """
-        _summary = (
-            self._metrics_buffer.get(name, None) if self._metrics_buffer else None
-        )
-        _histogram = (
-            self._histogram_buffer.get(name, None) if self._histogram_buffer else None
-        )
+        _summary = self._metrics_buffer.get(name, None) if self._metrics_buffer else None
+        _histogram = self._histogram_buffer.get(name, None) if self._histogram_buffer else None
 
         if self._metrics_buffer and not _summary:
             from prometheus_client import Summary
@@ -684,9 +634,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             self._metrics_buffer[name] = _summary
 
         if self._histogram_buffer and not _histogram:
-            _histogram = self.meter.create_histogram(
-                name=f'jina_{name}', description=documentation
-            )
+            _histogram = self.meter.create_histogram(name=f'jina_{name}', description=documentation)
             self._histogram_buffer[name] = _histogram
 
         if _summary or _histogram:

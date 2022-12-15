@@ -1,16 +1,13 @@
-# Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception 
+# Add parent to the search path so we can reference the modules(craft, pix2pix) here without throwing and exception
 import os
 import sys
-
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
 import copy
 
-import numpy as np
-from PIL import Image
-
 import cv2
+import numpy as np
 
 # import craft functions
 from craft_text_detector import (
@@ -23,24 +20,25 @@ from craft_text_detector import (
     load_refinenet_model,
     read_image,
 )
+from PIL import Image
 
 
 def crop_poly_low(img, poly):
     """
-        find region using the poly points
-        create mask using the poly points
-        do mask op to crop
-        add white bg
+    find region using the poly points
+    create mask using the poly points
+    do mask op to crop
+    add white bg
     """
     # points should have 1*x*2  shape
     if len(poly.shape) == 2:
         poly = np.array([np.array(poly).astype(np.int32)])
 
-    pts=poly
+    pts = poly
     ## (1) Crop the bounding rect
     rect = cv2.boundingRect(pts)
-    x,y,w,h = rect
-    croped = img[y:y+h, x:x+w].copy()
+    x, y, w, h = rect
+    croped = img[y : y + h, x : x + w].copy()
 
     ## (2) make mask
     pts = pts - pts.min(axis=0)
@@ -52,8 +50,8 @@ def crop_poly_low(img, poly):
     dst = cv2.bitwise_and(croped, croped, mask=mask)
 
     ## (4) add the white background
-    bg = np.ones_like(croped, np.uint8)*255
-    cv2.bitwise_not(bg,bg, mask=mask)
+    bg = np.ones_like(croped, np.uint8) * 255
+    cv2.bitwise_not(bg, bg, mask=mask)
     dst2 = bg + dst
 
     return dst2
@@ -62,12 +60,12 @@ def crop_poly_low(img, poly):
 print('Eval')
 
 # set image path and export folder directory
-image = 'figures/padded_snippet-HCFA24.jpg' # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3108.original.tif' # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3110.original.tif' # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3111.original.tif' # can be filepath, PIL image or numpy array
-image = 'figures/PID_10_5_0_3112.original.tif' # can be filepath, PIL image or numpy array
-image = 'figures//PID_10_5_0_3108.original.tif' # can be filepath, PIL image or numpy array
+image = 'figures/padded_snippet-HCFA24.jpg'  # can be filepath, PIL image or numpy array
+image = 'figures/PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
+image = 'figures/PID_10_5_0_3110.original.tif'  # can be filepath, PIL image or numpy array
+image = 'figures/PID_10_5_0_3111.original.tif'  # can be filepath, PIL image or numpy array
+image = 'figures/PID_10_5_0_3112.original.tif'  # can be filepath, PIL image or numpy array
+image = 'figures//PID_10_5_0_3108.original.tif'  # can be filepath, PIL image or numpy array
 
 image = '/tmp/hicfa/PID_10_5_0_3101.original.tif'
 output_dir = 'outputs/'
@@ -91,7 +89,7 @@ prediction_result = get_prediction(
     link_threshold=0.4,
     low_text=0.4,
     cuda=True,
-    long_size=2550 #1280
+    long_size=2550  # 1280
     # long_size=1280
 )
 
@@ -103,7 +101,7 @@ exported_file_paths = export_detected_regions(
     image=image_paths,
     regions=prediction_result["boxes"],
     output_dir=output_dir,
-    rectify=True 
+    rectify=True,
 )
 
 # export heatmap, detection points, box visualization
@@ -113,8 +111,9 @@ export_extra_results(
     image=image_results,
     regions=prediction_result["boxes"],
     heatmaps=prediction_result["heatmaps"],
-    output_dir=output_dir
+    output_dir=output_dir,
 )
+
 
 def imwrite(path, img):
     try:
@@ -122,23 +121,25 @@ def imwrite(path, img):
     except Exception as ident:
         print(ident)
 
-def paste_fragment(overlay, fragment, pos=(0,0)):
+
+def paste_fragment(overlay, fragment, pos=(0, 0)):
     # You may need to convert the color.
     fragment = cv2.cvtColor(fragment, cv2.COLOR_BGR2RGB)
     fragment_pil = Image.fromarray(fragment)
     overlay.paste(fragment_pil, pos)
 
+
 # output text only blocks
 # deepcopy image so that original is not altered
 image = copy.deepcopy(image)
-regions=prediction_result["boxes"]
+regions = prediction_result["boxes"]
 
 # convert imaget to BGR color
 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 file_path = os.path.join(output_dir, "image_cv.png")
 cv2.imwrite(file_path, image)
- 
-pil_image = Image.new('RGB', (image.shape[1], image.shape[0]), color=(255,255,255,0))
+
+pil_image = Image.new('RGB', (image.shape[1], image.shape[0]), color=(255, 255, 255, 0))
 
 for i, region in enumerate(regions):
     region = np.array(region).astype(np.int32).reshape((-1))
@@ -159,7 +160,7 @@ for i, region in enumerate(regions):
 
     x = rect[0]
     y = rect[1]
-    
+
     # export corpped region
     file_path = os.path.join(output_dir, 'crops', "%s.jpg" % (i))
     cv2.imwrite(file_path, snippet)
@@ -167,7 +168,7 @@ for i, region in enumerate(regions):
     paste_fragment(pil_image, snippet, (x, y))
 
 
-savepath = os.path.join(output_dir, "%s.jpg" % ('txt_overlay'))
+savepath = os.path.join(output_dir, "%s.jpg" % 'txt_overlay')
 pil_image.save(savepath, format='JPEG', subsampling=0, quality=100)
 
 # unload models from gpu
@@ -179,5 +180,5 @@ empty_cuda_cache()
 # savepath = os.path.join(debug_dir, "%s-%s.jpg" % ('padded_snippet' , key))
 # pil_padded.save(savepath, format='JPEG', subsampling=0, quality=100)
 
-# cv_snip = np.array(pil_padded)                
+# cv_snip = np.array(pil_padded)
 # snippet = cv2.cvtColor(cv_snip, cv2.COLOR_RGB2BGR)# convert RGB to BGR

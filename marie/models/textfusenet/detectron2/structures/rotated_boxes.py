@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import math
 from typing import Iterator, List, Union
-import torch
 
+import torch
 from detectron2.layers import cat
 from detectron2.layers.rotated_boxes import pairwise_iou_rotated
 
@@ -332,9 +332,7 @@ class RotatedBoxes(Boxes):
         if isinstance(item, int):
             return RotatedBoxes(self.tensor[item].view(1, -1))
         b = self.tensor[item]
-        assert b.dim() == 2, "Indexing on RotatedBoxes with {} failed to return a matrix!".format(
-            item
-        )
+        assert b.dim() == 2, "Indexing on RotatedBoxes with {} failed to return a matrix!".format(item)
         return RotatedBoxes(b)
 
     def __len__(self) -> int:

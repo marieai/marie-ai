@@ -1,8 +1,9 @@
 import os
-from data import SROIETask2
-from tqdm import tqdm
 import shutil
 import zipfile
+
+from data import SROIETask2
+from tqdm import tqdm
 
 if __name__ == '__main__':
     test_dir = '../SROIE_Task2_Original/test'
@@ -16,7 +17,7 @@ if __name__ == '__main__':
         lines = list(fp.readlines())
     while not lines[0].startswith('T-0'):
         lines = lines[1:]
-    
+
     _, data = SROIETask2(test_dir, None, None)
     for t in tqdm(data):
         file_name = t['file_name']
@@ -32,18 +33,17 @@ if __name__ == '__main__':
         pred_line_id = image_id * 4 + 2
         pred_line = lines[pred_line_id]
         assert pred_line.startswith('D-{:d}'.format(image_id))
-        pred_line = pred_line[pred_line.find('\t') + 1:]
-        pred_str = pred_line[pred_line.find('\t') + 1:]
+        pred_line = pred_line[pred_line.find('\t') + 1 :]
+        pred_str = pred_line[pred_line.find('\t') + 1 :]
 
         for word in pred_str.split():
             output_fp.write(word + '\n')
-    
+
     if output_fp:
         output_fp.close()
-        
+
     zip_fp = zipfile.ZipFile('predictions.zip', 'w')
     for txt_file in os.listdir(output_dir):
         zip_fp.write(os.path.join(output_dir, txt_file), txt_file)
     zip_fp.close()
     shutil.rmtree(output_dir)
-

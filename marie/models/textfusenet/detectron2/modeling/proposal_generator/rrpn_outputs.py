@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import itertools
 import logging
-import torch
 
+import torch
 from detectron2.layers import batched_nms_rotated, cat
 from detectron2.structures import Instances, RotatedBoxes, pairwise_iou_rotated
 
@@ -86,9 +86,7 @@ def find_top_rrpn_proposals(
     topk_proposals = []
     level_ids = []  # #lvl Tensor, each of shape (topk,)
     batch_idx = torch.arange(num_images, device=device)
-    for level_id, proposals_i, logits_i in zip(
-        itertools.count(), proposals, pred_objectness_logits
-    ):
+    for level_id, proposals_i, logits_i in zip(itertools.count(), proposals, pred_objectness_logits):
         Hi_Wi_A = logits_i.shape[1]
         num_proposals_i = min(pre_nms_topk, Hi_Wi_A)
 
@@ -121,7 +119,11 @@ def find_top_rrpn_proposals(
         keep = boxes.nonempty(threshold=min_box_side_len)
         lvl = level_ids
         if keep.sum().item() != len(boxes):
-            boxes, scores_per_img, lvl = (boxes[keep], scores_per_img[keep], level_ids[keep])
+            boxes, scores_per_img, lvl = (
+                boxes[keep],
+                scores_per_img[keep],
+                level_ids[keep],
+            )
 
         keep = batched_nms_rotated(boxes.tensor, scores_per_img, lvl, nms_thresh)
         # In Detectron1, there was different behavior during training vs. testing.
@@ -230,9 +232,7 @@ class RRPNOutputs(RPNOutputs):
             else:
                 # TODO wasted computation for ignored boxes
                 matched_gt_boxes = gt_boxes_i[matched_idxs]
-                gt_anchor_deltas_i = self.box2box_transform.get_deltas(
-                    anchors_i.tensor, matched_gt_boxes.tensor
-                )
+                gt_anchor_deltas_i = self.box2box_transform.get_deltas(anchors_i.tensor, matched_gt_boxes.tensor)
 
             gt_objectness_logits.append(gt_objectness_logits_i)
             gt_anchor_deltas.append(gt_anchor_deltas_i)

@@ -19,7 +19,7 @@ def add_vit_config(cfg):
 
     _C.MODEL.VIT.POS_TYPE = "shared_rel"
 
-    _C.MODEL.VIT.DROP_PATH = 0.
+    _C.MODEL.VIT.DROP_PATH = 0.0
 
     _C.MODEL.VIT.MODEL_KWARGS = "{}"
 

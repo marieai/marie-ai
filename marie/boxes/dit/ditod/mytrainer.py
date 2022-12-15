@@ -10,49 +10,38 @@ since they are meant to represent the "common default behavior" people need in t
 """
 
 import argparse
+import itertools
 import logging
 import os
 import sys
 import weakref
 from collections import OrderedDict
-from typing import Optional
-import torch
-from fvcore.nn.precise_bn import get_bn_modules
-from omegaconf import OmegaConf
-from torch.nn.parallel import DistributedDataParallel
+from typing import Any, Dict, List, Optional, Set
 
 import detectron2.data.transforms as T
+import torch
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import CfgNode, LazyConfig
-from detectron2.data import (
-    MetadataCatalog,
-    build_detection_test_loader,
-    build_detection_train_loader,
-)
-from detectron2.evaluation import (
-    DatasetEvaluator,
-    inference_on_dataset,
-    print_csv_format,
-    verify_results,
-)
+from detectron2.data import MetadataCatalog, build_detection_test_loader, build_detection_train_loader
+from detectron2.engine import hooks
+from detectron2.engine.train_loop import AMPTrainer, SimpleTrainer, TrainerBase
+from detectron2.evaluation import DatasetEvaluator, inference_on_dataset, print_csv_format, verify_results
 from detectron2.modeling import build_model
 from detectron2.solver import build_lr_scheduler, build_optimizer
+from detectron2.solver.build import maybe_add_gradient_clipping
 from detectron2.utils import comm
 from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
 from detectron2.utils.file_io import PathManager
 from detectron2.utils.logger import setup_logger
+from fvcore.nn.precise_bn import get_bn_modules
+from omegaconf import OmegaConf
+from torch.nn.parallel import DistributedDataParallel
 
-from detectron2.engine import hooks
-from detectron2.engine.train_loop import AMPTrainer, SimpleTrainer, TrainerBase
-
-from .mycheckpointer import MyDetectionCheckpointer
-from typing import Any, Dict, List, Set
-import itertools
-from detectron2.solver.build import maybe_add_gradient_clipping
 from .dataset_mapper import DetrDatasetMapper
 from .funsd_evaluation import FUNSDEvaluator
+from .mycheckpointer import MyDetectionCheckpointer
 
 __all__ = [
     "create_ddp_model",
@@ -117,25 +106,32 @@ Run on multiple machines:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Whether to attempt to resume from the checkpoint directory. "
-        "See documentation of `MyTrainer.resume_or_load()` for what it means.",
+        help=(
+            "Whether to attempt to resume from the checkpoint directory. "
+            "See documentation of `MyTrainer.resume_or_load()` for what it means."
+        ),
     )
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
     parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
     parser.add_argument("--num-machines", type=int, default=1, help="total number of machines")
     parser.add_argument(
-        "--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)"
+        "--machine-rank",
+        type=int,
+        default=0,
+        help="the rank of this machine (unique per machine)",
     )
 
     # PyTorch still may leave orphan processes in multi-gpu training.
     # Therefore we use a deterministic way to obtain port,
     # so that users are aware of orphan processes by seeing the port occupied.
-    port = 2 ** 15 + 2 ** 14 + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
+    port = 2**15 + 2**14 + hash(os.getuid() if sys.platform != "win32" else 1) % 2**14
     parser.add_argument(
         "--dist-url",
         default="tcp://127.0.0.1:{}".format(port),
-        help="initialization URL for pytorch distributed backend. See "
-        "https://pytorch.org/docs/stable/distributed.html for details.",
+        help=(
+            "initialization URL for pytorch distributed backend. See "
+            "https://pytorch.org/docs/stable/distributed.html for details."
+        ),
     )
     parser.add_argument(
         "opts",
@@ -170,8 +166,8 @@ def _highlight(code, filename):
     except ImportError:
         return code
 
-    from pygments.lexers import Python3Lexer, YamlLexer
     from pygments.formatters import Terminal256Formatter
+    from pygments.lexers import Python3Lexer, YamlLexer
 
     lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
     code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
@@ -229,9 +225,7 @@ def default_setup(cfg, args):
     # cudnn benchmark has large overhead. It shouldn't be used considering the small size of
     # typical validation set.
     if not (hasattr(args, "eval_only") and args.eval_only):
-        torch.backends.cudnn.benchmark = _try_get_key(
-            cfg, "CUDNN_BENCHMARK", "train.cudnn_benchmark", default=False
-        )
+        torch.backends.cudnn.benchmark = _try_get_key(cfg, "CUDNN_BENCHMARK", "train.cudnn_benchmark", default=False)
 
 
 def default_writers(output_dir: str, max_iter: Optional[int] = None):
@@ -294,9 +288,7 @@ class DefaultPredictor:
         checkpointer = DetectionCheckpointer(self.model)
         checkpointer.load(cfg.MODEL.WEIGHTS)
 
-        self.aug = T.ResizeShortestEdge(
-            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
-        )
+        self.aug = T.ResizeShortestEdge([cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST)
 
         self.input_format = cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
@@ -387,9 +379,7 @@ class MyTrainer(TrainerBase):
         data_loader = self.build_train_loader(cfg)
 
         model = create_ddp_model(model, broadcast_buffers=False)
-        self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
-            model, data_loader, optimizer
-        )
+        self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(model, data_loader, optimizer)
 
         self.scheduler = self.build_lr_scheduler(cfg, optimizer)
         self.checkpointer = MyDetectionCheckpointer(
@@ -492,9 +482,7 @@ class MyTrainer(TrainerBase):
         """
         super().train(self.start_iter, self.max_iter)
         if len(self.cfg.TEST.EXPECTED_RESULTS) and comm.is_main_process():
-            assert hasattr(
-                self, "_last_eval_results"
-            ), "No evaluation results obtained during training!"
+            assert hasattr(self, "_last_eval_results"), "No evaluation results obtained during training!"
             verify_results(self.cfg, self._last_eval_results)
             return self._last_eval_results
 
@@ -537,9 +525,9 @@ class MyTrainer(TrainerBase):
             # detectron2 doesn't have full model gradient clipping now
             clip_norm_val = cfg.SOLVER.CLIP_GRADIENTS.CLIP_VALUE
             enable = (
-                    cfg.SOLVER.CLIP_GRADIENTS.ENABLED
-                    and cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE == "full_model"
-                    and clip_norm_val > 0.0
+                cfg.SOLVER.CLIP_GRADIENTS.ENABLED
+                and cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE == "full_model"
+                and clip_norm_val > 0.0
             )
 
             class FullModelGradientClippingOptimizer(optim):
@@ -556,9 +544,7 @@ class MyTrainer(TrainerBase):
                 params, cfg.SOLVER.BASE_LR, momentum=cfg.SOLVER.MOMENTUM
             )
         elif optimizer_type == "ADAMW":
-            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.AdamW)(
-                params, cfg.SOLVER.BASE_LR
-            )
+            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.AdamW)(params, cfg.SOLVER.BASE_LR)
         else:
             raise NotImplementedError(f"no optimizer type {optimizer_type}")
         if not cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE == "full_model":
@@ -618,9 +604,7 @@ class MyTrainer(TrainerBase):
         if isinstance(evaluators, DatasetEvaluator):
             evaluators = [evaluators]
         if evaluators is not None:
-            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
-                len(cfg.DATASETS.TEST), len(evaluators)
-            )
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(len(cfg.DATASETS.TEST), len(evaluators))
 
         results = OrderedDict()
         for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
@@ -634,17 +618,14 @@ class MyTrainer(TrainerBase):
                     evaluator = cls.build_evaluator(cfg, dataset_name)
                 except NotImplementedError:
                     logger.warn(
-                        "No evaluator found. Use `MyTrainer.test(evaluators=)`, "
-                        "or implement its `build_evaluator` method."
+                        "No evaluator found. Use `MyTrainer.test(evaluators=)`, or implement its `build_evaluator` method."
                     )
                     results[dataset_name] = {}
                     continue
             results_i = inference_on_dataset(model, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():
-                assert isinstance(
-                    results_i, dict
-                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                assert isinstance(results_i, dict), "Evaluator must return a dict on the main process. Got {} instead.".format(
                     results_i
                 )
                 logger.info("Evaluation results for {} in csv format:".format(dataset_name))
@@ -703,9 +684,7 @@ class MyTrainer(TrainerBase):
         frozen = cfg.is_frozen()
         cfg.defrost()
 
-        assert (
-            cfg.SOLVER.IMS_PER_BATCH % old_world_size == 0
-        ), "Invalid REFERENCE_WORLD_SIZE in config!"
+        assert cfg.SOLVER.IMS_PER_BATCH % old_world_size == 0, "Invalid REFERENCE_WORLD_SIZE in config!"
         scale = num_workers / old_world_size
         bs = cfg.SOLVER.IMS_PER_BATCH = int(round(cfg.SOLVER.IMS_PER_BATCH * scale))
         lr = cfg.SOLVER.BASE_LR = cfg.SOLVER.BASE_LR * scale
@@ -717,8 +696,7 @@ class MyTrainer(TrainerBase):
         cfg.SOLVER.REFERENCE_WORLD_SIZE = num_workers  # maintain invariant
         logger = logging.getLogger(__name__)
         logger.info(
-            f"Auto-scaling the config to batch_size={bs}, learning_rate={lr}, "
-            f"max_iter={max_iter}, warmup={warmup_iter}."
+            f"Auto-scaling the config to batch_size={bs}, learning_rate={lr}, max_iter={max_iter}, warmup={warmup_iter}."
         )
 
         if frozen:

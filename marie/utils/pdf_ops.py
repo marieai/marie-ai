@@ -1,7 +1,7 @@
 import glob
 import os
 
-from PyPDF4 import PdfFileWriter, PdfFileReader
+from PyPDF4 import PdfFileReader, PdfFileWriter
 
 
 def merge_pdf(src_dir, dst_pdf_path, sort_key=None):

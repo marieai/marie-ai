@@ -51,9 +51,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         )
 
         all_worker_results = await asyncio.gather(*worker_send_tasks)
-        worker_results = list(
-            filter(lambda x: isinstance(x, Tuple), all_worker_results)
-        )
+        worker_results = list(filter(lambda x: isinstance(x, Tuple), all_worker_results))
         exceptions = list(
             filter(
                 lambda x: issubclass(type(x), BaseException),
@@ -120,12 +118,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 response, uses_before_metadata = result
                 requests = [response]
 
-        (
-            worker_results,
-            exceptions,
-            total_shards,
-            failed_shards,
-        ) = await self._gather_worker_tasks(
+        (worker_results, exceptions, total_shards, failed_shards,) = await self._gather_worker_tasks(
             requests=requests,
             deployment_name=deployment_name,
             timeout_send=timeout_send,
@@ -139,9 +132,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 # raise the underlying error first
                 self._update_end_failed_requests_metrics()
                 raise exceptions[0]
-            raise RuntimeError(
-                f'Head {self.runtime_name} did not receive a response when sending message to worker pods'
-            )
+            raise RuntimeError(f'Head {self.runtime_name} did not receive a response when sending message to worker pods')
 
         worker_results, metadata = zip(*worker_results)
 
@@ -164,9 +155,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         elif len(worker_results) > 1 and not reduce:
             # worker returned multiple responses, but the head is configured to skip reduction
             # just concatenate the docs in this case
-            response_request.data.docs = WorkerRequestHandler.get_docs_from_request(
-                requests, field='docs'
-            )
+            response_request.data.docs = WorkerRequestHandler.get_docs_from_request(requests, field='docs')
 
         merged_metadata = self._merge_metadata(
             metadata,

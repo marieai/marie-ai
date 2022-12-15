@@ -18,6 +18,7 @@ class AdlibRenderer(ResultRenderer):
 
     def render(self, img, result, output_filename):
         import xml.etree.ElementTree as gfg
+
         try:
             meta = result["meta"]
             words = result["words"]

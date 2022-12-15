@@ -1,4 +1,5 @@
 from xml.sax.saxutils import escape, quoteattr
+
 from marie.renderer.renderer import ResultRenderer
 
 

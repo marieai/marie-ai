@@ -34,15 +34,11 @@ def wrap_func(cls, func_lst, wrapper, **kwargs):
     :param kwargs: extra wrapper kwargs
     """
     for f_name in func_lst:
-        if hasattr(cls, f_name) and all(
-            getattr(cls, f_name) != getattr(i, f_name, None) for i in cls.mro()[1:]
-        ):
+        if hasattr(cls, f_name) and all(getattr(cls, f_name) != getattr(i, f_name, None) for i in cls.mro()[1:]):
             setattr(cls, f_name, wrapper(getattr(cls, f_name), **kwargs))
 
 
-def store_init_kwargs(
-    func: typing.Callable, taboo: Optional[typing.Set] = None
-) -> typing.Callable:
+def store_init_kwargs(func: typing.Callable, taboo: Optional[typing.Set] = None) -> typing.Callable:
     """Mark the args and kwargs of :func:`__init__` later to be stored via :func:`save_config` in YAML
     :param func: the function to decorate
     :param taboo: class taboo set of parameters

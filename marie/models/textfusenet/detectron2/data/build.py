@@ -3,17 +3,17 @@ import bisect
 import copy
 import itertools
 import logging
-import numpy as np
 import pickle
-import torch.utils.data
-from fvcore.common.file_io import PathManager
-from tabulate import tabulate
-from termcolor import colored
 
+import numpy as np
+import torch.utils.data
 from detectron2.structures import BoxMode
 from detectron2.utils.comm import get_world_size
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.logger import log_first_n
+from fvcore.common.file_io import PathManager
+from tabulate import tabulate
+from termcolor import colored
 
 from . import samplers
 from .catalog import DatasetCatalog, MetadataCatalog
@@ -57,11 +57,7 @@ def filter_images_with_only_crowd_annotations(dataset_dicts):
     dataset_dicts = [x for x in dataset_dicts if valid(x["annotations"])]
     num_after = len(dataset_dicts)
     logger = logging.getLogger(__name__)
-    logger.info(
-        "Removed {} images with no usable annotations. {} images left.".format(
-            num_before - num_after, num_after
-        )
-    )
+    logger.info("Removed {} images with no usable annotations. {} images left.".format(num_before - num_after, num_after))
     return dataset_dicts
 
 
@@ -80,22 +76,12 @@ def filter_images_with_few_keypoints(dataset_dicts, min_keypoints_per_image):
     def visible_keypoints_in_image(dic):
         # Each keypoints field has the format [x1, y1, v1, ...], where v is visibility
         annotations = dic["annotations"]
-        return sum(
-            (np.array(ann["keypoints"][2::3]) > 0).sum()
-            for ann in annotations
-            if "keypoints" in ann
-        )
+        return sum((np.array(ann["keypoints"][2::3]) > 0).sum() for ann in annotations if "keypoints" in ann)
 
-    dataset_dicts = [
-        x for x in dataset_dicts if visible_keypoints_in_image(x) >= min_keypoints_per_image
-    ]
+    dataset_dicts = [x for x in dataset_dicts if visible_keypoints_in_image(x) >= min_keypoints_per_image]
     num_after = len(dataset_dicts)
     logger = logging.getLogger(__name__)
-    logger.info(
-        "Removed {} images with fewer than {} keypoints.".format(
-            num_before - num_after, min_keypoints_per_image
-        )
-    )
+    logger.info("Removed {} images with fewer than {} keypoints.".format(num_before - num_after, min_keypoints_per_image))
     return dataset_dicts
 
 
@@ -176,9 +162,7 @@ def print_instances_class_histogram(dataset_dicts, class_names):
             return x[:11] + ".."
         return x
 
-    data = list(
-        itertools.chain(*[[short_name(class_names[i]), int(v)] for i, v in enumerate(histogram)])
-    )
+    data = list(itertools.chain(*[[short_name(class_names[i]), int(v)] for i, v in enumerate(histogram)]))
     total_num_instances = sum(data[1::2])
     data.extend([None] * (N_COLS - (len(data) % N_COLS)))
     if num_classes > 1:
@@ -193,15 +177,12 @@ def print_instances_class_histogram(dataset_dicts, class_names):
     )
     log_first_n(
         logging.INFO,
-        "Distribution of training instances among all {} categories:\n".format(num_classes)
-        + colored(table, "cyan"),
+        "Distribution of training instances among all {} categories:\n".format(num_classes) + colored(table, "cyan"),
         key="message",
     )
 
 
-def build_batch_data_sampler(
-    sampler, images_per_batch, group_bin_edges=None, grouping_features=None
-):
+def build_batch_data_sampler(sampler, images_per_batch, group_bin_edges=None, grouping_features=None):
     """
     Return a dataset index sampler that batches dataset indices possibly with
     grouping to improve training efficiency.
@@ -238,9 +219,7 @@ def build_batch_data_sampler(
     return batch_sampler
 
 
-def get_detection_dataset_dicts(
-    dataset_names, filter_empty=True, min_keypoints=0, proposal_files=None
-):
+def get_detection_dataset_dicts(dataset_names, filter_empty=True, min_keypoints=0, proposal_files=None):
     """
     Load and prepare dataset dicts for instance detection/segmentation and semantic segmentation.
 
@@ -308,12 +287,8 @@ def build_detection_train_loader(cfg, mapper=None):
     images_per_batch = cfg.SOLVER.IMS_PER_BATCH
     assert (
         images_per_batch % num_workers == 0
-    ), "SOLVER.IMS_PER_BATCH ({}) must be divisible by the number of workers ({}).".format(
-        images_per_batch, num_workers
-    )
-    assert (
-        images_per_batch >= num_workers
-    ), "SOLVER.IMS_PER_BATCH ({}) must be larger than the number of workers ({}).".format(
+    ), "SOLVER.IMS_PER_BATCH ({}) must be divisible by the number of workers ({}).".format(images_per_batch, num_workers)
+    assert images_per_batch >= num_workers, "SOLVER.IMS_PER_BATCH ({}) must be larger than the number of workers ({}).".format(
         images_per_batch, num_workers
     )
     images_per_worker = images_per_batch // num_workers
@@ -321,9 +296,7 @@ def build_detection_train_loader(cfg, mapper=None):
     dataset_dicts = get_detection_dataset_dicts(
         cfg.DATASETS.TRAIN,
         filter_empty=cfg.DATALOADER.FILTER_EMPTY_ANNOTATIONS,
-        min_keypoints=cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE
-        if cfg.MODEL.KEYPOINT_ON
-        else 0,
+        min_keypoints=cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE if cfg.MODEL.KEYPOINT_ON else 0,
         proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None,
     )
     dataset = DatasetFromList(dataset_dicts, copy=False)
@@ -343,14 +316,10 @@ def build_detection_train_loader(cfg, mapper=None):
     if sampler_name == "TrainingSampler":
         sampler = samplers.TrainingSampler(len(dataset))
     elif sampler_name == "RepeatFactorTrainingSampler":
-        sampler = samplers.RepeatFactorTrainingSampler(
-            dataset_dicts, cfg.DATALOADER.REPEAT_THRESHOLD
-        )
+        sampler = samplers.RepeatFactorTrainingSampler(dataset_dicts, cfg.DATALOADER.REPEAT_THRESHOLD)
     else:
         raise ValueError("Unknown training sampler: {}".format(sampler_name))
-    batch_sampler = build_batch_data_sampler(
-        sampler, images_per_worker, group_bin_edges, aspect_ratios
-    )
+    batch_sampler = build_batch_data_sampler(sampler, images_per_worker, group_bin_edges, aspect_ratios)
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -382,9 +351,7 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
     dataset_dicts = get_detection_dataset_dicts(
         [dataset_name],
         filter_empty=False,
-        proposal_files=[
-            cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(dataset_name)]
-        ]
+        proposal_files=[cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(dataset_name)]]
         if cfg.MODEL.LOAD_PROPOSALS
         else None,
     )
@@ -416,4 +383,4 @@ def trivial_batch_collator(batch):
 
 
 def worker_init_reset_seed(worker_id):
-    seed_all_rng(np.random.randint(2 ** 31) + worker_id)
+    seed_all_rng(np.random.randint(2**31) + worker_id)

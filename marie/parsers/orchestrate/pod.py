@@ -6,12 +6,7 @@ from typing import Dict
 
 from marie import helper
 from marie.enums import PodRoleType
-from marie.parsers.helper import (
-    _SHOW_ALL_ARGS,
-    CastToIntAction,
-    KVAppendAction,
-    add_arg_group,
-)
+from marie.parsers.helper import _SHOW_ALL_ARGS, CastToIntAction, KVAppendAction, add_arg_group
 
 
 @dataclass
@@ -25,9 +20,7 @@ class PodTypeParams:
 POD_PARAMS_MAPPING: Dict[str, PodTypeParams] = {
     'worker': PodTypeParams(runtime_cls='WorkerRuntime', role_type=PodRoleType.WORKER),
     'head': PodTypeParams(runtime_cls='HeadRuntime', role_type=PodRoleType.HEAD),
-    'gateway': PodTypeParams(
-        runtime_cls='GatewayRuntime', role_type=PodRoleType.GATEWAY
-    ),
+    'gateway': PodTypeParams(runtime_cls='GatewayRuntime', role_type=PodRoleType.GATEWAY),
 }
 
 
@@ -50,8 +43,7 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
         '--timeout-ready',
         type=int,
         default=600000,
-        help='The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting '
-        'forever',
+        help='The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever',
     )
 
     gp.add_argument(
@@ -78,17 +70,18 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
         type=PodRoleType.from_string,
         choices=list(PodRoleType),
         default=POD_PARAMS_MAPPING[pod_type].role_type,
-        help='The role of this Pod in a Deployment'
-        if _SHOW_ALL_ARGS
-        else argparse.SUPPRESS,
+        help='The role of this Pod in a Deployment' if _SHOW_ALL_ARGS else argparse.SUPPRESS,
     )
 
     gp.add_argument(
         '--noblock-on-start',
         action='store_true',
         default=False,
-        help='If set, starting a Pod/Deployment does not block the thread/process. It then relies on '
-        '`wait_start_success` at outer function for the postpone check.'
+        help=(
+            'If set, starting a Pod/Deployment does not block the thread/process. It'
+            ' then relies on `wait_start_success` at outer function for the postpone'
+            ' check.'
+        )
         if _SHOW_ALL_ARGS
         else argparse.SUPPRESS,
     )
@@ -97,22 +90,30 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
         '--floating',
         action='store_true',
         default=False,
-        help='If set, the current Pod/Deployment can not be further chained, '
-        'and the next `.add()` will chain after the last Pod/Deployment not this current one.',
+        help=(
+            'If set, the current Pod/Deployment can not be further chained, and the'
+            ' next `.add()` will chain after the last Pod/Deployment not this current'
+            ' one.'
+        ),
     )
     if pod_type != 'gateway':
         gp.add_argument(
             '--restart',
             action='store_true',
             default=False,
-            help='If set, the Executor will restart while serving if the YAML configuration source is changed. This differs from `reload` argument in that this will restart the server and more configuration can be changed, like number of replicas.'
+            help=(
+                'If set, the Executor will restart while serving if the YAML'
+                ' configuration source is changed. This differs from `reload` argument'
+                ' in that this will restart the server and more configuration can be'
+                ' changed, like number of replicas.'
+            ),
         )
     else:
         gp.add_argument(
             '--restart',
             action='store_true',
             default=False,
-            help='If set, the Gateway will restart while serving if the YAML configuration source is changed.'
+            help='If set, the Gateway will restart while serving if the YAML configuration source is changed.',
         )
     mixin_pod_runtime_args_parser(gp, pod_type=pod_type)
 
@@ -123,9 +124,10 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
     :param pod_type: the pod_type configured by the parser. Can be either 'worker' for WorkerRuntime or 'gateway' for GatewayRuntime
     """
     port_description = (
-        'The port for input data to bind to, default is a random port between [49152, 65535]. '
-        'In the case of an external Executor (`--external` or `external=True`) this can be a list of ports, separated by commas. '
-        'Then, every resulting address will be considered as one replica of the Executor.'
+        'The port for input data to bind to, default is a random port between [49152,'
+        ' 65535]. In the case of an external Executor (`--external` or `external=True`)'
+        ' this can be a list of ports, separated by commas. Then, every resulting'
+        ' address will be considered as one replica of the Executor.'
     )
 
     if pod_type != 'gateway':
@@ -141,13 +143,14 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
             '--reload',
             action='store_true',
             default=False,
-            help='If set, the Executor reloads the modules as they change'
+            help='If set, the Executor reloads the modules as they change',
         )
     else:
         port_description = (
-            'The port for input data to bind the gateway server to, by default, random ports between range [49152, 65535] will be assigned. '
-            'The port argument can be either 1 single value in case only 1 protocol is used or multiple values when '
-            'many protocols are used.'
+            'The port for input data to bind the gateway server to, by default, random'
+            ' ports between range [49152, 65535] will be assigned. The port argument'
+            ' can be either 1 single value in case only 1 protocol is used or multiple'
+            ' values when many protocols are used.'
         )
         arg_group.add_argument(
             '--port',
@@ -188,8 +191,12 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         '--tracing',
         action='store_true',
         default=False,
-        help='If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. '
-        'Otherwise a no-op implementation will be provided.',
+        help=(
+            'If set, the sdk implementation of the OpenTelemetry tracer will be'
+            ' available and will be enabled for automatic tracing of requests and'
+            ' customer span creation. Otherwise a no-op implementation will be'
+            ' provided.'
+        ),
     )
 
     arg_group.add_argument(
@@ -210,8 +217,11 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         '--metrics',
         action='store_true',
         default=False,
-        help='If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. '
-        'Otherwise a no-op implementation will be provided.',
+        help=(
+            'If set, the sdk implementation of the OpenTelemetry metrics will be'
+            ' available for default monitoring and custom measurements. Otherwise a'
+            ' no-op implementation will be provided.'
+        ),
     )
 
     arg_group.add_argument(

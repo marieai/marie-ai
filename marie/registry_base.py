@@ -18,5 +18,3 @@ class RegistryHolder(type):
     @classmethod
     def get_registry(cls):
         return dict(cls.REGISTRY)
-
-

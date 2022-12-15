@@ -1,5 +1,4 @@
 import pytest
-
 from jina import Executor, Flow, requests
 
 

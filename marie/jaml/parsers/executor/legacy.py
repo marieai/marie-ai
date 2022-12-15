@@ -58,9 +58,7 @@ class ExecutorLegacyParser(BaseLegacyParser):
         difference_set = arguments_from_yaml - arguments_from_cls
         # only log warnings about unknown args for main Pod
         if any(difference_set) and not ExecutorLegacyParser.is_tail_or_head(data):
-            default_logger.warning(
-                f'The given arguments {difference_set} are not defined in `{cls.__name__}.__init__`'
-            )
+            default_logger.warning(f'The given arguments {difference_set} are not defined in `{cls.__name__}.__init__`')
 
         if not _meta_config:
             default_logger.warning(
@@ -97,11 +95,7 @@ class ExecutorLegacyParser(BaseLegacyParser):
         # note: we only save non-default property for the sake of clarity
         _defaults = get_default_metas()
         p = (
-            {
-                k: getattr(data.metas, k)
-                for k, v in _defaults.items()
-                if getattr(data.metas, k) != v
-            }
+            {k: getattr(data.metas, k) for k, v in _defaults.items() if getattr(data.metas, k) != v}
             if hasattr(data, 'metas')
             else {}
         )

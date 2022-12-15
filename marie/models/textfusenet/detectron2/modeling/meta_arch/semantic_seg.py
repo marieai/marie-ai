@@ -1,20 +1,25 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import numpy as np
 from typing import Dict
-import fvcore.nn.weight_init as weight_init
-import torch
-from torch import nn
-from torch.nn import functional as F
 
+import fvcore.nn.weight_init as weight_init
+import numpy as np
+import torch
 from detectron2.layers import Conv2d, ShapeSpec
 from detectron2.structures import ImageList
 from detectron2.utils.registry import Registry
+from torch import nn
+from torch.nn import functional as F
 
 from ..backbone import build_backbone
 from ..postprocessing import sem_seg_postprocess
 from .build import META_ARCH_REGISTRY
 
-__all__ = ["SemanticSegmentor", "SEM_SEG_HEADS_REGISTRY", "SemSegFPNHead", "build_sem_seg_head"]
+__all__ = [
+    "SemanticSegmentor",
+    "SEM_SEG_HEADS_REGISTRY",
+    "SemSegFPNHead",
+    "build_sem_seg_head",
+]
 
 
 SEM_SEG_HEADS_REGISTRY = Registry("SEM_SEG_HEADS")
@@ -71,9 +76,7 @@ class SemanticSegmentor(nn.Module):
 
         if "sem_seg" in batched_inputs[0]:
             targets = [x["sem_seg"].to(self.device) for x in batched_inputs]
-            targets = ImageList.from_tensors(
-                targets, self.backbone.size_divisibility, self.sem_seg_head.ignore_value
-            ).tensor
+            targets = ImageList.from_tensors(targets, self.backbone.size_divisibility, self.sem_seg_head.ignore_value).tensor
         else:
             targets = None
         results, losses = self.sem_seg_head(features, targets)
@@ -125,7 +128,8 @@ class SemSegFPNHead(nn.Module):
         for in_feature in self.in_features:
             head_ops = []
             head_length = max(
-                1, int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride))
+                1,
+                int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride)),
             )
             for k in range(head_length):
                 norm_module = nn.GroupNorm(32, conv_dims) if norm == "GN" else None
@@ -142,9 +146,7 @@ class SemSegFPNHead(nn.Module):
                 weight_init.c2_msra_fill(conv)
                 head_ops.append(conv)
                 if feature_strides[in_feature] != self.common_stride:
-                    head_ops.append(
-                        nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-                    )
+                    head_ops.append(nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False))
             self.scale_heads.append(nn.Sequential(*head_ops))
             self.add_module(in_feature, self.scale_heads[-1])
         self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
@@ -162,8 +164,7 @@ class SemSegFPNHead(nn.Module):
         if self.training:
             losses = {}
             losses["loss_sem_seg"] = (
-                F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value)
-                * self.loss_weight
+                F.cross_entropy(x, targets, reduction="mean", ignore_index=self.ignore_value) * self.loss_weight
             )
             return [], losses
         else:

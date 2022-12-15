@@ -1,8 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from torch.nn import functional as F
-
 from detectron2.layers import paste_masks_in_image
 from detectron2.structures import Instances
+from torch.nn import functional as F
 
 
 def detector_postprocess(results, output_height, output_width, mask_threshold=0.5):
@@ -24,7 +23,10 @@ def detector_postprocess(results, output_height, output_width, mask_threshold=0.
     Returns:
         Instances: the resized output from the model, based on the output resolution
     """
-    scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
+    scale_x, scale_y = (
+        output_width / results.image_size[1],
+        output_height / results.image_size[0],
+    )
     results = Instances((output_height, output_width), **results.get_fields())
 
     if results.has("pred_boxes"):
@@ -72,7 +74,5 @@ def sem_seg_postprocess(result, img_size, output_height, output_width):
             (C, output_height, output_width) that contains per-pixel soft predictions.
     """
     result = result[:, : img_size[0], : img_size[1]].expand(1, -1, -1, -1)
-    result = F.interpolate(
-        result, size=(output_height, output_width), mode="bilinear", align_corners=False
-    )[0]
+    result = F.interpolate(result, size=(output_height, output_width), mode="bilinear", align_corners=False)[0]
     return result

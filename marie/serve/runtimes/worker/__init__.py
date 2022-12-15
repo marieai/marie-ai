@@ -121,14 +121,10 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
             interceptors=self.aio_tracing_server_interceptors(),
         )
 
-        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(
-            self, self._grpc_server
-        )
+        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(self, self._grpc_server)
         jina_pb2_grpc.add_JinaDataRequestRPCServicer_to_server(self, self._grpc_server)
 
-        jina_pb2_grpc.add_JinaDiscoverEndpointsRPCServicer_to_server(
-            self, self._grpc_server
-        )
+        jina_pb2_grpc.add_JinaDiscoverEndpointsRPCServicer_to_server(self, self._grpc_server)
         jina_pb2_grpc.add_JinaInfoRPCServicer_to_server(self, self._grpc_server)
         service_names = (
             jina_pb2.DESCRIPTOR.services_by_name['JinaSingleDataRequestRPC'].full_name,
@@ -138,9 +134,7 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
             reflection.SERVICE_NAME,
         )
         # Mark all services as healthy.
-        health_pb2_grpc.add_HealthServicer_to_server(
-            self._health_servicer, self._grpc_server
-        )
+        health_pb2_grpc.add_HealthServicer_to_server(self._health_servicer, self._grpc_server)
 
         reflection.enable_server_reflection(service_names, self._grpc_server)
         bind_addr = f'{self.args.host}:{self.args.port}'
@@ -148,20 +142,15 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
         self._grpc_server.add_insecure_port(bind_addr)
         await self._grpc_server.start()
         for service in service_names:
-            await self._health_servicer.set(
-                service, health_pb2.HealthCheckResponse.SERVING
-            )
+            await self._health_servicer.set(service, health_pb2.HealthCheckResponse.SERVING)
 
     async def _hot_reload(self):
         import inspect
+
         executor_file = inspect.getfile(self._request_handler._executor.__class__)
         watched_files = set([executor_file] + (self.args.py_modules or []))
         executor_base_path = os.path.dirname(os.path.abspath(executor_file))
-        extra_paths = [
-            os.path.join(path, name)
-            for path, subdirs, files in os.walk(executor_base_path)
-            for name in files
-        ]
+        extra_paths = [os.path.join(path, name) for path, subdirs, files in os.walk(executor_base_path) for name in files]
         extra_python_paths = list(filter(lambda x: x.endswith('.py'), extra_paths))
         for extra_python_file in extra_python_paths:
             watched_files.add(extra_python_file)
@@ -176,9 +165,7 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
 
         async for changes in awatch(*watched_files):
             changed_files = [changed_file for _, changed_file in changes]
-            self.logger.info(
-                f'detected changes in: {changed_files}. Refreshing the Executor'
-            )
+            self.logger.info(f'detected changes in: {changed_files}. Refreshing the Executor')
             self._request_handler._refresh_executor(changed_files)
 
     async def async_run_forever(self):
@@ -226,14 +213,10 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
         """
         self.logger.debug('got an endpoint discovery request')
         endpoints_proto = jina_pb2.EndpointsProto()
-        endpoints_proto.endpoints.extend(
-            list(self._request_handler._executor.requests.keys())
-        )
+        endpoints_proto.endpoints.extend(list(self._request_handler._executor.requests.keys()))
         return endpoints_proto
 
-    def _extract_tracing_context(
-        self, metadata: grpc.aio.Metadata
-    ) -> Optional['Context']:
+    def _extract_tracing_context(self, metadata: grpc.aio.Metadata) -> Optional['Context']:
         if self.tracer:
             from opentelemetry.propagate import extract
 
@@ -251,30 +234,21 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
         :returns: the response request
         """
 
-        with MetricsTimer(
-            self._summary, self._receiving_request_seconds, self._metric_attributes
-        ):
+        with MetricsTimer(self._summary, self._receiving_request_seconds, self._metric_attributes):
             try:
                 if self.logger.debug_enabled:
                     self._log_data_request(requests[0])
 
-                tracing_context = self._extract_tracing_context(
-                    context.invocation_metadata()
-                )
-                result = await self._request_handler.handle(
-                    requests=requests, tracing_context=tracing_context
-                )
+                tracing_context = self._extract_tracing_context(context.invocation_metadata())
+                result = await self._request_handler.handle(requests=requests, tracing_context=tracing_context)
                 if self._successful_requests_metrics:
                     self._successful_requests_metrics.inc()
                 if self._successful_requests_counter:
-                    self._successful_requests_counter.add(
-                        1, attributes=self._metric_attributes
-                    )
+                    self._successful_requests_counter.add(1, attributes=self._metric_attributes)
                 return result
             except (RuntimeError, Exception) as ex:
                 self.logger.error(
-                    f'{ex!r}'
-                    + f'\n add "--quiet-error" to suppress the exception details'
+                    f'{ex!r}' + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
                     else '',
                     exc_info=not self.args.quiet_error,
@@ -285,14 +259,9 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
                 if self._failed_requests_metrics:
                     self._failed_requests_metrics.inc()
                 if self._failed_requests_counter:
-                    self._failed_requests_counter.add(
-                        1, attributes=self._metric_attributes
-                    )
+                    self._failed_requests_counter.add(1, attributes=self._metric_attributes)
 
-                if (
-                    self.args.exit_on_exceptions
-                    and type(ex).__name__ in self.args.exit_on_exceptions
-                ):
+                if self.args.exit_on_exceptions and type(ex).__name__ in self.args.exit_on_exceptions:
                     self.logger.info('Exiting because of "--exit-on-exceptions".')
                     raise RuntimeTerminated
 
@@ -314,9 +283,7 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
             info_proto.envs[k] = str(v)
         return info_proto
 
-    async def Check(
-        self, request: health_pb2.HealthCheckRequest, context
-    ) -> health_pb2.HealthCheckResponse:
+    async def Check(self, request: health_pb2.HealthCheckRequest, context) -> health_pb2.HealthCheckResponse:
         """Calls the underlying HealthServicer.Check method with the same arguments
         :param request: grpc request
         :param context: grpc request context
@@ -325,9 +292,7 @@ class WorkerRuntime(AsyncNewLoopRuntime, ABC):
         self.logger.debug(f'Receive Check request')
         return await self._health_servicer.Check(request, context)
 
-    async def Watch(
-        self, request: health_pb2.HealthCheckRequest, context
-    ) -> health_pb2.HealthCheckResponse:
+    async def Watch(self, request: health_pb2.HealthCheckRequest, context) -> health_pb2.HealthCheckResponse:
         """Calls the underlying HealthServicer.Watch method with the same arguments
         :param request: grpc request
         :param context: grpc request context

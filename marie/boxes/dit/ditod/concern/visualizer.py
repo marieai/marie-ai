@@ -4,10 +4,11 @@
 # Author            : Zhaoyi Wan <wanzhaoyi@megvii.com>
 # Date              : 08.01.2019
 # Last Modified Date: 02.12.2019
-# Last Modified By  : Minghui Liao 
-import torch
-import numpy as np
+# Last Modified By  : Minghui Liao
 import cv2
+import numpy as np
+import torch
+
 
 class Visualize:
     @classmethod
@@ -42,28 +43,27 @@ class Visualize:
         if normalized:
             points = points * image.shape[:2][::-1]
         for i in range(points.shape[0]):
-            color = np.random.randint(
-                0, 255, (3, ), dtype=np.uint8).astype(np.float)
-            image = cv2.circle(image,
-                               tuple(points[i].astype(np.int32).tolist()),
-                               radius, color, thickness=radius//2)
+            color = np.random.randint(0, 255, (3,), dtype=np.uint8).astype(np.float)
+            image = cv2.circle(
+                image,
+                tuple(points[i].astype(np.int32).tolist()),
+                radius,
+                color,
+                thickness=radius // 2,
+            )
         return image
 
     @classmethod
     def visualize_heatmap(cls, tensor, format='CHW'):
         if isinstance(tensor, torch.Tensor):
-            x = cls.to_np(tensor.permute(format.index('H'),
-                                         format.index('W'), format.index('C')))
+            x = cls.to_np(tensor.permute(format.index('H'), format.index('W'), format.index('C')))
         else:
-            x = tensor.transpose(
-                format.index('H'), format.index('W'), format.index('C'))
+            x = tensor.transpose(format.index('H'), format.index('W'), format.index('C'))
         canvas = np.zeros((x.shape[0], x.shape[1], 3), dtype=np.float)
 
         for c in range(0, x.shape[-1]):
-            color = np.random.randint(
-                0, 255, (3, ), dtype=np.uint8).astype(np.float)
-            canvas += np.tile(x[:, :, c], (3, 1, 1)
-                              ).swapaxes(0, 2).swapaxes(1, 0) * color
+            color = np.random.randint(0, 255, (3,), dtype=np.uint8).astype(np.float)
+            canvas += np.tile(x[:, :, c], (3, 1, 1)).swapaxes(0, 2).swapaxes(1, 0) * color
 
         canvas = canvas.astype(np.uint8)
         return canvas
@@ -72,8 +72,7 @@ class Visualize:
     def visualize_classes(cls, x):
         canvas = np.zeros((x.shape[0], x.shape[1], 3), dtype=np.uint8)
         for c in range(int(x.max())):
-            color = np.random.randint(
-                0, 255, (3, ), dtype=np.uint8).astype(np.float)
+            color = np.random.randint(0, 255, (3,), dtype=np.uint8).astype(np.float)
             canvas[np.where(x == c)] = color
         return canvas
 
@@ -87,7 +86,13 @@ class Visualize:
         while i < w:
             j = 0
             while j < h:
-                canvas = cv2.circle(canvas, (int(x[i, j] * w + 0.5), int(y[i, j] * h + 0.5)), radius=max(stride//4, 1), color=color, thickness=stride//8)
+                canvas = cv2.circle(
+                    canvas,
+                    (int(x[i, j] * w + 0.5), int(y[i, j] * h + 0.5)),
+                    radius=max(stride // 4, 1),
+                    color=color,
+                    thickness=stride // 8,
+                )
                 j += stride
             i += stride
         return canvas

@@ -4,16 +4,16 @@ import glob
 import json
 import logging
 import multiprocessing as mp
-import numpy as np
 import os
 from itertools import chain
-import pycocotools.mask as mask_util
-from PIL import Image
 
+import numpy as np
+import pycocotools.mask as mask_util
 from detectron2.structures import BoxMode
-from detectron2.utils.logger import setup_logger
 from detectron2.utils.comm import get_world_size
+from detectron2.utils.logger import setup_logger
 from fvcore.common.file_io import PathManager
+from PIL import Image
 
 try:
     import cv2  # noqa
@@ -36,10 +36,9 @@ def load_cityscapes_instances(image_dir, gt_dir, from_json=True, to_polygons=Tru
         `Using Custom Datasets </tutorials/datasets.html>`_ )
     """
     if from_json:
-        assert to_polygons, (
-            "Cityscapes's json annotations are in polygon format. "
-            "Converting to mask format is not supported now."
-        )
+        assert (
+            to_polygons
+        ), "Cityscapes's json annotations are in polygon format. Converting to mask format is not supported now."
     files = []
     for image_file in glob.glob(os.path.join(image_dir, "**/*.png")):
         suffix = "leftImg8bit.png"
@@ -252,9 +251,7 @@ def cityscapes_files_to_dict(files, from_json, to_polygons):
             if to_polygons:
                 # This conversion comes from D4809743 and D5171122,
                 # when Mask-RCNN was first developed.
-                contours = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[
-                    -2
-                ]
+                contours = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[-2]
                 polygons = [c.reshape(-1).tolist() for c in contours if len(c) >= 3]
                 # opencv's can produce invalid polygons
                 if len(polygons) == 0:
@@ -282,9 +279,9 @@ if __name__ == "__main__":
     parser.add_argument("gt_dir")
     parser.add_argument("--type", choices=["instance", "semantic"], default="instance")
     args = parser.parse_args()
+    from cityscapesscripts.helpers.labels import labels
     from detectron2.data.catalog import Metadata
     from detectron2.utils.visualizer import Visualizer
-    from cityscapesscripts.helpers.labels import labels
 
     logger = setup_logger(name=__name__)
 
@@ -292,9 +289,7 @@ if __name__ == "__main__":
     os.makedirs(dirname, exist_ok=True)
 
     if args.type == "instance":
-        dicts = load_cityscapes_instances(
-            args.image_dir, args.gt_dir, from_json=True, to_polygons=True
-        )
+        dicts = load_cityscapes_instances(args.image_dir, args.gt_dir, from_json=True, to_polygons=True)
         logger.info("Done loading {} samples.".format(len(dicts)))
 
         thing_classes = [k.name for k in labels if k.hasInstances and not k.ignoreInEval]

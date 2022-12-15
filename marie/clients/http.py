@@ -11,9 +11,7 @@ from marie.clients.mixin import (
 )
 
 
-class HTTPClient(
-    HTTPBaseClient, PostMixin, ProfileMixin, MutateMixin, HealthCheckMixin
-):
+class HTTPClient(HTTPBaseClient, PostMixin, ProfileMixin, MutateMixin, HealthCheckMixin):
     """A client connecting to a Gateway using gRPC protocol.
 
     Instantiate this class through the :meth:`jina.Client` convenience method.

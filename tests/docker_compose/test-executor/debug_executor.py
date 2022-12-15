@@ -1,6 +1,6 @@
 import os
 
-from marie import Executor, requests, DocumentArray
+from marie import DocumentArray, Executor, requests
 
 
 class TestExecutor(Executor):
@@ -13,9 +13,7 @@ class TestExecutor(Executor):
 
     @requests(on='/debug')
     def debug(self, docs: DocumentArray, **kwargs):
-        self.logger.debug(
-            f'Received doc array in test-executor {self._name} with length {len(docs)}.'
-        )
+        self.logger.debug(f'Received doc array in test-executor {self._name} with length {len(docs)}.')
         key = 'traversed-executors'
 
         for doc in docs:
@@ -30,9 +28,7 @@ class TestExecutor(Executor):
 
     @requests(on='/env')
     def env(self, docs: DocumentArray, **kwargs):
-        self.logger.debug(
-            f'Received doc array in test-executor {self._name} with length {len(docs)}.'
-        )
+        self.logger.debug(f'Received doc array in test-executor {self._name} with length {len(docs)}.')
 
         for doc in docs:
             doc.tags['k1'] = os.environ.get('k1')
@@ -42,9 +38,7 @@ class TestExecutor(Executor):
 
     @requests(on='/cuda')
     def cuda(self, docs: DocumentArray, **kwargs):
-        self.logger.debug(
-            f'Received doc array in test-executor {self._name} with length {len(docs)}.'
-        )
+        self.logger.debug(f'Received doc array in test-executor {self._name} with length {len(docs)}.')
 
         import kubernetes
         from kubernetes import client
@@ -70,9 +64,7 @@ class TestExecutor(Executor):
 
     @requests(on='/workspace')
     def foo_workspace(self, docs: DocumentArray, **kwargs):
-        self.logger.debug(
-            f'Received doc array in test-executor {self._name} with length {len(docs)}.'
-        )
+        self.logger.debug(f'Received doc array in test-executor {self._name} with length {len(docs)}.')
         self.logger.debug(f'Workspace {self.workspace}.')
         for doc in docs:
             doc.tags['workspace'] = self.workspace

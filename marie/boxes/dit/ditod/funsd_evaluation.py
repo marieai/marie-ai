@@ -1,13 +1,14 @@
-import os
-import json
 import copy
 import itertools
+import json
+import os
 from collections import OrderedDict
 
 import detectron2.utils.comm as comm
 from detectron2.evaluation import COCOEvaluator
 
 from .concern.icdar2015_eval.detection.iou import DetectionIoUEvaluator
+
 
 class FUNSDEvaluator(COCOEvaluator):
     def evaluate(self, img_ids=None):
@@ -33,19 +34,18 @@ class FUNSDEvaluator(COCOEvaluator):
 
         id2img = {}
         gt = {}
-        with open('data/instances_test.json', 'r',
-                  encoding='utf-8') as fr:
+        with open('data/instances_test.json', 'r', encoding='utf-8') as fr:
             data = json.load(fr)
             for img in data['images']:
                 id = img['id']
-                name = os.path.basename(img['file_name'])[:-len('.jpg')]
+                name = os.path.basename(img['file_name'])[: -len('.jpg')]
                 assert id not in id2img.keys()
                 id2img[id] = name
             assert len(id2img) == len(data['images'])
 
             img2id, id2bbox = {}, {}
             for i in range(len(data['images'])):
-                key = os.path.basename(data['images'][i]['file_name'][:-len('.png')])
+                key = os.path.basename(data['images'][i]['file_name'][: -len('.png')])
                 assert key not in img2id.keys()
                 img2id[key] = data['images'][i]['id']
             for i in range(len(data['annotations'])):
@@ -78,7 +78,8 @@ class FUNSDEvaluator(COCOEvaluator):
             for cur_pred in predictions:
                 assert cur_pred['image_id'] in id2img.keys()
                 id = id2img[cur_pred['image_id']]
-                if id not in total_prediction.keys(): total_prediction[id] = []
+                if id not in total_prediction.keys():
+                    total_prediction[id] = []
 
                 for cur_inst in cur_pred['instances']:
                     x0, y0, w, h = cur_inst['bbox']
@@ -108,7 +109,12 @@ class FUNSDEvaluator(COCOEvaluator):
                 pred = total_prediction[key]
                 for i in range(len(pred)):
                     line = list(map(int, pred[i].split(',')))
-                    line = [(line[0], line[1]), (line[2], line[3]), (line[4], line[5]), (line[6], line[7])]
+                    line = [
+                        (line[0], line[1]),
+                        (line[2], line[3]),
+                        (line[4], line[5]),
+                        (line[6], line[7]),
+                    ]
                     cur_res.append(
                         {
                             'points': line,

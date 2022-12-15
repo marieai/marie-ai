@@ -1,12 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import fvcore.nn.weight_init as weight_init
 import torch
-from torch import nn
-from torch.nn import functional as F
-
 from detectron2.layers import Conv2d, ConvTranspose2d, ShapeSpec, cat, get_norm
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
+from torch import nn
+from torch.nn import functional as F
 
 ROI_MASK_HEAD_REGISTRY = Registry("ROI_MASK_HEAD")
 ROI_MASK_HEAD_REGISTRY.__doc__ = """
@@ -76,9 +75,7 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     mask_incorrect = (pred_mask_logits > 0.0) != gt_masks_bool
     mask_accuracy = 1 - (mask_incorrect.sum().item() / max(mask_incorrect.numel(), 1.0))
     num_positive = gt_masks_bool.sum().item()
-    false_positive = (mask_incorrect & ~gt_masks_bool).sum().item() / max(
-        gt_masks_bool.numel() - num_positive, 1.0
-    )
+    false_positive = (mask_incorrect & ~gt_masks_bool).sum().item() / max(gt_masks_bool.numel() - num_positive, 1.0)
     false_negative = (mask_incorrect & gt_masks_bool).sum().item() / max(num_positive, 1.0)
 
     storage = get_event_storage()
@@ -86,9 +83,7 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     storage.put_scalar("mask_rcnn/false_positive", false_positive)
     storage.put_scalar("mask_rcnn/false_negative", false_negative)
 
-    mask_loss = F.binary_cross_entropy_with_logits(
-        pred_mask_logits, gt_masks.to(dtype=torch.float32), reduction="mean"
-    )
+    mask_loss = F.binary_cross_entropy_with_logits(pred_mask_logits, gt_masks.to(dtype=torch.float32), reduction="mean")
     return mask_loss
 
 

@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 import torch
 from docarray import Document, DocumentArray
-
 from jina import Executor, Flow, requests
 
 
@@ -31,9 +30,7 @@ class NparrayInEec(Executor):
         embedding_is_nparray = True
         tensor_is_nparray = True
         for doc in docs:
-            embedding_is_nparray = embedding_is_nparray and isinstance(
-                doc.embedding, np.ndarray
-            )
+            embedding_is_nparray = embedding_is_nparray and isinstance(doc.embedding, np.ndarray)
             tensor_is_nparray = tensor_is_nparray and isinstance(doc.tensor, np.ndarray)
         for doc in docs:
             doc.tags['nparraycheck_embedding'] = embedding_is_nparray

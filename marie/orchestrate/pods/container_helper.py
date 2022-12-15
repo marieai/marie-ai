@@ -1,6 +1,5 @@
 import os
 import socket
-
 from typing import TYPE_CHECKING, Optional
 
 
@@ -15,7 +14,7 @@ def get_docker_network(client) -> Optional[str]:
     """
     import docker
 
-    if TYPE_CHECKING: # pragma: no cover
+    if TYPE_CHECKING:  # pragma: no cover
         from docker.models.containers import Container
 
     container: 'Container' = None

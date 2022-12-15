@@ -2,12 +2,7 @@ import copy
 from argparse import Namespace
 from typing import Dict, List, Optional, Tuple, Union
 
-from marie import (
-    __default_executor__,
-    __default_grpc_gateway__,
-    __default_http_gateway__,
-    __default_websocket_gateway__,
-)
+from marie import __default_executor__, __default_grpc_gateway__, __default_http_gateway__, __default_websocket_gateway__
 from marie.enums import PodRoleType
 from marie.excepts import NoContainerizedError
 from marie.orchestrate.deployments import BaseDeployment
@@ -81,9 +76,7 @@ class K8sDeploymentConfig:
             ]:
                 cargs.uses = 'config.yml'
 
-            non_defaults = ArgNamespace.get_non_defaults_args(
-                cargs, set_gateway_parser(), taboo=taboo
-            )
+            non_defaults = ArgNamespace.get_non_defaults_args(cargs, set_gateway_parser(), taboo=taboo)
             _args = ArgNamespace.kwargs2list(non_defaults)
             container_args = ['gateway'] + _args
             return kubernetes_deployment.get_template_yamls(
@@ -106,9 +99,7 @@ class K8sDeploymentConfig:
         def _get_image_name(self, uses: Optional[str]):
             import os
 
-            image_name = os.getenv(
-                'JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard'
-            )
+            image_name = os.getenv('JINA_GATEWAY_IMAGE', f'jinaai/jina:{self.version}-py38-standard')
             if uses is not None and uses not in [
                 __default_executor__,
                 __default_http_gateway__,
@@ -124,9 +115,7 @@ class K8sDeploymentConfig:
             uses_with = self.deployment_args.uses_with
             if cargs.uses != __default_executor__:
                 cargs.uses = 'config.yml'
-            return construct_runtime_container_args(
-                cargs, uses_metas, uses_with, pod_type
-            )
+            return construct_runtime_container_args(cargs, uses_metas, uses_with, pod_type)
 
         def get_runtime_yamls(
             self,
@@ -135,14 +124,10 @@ class K8sDeploymentConfig:
 
             image_name = self._get_image_name(cargs.uses)
             image_name_uses_before = (
-                self._get_image_name(cargs.uses_before)
-                if hasattr(cargs, 'uses_before') and cargs.uses_before
-                else None
+                self._get_image_name(cargs.uses_before) if hasattr(cargs, 'uses_before') and cargs.uses_before else None
             )
             image_name_uses_after = (
-                self._get_image_name(cargs.uses_after)
-                if hasattr(cargs, 'uses_after') and cargs.uses_after
-                else None
+                self._get_image_name(cargs.uses_after) if hasattr(cargs, 'uses_after') and cargs.uses_after else None
             )
             container_args = self._get_container_args(cargs, pod_type=self.pod_type)
             container_args_uses_before = None
@@ -162,9 +147,7 @@ class K8sDeploymentConfig:
                 uses_before_cargs.pod_role = PodRoleType.WORKER
                 uses_before_cargs.polling = None
                 uses_before_cargs.env = None
-                container_args_uses_before = self._get_container_args(
-                    uses_before_cargs, PodRoleType.WORKER
-                )
+                container_args_uses_before = self._get_container_args(uses_before_cargs, PodRoleType.WORKER)
 
             container_args_uses_after = None
             if getattr(cargs, 'uses_after', False):
@@ -183,9 +166,7 @@ class K8sDeploymentConfig:
                 uses_after_cargs.pod_role = PodRoleType.WORKER
                 uses_after_cargs.polling = None
                 uses_after_cargs.env = None
-                container_args_uses_after = self._get_container_args(
-                    uses_after_cargs, PodRoleType.WORKER
-                )
+                container_args_uses_after = self._get_container_args(uses_after_cargs, PodRoleType.WORKER)
 
             return kubernetes_deployment.get_template_yamls(
                 self.dns_name,
@@ -222,8 +203,9 @@ class K8sDeploymentConfig:
         assert not (hasattr(args, 'external') and args.external)
         if not validate_uses(args.uses):
             raise NoContainerizedError(
-                f'Executor "{args.uses}" is not valid to be used in K8s. '
-                'You need to use a containerized Executor. You may check `jina hub --help` to see how Jina Hub can help you building containerized Executors.'
+                f'Executor "{args.uses}" is not valid to be used in K8s. You need to'
+                ' use a containerized Executor. You may check `jina hub --help` to see'
+                ' how Jina Hub can help you building containerized Executors.'
             )
         self.k8s_namespace = k8s_namespace
         self.k8s_deployments_addresses = k8s_deployments_addresses
@@ -261,17 +243,11 @@ class K8sDeploymentConfig:
                     shard_id=i,
                     common_args=self.args,
                     deployment_args=args,
-                    pod_type=PodRoleType.WORKER
-                    if name != 'gateway'
-                    else PodRoleType.GATEWAY,
+                    pod_type=PodRoleType.WORKER if name != 'gateway' else PodRoleType.GATEWAY,
                     jina_deployment_name=self.name,
                     k8s_namespace=self.k8s_namespace,
-                    k8s_deployments_addresses=self.k8s_deployments_addresses
-                    if name == 'gateway'
-                    else None,
-                    k8s_deployments_metadata=self.k8s_deployments_metadata
-                    if name == 'gateway'
-                    else None,
+                    k8s_deployments_addresses=self.k8s_deployments_addresses if name == 'gateway' else None,
+                    k8s_deployments_metadata=self.k8s_deployments_metadata if name == 'gateway' else None,
                 )
             )
 
@@ -287,14 +263,10 @@ class K8sDeploymentConfig:
         if args.name != 'gateway':
             # head deployment only exists for sharded deployments
             if shards > 1:
-                parsed_args['head_deployment'] = BaseDeployment._copy_to_head_args(
-                    self.args
-                )
+                parsed_args['head_deployment'] = BaseDeployment._copy_to_head_args(self.args)
                 parsed_args['head_deployment'].gpus = None
                 parsed_args['head_deployment'].port = GrpcConnectionPool.K8S_PORT
-                parsed_args[
-                    'head_deployment'
-                ].port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
+                parsed_args['head_deployment'].port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
                 parsed_args['head_deployment'].uses = None
                 parsed_args['head_deployment'].uses_metas = None
                 parsed_args['head_deployment'].uses_with = None
@@ -303,31 +275,15 @@ class K8sDeploymentConfig:
 
                 connection_list = {}
                 for i in range(shards):
-                    name = (
-                        f'{to_compatible_name(self.name)}-{i}'
-                        if shards > 1
-                        else f'{to_compatible_name(self.name)}'
-                    )
-                    connection_list[
-                        str(i)
-                    ] = f'{name}.{self.k8s_namespace}.svc:{GrpcConnectionPool.K8S_PORT}'
+                    name = f'{to_compatible_name(self.name)}-{i}' if shards > 1 else f'{to_compatible_name(self.name)}'
+                    connection_list[str(i)] = f'{name}.{self.k8s_namespace}.svc:{GrpcConnectionPool.K8S_PORT}'
 
-                parsed_args['head_deployment'].connection_list = json.dumps(
-                    connection_list
-                )
+                parsed_args['head_deployment'].connection_list = json.dumps(connection_list)
 
                 if uses_before:
-                    parsed_args[
-                        'head_deployment'
-                    ].uses_before_address = (
-                        f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_BEFORE}'
-                    )
+                    parsed_args['head_deployment'].uses_before_address = f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_BEFORE}'
                 if uses_after:
-                    parsed_args[
-                        'head_deployment'
-                    ].uses_after_address = (
-                        f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_AFTER}'
-                    )
+                    parsed_args['head_deployment'].uses_after_address = f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_AFTER}'
 
         for i in range(shards):
             cargs = copy.deepcopy(args)

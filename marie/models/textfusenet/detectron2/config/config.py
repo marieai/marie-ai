@@ -2,6 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import logging
+
 from fvcore.common.config import CfgNode as _CfgNode
 
 
@@ -27,9 +28,7 @@ class CfgNode(_CfgNode):
         from .defaults import _C
 
         latest_ver = _C.VERSION
-        assert (
-            latest_ver == self.VERSION
-        ), "CfgNode.merge_from_file is only allowed on a config of latest version!"
+        assert latest_ver == self.VERSION, "CfgNode.merge_from_file is only allowed on a config of latest version!"
 
         logger = logging.getLogger(__name__)
 
@@ -38,21 +37,17 @@ class CfgNode(_CfgNode):
             from .compat import guess_version
 
             loaded_ver = guess_version(loaded_cfg, cfg_filename)
-        assert loaded_ver <= self.VERSION, "Cannot merge a v{} config into a v{} config.".format(
-            loaded_ver, self.VERSION
-        )
+        assert loaded_ver <= self.VERSION, "Cannot merge a v{} config into a v{} config.".format(loaded_ver, self.VERSION)
 
         if loaded_ver == self.VERSION:
             self.merge_from_other_cfg(loaded_cfg)
         else:
             # compat.py needs to import CfgNode
-            from .compat import upgrade_config, downgrade_config
+            from .compat import downgrade_config, upgrade_config
 
             logger.warning(
-                "Loading an old v{} config file '{}' by automatically upgrading to v{}. "
-                "See docs/CHANGELOG.md for instructions to update your files.".format(
-                    loaded_ver, cfg_filename, self.VERSION
-                )
+                "Loading an old v{} config file '{}' by automatically upgrading to v{}."
+                " See docs/CHANGELOG.md for instructions to update your files.".format(loaded_ver, cfg_filename, self.VERSION)
             )
             # To convert, first obtain a full config at an old version
             old_self = downgrade_config(self, to_version=loaded_ver)

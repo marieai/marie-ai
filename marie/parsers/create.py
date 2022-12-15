@@ -12,7 +12,5 @@ def set_new_project_parser(parser=None):
     if not parser:
         parser = set_base_parser()
 
-    parser.add_argument(
-        'name', type=str, help='The name of the project', default='hello-jina'
-    )
+    parser.add_argument('name', type=str, help='The name of the project', default='hello-jina')
     return parser

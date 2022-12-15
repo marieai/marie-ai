@@ -10,7 +10,7 @@ __all__ = ["paste_masks_in_image"]
 BYTES_PER_FLOAT = 4
 # TODO: This memory limit may be too much or too little. It would be better to
 # determine it based on available resources.
-GPU_MEM_LIMIT = 1024 ** 3  # 1 GB memory limit
+GPU_MEM_LIMIT = 1024**3  # 1 GB memory limit
 
 
 def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
@@ -34,9 +34,7 @@ def _do_paste_mask(masks, boxes, img_h, img_w, skip_empty=True):
     # this has more operations but is faster on COCO-scale dataset.
     device = masks.device
     if skip_empty:
-        x0_int, y0_int = torch.clamp(boxes.min(dim=0).values.floor()[:2] - 1, min=0).to(
-            dtype=torch.int32
-        )
+        x0_int, y0_int = torch.clamp(boxes.min(dim=0).values.floor()[:2] - 1, min=0).to(dtype=torch.int32)
         x1_int = torch.clamp(boxes[:, 2].max().ceil() + 1, max=img_w).to(dtype=torch.int32)
         y1_int = torch.clamp(boxes[:, 3].max().ceil() + 1, max=img_h).to(dtype=torch.int32)
     else:
@@ -105,17 +103,23 @@ def paste_masks_in_image(masks, boxes, image_shape, threshold=0.5):
     else:
         # GPU benefits from parallelism for larger chunks, but may have memory issue
         num_chunks = int(np.ceil(N * img_h * img_w * BYTES_PER_FLOAT / GPU_MEM_LIMIT))
-        assert (
-            num_chunks <= N
-        ), "Default GPU_MEM_LIMIT in mask_ops.py is too small; try increasing it"
+        assert num_chunks <= N, "Default GPU_MEM_LIMIT in mask_ops.py is too small; try increasing it"
     chunks = torch.chunk(torch.arange(N, device=device), num_chunks)
 
     img_masks = torch.zeros(
-        N, img_h, img_w, device=device, dtype=torch.bool if threshold >= 0 else torch.uint8
+        N,
+        img_h,
+        img_w,
+        device=device,
+        dtype=torch.bool if threshold >= 0 else torch.uint8,
     )
     for inds in chunks:
         masks_chunk, spatial_inds = _do_paste_mask(
-            masks[inds, None, :, :], boxes[inds], img_h, img_w, skip_empty=device.type == "cpu"
+            masks[inds, None, :, :],
+            boxes[inds],
+            img_h,
+            img_w,
+            skip_empty=device.type == "cpu",
         )
 
         if threshold >= 0:
@@ -182,9 +186,7 @@ def paste_mask_in_image_old(mask, box, img_h, img_w, threshold):
     y_0 = max(box[1], 0)
     y_1 = min(box[3] + 1, img_h)
 
-    im_mask[y_0:y_1, x_0:x_1] = mask[
-        (y_0 - box[1]) : (y_1 - box[1]), (x_0 - box[0]) : (x_1 - box[0])
-    ]
+    im_mask[y_0:y_1, x_0:x_1] = mask[(y_0 - box[1]) : (y_1 - box[1]), (x_0 - box[0]) : (x_1 - box[0])]
     return im_mask
 
 

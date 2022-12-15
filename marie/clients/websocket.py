@@ -30,9 +30,7 @@ class WebSocketClient(WebSocketBaseClient, PostMixin, ProfileMixin, HealthCheckM
     """
 
 
-class AsyncWebSocketClient(
-    WebSocketBaseClient, AsyncPostMixin, AsyncProfileMixin, AsyncHealthCheckMixin
-):
+class AsyncWebSocketClient(WebSocketBaseClient, AsyncPostMixin, AsyncProfileMixin, AsyncHealthCheckMixin):
     """
     Asynchronous client connecting to a Gateway using WebSocket protocol.
 

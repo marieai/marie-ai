@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
 from typing import Dict
-import torch
 
+import torch
 from detectron2.layers import ShapeSpec
 
 from ..box_regression import Box2BoxTransformRotated

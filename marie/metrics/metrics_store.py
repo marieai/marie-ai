@@ -1,5 +1,3 @@
-
-
 """
 Metrics collection module
 """

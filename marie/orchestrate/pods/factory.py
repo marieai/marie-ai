@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Type
 
 from marie.enums import PodRoleType
+
 # from marie.hubble.helper import is_valid_huburi
 # from marie.hubble.hubio import HubIO
 from marie.orchestrate.pods import Pod
@@ -34,11 +35,7 @@ class PodFactory:
         #     _hub_args.no_usage = True
         #     cargs.uses = HubIO(_hub_args).pull()
 
-        if (
-            cargs.pod_role != PodRoleType.HEAD
-            and cargs.uses
-            and cargs.uses.startswith('docker://')
-        ):
+        if cargs.pod_role != PodRoleType.HEAD and cargs.uses and cargs.uses.startswith('docker://'):
             return ContainerPod(cargs)
         else:
             return Pod(args)

@@ -2,20 +2,19 @@ import argparse
 import copy
 import os
 import time
+
 import cv2
 import numpy as np
 import torch
-
-from marie.logger import setup_logger
-from marie.models.textfusenet.detectron2.config import get_cfg
-from marie.models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
-from marie.models.textfusenet.detectron2.utils.colormap import random_color
-
-from marie.models.textfusenet.detectron2.engine.defaults import DefaultPredictor
 from PIL import Image
 
 from marie.boxes.box_processor import BoxProcessor, PSMode
-from marie.utils.image_utils import paste_fragment, imwrite
+from marie.logger import setup_logger
+from marie.models.textfusenet.detectron2.config import get_cfg
+from marie.models.textfusenet.detectron2.engine.defaults import DefaultPredictor
+from marie.models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
+from marie.models.textfusenet.detectron2.utils.colormap import random_color
+from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.utils import ensure_exists
 
 logger = setup_logger(__name__)
@@ -61,14 +60,16 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--input", default="./assets/private/*.*", nargs="+", help="the folder of totaltext test images"
+        "--input",
+        default="./assets/private/*.*",
+        nargs="+",
+        help="the folder of totaltext test images",
     )
 
     parser.add_argument(
         "--output",
         default="./test_synth/",
-        help="A file or directory to save output visualizations. "
-        "If not given, will show output in an OpenCV window.",
+        help="A file or directory to save output visualizations. If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(

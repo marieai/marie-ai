@@ -9,6 +9,7 @@ is implemented
 """
 
 import math
+
 import torch
 from torch.nn.modules.utils import _ntuple
 
@@ -66,16 +67,18 @@ class Conv2d(torch.nn.Conv2d):
             output_shape = [
                 (i + 2 * p - (di * (k - 1) + 1)) // s + 1
                 for i, p, di, k, s in zip(
-                    x.shape[-2:], self.padding, self.dilation, self.kernel_size, self.stride
+                    x.shape[-2:],
+                    self.padding,
+                    self.dilation,
+                    self.kernel_size,
+                    self.stride,
                 )
             ]
             output_shape = [x.shape[0], self.weight.shape[0]] + output_shape
             empty = _NewEmptyTensorOp.apply(x, output_shape)
             if self.training:
                 # https://github.com/pytorch/pytorch/issues/12013
-                assert not isinstance(
-                    self.norm, torch.nn.SyncBatchNorm
-                ), "SyncBatchNorm does not support empty inputs!"
+                assert not isinstance(self.norm, torch.nn.SyncBatchNorm), "SyncBatchNorm does not support empty inputs!"
 
                 # This is to make DDP happy.
                 # DDP expects all workers to have gradient w.r.t the same set of parameters.
@@ -138,23 +141,18 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corne
     A wrapper around :func:`torch.nn.functional.interpolate` to support zero-size tensor.
     """
     if input.numel() > 0:
-        return torch.nn.functional.interpolate(
-            input, size, scale_factor, mode, align_corners=align_corners
-        )
+        return torch.nn.functional.interpolate(input, size, scale_factor, mode, align_corners=align_corners)
 
     def _check_size_scale_factor(dim):
         if size is None and scale_factor is None:
             raise ValueError("either size or scale_factor should be defined")
         if size is not None and scale_factor is not None:
             raise ValueError("only one of size or scale_factor should be defined")
-        if (
-            scale_factor is not None
-            and isinstance(scale_factor, tuple)
-            and len(scale_factor) != dim
-        ):
+        if scale_factor is not None and isinstance(scale_factor, tuple) and len(scale_factor) != dim:
             raise ValueError(
-                "scale_factor shape must match input shape. "
-                "Input is {}D, scale_factor size is {}".format(dim, len(scale_factor))
+                "scale_factor shape must match input shape. Input is {}D, scale_factor size is {}".format(
+                    dim, len(scale_factor)
+                )
             )
 
     def _output_size(dim):

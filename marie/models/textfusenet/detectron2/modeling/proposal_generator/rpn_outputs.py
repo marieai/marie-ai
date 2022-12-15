@@ -1,14 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import itertools
 import logging
+
 import numpy as np
 import torch
 import torch.nn.functional as F
-from fvcore.nn import smooth_l1_loss
-
 from detectron2.layers import batched_nms, cat
 from detectron2.structures import Boxes, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
+from fvcore.nn import smooth_l1_loss
 
 from ..sampling import subsample_labels
 
@@ -96,9 +96,7 @@ def find_top_rpn_proposals(
     topk_proposals = []
     level_ids = []  # #lvl Tensor, each of shape (topk,)
     batch_idx = torch.arange(num_images, device=device)
-    for level_id, proposals_i, logits_i in zip(
-        itertools.count(), proposals, pred_objectness_logits
-    ):
+    for level_id, proposals_i, logits_i in zip(itertools.count(), proposals, pred_objectness_logits):
         Hi_Wi_A = logits_i.shape[1]
         num_proposals_i = min(pre_nms_topk, Hi_Wi_A)
 
@@ -131,7 +129,11 @@ def find_top_rpn_proposals(
         keep = boxes.nonempty(threshold=min_box_side_len)
         lvl = level_ids
         if keep.sum().item() != len(boxes):
-            boxes, scores_per_img, lvl = boxes[keep], scores_per_img[keep], level_ids[keep]
+            boxes, scores_per_img, lvl = (
+                boxes[keep],
+                scores_per_img[keep],
+                level_ids[keep],
+            )
 
         keep = batched_nms(boxes.tensor, scores_per_img, lvl, nms_thresh)
         # In Detectron1, there was different behavior during training vs. testing.
@@ -177,7 +179,10 @@ def rpn_losses(
     """
     pos_masks = gt_objectness_logits == 1
     localization_loss = smooth_l1_loss(
-        pred_anchor_deltas[pos_masks], gt_anchor_deltas[pos_masks], smooth_l1_beta, reduction="sum"
+        pred_anchor_deltas[pos_masks],
+        gt_anchor_deltas[pos_masks],
+        smooth_l1_beta,
+        reduction="sum",
     )
 
     valid_masks = gt_objectness_logits >= 0
@@ -279,9 +284,7 @@ class RPNOutputs(object):
             else:
                 # TODO wasted computation for ignored boxes
                 matched_gt_boxes = gt_boxes_i[matched_idxs]
-                gt_anchor_deltas_i = self.box2box_transform.get_deltas(
-                    anchors_i.tensor, matched_gt_boxes.tensor
-                )
+                gt_anchor_deltas_i = self.box2box_transform.get_deltas(anchors_i.tensor, matched_gt_boxes.tensor)
 
             gt_objectness_logits.append(gt_objectness_logits_i)
             gt_anchor_deltas.append(gt_anchor_deltas_i)
@@ -304,9 +307,7 @@ class RPNOutputs(object):
             the label vector to the ignore value (-1) for all elements that are not
             included in the sample.
             """
-            pos_idx, neg_idx = subsample_labels(
-                label, self.batch_size_per_image, self.positive_fraction, 0
-            )
+            pos_idx, neg_idx = subsample_labels(label, self.batch_size_per_image, self.positive_fraction, 0)
             # Fill with the ignore label (-1), then set positive and negative labels
             label.fill_(-1)
             label.scatter_(0, pos_idx, 1)
@@ -326,9 +327,7 @@ class RPNOutputs(object):
         num_anchors_per_image = sum(num_anchors_per_map)
 
         # Stack to: (N, num_anchors_per_image)
-        gt_objectness_logits = torch.stack(
-            [resample(label) for label in gt_objectness_logits], dim=0
-        )
+        gt_objectness_logits = torch.stack([resample(label) for label in gt_objectness_logits], dim=0)
 
         # Log the number of positive/negative anchors per-image that's used in training
         num_pos_anchors = (gt_objectness_logits == 1).sum().item()
@@ -368,9 +367,7 @@ class RPNOutputs(object):
             [
                 # Reshape: (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B)
                 #          -> (N*Hi*Wi*A, B)
-                x.view(x.shape[0], -1, B, x.shape[-2], x.shape[-1])
-                .permute(0, 3, 4, 1, 2)
-                .reshape(-1, B)
+                x.view(x.shape[0], -1, B, x.shape[-2], x.shape[-1]).permute(0, 3, 4, 1, 2).reshape(-1, B)
                 for x in self.pred_anchor_deltas
             ],
             dim=0,
@@ -406,15 +403,11 @@ class RPNOutputs(object):
             B = anchors_i[0].tensor.size(1)
             N, _, Hi, Wi = pred_anchor_deltas_i.shape
             # Reshape: (N, A*B, Hi, Wi) -> (N, A, B, Hi, Wi) -> (N, Hi, Wi, A, B) -> (N*Hi*Wi*A, B)
-            pred_anchor_deltas_i = (
-                pred_anchor_deltas_i.view(N, -1, B, Hi, Wi).permute(0, 3, 4, 1, 2).reshape(-1, B)
-            )
+            pred_anchor_deltas_i = pred_anchor_deltas_i.view(N, -1, B, Hi, Wi).permute(0, 3, 4, 1, 2).reshape(-1, B)
             # Concatenate all anchors to shape (N*Hi*Wi*A, B)
             # type(anchors_i[0]) is Boxes (B = 4) or RotatedBoxes (B = 5)
             anchors_i = type(anchors_i[0]).cat(anchors_i)
-            proposals_i = self.box2box_transform.apply_deltas(
-                pred_anchor_deltas_i, anchors_i.tensor
-            )
+            proposals_i = self.box2box_transform.apply_deltas(pred_anchor_deltas_i, anchors_i.tensor)
             # Append feature map proposals with shape (N, Hi*Wi*A, B)
             proposals.append(proposals_i.view(N, -1, B))
         return proposals

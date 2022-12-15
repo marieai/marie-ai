@@ -1,25 +1,17 @@
 """Module for Jina Requests."""
 
-from typing import (
-    TYPE_CHECKING,
-    AsyncIterable,
-    Dict,
-    Iterable,
-    Iterator,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, AsyncIterable, Dict, Iterable, Iterator, Optional, Tuple, Union
 
-from marie.clients.request.helper import _new_data_request_from_batch, _new_data_request
+from marie.clients.request.helper import _new_data_request, _new_data_request_from_batch
 from marie.enums import DataInputType
 from marie.helper import batch_iterator
 from marie.logging.predefined import default_logger
 
 if TYPE_CHECKING:  # pragma: no cover
-    from marie import Document
     from docarray.document import DocumentSourceType
     from docarray.document.mixins.content import DocumentContentType
+
+    from marie import Document
     from marie.types.request import Request
 
     SingletonDataType = Union[
@@ -30,9 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover
         Tuple[DocumentSourceType, DocumentSourceType],
     ]
 
-    GeneratorSourceType = Union[
-        Document, Iterable[SingletonDataType], AsyncIterable[SingletonDataType]
-    ]
+    GeneratorSourceType = Union[Document, Iterable[SingletonDataType], AsyncIterable[SingletonDataType]]
 
 
 def request_generator(
@@ -62,9 +52,7 @@ def request_generator(
     try:
         if data is None:
             # this allows empty inputs, i.e. a data request with only parameters
-            yield _new_data_request(
-                endpoint=exec_endpoint, target=target_executor, parameters=parameters
-            )
+            yield _new_data_request(endpoint=exec_endpoint, target=target_executor, parameters=parameters)
         else:
             if not isinstance(data, Iterable):
                 data = [data]

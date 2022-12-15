@@ -1,11 +1,9 @@
 import asyncio
 import threading
 import time
-
-from marie.concur import ScheduledExecutorService
-
 from threading import current_thread
 
+from marie.concur import ScheduledExecutorService
 from marie.concur.ScheduledExecutorService import TimeUnit
 
 
@@ -23,22 +21,16 @@ async def cancel_callback(task):
 async def main():
     scheduler = ScheduledExecutorService.new_scheduled_asyncio_pool()
 
-    t1 = scheduler.schedule_at_fixed_rate(
-        async_task, 1, TimeUnit.MILLISECONDS, name="T1"
-    )
+    t1 = scheduler.schedule_at_fixed_rate(async_task, 1, TimeUnit.MILLISECONDS, name="T1")
 
-    t2 = scheduler.schedule_at_fixed_rate(
-        async_task, 2, TimeUnit.MILLISECONDS, name="T2"
-    )
+    t2 = scheduler.schedule_at_fixed_rate(async_task, 2, TimeUnit.MILLISECONDS, name="T2")
 
     asyncio.get_event_loop().call_later(3, asyncio.create_task, cancel_callback(t1))
 
 
 async def main_single():
     scheduler = ScheduledExecutorService.new_scheduled_asyncio_pool()
-    t1 = scheduler.schedule_at_fixed_rate(
-        async_task, 1, TimeUnit.MILLISECONDS, name="T1"
-    )
+    t1 = scheduler.schedule_at_fixed_rate(async_task, 1, TimeUnit.MILLISECONDS, name="T1")
 
     # call_later() only supports callbacks (regular functions); you  can’t pass in a coroutine.
     asyncio.get_event_loop().call_later(3, asyncio.create_task, cancel_callback(t1))
@@ -47,9 +39,7 @@ async def main_single():
 
 async def main_delay():
     scheduler = ScheduledExecutorService.new_scheduled_asyncio_pool()
-    t1 = scheduler.schedule_with_fixed_delay(
-        async_task, 2, 1, TimeUnit.MILLISECONDS, name="T1"
-    )
+    t1 = scheduler.schedule_with_fixed_delay(async_task, 2, 1, TimeUnit.MILLISECONDS, name="T1")
 
     await t1.start()
     print(t1.task)

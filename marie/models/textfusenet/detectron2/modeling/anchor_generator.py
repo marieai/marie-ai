@@ -2,12 +2,12 @@
 import copy
 import math
 from typing import List
-import torch
-from torch import nn
 
+import torch
 from detectron2.layers import ShapeSpec
 from detectron2.structures import Boxes, RotatedBoxes
 from detectron2.utils.registry import Registry
+from torch import nn
 
 ANCHOR_GENERATOR_REGISTRY = Registry("ANCHOR_GENERATOR")
 """
@@ -41,9 +41,7 @@ class BufferList(nn.Module):
 def _create_grid_offsets(size, stride, device):
     grid_height, grid_width = size
     shifts_x = torch.arange(0, grid_width * stride, step=stride, dtype=torch.float32, device=device)
-    shifts_y = torch.arange(
-        0, grid_height * stride, step=stride, dtype=torch.float32, device=device
-    )
+    shifts_y = torch.arange(0, grid_height * stride, step=stride, dtype=torch.float32, device=device)
     shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
     shift_x = shift_x.reshape(-1)
     shift_y = shift_y.reshape(-1)
@@ -90,9 +88,7 @@ class DefaultAnchorGenerator(nn.Module):
         assert self.num_features == len(sizes)
         assert self.num_features == len(aspect_ratios)
 
-        cell_anchors = [
-            self.generate_cell_anchors(s, a).float() for s, a in zip(sizes, aspect_ratios)
-        ]
+        cell_anchors = [self.generate_cell_anchors(s, a).float() for s, a in zip(sizes, aspect_ratios)]
 
         return BufferList(cell_anchors)
 
@@ -154,7 +150,7 @@ class DefaultAnchorGenerator(nn.Module):
 
         anchors = []
         for size in sizes:
-            area = size ** 2.0
+            area = size**2.0
             for aspect_ratio in aspect_ratios:
                 # s * s = w * h
                 # a = h / w
@@ -308,7 +304,7 @@ class RotatedAnchorGenerator(nn.Module):
         """
         anchors = []
         for size in sizes:
-            area = size ** 2.0
+            area = size**2.0
             for aspect_ratio in aspect_ratios:
                 # s * s = w * h
                 # a = h / w

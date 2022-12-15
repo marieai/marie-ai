@@ -1,6 +1,6 @@
+from cli.export import api_to_dict
 from marie.schemas.gateway import schema_gateway
 from marie.schemas.helper import _cli_to_schema
-from cli.export import api_to_dict
 
 _schema_flow_with = _cli_to_schema(
     api_to_dict(),
@@ -14,9 +14,11 @@ schema_flow = {
         'properties': {
             'with': _schema_flow_with,
             'jtype': {
-                'description': 'The type of Jina object (Flow, Executor).\n'
-                'A Flow is made up of several sub-tasks, and it manages the states and context of these sub-tasks.\n'
-                'The input and output data of Flows are Documents.',
+                'description': (
+                    'The type of Jina object (Flow, Executor).\nA Flow is made up of'
+                    ' several sub-tasks, and it manages the states and context of these'
+                    ' sub-tasks.\nThe input and output data of Flows are Documents.'
+                ),
                 'type': 'string',
                 'default': 'Flow',
                 'enum': ['Flow'],
@@ -27,8 +29,10 @@ schema_flow = {
                 'default': '\'1\'',
             },
             'executors': {
-                'description': 'Define the steps in the Flow.\n'
-                'A Deployment is a container and interface for one or multiple Pods that have the same properties.',
+                'description': (
+                    'Define the steps in the Flow.\nA Deployment is a container and'
+                    ' interface for one or multiple Pods that have the same properties.'
+                ),
                 'type': 'array',
                 'items': {'$ref': '#/definitions/Jina::Deployment'},
                 'minItems': 1,

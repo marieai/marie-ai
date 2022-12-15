@@ -12,7 +12,7 @@ from marie.lang import Object
 from marie.models.icr.dataset import AlignCollate, RawDataset
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.icr.model import Model
-from marie.models.icr.utils import CTCLabelConverter, AttnLabelConverter
+from marie.models.icr.utils import AttnLabelConverter, CTCLabelConverter
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -21,7 +21,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class CraftIcrProcessor(IcrProcessor):
-    def __init__(self, work_dir: str = "/tmp/icr", models_dir: str = "./model_zoo/icr", cuda: bool = True) -> None:
+    def __init__(
+        self,
+        work_dir: str = "/tmp/icr",
+        models_dir: str = "./model_zoo/icr",
+        cuda: bool = True,
+    ) -> None:
         super().__init__(work_dir, cuda)
         print("CRAFT ICR processor [cuda={}]".format(cuda))
 
@@ -37,9 +42,7 @@ class CraftIcrProcessor(IcrProcessor):
             opt.sensitive = True
             opt.imgH = 32
             opt.imgW = 100
-            opt.character = (
-                "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
-            )
+            opt.character = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"
             opt.rgb = False
             opt.num_fiducial = 20
             opt.input_channel = 1

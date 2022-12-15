@@ -3,12 +3,11 @@ from __future__ import absolute_import
 import os
 import sys
 
+import conf
 import torch
 
-import conf
 import marie
 import marie.helper
-
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.parsers import set_gateway_parser
@@ -50,11 +49,11 @@ if __name__ == "__main__":
         logger.info("Device : %s", torch.cuda.get_device_name(0))
         logger.info(
             "GPU Memory Allocated: %d GB",
-            round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_allocated(0) / 1024**3, 1),
         )
         logger.info(
             "GPU Memory Cached: %d GB",
-            round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1),
+            round(torch.cuda.memory_reserved(0) / 1024**3, 1),
         )
 
     if __name__ == "__main__":

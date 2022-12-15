@@ -16,8 +16,9 @@ You need to implement the following functions:
     <optimize_parameters>: Update network weights; it will be called in every training iteration.
 """
 import torch
-from .base_model import BaseModel
+
 from . import networks
+from .base_model import BaseModel
 
 
 class TemplateModel(BaseModel):
@@ -32,9 +33,16 @@ class TemplateModel(BaseModel):
         Returns:
             the modified parser.
         """
-        parser.set_defaults(dataset_mode='aligned')  # You can rewrite default values for this model. For example, this model usually uses aligned dataset as its dataset.
+        parser.set_defaults(
+            dataset_mode='aligned'
+        )  # You can rewrite default values for this model. For example, this model usually uses aligned dataset as its dataset.
         if is_train:
-            parser.add_argument('--lambda_regression', type=float, default=1.0, help='weight for the regression loss')  # You can define new arguments for this model.
+            parser.add_argument(
+                '--lambda_regression',
+                type=float,
+                default=1.0,
+                help='weight for the regression loss',
+            )  # You can define new arguments for this model.
 
         return parser
 
@@ -89,11 +97,11 @@ class TemplateModel(BaseModel):
         # caculate the intermediate results if necessary; here self.output has been computed during function <forward>
         # calculate loss given the input and intermediate results
         self.loss_G = self.criterionLoss(self.output, self.data_B) * self.opt.lambda_regression
-        self.loss_G.backward()       # calculate gradients of network G w.r.t. loss_G
+        self.loss_G.backward()  # calculate gradients of network G w.r.t. loss_G
 
     def optimize_parameters(self):
         """Update network weights; it will be called in every training iteration."""
-        self.forward()               # first call forward to calculate intermediate results
-        self.optimizer.zero_grad()   # clear network G's existing gradients
-        self.backward()              # calculate gradients for network G
-        self.optimizer.step()        # update gradients for network G
+        self.forward()  # first call forward to calculate intermediate results
+        self.optimizer.zero_grad()  # clear network G's existing gradients
+        self.backward()  # calculate gradients for network G
+        self.optimizer.step()  # update gradients for network G

@@ -29,9 +29,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor
-    from opentelemetry.instrumentation.grpc._client import (
-        OpenTelemetryClientInterceptor,
-    )
+    from opentelemetry.instrumentation.grpc._client import OpenTelemetryClientInterceptor
     from opentelemetry.metrics import Histogram, Meter
     from prometheus_client import CollectorRegistry, Summary
 
@@ -65,9 +63,7 @@ class _NetworkingHistograms:
     send_requests_bytes_metrics: Optional['Histogram'] = None
     histogram_metric_labels: Dict[str, str] = None
 
-    def _get_labels(
-        self, additional_labels: Optional[Dict[str, str]] = None
-    ) -> Optional[Dict[str, str]]:
+    def _get_labels(self, additional_labels: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
 
         if self.histogram_metric_labels is None:
             return None
@@ -75,25 +71,19 @@ class _NetworkingHistograms:
             return self.histogram_metric_labels
         return {**self.histogram_metric_labels, **additional_labels}
 
-    def record_sending_requests_time_metrics(
-        self, value: int, additional_labels: Optional[Dict[str, str]] = None
-    ):
+    def record_sending_requests_time_metrics(self, value: int, additional_labels: Optional[Dict[str, str]] = None):
         labels = self._get_labels(additional_labels)
 
         if self.sending_requests_time_metrics:
             self.sending_requests_time_metrics.record(value, labels)
 
-    def record_received_response_bytes(
-        self, value: int, additional_labels: Optional[Dict[str, str]] = None
-    ):
+    def record_received_response_bytes(self, value: int, additional_labels: Optional[Dict[str, str]] = None):
         labels = self._get_labels(additional_labels)
 
         if self.received_response_bytes:
             self.received_response_bytes.record(value, labels)
 
-    def record_send_requests_bytes_metrics(
-        self, value: int, additional_labels: Optional[Dict[str, str]] = None
-    ):
+    def record_send_requests_bytes_metrics(self, value: int, additional_labels: Optional[Dict[str, str]] = None):
         labels = self._get_labels(additional_labels)
 
         if self.send_requests_bytes_metrics:
@@ -128,9 +118,7 @@ class ReplicaList:
         self.tracing_client_interceptors = tracing_client_interceptor
         self._deployment_name = deployment_name
 
-    async def reset_connection(
-        self, address: str, deployment_name: str
-    ) -> Union[grpc.aio.Channel, None]:
+    async def reset_connection(self, address: str, deployment_name: str) -> Union[grpc.aio.Channel, None]:
         """
         Removes and then re-adds a connection.
         Result is the same as calling :meth:`remove_connection` and then :meth:`add_connection`, but this allows for
@@ -142,10 +130,7 @@ class ReplicaList:
         """
         self._logger.debug(f'resetting connection for {deployment_name} to {address}')
 
-        if (
-            address in self._address_to_connection_idx
-            and self._address_to_connection_idx[address] is not None
-        ):
+        if address in self._address_to_connection_idx and self._address_to_connection_idx[address] is not None:
             # remove connection:
             # in contrast to remove_connection(), we don't 'shorten' the data structures below, instead just set to None
             # so if someone else accesses them in the meantime, they know that they can just wait
@@ -193,18 +178,12 @@ class ReplicaList:
         :returns: The removed connection or None if there was not any for the given address
         """
         if address in self._address_to_connection_idx:
-            self._rr_counter = (
-                self._rr_counter % (len(self._connections) - 1)
-                if (len(self._connections) - 1)
-                else 0
-            )
+            self._rr_counter = self._rr_counter % (len(self._connections) - 1) if (len(self._connections) - 1) else 0
             idx_to_delete = self._address_to_connection_idx.pop(address)
             popped_connection = self._connections.pop(idx_to_delete)
             closing_channel = self._address_to_channel[address]
             del self._address_to_channel[address]
-            await self._destroy_connection(
-                closing_channel, grace=GRACE_PERIOD_DESTROY_CONNECTION
-            )
+            await self._destroy_connection(closing_channel, grace=GRACE_PERIOD_DESTROY_CONNECTION)
             # update the address/idx mapping
             for address in self._address_to_connection_idx:
                 if self._address_to_connection_idx[address] > idx_to_delete:
@@ -258,12 +237,14 @@ class ReplicaList:
             if all_connections_unavailable:
                 if num_retries <= 0:
                     raise EstablishGrpcConnectionError(
-                        f'Error while resetting connections {self._connections} for {self._deployment_name}. Connections cannot be used.'
+                        f'Error while resetting connections {self._connections} for'
+                        f' {self._deployment_name}. Connections cannot be used.'
                     )
             elif connection is None:
                 # give control back to async event loop so connection resetting can be completed; then retry
                 self._logger.debug(
-                    f' No valid connection found for {self._deployment_name}, give chance for potential resetting of connection'
+                    f' No valid connection found for {self._deployment_name}, give'
+                    ' chance for potential resetting of connection'
                 )
                 try:
                     await asyncio.wait_for(
@@ -363,9 +344,7 @@ class GrpcConnectionPool:
         # This has to be done lazily, because the target endpoint may not be available
         # when a connection is added
         async def _init_stubs(self):
-            available_services = await GrpcConnectionPool.get_available_services(
-                self.channel
-            )
+            available_services = await GrpcConnectionPool.get_available_services(self.channel)
             stubs = defaultdict(lambda: None)
             for service in available_services:
                 stubs[service] = self.STUB_MAPPING[service](self.channel)
@@ -417,16 +396,12 @@ class GrpcConnectionPool:
         def _record_request_bytes_metric(self, nbytes: int):
             if self._metrics.send_requests_bytes_metrics:
                 self._metrics.send_requests_bytes_metrics.observe(nbytes)
-            self._histograms.record_send_requests_bytes_metrics(
-                nbytes, self.stub_specific_labels
-            )
+            self._histograms.record_send_requests_bytes_metrics(nbytes, self.stub_specific_labels)
 
         def _record_received_bytes_metric(self, nbytes: int):
             if self._metrics.received_response_bytes:
                 self._metrics.received_response_bytes.observe(nbytes)
-            self._histograms.record_received_response_bytes(
-                nbytes, self.stub_specific_labels
-            )
+            self._histograms.record_received_response_bytes(nbytes, self.stub_specific_labels)
 
         async def send_requests(
             self,
@@ -500,9 +475,7 @@ class GrpcConnectionPool:
                         self._record_received_bytes_metric(response.nbytes)
                     return response, metadata
                 else:
-                    raise ValueError(
-                        'Can not send list of DataRequests. gRPC endpoint not available.'
-                    )
+                    raise ValueError('Can not send list of DataRequests. gRPC endpoint not available.')
             else:
                 raise ValueError(f'Unsupported request type {type(requests[0])}')
 
@@ -513,12 +486,8 @@ class GrpcConnectionPool:
             logger: Optional[MarieLogger],
             metrics: _NetworkingMetrics,
             histograms: _NetworkingHistograms,
-            aio_tracing_client_interceptors: Optional[
-                Sequence['ClientInterceptor']
-            ] = None,
-            tracing_client_interceptor: Optional[
-                'OpenTelemetryClientInterceptor'
-            ] = None,
+            aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
+            tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
         ):
             self._logger = logger
             # this maps deployments to shards or heads
@@ -554,13 +523,9 @@ class GrpcConnectionPool:
                 type_ = 'heads' if head else 'shards'
                 if entity_id is None and head:
                     entity_id = 0
-                return self._get_connection_list(
-                    deployment, type_, entity_id, increase_access_count
-                )
+                return self._get_connection_list(deployment, type_, entity_id, increase_access_count)
             else:
-                self._logger.debug(
-                    f'Unknown deployment {deployment}, no replicas available'
-                )
+                self._logger.debug(f'Unknown deployment {deployment}, no replicas available')
                 return None
 
         def get_replicas_all_shards(self, deployment: str) -> List[ReplicaList]:
@@ -569,9 +534,7 @@ class GrpcConnectionPool:
             replicas = []
             if deployment in self._deployments:
                 for shard_id in self._deployments[deployment]['shards']:
-                    replicas.append(
-                        self._get_connection_list(deployment, 'shards', shard_id)
-                    )
+                    replicas.append(self._get_connection_list(deployment, 'shards', shard_id))
             return replicas
 
         async def close(self):
@@ -579,9 +542,7 @@ class GrpcConnectionPool:
             for deployment in self._deployments:
                 for entity_type in self._deployments[deployment]:
                     for shard_in in self._deployments[deployment][entity_type]:
-                        await self._deployments[deployment][entity_type][
-                            shard_in
-                        ].close()
+                        await self._deployments[deployment][entity_type][shard_in].close()
             self._deployments.clear()
 
         def _get_connection_list(
@@ -597,24 +558,20 @@ class GrpcConnectionPool:
                     if increase_access_count:
                         self._access_count[deployment] += 1
                     return self._deployments[deployment][type_][
-                        self._access_count[deployment]
-                        % len(self._deployments[deployment][type_])
+                        self._access_count[deployment] % len(self._deployments[deployment][type_])
                     ]
                 else:
                     return self._deployments[deployment][type_][entity_id]
             except KeyError:
-                if (
-                    entity_id is None
-                    and deployment in self._deployments
-                    and len(self._deployments[deployment][type_])
-                ):
+                if entity_id is None and deployment in self._deployments and len(self._deployments[deployment][type_]):
                     # This can happen as a race condition when removing connections while accessing it
                     # In this case we don't care for the concrete entity, so retry with the first one
-                    return self._get_connection_list(
-                        deployment, type_, 0, increase_access_count
-                    )
+                    return self._get_connection_list(deployment, type_, 0, increase_access_count)
                 self._logger.debug(
-                    f'did not find a connection for deployment {deployment}, type {type_} and entity_id {entity_id}. There are {len(self._deployments[deployment][type_]) if deployment in self._deployments else 0} available connections for this deployment and type. '
+                    f'did not find a connection for deployment {deployment}, type'
+                    f' {type_} and entity_id {entity_id}. There are'
+                    f' {len(self._deployments[deployment][type_]) if deployment in self._deployments else 0} available'
+                    ' connections for this deployment and type. '
                 )
                 return None
 
@@ -643,41 +600,22 @@ class GrpcConnectionPool:
                 )
                 self._deployments[deployment][type][entity_id] = connection_list
 
-            if not self._deployments[deployment][type][entity_id].has_connection(
-                address
-            ):
-                self._logger.debug(
-                    f'adding connection for deployment {deployment}/{type}/{entity_id} to {address}'
-                )
-                self._deployments[deployment][type][entity_id].add_connection(
-                    address, deployment_name=deployment
-                )
+            if not self._deployments[deployment][type][entity_id].has_connection(address):
+                self._logger.debug(f'adding connection for deployment {deployment}/{type}/{entity_id} to {address}')
+                self._deployments[deployment][type][entity_id].add_connection(address, deployment_name=deployment)
             else:
-                self._logger.debug(
-                    f'ignoring activation of pod for deployment {deployment}, {address} already known'
-                )
+                self._logger.debug(f'ignoring activation of pod for deployment {deployment}, {address} already known')
 
         async def remove_head(self, deployment, address, head_id: Optional[int] = 0):
             return await self._remove_connection(deployment, head_id, address, 'heads')
 
-        async def remove_replica(
-            self, deployment, address, shard_id: Optional[int] = 0
-        ):
-            return await self._remove_connection(
-                deployment, shard_id, address, 'shards'
-            )
+        async def remove_replica(self, deployment, address, shard_id: Optional[int] = 0):
+            return await self._remove_connection(deployment, shard_id, address, 'shards')
 
         async def _remove_connection(self, deployment, entity_id, address, type):
-            if (
-                deployment in self._deployments
-                and entity_id in self._deployments[deployment][type]
-            ):
-                self._logger.debug(
-                    f'removing connection for deployment {deployment}/{type}/{entity_id} to {address}'
-                )
-                connection = await self._deployments[deployment][type][
-                    entity_id
-                ].remove_connection(address)
+            if deployment in self._deployments and entity_id in self._deployments[deployment][type]:
+                self._logger.debug(f'removing connection for deployment {deployment}/{type}/{entity_id} to {address}')
+                connection = await self._deployments[deployment][type][entity_id].remove_connection(address)
                 if not self._deployments[deployment][type][entity_id].has_connections():
                     del self._deployments[deployment][type][entity_id]
                 return connection
@@ -695,11 +633,7 @@ class GrpcConnectionPool:
     ):
         self._logger = logger or MarieLogger(self.__class__.__name__)
 
-        self.compression = (
-            getattr(grpc.Compression, compression)
-            if compression
-            else grpc.Compression.NoCompression
-        )
+        self.compression = getattr(grpc.Compression, compression) if compression else grpc.Compression.NoCompression
 
         if metrics_registry:
             with ImportExtensions(
@@ -844,17 +778,11 @@ class GrpcConnectionPool:
         :param retries: number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
         :return: asyncio.Task items to send call
         """
-        connection_list = self._connections.get_replicas(
-            deployment, head, shard_id, True
-        )
+        connection_list = self._connections.get_replicas(deployment, head, shard_id, True)
         if connection_list:
-            return self._send_discover_endpoint(
-                timeout=timeout, connection_list=connection_list, retries=retries
-            )
+            return self._send_discover_endpoint(timeout=timeout, connection_list=connection_list, retries=retries)
         else:
-            self._logger.debug(
-                f'no available connections for deployment {deployment} and shard {shard_id}'
-            )
+            self._logger.debug(f'no available connections for deployment {deployment} and shard {shard_id}')
             return None
 
     def send_requests_once(
@@ -892,9 +820,7 @@ class GrpcConnectionPool:
             )
             return result
         else:
-            self._logger.debug(
-                f'no available connections for deployment {deployment} and shard {shard_id}'
-            )
+            self._logger.debug(f'no available connections for deployment {deployment} and shard {shard_id}')
             return None
 
     def add_connection(
@@ -954,9 +880,7 @@ class GrpcConnectionPool:
         error: AioRpcError,
         retry_i: int = 0,
         request_id: str = '',
-        tried_addresses: Set[str] = {
-            ''
-        },  # same deployment can have multiple addresses (replicas)
+        tried_addresses: Set[str] = {''},  # same deployment can have multiple addresses (replicas)
         total_num_tries: int = 1,  # number of retries + 1
         current_address: str = '',  # the specific address that was contacted during this attempt
         current_deployment: str = '',  # the specific deployment that was contacted during this attempt
@@ -970,7 +894,8 @@ class GrpcConnectionPool:
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
         self._logger.debug(
-            f'GRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
+            f'GRPC call to {current_deployment} errored, with error'
+            f' {format_grpc_error(error)} and for the {retry_i + 1}th time.'
         )
         if (
             error.code() != grpc.StatusCode.UNAVAILABLE
@@ -981,20 +906,15 @@ class GrpcConnectionPool:
         ):
             return error
         elif (
-            error.code() == grpc.StatusCode.UNAVAILABLE
-            or error.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+            error.code() == grpc.StatusCode.UNAVAILABLE or error.code() == grpc.StatusCode.DEADLINE_EXCEEDED
         ) and retry_i >= total_num_tries - 1:  # retries exhausted. if we land here it already failed once, therefore -1
-            self._logger.debug(
-                f'GRPC call for {current_deployment} failed, retries exhausted'
-            )
+            self._logger.debug(f'GRPC call for {current_deployment} failed, retries exhausted')
             from jina.excepts import InternalNetworkError
 
             # after connection failure the gRPC `channel` gets stuck in a failure state for a few seconds
             # removing and re-adding the connection (stub) is faster & more reliable than just waiting
             if connection_list:
-                await connection_list.reset_connection(
-                    current_address, current_deployment
-                )
+                await connection_list.reset_connection(current_address, current_deployment)
 
             return InternalNetworkError(
                 og_exception=error,
@@ -1004,8 +924,10 @@ class GrpcConnectionPool:
             )
         else:
             self._logger.debug(
-                f'GRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
-                f' Trying next replica, if available.'
+                f'GRPC call to deployment {current_deployment} failed with error'
+                f' {format_grpc_error(error)}, for retry attempt'
+                f' {retry_i + 1}/{total_num_tries - 1}. Trying next replica, if'
+                ' available.'
             )
             return None
 
@@ -1031,16 +953,11 @@ class GrpcConnectionPool:
         async def task_wrapper():
             tried_addresses = set()
             if retries is None or retries < 0:
-                total_num_tries = (
-                    max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
-                    + 1
-                )
+                total_num_tries = max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections())) + 1
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                current_connection = await connections.get_next_connection(
-                    num_retries=total_num_tries
-                )
+                current_connection = await connections.get_next_connection(num_retries=total_num_tries)
                 tried_addresses.add(current_connection.address)
                 try:
                     return await current_connection.send_requests(
@@ -1089,9 +1006,7 @@ class GrpcConnectionPool:
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                connection = await connection_list.get_next_connection(
-                    num_retries=total_num_tries
-                )
+                connection = await connection_list.get_next_connection(num_retries=total_num_tries)
                 tried_addresses.add(connection.address)
                 try:
                     return await connection.send_discover_endpoint(
@@ -1184,18 +1099,14 @@ class GrpcConnectionPool:
 
         credentials = None
         if tls:
-            credentials = grpc.ssl_channel_credentials(
-                root_certificates=root_certificates
-            )
+            credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates)
 
         if asyncio:
             return GrpcConnectionPool.__aio_channel_with_tracing_interceptor(
                 address, credentials, options, aio_tracing_client_interceptors
             )
 
-        return GrpcConnectionPool.__channel_with_tracing_interceptor(
-            address, credentials, options, tracing_client_interceptor
-        )
+        return GrpcConnectionPool.__channel_with_tracing_interceptor(address, credentials, options, tracing_client_interceptor)
 
     @staticmethod
     def send_request_sync(
@@ -1398,9 +1309,7 @@ class GrpcConnectionPool:
         )
 
         return (
-            GrpcConnectionPool.ConnectionStubs(
-                address, channel, deployment_name, metrics, histograms
-            ),
+            GrpcConnectionPool.ConnectionStubs(address, channel, deployment_name, metrics, histograms),
             channel,
         )
 
@@ -1414,9 +1323,7 @@ class GrpcConnectionPool:
         :returns: List of services offered
         """
         reflection_stub = ServerReflectionStub(channel)
-        response = reflection_stub.ServerReflectionInfo(
-            iter([ServerReflectionRequest(list_services="")])
-        )
+        response = reflection_stub.ServerReflectionInfo(iter([ServerReflectionRequest(list_services="")]))
         service_names = []
         async for res in response:
             service_names.append(

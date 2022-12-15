@@ -1,18 +1,18 @@
+import imghdr
 import io
 import os
+import tempfile
 from typing import Any, List, Union
 
 import cv2
 import numpy as np
-import imghdr
+import PyPDF4
+import skimage.io as skio
 from PIL import Image
 from PyPDF4 import PdfFileReader
 from PyPDF4.utils import PdfReadError
-import PyPDF4
-import tempfile
-from marie import DocumentArray, Document
-import skimage.io as skio
 
+from marie import Document, DocumentArray
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff", "pdf"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif", "pdf": "pdf"}

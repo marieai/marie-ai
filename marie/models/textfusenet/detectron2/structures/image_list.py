@@ -1,6 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 from __future__ import division
+
 from typing import Any, List, Sequence, Tuple, Union
+
 import torch
 from torch.nn import functional as F
 
@@ -44,7 +46,9 @@ class ImageList(object):
 
     @staticmethod
     def from_tensors(
-        tensors: Sequence[torch.Tensor], size_divisibility: int = 0, pad_value: float = 0.0
+        tensors: Sequence[torch.Tensor],
+        size_divisibility: int = 0,
+        pad_value: float = 0.0,
     ) -> "ImageList":
         """
         Args:

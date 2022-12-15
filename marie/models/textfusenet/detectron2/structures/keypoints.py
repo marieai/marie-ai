@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import numpy as np
 from typing import Any, List, Tuple, Union
-import torch
 
+import numpy as np
+import torch
 from detectron2.layers import interpolate
 
 
@@ -75,9 +75,7 @@ class Keypoints:
 
 
 # TODO make this nicer, this is a direct translation from C2 (but removing the inner loop)
-def _keypoints_to_heatmap(
-    keypoints: torch.Tensor, rois: torch.Tensor, heatmap_size: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def _keypoints_to_heatmap(keypoints: torch.Tensor, rois: torch.Tensor, heatmap_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Encode keypoint locations into a target heatmap for use in SoftmaxWithLoss across space.
 
@@ -167,9 +165,7 @@ def heatmaps_to_keypoints(maps: torch.Tensor, rois: torch.Tensor) -> torch.Tenso
 
     for i in range(num_rois):
         outsize = (int(heights_ceil[i]), int(widths_ceil[i]))
-        roi_map = interpolate(maps[[i]], size=outsize, mode="bicubic", align_corners=False).squeeze(
-            0
-        )  # #keypoints x H x W
+        roi_map = interpolate(maps[[i]], size=outsize, mode="bicubic", align_corners=False).squeeze(0)  # #keypoints x H x W
 
         # softmax over the spatial region
         max_score, _ = roi_map.view(num_keypoints, -1).max(1)
@@ -186,10 +182,7 @@ def heatmaps_to_keypoints(maps: torch.Tensor, rois: torch.Tensor) -> torch.Tenso
         x_int = pos % w
         y_int = (pos - x_int) // w
 
-        assert (
-            roi_map_probs[keypoints_idx, y_int, x_int]
-            == roi_map_probs.view(num_keypoints, -1).max(1)[0]
-        ).all()
+        assert (roi_map_probs[keypoints_idx, y_int, x_int] == roi_map_probs.view(num_keypoints, -1).max(1)[0]).all()
 
         x = (x_int.float() + 0.5) * width_corrections[i]
         y = (y_int.float() + 0.5) * height_corrections[i]

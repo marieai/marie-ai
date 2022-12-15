@@ -13,6 +13,10 @@ def mixin_base_runtime_parser(arg_group):
         action=KVAppendAction,
         metavar='KEY: VALUE',
         nargs='*',
-        help="Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}",
+        help=(
+            "Dictionary of kwargs arguments that will be passed to the grpc server as"
+            " options when starting the server, example :"
+            " {'grpc.max_send_message_length': -1}"
+        ),
         default=None,
     )

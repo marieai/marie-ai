@@ -2,13 +2,13 @@
 import logging
 import math
 from typing import List
-import torch
-from fvcore.nn import sigmoid_focal_loss_jit, smooth_l1_loss
-from torch import nn
 
+import torch
 from detectron2.layers import ShapeSpec, batched_nms, cat
 from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
 from detectron2.utils.logger import log_first_n
+from fvcore.nn import sigmoid_focal_loss_jit, smooth_l1_loss
+from torch import nn
 
 from ..anchor_generator import build_anchor_generator
 from ..backbone import build_backbone
@@ -121,7 +121,9 @@ class RetinaNet(nn.Module):
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         elif "targets" in batched_inputs[0]:
             log_first_n(
-                logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
+                logging.WARN,
+                "'targets' in the model inputs is now renamed to 'instances'!",
+                n=10,
             )
             gt_instances = [x["targets"].to(self.device) for x in batched_inputs]
         else:
@@ -138,9 +140,7 @@ class RetinaNet(nn.Module):
         else:
             results = self.inference(box_cls, box_delta, anchors, images)
             processed_results = []
-            for results_per_image, input_per_image, image_size in zip(
-                results, batched_inputs, images.image_sizes
-            ):
+            for results_per_image, input_per_image, image_size in zip(results, batched_inputs, images.image_sizes):
                 height = input_per_image.get("height", image_size[0])
                 width = input_per_image.get("width", image_size[1])
                 r = detector_postprocess(results_per_image, height, width)
@@ -163,7 +163,7 @@ class RetinaNet(nn.Module):
                 storing the loss. Used during training only. The dict keys are:
                 "loss_cls" and "loss_box_reg"
         """
-        pred_class_logits, pred_anchor_deltas = permute_all_cls_and_box_to_N_HWA_K_and_concat(
+        (pred_class_logits, pred_anchor_deltas,) = permute_all_cls_and_box_to_N_HWA_K_and_concat(
             pred_class_logits, pred_anchor_deltas, self.num_classes
         )  # Shapes: (N x R, K) and (N x R, 4), respectively.
 
@@ -235,9 +235,7 @@ class RetinaNet(nn.Module):
 
             # ground truth box regression
             matched_gt_boxes = targets_per_image[gt_matched_idxs].gt_boxes
-            gt_anchors_reg_deltas_i = self.box2box_transform.get_deltas(
-                anchors_per_image.tensor, matched_gt_boxes.tensor
-            )
+            gt_anchors_reg_deltas_i = self.box2box_transform.get_deltas(anchors_per_image.tensor, matched_gt_boxes.tensor)
 
             # ground truth classes
             has_gt = len(targets_per_image) > 0
@@ -279,7 +277,10 @@ class RetinaNet(nn.Module):
             box_cls_per_image = [box_cls_per_level[img_idx] for box_cls_per_level in box_cls]
             box_reg_per_image = [box_reg_per_level[img_idx] for box_reg_per_level in box_delta]
             results_per_image = self.inference_single_image(
-                box_cls_per_image, box_reg_per_image, anchors_per_image, tuple(image_size)
+                box_cls_per_image,
+                box_reg_per_image,
+                anchors_per_image,
+                tuple(image_size),
             )
             results.append(results_per_image)
         return results
@@ -334,9 +335,7 @@ class RetinaNet(nn.Module):
             scores_all.append(predicted_prob)
             class_idxs_all.append(classes_idxs)
 
-        boxes_all, scores_all, class_idxs_all = [
-            cat(x) for x in [boxes_all, scores_all, class_idxs_all]
-        ]
+        boxes_all, scores_all, class_idxs_all = [cat(x) for x in [boxes_all, scores_all, class_idxs_all]]
         keep = batched_nms(boxes_all, scores_all, class_idxs_all, self.nms_threshold)
         keep = keep[: self.max_detections_per_image]
 
@@ -371,32 +370,29 @@ class RetinaNetHead(nn.Module):
         prior_prob       = cfg.MODEL.RETINANET.PRIOR_PROB
         num_anchors      = build_anchor_generator(cfg, input_shape).num_cell_anchors
         # fmt: on
-        assert (
-            len(set(num_anchors)) == 1
-        ), "Using different number of anchors between levels is not currently supported!"
+        assert len(set(num_anchors)) == 1, "Using different number of anchors between levels is not currently supported!"
         num_anchors = num_anchors[0]
 
         cls_subnet = []
         bbox_subnet = []
         for _ in range(num_convs):
-            cls_subnet.append(
-                nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
-            )
+            cls_subnet.append(nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1))
             cls_subnet.append(nn.ReLU())
-            bbox_subnet.append(
-                nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
-            )
+            bbox_subnet.append(nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1))
             bbox_subnet.append(nn.ReLU())
 
         self.cls_subnet = nn.Sequential(*cls_subnet)
         self.bbox_subnet = nn.Sequential(*bbox_subnet)
-        self.cls_score = nn.Conv2d(
-            in_channels, num_anchors * num_classes, kernel_size=3, stride=1, padding=1
-        )
+        self.cls_score = nn.Conv2d(in_channels, num_anchors * num_classes, kernel_size=3, stride=1, padding=1)
         self.bbox_pred = nn.Conv2d(in_channels, num_anchors * 4, kernel_size=3, stride=1, padding=1)
 
         # Initialization
-        for modules in [self.cls_subnet, self.bbox_subnet, self.cls_score, self.bbox_pred]:
+        for modules in [
+            self.cls_subnet,
+            self.bbox_subnet,
+            self.cls_score,
+            self.bbox_pred,
+        ]:
             for layer in modules.modules():
                 if isinstance(layer, nn.Conv2d):
                     torch.nn.init.normal_(layer.weight, mean=0, std=0.01)

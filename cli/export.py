@@ -21,8 +21,7 @@ def api_to_dict(show_all_args: bool = False):
         'description': 'Build cross-modal and multi-modal applications on the cloud',
         'license': 'Apache 2.0',
         'vendor': 'Marie AI Limited',
-        'source': 'https://github.com/gregbugaj/marie-ai'
-        + os.environ.get('MARIE_VCS_VERSION', 'main'),
+        'source': 'https://github.com/gregbugaj/marie-ai' + os.environ.get('MARIE_VCS_VERSION', 'main'),
         'url': 'https://jina.ai',
         'docs': 'https://docs.marie-ai.com',
         'authors': 'dev-team@marie-ai.com',
@@ -36,9 +35,7 @@ def api_to_dict(show_all_args: bool = False):
         if parsers:
             for p_name in parsers.keys():
                 d = {'name': p_name, 'options': [], 'help': parsers[p_name].description}
-                for ddd in _export_parser_args(
-                    lambda *x: p()._actions[-1].choices[p_name], type_as_str=True
-                ):
+                for ddd in _export_parser_args(lambda *x: p()._actions[-1].choices[p_name], type_as_str=True):
                     d['options'].append(ddd)
 
                 if not d['options']:
@@ -79,9 +76,7 @@ def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
             else:
                 ddd['type'] = a.type
             if ddd['choices']:
-                ddd['choices'] = [
-                    str(k) if isinstance(k, BetterEnum) else k for k in ddd['choices']
-                ]
+                ddd['choices'] = [str(k) if isinstance(k, BetterEnum) else k for k in ddd['choices']]
                 ddd['type'] = str
             if isinstance(ddd['default'], BetterEnum):
                 ddd['default'] = str(ddd['default'])

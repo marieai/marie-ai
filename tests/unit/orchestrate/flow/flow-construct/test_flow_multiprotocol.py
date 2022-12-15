@@ -3,7 +3,6 @@ import os.path
 
 import pytest
 from docarray import Document, DocumentArray
-
 from jina import Client, Executor, Flow, requests
 from jina.helper import random_port
 
@@ -25,14 +24,8 @@ class MyExecutor(Executor):
             ([random_port(), random_port(), random_port()], list(protocols))
             for protocols in itertools.combinations(PROTOCOLS, r=3)
         ],
-        *[
-            ([random_port(), random_port()], list(protocols))
-            for protocols in itertools.combinations(PROTOCOLS, r=2)
-        ],
-        *[
-            ([random_port()], list(protocols))
-            for protocols in itertools.combinations(PROTOCOLS, r=1)
-        ],
+        *[([random_port(), random_port()], list(protocols)) for protocols in itertools.combinations(PROTOCOLS, r=2)],
+        *[([random_port()], list(protocols)) for protocols in itertools.combinations(PROTOCOLS, r=1)],
     ],
 )
 def test_flow_multiprotocol(ports, protocols):
@@ -115,6 +108,5 @@ def test_flow_multiprotocol_ports_protocols_mismatch():
             pass
 
     assert (
-        'You need to specify as much protocols as ports if you want to use a jina built-in gateway'
-        in err_info.value.args[0]
+        'You need to specify as much protocols as ports if you want to use a jina built-in gateway' in err_info.value.args[0]
     )

@@ -7,11 +7,7 @@ def list_all_runtimes():
     from marie.serve.runtimes.base import BaseRuntime
     from marie.serve.runtimes.worker import WorkerRuntime
 
-    return [
-        k
-        for k, s in locals().items()
-        if isinstance(s, type) and issubclass(s, BaseRuntime)
-    ]
+    return [k for k, s in locals().items() if isinstance(s, type) and issubclass(s, BaseRuntime)]
 
 
 def get_runtime(name: str):

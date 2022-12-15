@@ -34,9 +34,9 @@ def interface():
     description = """<p>This particular model is fine-tuned from Correspondence Indexing Dataset on LayoutLMv3-Large</p>"""
 
     article = (
-        "<p style='text-align: center'><a href='https://arxiv.org/abs/2204.08387' target='_blank'>"
-        "LayoutLMv3: Multi-modal Pre-training for Visually-Rich Document Understanding</a> "
-        "</p>"
+        "<p style='text-align: center'><a href='https://arxiv.org/abs/2204.08387'"
+        " target='_blank'>LayoutLMv3: Multi-modal Pre-training for Visually-Rich"
+        " Document Understanding</a> </p>"
     )
     # examples = [['sample-01.png']]
     examples = []

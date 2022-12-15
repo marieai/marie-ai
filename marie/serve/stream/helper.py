@@ -66,9 +66,7 @@ class AsyncRequestsIterator:
             An `Iterator` indicates "blocking" code, which might block all tasks in the event loop.
             Hence we iterate in the default executor provided by asyncio.
             """
-            request = await get_or_reuse_loop().run_in_executor(
-                None, self.iterator__next__
-            )
+            request = await get_or_reuse_loop().run_in_executor(None, self.iterator__next__)
 
             """
             `iterator.__next__` can be executed directly and that'd raise `StopIteration` in the executor,

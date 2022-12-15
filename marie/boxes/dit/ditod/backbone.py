@@ -13,14 +13,11 @@
 
 
 import torch
+from detectron2.layers import ShapeSpec
+from detectron2.modeling import BACKBONE_REGISTRY, FPN, Backbone
+from detectron2.modeling.backbone.fpn import LastLevelMaxPool, LastLevelP6P7
 
-from detectron2.layers import (
-    ShapeSpec,
-)
-from detectron2.modeling import Backbone, BACKBONE_REGISTRY, FPN
-from detectron2.modeling.backbone.fpn import LastLevelP6P7, LastLevelMaxPool
-
-from .beit import beit_base_patch16, dit_base_patch16, dit_large_patch16, beit_large_patch16
+from .beit import beit_base_patch16, beit_large_patch16, dit_base_patch16, dit_large_patch16
 from .deit import deit_base_patch16, mae_base_patch16
 
 __all__ = [

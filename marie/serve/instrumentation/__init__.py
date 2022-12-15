@@ -4,9 +4,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor, ServerInterceptor
-    from opentelemetry.instrumentation.grpc._client import (
-        OpenTelemetryClientInterceptor,
-    )
+    from opentelemetry.instrumentation.grpc._client import OpenTelemetryClientInterceptor
     from opentelemetry.metrics import Histogram
     from prometheus_client import Summary
 
@@ -50,9 +48,7 @@ class InstrumentationMixin:
         self.metrics = metrics
 
         if tracing:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-                OTLPSpanExporter,
-            )
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -72,9 +68,7 @@ class InstrumentationMixin:
             self.tracer = None
 
         if metrics:
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
             from opentelemetry.sdk.metrics import MeterProvider
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             from opentelemetry.sdk.resources import Resource
@@ -86,9 +80,7 @@ class InstrumentationMixin:
                     endpoint=f'{metrics_exporter_host}:{metrics_exporter_port}',
                 )
             )
-            meter_provider = MeterProvider(
-                metric_readers=[metric_reader], resource=resource
-            )
+            meter_provider = MeterProvider(metric_readers=[metric_reader], resource=resource)
             self.meter_provider = meter_provider
             self.meter = self.meter_provider.get_meter(name)
         else:
@@ -102,9 +94,7 @@ class InstrumentationMixin:
         :returns: A service-side aio interceptor object.
         '''
         if self.tracing:
-            from opentelemetry.instrumentation.grpc._aio_server import (
-                OpenTelemetryAioServerInterceptor,
-            )
+            from opentelemetry.instrumentation.grpc._aio_server import OpenTelemetryAioServerInterceptor
 
             return [OpenTelemetryAioServerInterceptor(self.tracer)]
         else:
@@ -139,9 +129,7 @@ class InstrumentationMixin:
         :returns: a gRPC client interceptor with the global tracing provider.
         '''
         if self.tracing:
-            from opentelemetry.instrumentation.grpc import (
-                client_interceptor as grpc_client_interceptor,
-            )
+            from opentelemetry.instrumentation.grpc import client_interceptor as grpc_client_interceptor
 
             return grpc_client_interceptor(self.tracer_provider)
         else:
@@ -166,9 +154,7 @@ class MetricsTimer:
         self._histogram_metric_labels = histogram_metric_labels
 
     def _new_timer(self):
-        return self.__class__(
-            self._summary_metric, self._histogram, self._histogram_metric_labels
-        )
+        return self.__class__(self._summary_metric, self._histogram, self._histogram_metric_labels)
 
     def __enter__(self):
         self._start = default_timer()

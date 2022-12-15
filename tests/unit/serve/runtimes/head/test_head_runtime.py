@@ -56,9 +56,7 @@ def test_message_merging(disable_reduce):
     assert handle_queue.empty()
 
     data_request = _create_test_data_message()
-    result = GrpcConnectionPool.send_requests_sync(
-        [data_request, data_request], f'{args.host}:{args.port}'
-    )
+    result = GrpcConnectionPool.send_requests_sync([data_request, data_request], f'{args.host}:{args.port}')
     assert result
     assert _queue_length(handle_queue) == 3
     assert len(result.response.docs) == 2 if disable_reduce else 1
@@ -77,9 +75,7 @@ def test_uses_before_uses_after():
 
     assert handle_queue.empty()
 
-    result = GrpcConnectionPool.send_request_sync(
-        _create_test_data_message(), f'{args.host}:{args.port}'
-    )
+    result = GrpcConnectionPool.send_request_sync(_create_test_data_message(), f'{args.host}:{args.port}')
     assert result
     assert _queue_length(handle_queue) == 5  # uses_before + 3 workers + uses_after
     assert len(result.response.docs) == 1
@@ -132,9 +128,7 @@ def test_dynamic_polling(polling):
     args = set_pod_parser().parse_args(
         [
             '--polling',
-            json.dumps(
-                {'/any': PollingType.ANY, '/all': PollingType.ALL, '*': polling}
-            ),
+            json.dumps({'/any': PollingType.ANY, '/all': PollingType.ALL, '*': polling}),
             '--shards',
             str(2),
         ]
@@ -261,9 +255,7 @@ def test_timeout_behaviour():
 
 
 def _create_test_data_message(counter=0, endpoint='/'):
-    return list(
-        request_generator(endpoint, DocumentArray([Document(text=str(counter))]))
-    )[0]
+    return list(request_generator(endpoint, DocumentArray([Document(text=str(counter))])))[0]
 
 
 def _create_runtime(args):
@@ -281,13 +273,9 @@ def _create_runtime(args):
         ) -> asyncio.Task:
             async def mock_task_wrapper(new_requests, *args, **kwargs):
                 handle_queue.put('mock_called')
-                assert timeout == (
-                    runtime_args.timeout_send / 1000 if timeout else None
-                )
+                assert timeout == (runtime_args.timeout_send / 1000 if timeout else None)
                 await asyncio.sleep(0.1)
-                return new_requests[0], grpc.aio.Metadata.from_tuple(
-                    (('is-error', 'true'),)
-                )
+                return new_requests[0], grpc.aio.Metadata.from_tuple((('is-error', 'true'),))
 
             return asyncio.create_task(mock_task_wrapper(request, connection))
 

@@ -4,8 +4,8 @@ import logging
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
-import torch
 
+import torch
 from detectron2.utils.comm import is_main_process
 
 
@@ -73,9 +73,7 @@ class DatasetEvaluators(DatasetEvaluator):
             result = evaluator.evaluate()
             if is_main_process():
                 for k, v in result.items():
-                    assert (
-                        k not in results
-                    ), "Different evaluators produce results with the same key {}".format(k)
+                    assert k not in results, "Different evaluators produce results with the same key {}".format(k)
                     results[k] = v
         return results
 
@@ -125,14 +123,8 @@ def inference_on_dataset(model, data_loader, evaluator):
             if (idx + 1) % logging_interval == 0:
                 duration = time.time() - start_time
                 seconds_per_img = duration / (idx + 1 - num_warmup)
-                eta = datetime.timedelta(
-                    seconds=int(seconds_per_img * (total - num_warmup) - duration)
-                )
-                logger.info(
-                    "Inference done {}/{}. {:.4f} s / img. ETA={}".format(
-                        idx + 1, total, seconds_per_img, str(eta)
-                    )
-                )
+                eta = datetime.timedelta(seconds=int(seconds_per_img * (total - num_warmup) - duration))
+                logger.info("Inference done {}/{}. {:.4f} s / img. ETA={}".format(idx + 1, total, seconds_per_img, str(eta)))
 
     # Measure the time only for this worker (before the synchronization barrier)
     total_time = int(time.time() - start_time)
@@ -146,7 +138,9 @@ def inference_on_dataset(model, data_loader, evaluator):
     total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
     logger.info(
         "Total inference pure compute time: {} ({:.6f} s / img per device, on {} devices)".format(
-            total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+            total_compute_time_str,
+            total_compute_time / (total - num_warmup),
+            num_devices,
         )
     )
 

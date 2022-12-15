@@ -22,15 +22,15 @@ class _MyLogRender(_LogRender):
     """Override the original rich log record for more compact layout."""
 
     def __call__(
-            self,
-            console,
-            renderables,
-            log_time=None,
-            time_format=None,
-            level=None,
-            path=None,
-            line_no=None,
-            link_path=None,
+        self,
+        console,
+        renderables,
+        log_time=None,
+        time_format=None,
+        level=None,
+        path=None,
+        line_no=None,
+        link_path=None,
     ):
         from rich.containers import Renderables
         from rich.table import Table
@@ -115,12 +115,12 @@ class MarieLogger:
     supported = {'FileHandler', 'StreamHandler', 'SysLogHandler', 'RichHandler'}
 
     def __init__(
-            self,
-            context: str,
-            name: Optional[str] = None,
-            log_config: Optional[str] = None,
-            quiet: bool = False,
-            **kwargs,
+        self,
+        context: str,
+        name: Optional[str] = None,
+        log_config: Optional[str] = None,
+        quiet: bool = False,
+        **kwargs,
     ):
 
         log_config = os.getenv(
@@ -201,9 +201,7 @@ class MarieLogger:
             if 'logging.' in config_path and '.yml' in config_path:
                 config_path = os.path.join(__resources_path__, config_path)
             else:
-                config_path = os.path.join(
-                    __resources_path__, f'logging.{config_path}.yml'
-                )
+                config_path = os.path.join(__resources_path__, f'logging.{config_path}.yml')
             if not os.path.exists(config_path):
                 config_path = old_config_path
 
@@ -215,9 +213,7 @@ class MarieLogger:
             fmt = getattr(formatter, cfg.get('formatter', 'Formatter'))
 
             if h not in self.supported or not cfg:
-                raise ValueError(
-                    f'can not find configs for {h}, maybe it is not supported'
-                )
+                raise ValueError(f'can not find configs for {h}, maybe it is not supported')
 
             handler = None
             if h == 'StreamHandler':

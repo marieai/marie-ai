@@ -3,10 +3,10 @@ import itertools
 import math
 from collections import defaultdict
 from typing import Optional
-import torch
-from torch.utils.data.sampler import Sampler
 
+import torch
 from detectron2.utils import comm
+from torch.utils.data.sampler import Sampler
 
 
 class TrainingSampler(Sampler):
@@ -113,10 +113,7 @@ class RepeatFactorTrainingSampler(Sampler):
 
         # 2. For each category c, compute the category-level repeat factor:
         #    r(c) = max(1, sqrt(t / f(c)))
-        category_rep = {
-            cat_id: max(1.0, math.sqrt(repeat_thresh / cat_freq))
-            for cat_id, cat_freq in category_freq.items()
-        }
+        category_rep = {cat_id: max(1.0, math.sqrt(repeat_thresh / cat_freq)) for cat_id, cat_freq in category_freq.items()}
 
         # 3. For each image I, compute the image-level repeat factor:
         #    r(I) = max_{c in I} r(c)

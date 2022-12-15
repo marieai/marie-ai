@@ -2,24 +2,21 @@ import io
 import json
 import os
 
+import cv2
 import numpy
 import numpy as np
 import tqdm
+from PIL import Image
 
-import cv2
-
-from marie.numpyencoder import NumpyEncoder
-from marie.utils.utils import ensure_exists
-
-from marie.renderer.pdf_renderer import PdfRenderer
-from marie.renderer.text_renderer import TextRenderer
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
 from marie.document.craft_icr_processor import CraftIcrProcessor
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
-
-from PIL import Image
+from marie.numpyencoder import NumpyEncoder
+from marie.renderer.pdf_renderer import PdfRenderer
+from marie.renderer.text_renderer import TextRenderer
+from marie.utils.utils import ensure_exists
 
 
 def __scale_width(src, target_size, crop_size, method=Image.BICUBIC):
@@ -117,9 +114,7 @@ if __name__ == "__main__":
         ) = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
         print(lines)
-        result, overlay_image = icr.recognize(
-            key, "test", image, boxes, fragments, lines
-        )
+        result, overlay_image = icr.recognize(key, "test", image, boxes, fragments, lines)
 
         cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
 

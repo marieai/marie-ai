@@ -32,11 +32,7 @@ def test_grpc_gateway_runtime_init_close():
                     '--graph-description',
                     '{"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}',
                     '--deployments-addresses',
-                    '{"deployment0": ["0.0.0.0:'
-                    + f'{deployment0_port}'
-                    + '", "0.0.0.0:'
-                    + f'{deployment1_port}'
-                    + '"]}',
+                    '{"deployment0": ["0.0.0.0:' + f'{deployment0_port}' + '", "0.0.0.0:' + f'{deployment1_port}' + '"]}',
                 ]
             )
         ) as runtime:
@@ -187,9 +183,7 @@ def test_grpc_gateway_runtime_handle_messages_linear(linear_graph_dict, monkeypa
 
             async def _test():
                 r = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     r.append(resp)
                 return r
@@ -208,9 +202,7 @@ def test_grpc_gateway_runtime_handle_messages_linear(linear_graph_dict, monkeypa
     assert p.exitcode == 0
 
 
-def test_grpc_gateway_runtime_handle_messages_bifurcation(
-    bifurcation_graph_dict, monkeypatch
-):
+def test_grpc_gateway_runtime_handle_messages_bifurcation(bifurcation_graph_dict, monkeypatch):
     def process_wrapper():
         monkeypatch.setattr(
             networking.GrpcConnectionPool,
@@ -239,9 +231,7 @@ def test_grpc_gateway_runtime_handle_messages_bifurcation(
 
             async def _test():
                 responses = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     responses.append(resp)
                 return responses
@@ -250,10 +240,8 @@ def test_grpc_gateway_runtime_handle_messages_bifurcation(
         assert len(responses) > 0
         assert len(responses[0].docs) == 1
         assert (
-            responses[0].docs[0].text
-            == f'client0-Request-client0-deployment0-client0-deployment2-client0-deployment3'
-            or responses[0].docs[0].text
-            == f'client0-Request-client0-deployment4-client0-deployment5'
+            responses[0].docs[0].text == f'client0-Request-client0-deployment0-client0-deployment2-client0-deployment3'
+            or responses[0].docs[0].text == f'client0-Request-client0-deployment4-client0-deployment5'
         )
 
     p = Process(target=process_wrapper)
@@ -262,9 +250,7 @@ def test_grpc_gateway_runtime_handle_messages_bifurcation(
     assert p.exitcode == 0
 
 
-def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
-    merge_graph_dict_directly_merge_in_gateway, monkeypatch
-):
+def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(merge_graph_dict_directly_merge_in_gateway, monkeypatch):
     def process_wrapper():
         monkeypatch.setattr(
             networking.GrpcConnectionPool,
@@ -293,9 +279,7 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
 
             async def _test():
                 responses = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     responses.append(resp)
                 return responses
@@ -304,12 +288,10 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
         assert len(responses) > 0
         assert len(responses[0].docs) == 1
         deployment1_path = (
-            f'client0-Request-client0-deployment0-client0-deployment1-client0-merger'
-            in responses[0].docs[0].text
+            f'client0-Request-client0-deployment0-client0-deployment1-client0-merger' in responses[0].docs[0].text
         )
         deployment2_path = (
-            f'client0-Request-client0-deployment0-client0-deployment2-client0-merger'
-            in responses[0].docs[0].text
+            f'client0-Request-client0-deployment0-client0-deployment2-client0-merger' in responses[0].docs[0].text
         )
         assert deployment1_path or deployment2_path
 
@@ -350,9 +332,7 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
 
             async def _test():
                 responses = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     responses.append(resp)
                 return responses
@@ -376,9 +356,7 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
     assert p.exitcode == 0
 
 
-def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(
-    complete_graph_dict, monkeypatch
-):
+def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(complete_graph_dict, monkeypatch):
     def process_wrapper():
         monkeypatch.setattr(
             networking.GrpcConnectionPool,
@@ -407,9 +385,7 @@ def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(
 
             async def _test():
                 responses = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     responses.append(resp)
                 return responses
@@ -457,9 +433,7 @@ def test_grpc_gateway_runtime_handle_empty_graph():
 
             async def _test():
                 responses = []
-                req = request_generator(
-                    '/', DocumentArray([Document(text='client0-Request')])
-                )
+                req = request_generator('/', DocumentArray([Document(text='client0-Request')]))
                 async for resp in runtime.gateway.streamer.stream(request_iterator=req):
                     responses.append(resp)
                 return responses
@@ -490,11 +464,7 @@ async def test_grpc_gateway_runtime_reflection():
                     '--graph-description',
                     '{"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}',
                     '--deployments-addresses',
-                    '{"deployment0": ["0.0.0.0:'
-                    + f'{deployment0_port}'
-                    + '", "0.0.0.0:'
-                    + f'{deployment1_port}'
-                    + '"]}',
+                    '{"deployment0": ["0.0.0.0:' + f'{deployment0_port}' + '", "0.0.0.0:' + f'{deployment1_port}' + '"]}',
                 ]
             )
         ) as runtime:

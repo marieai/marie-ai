@@ -7,7 +7,6 @@ MIT License
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from basenet.vgg16_bn import init_weights, vgg16_bn
 
 
@@ -20,7 +19,7 @@ class double_conv(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(mid_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
@@ -43,10 +42,14 @@ class CRAFT(nn.Module):
 
         num_class = 2
         self.conv_cls = nn.Sequential(
-            nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.ReLU(inplace=True),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.ReLU(inplace=True),
-            nn.Conv2d(32, 16, kernel_size=3, padding=1), nn.ReLU(inplace=True),
-            nn.Conv2d(16, 16, kernel_size=1), nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 16, kernel_size=1),
+            nn.ReLU(inplace=True),
             nn.Conv2d(16, num_class, kernel_size=1),
         )
 
@@ -55,9 +58,9 @@ class CRAFT(nn.Module):
         init_weights(self.upconv3.modules())
         init_weights(self.upconv4.modules())
         init_weights(self.conv_cls.modules())
-        
+
     def forward(self, x):
-        """ Base network """
+        """Base network"""
         sources = self.basenet(x)
 
         """ U network """
@@ -78,7 +81,8 @@ class CRAFT(nn.Module):
 
         y = self.conv_cls(feature)
 
-        return y.permute(0,2,3,1), feature
+        return y.permute(0, 2, 3, 1), feature
+
 
 if __name__ == '__main__':
     model = CRAFT(pretrained=True).cuda()

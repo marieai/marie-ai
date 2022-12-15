@@ -49,9 +49,7 @@ class GRPCBaseClient(BaseClient):
                 if response.code == jina_pb2.StatusProto.SUCCESS:
                     return True
                 else:
-                    self.logger.error(
-                        f'Returned code is not expected! Exception: {response.exception}'
-                    )
+                    self.logger.error(f'Returned code is not expected! Exception: {response.exception}')
         except RpcError as e:
             self.logger.error(f'RpcError: {e.details()}')
         except Exception as e:
@@ -74,11 +72,7 @@ class GRPCBaseClient(BaseClient):
         **kwargs,
     ):
         try:
-            self.compression = (
-                getattr(grpc.Compression, compression)
-                if compression
-                else grpc.Compression.NoCompression
-            )
+            self.compression = getattr(grpc.Compression, compression) if compression else grpc.Compression.NoCompression
 
             self.inputs = inputs
             req_iter = self._get_requests(**kwargs)
@@ -126,9 +120,7 @@ class GRPCBaseClient(BaseClient):
                 stub = jina_pb2_grpc.JinaRPCStub(channel)
                 self.logger.debug(f'connected to {self.args.host}:{self.args.port}')
 
-                with ProgressBar(
-                    total_length=self._inputs_length, disable=not self.show_progress
-                ) as p_bar:
+                with ProgressBar(total_length=self._inputs_length, disable=not self.show_progress) as p_bar:
                     try:
                         async for resp in stub.Call(
                             req_iter,
@@ -159,23 +151,16 @@ class GRPCBaseClient(BaseClient):
                             )
                             raise ConnectionError(my_details)
                         elif my_code == grpc.StatusCode.DEADLINE_EXCEEDED:
-                            self.logger.error(
-                                f'{msg}\nThe ongoing request is terminated due to a server-side timeout.'
-                            )
+                            self.logger.error(f'{msg}\nThe ongoing request is terminated due to a server-side timeout.')
                             raise ConnectionError(my_details)
                         elif my_code == grpc.StatusCode.INTERNAL:
-                            self.logger.error(
-                                f'{msg}\ninternal error on the server side'
-                            )
+                            self.logger.error(f'{msg}\ninternal error on the server side')
                             raise err
-                        elif (
-                            my_code == grpc.StatusCode.UNKNOWN
-                            and 'asyncio.exceptions.TimeoutError' in my_details
-                        ):
+                        elif my_code == grpc.StatusCode.UNKNOWN and 'asyncio.exceptions.TimeoutError' in my_details:
                             raise BadClientInput(
-                                f'{msg}\n'
-                                'often the case is that you define/send a bad input iterator to jina, '
-                                'please double check your input iterator'
+                                f'{msg}\noften the case is that you define/send a bad'
+                                ' input iterator to jina, please double check your'
+                                ' input iterator'
                             ) from err
                         else:
                             raise BadServerFlow(msg) from err
