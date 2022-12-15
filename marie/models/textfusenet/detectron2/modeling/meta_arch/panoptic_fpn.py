@@ -2,9 +2,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import torch
-from torch import nn
-
 from detectron2.structures import ImageList
+from torch import nn
 
 from ..backbone import build_backbone
 from ..postprocessing import detector_postprocess, sem_seg_postprocess
@@ -33,9 +32,7 @@ class PanopticFPN(nn.Module):
         self.combine_on = cfg.MODEL.PANOPTIC_FPN.COMBINE.ENABLED
         self.combine_overlap_threshold = cfg.MODEL.PANOPTIC_FPN.COMBINE.OVERLAP_THRESH
         self.combine_stuff_area_limit = cfg.MODEL.PANOPTIC_FPN.COMBINE.STUFF_AREA_LIMIT
-        self.combine_instances_confidence_threshold = (
-            cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH
-        )
+        self.combine_instances_confidence_threshold = cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH
 
         self.backbone = build_backbone(cfg)
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
@@ -82,7 +79,9 @@ class PanopticFPN(nn.Module):
         if "sem_seg" in batched_inputs[0]:
             gt_sem_seg = [x["sem_seg"].to(self.device) for x in batched_inputs]
             gt_sem_seg = ImageList.from_tensors(
-                gt_sem_seg, self.backbone.size_divisibility, self.sem_seg_head.ignore_value
+                gt_sem_seg,
+                self.backbone.size_divisibility,
+                self.sem_seg_head.ignore_value,
             ).tensor
         else:
             gt_sem_seg = None
@@ -94,9 +93,7 @@ class PanopticFPN(nn.Module):
             gt_instances = None
         if self.proposal_generator:
             proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
-        detector_results, detector_losses = self.roi_heads(
-            images, features, proposals, gt_instances
-        )
+        detector_results, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
 
         if self.training:
             losses = {}

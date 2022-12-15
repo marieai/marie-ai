@@ -1,13 +1,14 @@
-import torch
-from typing import List, Union
-import time
+import math
 import os
+import time
 from enum import Enum
 from pathlib import Path
-import math
-from tqdm import tqdm
+from typing import List, Union
+
+import torch
 import torch.fx as fx
 import torch.nn.utils.prune
+from tqdm import tqdm
 
 
 class Precision(Enum):

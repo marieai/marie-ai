@@ -18,9 +18,7 @@ try:
     pkg_name = 'marie'
     libinfo_py = path.join(pkg_name, '__init__.py')
     libinfo_content = open(libinfo_py, 'r', encoding='utf8').readlines()
-    version_line = [l.strip() for l in libinfo_content if l.startswith('__version__')][
-        0
-    ]
+    version_line = [l.strip() for l in libinfo_content if l.startswith('__version__')][0]
     exec(version_line)  # gives __version__
 except FileNotFoundError:
     __version__ = '0.0.0'
@@ -185,6 +183,8 @@ setup(
         'Source': 'https://github.com/gregbugaj/marie-ai/',
         'Tracker': 'https://github.com/gregbugaj/marie-ai/issues',
     },
-    keywords='marie-ai ocr icr index elastic neural-network encoding '
-    'embedding serving docker container image video audio deep-learning mlops',
+    keywords=(
+        'marie-ai ocr icr index elastic neural-network encoding '
+        'embedding serving docker container image video audio deep-learning mlops'
+    ),
 )

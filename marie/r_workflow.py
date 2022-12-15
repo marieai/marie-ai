@@ -1,31 +1,31 @@
 import glob
 import io
 import json
+import logging
 import os
 import pathlib
 import shutil
-import logging
 
 import cv2
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-
-from boxes.box_processor import PSMode
 from boxes import BoxProcessorCraft
+from boxes.box_processor import PSMode
 from common.file_io import PathManager
 from document.craft_icr_processor import CraftIcrProcessor
-from marie.common.volume_handler import VolumeHandler
-from numpyencoder import NumpyEncoder
 from document.trocr_icr_processor import TrOcrIcrProcessor
+from numpyencoder import NumpyEncoder
 from overlay.overlay import OverlayProcessor
 from renderer.adlib_renderer import AdlibRenderer
 from renderer.blob_renderer import BlobRenderer
 from renderer.pdf_renderer import PdfRenderer
+
+from marie.common.volume_handler import VolumeHandler
 from utils.image_utils import imwrite
 from utils.pdf_ops import merge_pdf
-from utils.tiff_ops import merge_tiff, burst_tiff
-from utils.utils import ensure_exists, FileSystem
+from utils.tiff_ops import burst_tiff, merge_tiff
+from utils.utils import FileSystem, ensure_exists
 from utils.zip_ops import merge_zip
 
 
@@ -224,7 +224,11 @@ def process_workflow(src_file: str) -> None:
     merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{fileId}.ocr.zip"))
     merge_zip(blob_dir, os.path.join(assets_dir, f"{fileId}.blobs.xml.zip"))
     merge_pdf(pdf_dir, os.path.join(assets_dir, f"{fileId}.pdf"), __sort_key_files_by_page)
-    merge_tiff(clean_dir, os.path.join(assets_dir, f"{fileId}.tif.clean"), __sort_key_files_by_page)
+    merge_tiff(
+        clean_dir,
+        os.path.join(assets_dir, f"{fileId}.tif.clean"),
+        __sort_key_files_by_page,
+    )
 
 
 if __name__ == "__main__":

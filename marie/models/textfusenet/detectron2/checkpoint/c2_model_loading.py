@@ -2,11 +2,9 @@
 import copy
 import logging
 import re
+
 import torch
-from fvcore.common.checkpoint import (
-    get_missing_parameters_message,
-    get_unexpected_parameters_message,
-)
+from fvcore.common.checkpoint import get_missing_parameters_message, get_unexpected_parameters_message
 
 
 def convert_basic_c2_names(original_keys):
@@ -20,9 +18,7 @@ def convert_basic_c2_names(original_keys):
         list[str]: The same number of strings matching those in original_keys.
     """
     layer_keys = copy.deepcopy(original_keys)
-    layer_keys = [
-        {"pred_b": "linear_b", "pred_w": "linear_w"}.get(k, k) for k in layer_keys
-    ]  # some hard-coded mappings
+    layer_keys = [{"pred_b": "linear_b", "pred_w": "linear_w"}.get(k, k) for k in layer_keys]  # some hard-coded mappings
 
     layer_keys = [k.replace("_", ".") for k in layer_keys]
     layer_keys = [re.sub("\\.b$", ".bias", k) for k in layer_keys]
@@ -89,9 +85,7 @@ def convert_c2_detectron_names(weights):
     # FPN case
     # In the C2 model, the RPN hidden layer conv is defined for FPN level 2 and then
     # shared for all other levels, hence the appearance of "fpn2"
-    layer_keys = [
-        k.replace("conv.rpn.fpn2", "proposal_generator.rpn_head.conv") for k in layer_keys
-    ]
+    layer_keys = [k.replace("conv.rpn.fpn2", "proposal_generator.rpn_head.conv") for k in layer_keys]
     # Non-FPN case
     layer_keys = [k.replace("conv.rpn", "proposal_generator.rpn_head.conv") for k in layer_keys]
 
@@ -99,22 +93,11 @@ def convert_c2_detectron_names(weights):
     # RPN box transformation conv
     # --------------------------------------------------------------------------
     # FPN case (see note above about "fpn2")
-    layer_keys = [
-        k.replace("rpn.bbox.pred.fpn2", "proposal_generator.rpn_head.anchor_deltas")
-        for k in layer_keys
-    ]
-    layer_keys = [
-        k.replace("rpn.cls.logits.fpn2", "proposal_generator.rpn_head.objectness_logits")
-        for k in layer_keys
-    ]
+    layer_keys = [k.replace("rpn.bbox.pred.fpn2", "proposal_generator.rpn_head.anchor_deltas") for k in layer_keys]
+    layer_keys = [k.replace("rpn.cls.logits.fpn2", "proposal_generator.rpn_head.objectness_logits") for k in layer_keys]
     # Non-FPN case
-    layer_keys = [
-        k.replace("rpn.bbox.pred", "proposal_generator.rpn_head.anchor_deltas") for k in layer_keys
-    ]
-    layer_keys = [
-        k.replace("rpn.cls.logits", "proposal_generator.rpn_head.objectness_logits")
-        for k in layer_keys
-    ]
+    layer_keys = [k.replace("rpn.bbox.pred", "proposal_generator.rpn_head.anchor_deltas") for k in layer_keys]
+    layer_keys = [k.replace("rpn.cls.logits", "proposal_generator.rpn_head.objectness_logits") for k in layer_keys]
 
     # --------------------------------------------------------------------------
     # Fast R-CNN box head
@@ -168,9 +151,7 @@ def convert_c2_detectron_names(weights):
     # --------------------------------------------------------------------------
     # interestingly, the keypoint head convs have blob names that are simply "conv_fcnX"
     layer_keys = [k.replace("conv.fcn", "roi_heads.keypoint_head.conv_fcn") for k in layer_keys]
-    layer_keys = [
-        k.replace("kps.score.lowres", "roi_heads.keypoint_head.score_lowres") for k in layer_keys
-    ]
+    layer_keys = [k.replace("kps.score.lowres", "roi_heads.keypoint_head.score_lowres") for k in layer_keys]
     layer_keys = [k.replace("kps.score.", "roi_heads.keypoint_head.score.") for k in layer_keys]
 
     # --------------------------------------------------------------------------
@@ -188,16 +169,18 @@ def convert_c2_detectron_names(weights):
             new_start_idx = 4 if renamed.startswith("bbox_pred.") else 1
             new_weights[renamed] = weights[orig][new_start_idx:]
             logger.info(
-                "Remove prediction weight for background class in {}. The shape changes from "
-                "{} to {}.".format(
-                    renamed, tuple(weights[orig].shape), tuple(new_weights[renamed].shape)
+                "Remove prediction weight for background class in {}. The shape changes from {} to {}.".format(
+                    renamed,
+                    tuple(weights[orig].shape),
+                    tuple(new_weights[renamed].shape),
                 )
             )
         elif renamed.startswith("cls_score."):
             # move weights of bg class from original index 0 to last index
             logger.info(
-                "Move classification weights for background class in {} from index 0 to "
-                "index {}.".format(renamed, weights[orig].shape[0] - 1)
+                "Move classification weights for background class in {} from index 0 to index {}.".format(
+                    renamed, weights[orig].shape[0] - 1
+                )
             )
             new_weights[renamed] = torch.cat([weights[orig][1:], weights[orig][:1]])
         else:
@@ -272,18 +255,13 @@ def align_and_update_state_dicts(model_state_dict, ckpt_state_dict, c2_conversio
                     key_ckpt, value_ckpt.shape, key_model, shape_in_model
                 )
             )
-            logger.warning(
-                "{} will not be loaded. Please double check and see if this is desired.".format(
-                    key_ckpt
-                )
-            )
+            logger.warning("{} will not be loaded. Please double check and see if this is desired.".format(key_ckpt))
             continue
 
         model_state_dict[key_model] = value_ckpt.clone()
         if key_ckpt in matched_keys:  # already added to matched_keys
             logger.error(
-                "Ambiguity found for {} in checkpoint!"
-                "It matches at least two keys in the model ({} and {}).".format(
+                "Ambiguity found for {} in checkpoint!It matches at least two keys in the model ({} and {}).".format(
                     key_ckpt, key_model, matched_keys[key_ckpt]
                 )
             )
@@ -308,6 +286,4 @@ def align_and_update_state_dicts(model_state_dict, ckpt_state_dict, c2_conversio
 
     unmatched_ckpt_keys = [k for k in ckpt_keys if k not in matched_ckpt_keys]
     if len(unmatched_ckpt_keys):
-        logger.info(
-            get_unexpected_parameters_message(original_keys[x] for x in unmatched_ckpt_keys)
-        )
+        logger.info(get_unexpected_parameters_message(original_keys[x] for x in unmatched_ckpt_keys))

@@ -33,9 +33,7 @@ class StatusMessage(ProtoTypeMixin):
             else:
                 self._pb_body = jina_pb2.StatusProto()
         except Exception as ex:
-            raise BadRequestType(
-                f'fail to construct a {self.__class__} object from {status_object}'
-            ) from ex
+            raise BadRequestType(f'fail to construct a {self.__class__} object from {status_object}') from ex
 
     def set_exception(self, ex: Exception):
         """Set exception information into the Status Message
@@ -48,9 +46,7 @@ class StatusMessage(ProtoTypeMixin):
         self.proto.description = repr(ex)
         self.proto.exception.name = ex.__class__.__name__
         self.proto.exception.args.extend([str(v) for v in ex.args])
-        self.proto.exception.stacks.extend(
-            traceback.format_exception(type(ex), value=ex, tb=ex.__traceback__)
-        )
+        self.proto.exception.stacks.extend(traceback.format_exception(type(ex), value=ex, tb=ex.__traceback__))
 
     def set_code(self, code):
         """Set the code of the Status Message

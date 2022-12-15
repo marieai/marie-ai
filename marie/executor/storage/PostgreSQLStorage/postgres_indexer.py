@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 import numpy as np
+
 from marie import DocumentArray, Executor, requests
 from marie.logging.logger import MarieLogger
 
@@ -95,9 +96,7 @@ class PostgreSQLStorage(Executor):
         """
         if docs is None:
             return
-        traversal_paths = parameters.get(
-            "traversal_paths", self.default_traversal_paths
-        )
+        traversal_paths = parameters.get("traversal_paths", self.default_traversal_paths)
 
         self.handler.add(
             docs[traversal_paths],

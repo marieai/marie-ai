@@ -1,14 +1,13 @@
 import glob
+import multiprocessing as mp
 import os
 import tempfile
-import multiprocessing as mp
 from concurrent.futures.thread import ThreadPoolExecutor
 
 import cv2
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
-
 
 # https://github.com/joeatwork/python-lzw
 # exiftool PID_576_7188_0_150300431.tif
@@ -26,7 +25,8 @@ def convert_group4(src_path, dst_path):
 
     identify -verbose /path/to/img.tiff | grep photometric
     """
-    from ctypes import c_void_p, c_char_p
+    from ctypes import c_char_p, c_void_p
+
     from wand.api import library
     from wand.image import Image
 

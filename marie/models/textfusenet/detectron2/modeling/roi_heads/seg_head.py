@@ -1,9 +1,10 @@
-import torch
-from torch import nn
-import numpy as np
 import cv2
+import numpy as np
+import torch
 import torch.nn.functional as F
-from torch.nn import Parameter, Module
+from torch import nn
+from torch.nn import Module, Parameter
+
 from ..poolers import ROIPooler
 
 
@@ -15,11 +16,12 @@ class Segmentation_head(nn.Module):
         x (lsit[Tensor]): fpn features
         feature_level (int): select which level to align
         proposal_boxes (list[Tensor]): selected positive proposals
-        image_shape: reshaped size of training img 
+        image_shape: reshaped size of training img
     Returns:
         seg_logits (Tensor): segmentation result
-        global_context (Tensor): features of global context 
+        global_context (Tensor): features of global context
     """
+
     def __init__(self, cfg):
         super(Segmentation_head, self).__init__()
 
@@ -52,13 +54,11 @@ class Segmentation_head(nn.Module):
         for i in range(self.num_conv3x3):
             self.conv3x3_list_roi.append(nn.Conv2d(self.channels, self.channels, 3, padding=1, bias=False))
 
-
         # layers---segmentation logits
         self.conv1x1_seg_logits = nn.Conv2d(self.channels, self.channels, 1, padding=0, bias=False)
         self.seg_logits = nn.Conv2d(self.channels, self.num_classes, 1)
 
         self.relu = nn.ReLU(inplace=True)
-
 
     def forward(self, x, feature_level, proposal_boxes, image_shape):
         feature_shape = x[feature_level].shape[-2:]
@@ -73,13 +73,11 @@ class Segmentation_head(nn.Module):
         for i in range(self.num_conv3x3):
             feature_fuse = self.conv3x3_list[i](feature_fuse)
 
-
         # get global context
         global_context = self.seg_pooler([feature_fuse], proposal_boxes)
         for i in range(self.num_conv3x3):
             global_context = self.conv3x3_list_roi[i](global_context)
         global_context = self.relu(global_context)
-
 
         # get segmentation logits
         feature_pred = F.interpolate(feature_fuse, size=image_shape, mode='bilinear', align_corners=True)
@@ -100,9 +98,9 @@ def make_segmentation_gt(targets):
     H = targets[0].image_size[0]
 
     classes = targets[0].gt_classes
-    word_indx = (classes==0).nonzero()
+    word_indx = (classes == 0).nonzero()
 
-    gt_polygon_list = targets[0].gt_masks.polygons 
+    gt_polygon_list = targets[0].gt_masks.polygons
 
     imglist = []
     for i in word_indx:
@@ -125,6 +123,7 @@ class Segmentation_LossComputation(Module):
     compute seg loss
 
     """
+
     def __init__(self):
         super(Segmentation_LossComputation, self).__init__()
 
@@ -138,8 +137,7 @@ class Segmentation_LossComputation(Module):
 
         return loss_seg
 
+
 def build_seg_head_loss():
     loss_evaluator = Segmentation_LossComputation()
     return loss_evaluator
-
-

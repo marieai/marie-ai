@@ -42,9 +42,7 @@ def _setup(worker_port, port, protocol):
     pod_addresses = f'{{"pod0": ["0.0.0.0:{worker_port}"]}}'
 
     # create a single worker runtime
-    worker_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(worker_port,)
-    )
+    worker_process = multiprocessing.Process(target=_create_worker_runtime, args=(worker_port,))
     worker_process.start()
 
     # create a single gateway runtime

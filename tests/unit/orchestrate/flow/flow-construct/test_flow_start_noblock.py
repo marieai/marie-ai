@@ -1,11 +1,10 @@
 import time
 
 import pytest
-
-from jina.excepts import RuntimeFailToStart
-from jina.serve.executors import BaseExecutor
 from jina import Flow
+from jina.excepts import RuntimeFailToStart
 from jina.logging.profile import TimeContext
+from jina.serve.executors import BaseExecutor
 
 
 class SlowExecutor(BaseExecutor):

@@ -1,12 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import torch
-from torch import nn
-from torch.nn import functional as F
-
 from detectron2.layers import Conv2d, ConvTranspose2d, ShapeSpec, cat, interpolate
 from detectron2.structures import heatmaps_to_keypoints
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
+from torch import nn
+from torch.nn import functional as F
 
 _TOTAL_SKIPPED = 0
 
@@ -73,9 +72,7 @@ def keypoint_rcnn_loss(pred_keypoint_logits, instances, normalizer):
     N, K, H, W = pred_keypoint_logits.shape
     pred_keypoint_logits = pred_keypoint_logits.view(N * K, H * W)
 
-    keypoint_loss = F.cross_entropy(
-        pred_keypoint_logits[valid], keypoint_targets[valid], reduction="sum"
-    )
+    keypoint_loss = F.cross_entropy(pred_keypoint_logits[valid], keypoint_targets[valid], reduction="sum")
 
     # If a normalizer isn't specified, normalize by the number of visible keypoints in the minibatch
     if normalizer is None:
@@ -148,7 +145,11 @@ class KRCNNConvDeconvUpsampleHead(nn.Module):
 
         deconv_kernel = 4
         self.score_lowres = ConvTranspose2d(
-            in_channels, num_keypoints, deconv_kernel, stride=2, padding=deconv_kernel // 2 - 1
+            in_channels,
+            num_keypoints,
+            deconv_kernel,
+            stride=2,
+            padding=deconv_kernel // 2 - 1,
         )
         self.up_scale = up_scale
 

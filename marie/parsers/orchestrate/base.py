@@ -32,8 +32,9 @@ def mixin_essential_parser(parser):
         '--workspace',
         type=str,
         default=None,
-        help='The working directory for any IO operations in this object. '
-        'If not set, then derive from its parent `workspace`.',
+        help=(
+            'The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.'
+        ),
     )
 
     gp.add_argument(
@@ -61,9 +62,11 @@ def mixin_essential_parser(parser):
         '--workspace-id',
         type=str,
         default=random_identity(),
-        help='the UUID for identifying the workspace. When not given a random id will be assigned.'
-        'Multiple Pod/Deployment/Flow will work under the same workspace if they share the same '
-        '`workspace-id`.'
+        help=(
+            'the UUID for identifying the workspace. When not given a random id will be'
+            ' assigned.Multiple Pod/Deployment/Flow will work under the same workspace'
+            ' if they share the same `workspace-id`.'
+        )
         if _SHOW_ALL_ARGS
         else argparse.SUPPRESS,
     )
@@ -136,8 +139,11 @@ def mixin_scalable_deployment_parser(parser):
         '--shards',
         type=int,
         default=1,
-        help='The number of shards in the deployment running at the same time. For more details check '
-        'https://docs.jina.ai/concepts/flow/create-flow/#complex-flow-topologies',
+        help=(
+            'The number of shards in the deployment running at the same time. For more'
+            ' details check'
+            ' https://docs.jina.ai/concepts/flow/create-flow/#complex-flow-topologies'
+        ),
     )
 
     gp.add_argument(

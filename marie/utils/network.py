@@ -1,5 +1,5 @@
-import socket
 import os
+import socket
 
 
 def find_open_port():
@@ -15,11 +15,7 @@ def find_open_port():
 
 def is_docker():
     path = "/proc/self/cgroup"
-    return (
-        os.path.exists("/.dockerenv")
-        or os.path.isfile(path)
-        and any("docker" in line for line in open(path))
-    )
+    return os.path.exists("/.dockerenv") or os.path.isfile(path) and any("docker" in line for line in open(path))
 
 
 def get_ip_address():

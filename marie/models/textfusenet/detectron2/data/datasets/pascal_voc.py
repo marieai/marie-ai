@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-from fvcore.common.file_io import PathManager
 import os
-import numpy as np
 import xml.etree.ElementTree as ET
 
-from detectron2.structures import BoxMode
+import numpy as np
 from detectron2.data import DatasetCatalog, MetadataCatalog
-
+from detectron2.structures import BoxMode
+from fvcore.common.file_io import PathManager
 
 __all__ = ["register_pascal_voc"]
 
@@ -64,7 +63,11 @@ def load_voc_instances(dirname: str, split: str):
             bbox[0] -= 1.0
             bbox[1] -= 1.0
             instances.append(
-                {"category_id": CLASS_NAMES.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS}
+                {
+                    "category_id": CLASS_NAMES.index(cls),
+                    "bbox": bbox,
+                    "bbox_mode": BoxMode.XYXY_ABS,
+                }
             )
         r["annotations"] = instances
         dicts.append(r)
@@ -73,6 +76,4 @@ def load_voc_instances(dirname: str, split: str):
 
 def register_pascal_voc(name, dirname, split, year):
     DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split))
-    MetadataCatalog.get(name).set(
-        thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split
-    )
+    MetadataCatalog.get(name).set(thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split)

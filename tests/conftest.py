@@ -30,14 +30,10 @@ def test_metas(tmpdir, random_workspace_name):
 
 @pytest.fixture()
 def docker_compose(request):
-    os.system(
-        f"docker-compose -f {request.param} --project-directory . up  --build -d --remove-orphans"
-    )
+    os.system(f"docker-compose -f {request.param} --project-directory . up  --build -d --remove-orphans")
     time.sleep(10)
     yield
-    os.system(
-        f"docker-compose -f {request.param} --project-directory . down --remove-orphans"
-    )
+    os.system(f"docker-compose -f {request.param} --project-directory . down --remove-orphans")
 
 
 @pytest.fixture(scope='function')

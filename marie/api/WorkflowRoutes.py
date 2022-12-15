@@ -1,39 +1,36 @@
-from flask import Blueprint, jsonify
-from flask_restful import request
-
-import marie.conf
-from marie.logger import setup_logger
-from marie.utils.network import get_ip_address
-
 import glob
 import io
 import json
+import logging
 import os
 import pathlib
 import shutil
-import logging
 
 import cv2
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
+from flask import Blueprint, jsonify
+from flask_restful import request
 
+import marie.conf
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.common.file_io import PathManager
 from marie.document.craft_icr_processor import CraftIcrProcessor
-from marie.numpyencoder import NumpyEncoder
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.logger import setup_logger
+from marie.numpyencoder import NumpyEncoder
 from marie.overlay.overlay import OverlayProcessor
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
 from marie.renderer.pdf_renderer import PdfRenderer
 from marie.utils.image_utils import imwrite
+from marie.utils.network import get_ip_address
 from marie.utils.pdf_ops import merge_pdf
-from marie.utils.tiff_ops import merge_tiff, burst_tiff
-from marie.utils.utils import ensure_exists, FileSystem
+from marie.utils.tiff_ops import burst_tiff, merge_tiff
+from marie.utils.utils import FileSystem, ensure_exists
 from marie.utils.zip_ops import merge_zip
-
 from marie.version import __version__
 
 logger = setup_logger(__file__)
@@ -252,7 +249,11 @@ def process_workflow(src_file: str, dry_run: bool) -> None:
     merge_zip(adlib_final_dir, os.path.join(assets_dir, f"{file_id}.ocr.zip"))
     merge_zip(blob_dir, os.path.join(assets_dir, f"{file_id}.blobs.xml.zip"))
     merge_pdf(pdf_dir, os.path.join(assets_dir, f"{file_id}.pdf"), __sort_key_files_by_page)
-    merge_tiff(clean_dir, os.path.join(assets_dir, f"{file_id}.tif.clean"), __sort_key_files_by_page)
+    merge_tiff(
+        clean_dir,
+        os.path.join(assets_dir, f"{file_id}.tif.clean"),
+        __sort_key_files_by_page,
+    )
 
     # copy files from assets back to the asset source
     if dry_run:

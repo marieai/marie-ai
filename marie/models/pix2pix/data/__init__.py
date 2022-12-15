@@ -11,9 +11,12 @@ Now you can use the dataset class by specifying flag '--dataset_mode dummy'.
 See our template dataset class 'template_dataset.py' for more details.
 """
 import importlib
+
 import torch.utils.data
+
 from .base_dataset import BaseDataset
 from .single_dataset import SingleDataset
+
 
 def find_dataset_using_name(dataset_name):
     """Import the module "data/[dataset_name]_dataset.py".
@@ -24,10 +27,7 @@ def find_dataset_using_name(dataset_name):
     """
 
     # FIXME : this needs to be fixes as the import_module is not working
-    mapping = {
-        'single': SingleDataset,
-        'base': None
-    }
+    mapping = {'single': SingleDataset, 'base': None}
 
     return mapping[dataset_name]
 
@@ -37,12 +37,14 @@ def find_dataset_using_name(dataset_name):
     dataset = None
     target_dataset_name = dataset_name.replace('_', '') + 'dataset'
     for name, cls in datasetlib.__dict__.items():
-        if name.lower() == target_dataset_name.lower() \
-           and issubclass(cls, BaseDataset):
+        if name.lower() == target_dataset_name.lower() and issubclass(cls, BaseDataset):
             dataset = cls
 
     if dataset is None:
-        raise NotImplementedError("In %s.py, there should be a subclass of BaseDataset with class name that matches %s in lowercase." % (dataset_filename, target_dataset_name))
+        raise NotImplementedError(
+            "In %s.py, there should be a subclass of BaseDataset with class name that matches %s in lowercase."
+            % (dataset_filename, target_dataset_name)
+        )
 
     return dataset
 
@@ -51,6 +53,7 @@ def get_option_setter(dataset_name):
     """Return the static method <modify_commandline_options> of the dataset class."""
     dataset_class = find_dataset_using_name(dataset_name)
     return dataset_class.modify_commandline_options
+
 
 def create_dataset(opt):
     """Create a dataset given the option.
@@ -67,7 +70,7 @@ def create_dataset(opt):
     return dataset
 
 
-class CustomDatasetDataLoader():
+class CustomDatasetDataLoader:
     """Wrapper class of Dataset class that performs multi-threaded data loading"""
 
     def __init__(self, opt):
@@ -85,7 +88,7 @@ class CustomDatasetDataLoader():
             batch_size=opt.batch_size,
             shuffle=not opt.serial_batches,
             num_workers=int(opt.num_threads),
-            pin_memory=False
+            pin_memory=False,
         )
 
     def load_data(self):

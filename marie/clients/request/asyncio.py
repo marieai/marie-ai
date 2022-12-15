@@ -1,8 +1,8 @@
 """Module for async requests generator."""
 
-from typing import AsyncIterator, Optional, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
 
-from marie.clients.request.helper import _new_data_request_from_batch, _new_data_request
+from marie.clients.request.helper import _new_data_request, _new_data_request_from_batch
 from marie.enums import DataInputType
 from marie.importer import ImportExtensions
 from marie.logging.predefined import default_logger
@@ -39,9 +39,7 @@ async def request_generator(
     try:
         if data is None:
             # this allows empty inputs, i.e. a data request with only parameters
-            yield _new_data_request(
-                endpoint=exec_endpoint, target=target_executor, parameters=parameters
-            )
+            yield _new_data_request(endpoint=exec_endpoint, target=target_executor, parameters=parameters)
         else:
             with ImportExtensions(required=True):
                 import aiostream

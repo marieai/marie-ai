@@ -11,6 +11,7 @@ import consul
 import yaml
 from consul.base import Check
 from logger import setup_logger
+
 from marie.utils.types import strtobool
 from utils.network import find_open_port, get_ip_address
 
@@ -61,9 +62,7 @@ class DebugWebServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(
-            bytes("<html><head><title>Registry info</title></head>", "utf-8")
-        )
+        self.wfile.write(bytes("<html><head><title>Registry info</title></head>", "utf-8"))
         self.wfile.write(bytes("<p>Request: %s</p>" % self.path, "utf-8"))
         self.wfile.write(bytes("<body>", "utf-8"))
         self.wfile.write(bytes("<p>Service status.</p>", "utf-8"))
@@ -104,9 +103,7 @@ def verify_connection(cfg: EndpointConfig) -> bool:
     return False
 
 
-def create_client(
-    cfg: EndpointConfig, verify: bool = True
-) -> Tuple[Union[consul.Consul, None], bool]:
+def create_client(cfg: EndpointConfig, verify: bool = True) -> Tuple[Union[consul.Consul, None], bool]:
     """
     Create new consul client
     """
@@ -318,15 +315,11 @@ if __name__ == "__main__":
         server_port = int(fsrc.read())
         logger.info(f"port = {server_port}")
 
-    current_service_id = register(
-        service_host=host_name, service_port=server_port, service_id=None
-    )
+    current_service_id = register(service_host=host_name, service_port=server_port, service_id=None)
     logger.info("Registration service: %s", current_service_id)
 
     def _watchdog_target():
-        return start_watchdog(
-            watchdog_interval, service_host=host_name, service_port=server_port
-        )
+        return start_watchdog(watchdog_interval, service_host=host_name, service_port=server_port)
 
     threading.Thread(target=_watchdog_target, daemon=debug_server).start()
 

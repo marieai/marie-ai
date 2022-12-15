@@ -1,6 +1,6 @@
 import pytest
-
 from jina import Executor, Flow, __default_executor__, requests
+
 from tests import random_docs
 
 
@@ -52,9 +52,7 @@ def test_flow_after(protocol):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_before_after_no_shard_ignored(protocol):
     docs = random_docs(10)
-    f = Flow(protocol=protocol).add(
-        uses_after=MyExec, uses_before=MyExec, name='p1', shards=1
-    )
+    f = Flow(protocol=protocol).add(uses_after=MyExec, uses_before=MyExec, name='p1', shards=1)
 
     with f:
         f.index(docs)
@@ -67,9 +65,7 @@ def test_flow_before_after_no_shard_ignored(protocol):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_default_before_after_is_ignored(protocol):
     docs = random_docs(10)
-    f = Flow(protocol=protocol).add(
-        uses_after=__default_executor__, uses_before=__default_executor__, name='p1'
-    )
+    f = Flow(protocol=protocol).add(uses_after=__default_executor__, uses_before=__default_executor__, name='p1')
 
     with f:
         f.index(docs)
@@ -82,9 +78,7 @@ def test_flow_default_before_after_is_ignored(protocol):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_before_after(protocol):
     docs = random_docs(10)
-    f = Flow(protocol=protocol).add(
-        uses_before=MyExec, uses_after=MyExec, name='p1', shards=2
-    )
+    f = Flow(protocol=protocol).add(uses_before=MyExec, uses_after=MyExec, name='p1', shards=2)
 
     with f:
         f.index(docs)

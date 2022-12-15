@@ -35,8 +35,12 @@ def mixin_client_features_parser(parser):
         '--tracing',
         action='store_true',
         default=False,
-        help='If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. '
-        'Otherwise a no-op implementation will be provided.',
+        help=(
+            'If set, the sdk implementation of the OpenTelemetry tracer will be'
+            ' available and will be enabled for automatic tracing of requests and'
+            ' customer span creation. Otherwise a no-op implementation will be'
+            ' provided.'
+        ),
     )
 
     parser.add_argument(
@@ -57,8 +61,11 @@ def mixin_client_features_parser(parser):
         '--metrics',
         action='store_true',
         default=False,
-        help='If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. '
-        'Otherwise a no-op implementation will be provided.',
+        help=(
+            'If set, the sdk implementation of the OpenTelemetry metrics will be'
+            ' available for default monitoring and custom measurements. Otherwise a'
+            ' no-op implementation will be provided.'
+        ),
     )
 
     parser.add_argument(

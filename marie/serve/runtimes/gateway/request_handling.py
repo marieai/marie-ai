@@ -3,8 +3,8 @@ import copy
 from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 import grpc.aio
-
 from docarray import DocumentArray
+
 from marie.excepts import InternalNetworkError
 from marie.helper import GATEWAY_NAME
 from marie.logging.logger import MarieLogger
@@ -57,16 +57,16 @@ class GatewayRequestHandler(MonitoringRequestMixin):
         async def gather_endpoints(request_graph):
             nodes = request_graph.all_nodes
             try:
-                tasks_to_get_endpoints = [
-                    node.get_endpoints(connection_pool) for node in nodes
-                ]
+                tasks_to_get_endpoints = [node.get_endpoints(connection_pool) for node in nodes]
                 endpoints = await asyncio.gather(*tasks_to_get_endpoints)
             except InternalNetworkError as err:
                 err_code = err.code()
                 if err_code == grpc.StatusCode.UNAVAILABLE:
                     err._details = (
                         err.details()
-                        + f' |Gateway: Communication error while gathering endpoints with deployment at address(es) {err.dest_addr}. Head or worker(s) may be down.'
+                        + ' |Gateway: Communication error while gathering endpoints'
+                        f' with deployment at address(es) {err.dest_addr}. Head or'
+                        ' worker(s) may be down.'
                     )
                     raise err
                 else:
@@ -86,9 +86,7 @@ class GatewayRequestHandler(MonitoringRequestMixin):
             request_graph = copy.deepcopy(graph)
 
             if graph.has_filter_conditions:
-                request_doc_ids = request.data.docs[
-                    :, 'id'
-                ]  # used to maintain order of docs that are filtered by executors
+                request_doc_ids = request.data.docs[:, 'id']  # used to maintain order of docs that are filtered by executors
             responding_tasks = []
             floating_tasks = []
             endpoint = request.header.exec_endpoint
@@ -142,10 +140,7 @@ class GatewayRequestHandler(MonitoringRequestMixin):
                 tasks: List[asyncio.Task], request_graph: TopologyGraph
             ) -> asyncio.Future:
                 try:
-                    if (
-                        self._executor_endpoint_mapping is None
-                        and not self._gathering_endpoints
-                    ):
+                    if self._executor_endpoint_mapping is None and not self._gathering_endpoints:
                         self._gathering_endpoints = True
                         asyncio.create_task(gather_endpoints(request_graph))
 
@@ -155,9 +150,7 @@ class GatewayRequestHandler(MonitoringRequestMixin):
                     self._update_end_failed_requests_metrics()
                     raise
                 partial_responses, metadatas = zip(*partial_responses)
-                filtered_partial_responses = list(
-                    filter(lambda x: x is not None, partial_responses)
-                )
+                filtered_partial_responses = list(filter(lambda x: x is not None, partial_responses))
 
                 response = filtered_partial_responses[0]
                 # JoanFM: to keep the docs_map feature, need to add the routes in the WorkerRuntime but clear it here
@@ -186,12 +179,8 @@ class GatewayRequestHandler(MonitoringRequestMixin):
                 responding_tasks.append(future)
 
             return (
-                asyncio.ensure_future(
-                    _process_results_at_end_gateway(responding_tasks, request_graph)
-                ),
-                asyncio.ensure_future(asyncio.gather(*floating_tasks))
-                if len(floating_tasks) > 0
-                else None,
+                asyncio.ensure_future(_process_results_at_end_gateway(responding_tasks, request_graph)),
+                asyncio.ensure_future(asyncio.gather(*floating_tasks)) if len(floating_tasks) > 0 else None,
             )
 
         return _handle_request

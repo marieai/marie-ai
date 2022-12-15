@@ -42,9 +42,7 @@ def upgrade_config(cfg: CN, to_version: Optional[int] = None) -> CN:
     if to_version is None:
         to_version = _C.VERSION
 
-    assert cfg.VERSION <= to_version, "Cannot upgrade from v{} to v{}!".format(
-        cfg.VERSION, to_version
-    )
+    assert cfg.VERSION <= to_version, "Cannot upgrade from v{} to v{}!".format(cfg.VERSION, to_version)
     for k in range(cfg.VERSION, to_version):
         converter = globals()["ConverterV" + str(k + 1)]
         converter.upgrade(cfg)
@@ -69,9 +67,7 @@ def downgrade_config(cfg: CN, to_version: int) -> CN:
         in the old version when a general downgrade is not possible.
     """
     cfg = cfg.clone()
-    assert cfg.VERSION >= to_version, "Cannot downgrade from v{} to v{}!".format(
-        cfg.VERSION, to_version
-    )
+    assert cfg.VERSION >= to_version, "Cannot downgrade from v{} to v{}!".format(cfg.VERSION, to_version)
     for k in range(cfg.VERSION, to_version, -1):
         converter = globals()["ConverterV" + str(k)]
         converter.downgrade(cfg)
@@ -105,11 +101,7 @@ def guess_version(cfg: CN, filename: str) -> int:
         logger.warning("Config '{}' has no VERSION. Assuming it to be v{}.".format(filename, ret))
     else:
         ret = _C.VERSION
-        logger.warning(
-            "Config '{}' has no VERSION. Assuming it to be compatible with latest v{}.".format(
-                filename, ret
-            )
-        )
+        logger.warning("Config '{}' has no VERSION. Assuming it to be compatible with latest v{}.".format(filename, ret))
     return ret
 
 
@@ -174,7 +166,10 @@ class ConverterV2(_RenameConverter):
         ("MODEL.WEIGHT", "MODEL.WEIGHTS"),
         ("MODEL.PANOPTIC_FPN.SEMANTIC_LOSS_SCALE", "MODEL.SEM_SEG_HEAD.LOSS_WEIGHT"),
         ("MODEL.PANOPTIC_FPN.RPN_LOSS_SCALE", "MODEL.RPN.LOSS_WEIGHT"),
-        ("MODEL.PANOPTIC_FPN.INSTANCE_LOSS_SCALE", "MODEL.PANOPTIC_FPN.INSTANCE_LOSS_WEIGHT"),
+        (
+            "MODEL.PANOPTIC_FPN.INSTANCE_LOSS_SCALE",
+            "MODEL.PANOPTIC_FPN.INSTANCE_LOSS_WEIGHT",
+        ),
         ("MODEL.PANOPTIC_FPN.COMBINE_ON", "MODEL.PANOPTIC_FPN.COMBINE.ENABLED"),
         (
             "MODEL.PANOPTIC_FPN.COMBINE_OVERLAP_THRESHOLD",
@@ -190,8 +185,14 @@ class ConverterV2(_RenameConverter):
         ),
         ("MODEL.ROI_HEADS.SCORE_THRESH", "MODEL.ROI_HEADS.SCORE_THRESH_TEST"),
         ("MODEL.ROI_HEADS.NMS", "MODEL.ROI_HEADS.NMS_THRESH_TEST"),
-        ("MODEL.RETINANET.INFERENCE_SCORE_THRESHOLD", "MODEL.RETINANET.SCORE_THRESH_TEST"),
-        ("MODEL.RETINANET.INFERENCE_TOPK_CANDIDATES", "MODEL.RETINANET.TOPK_CANDIDATES_TEST"),
+        (
+            "MODEL.RETINANET.INFERENCE_SCORE_THRESHOLD",
+            "MODEL.RETINANET.SCORE_THRESH_TEST",
+        ),
+        (
+            "MODEL.RETINANET.INFERENCE_TOPK_CANDIDATES",
+            "MODEL.RETINANET.TOPK_CANDIDATES_TEST",
+        ),
         ("MODEL.RETINANET.INFERENCE_NMS_THRESHOLD", "MODEL.RETINANET.NMS_THRESH_TEST"),
         ("TEST.DETECTIONS_PER_IMG", "TEST.DETECTIONS_PER_IMAGE"),
         ("TEST.AUG_ON", "TEST.AUG.ENABLED"),
@@ -206,13 +207,19 @@ class ConverterV2(_RenameConverter):
 
         if cfg.MODEL.META_ARCHITECTURE == "RetinaNet":
             _rename(
-                cfg, "MODEL.RETINANET.ANCHOR_ASPECT_RATIOS", "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS"
+                cfg,
+                "MODEL.RETINANET.ANCHOR_ASPECT_RATIOS",
+                "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS",
             )
             _rename(cfg, "MODEL.RETINANET.ANCHOR_SIZES", "MODEL.ANCHOR_GENERATOR.SIZES")
             del cfg["MODEL"]["RPN"]["ANCHOR_SIZES"]
             del cfg["MODEL"]["RPN"]["ANCHOR_ASPECT_RATIOS"]
         else:
-            _rename(cfg, "MODEL.RPN.ANCHOR_ASPECT_RATIOS", "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS")
+            _rename(
+                cfg,
+                "MODEL.RPN.ANCHOR_ASPECT_RATIOS",
+                "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS",
+            )
             _rename(cfg, "MODEL.RPN.ANCHOR_SIZES", "MODEL.ANCHOR_GENERATOR.SIZES")
             del cfg["MODEL"]["RETINANET"]["ANCHOR_SIZES"]
             del cfg["MODEL"]["RETINANET"]["ANCHOR_ASPECT_RATIOS"]
@@ -222,7 +229,11 @@ class ConverterV2(_RenameConverter):
     def downgrade(cls, cfg: CN) -> None:
         super().downgrade(cfg)
 
-        _rename(cfg, "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS", "MODEL.RPN.ANCHOR_ASPECT_RATIOS")
+        _rename(
+            cfg,
+            "MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS",
+            "MODEL.RPN.ANCHOR_ASPECT_RATIOS",
+        )
         _rename(cfg, "MODEL.ANCHOR_GENERATOR.SIZES", "MODEL.RPN.ANCHOR_SIZES")
         cfg.MODEL.RETINANET.ANCHOR_ASPECT_RATIOS = cfg.MODEL.RPN.ANCHOR_ASPECT_RATIOS
         cfg.MODEL.RETINANET.ANCHOR_SIZES = cfg.MODEL.RPN.ANCHOR_SIZES

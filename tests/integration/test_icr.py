@@ -2,9 +2,9 @@ import os
 import time
 
 import cv2
+
 from marie.boxes import BoxProcessorCraft
-from marie.document import CraftIcrProcessor
-from marie.document import TrOcrIcrProcessor
+from marie.document import CraftIcrProcessor, TrOcrIcrProcessor
 from marie.logger import setup_logger
 from marie.registry_base import RegistryHolder
 from marie.timer import Timer
@@ -26,18 +26,12 @@ if __name__ == "__main__":
 
     # print(RegistryHolder.REGISTRY[TrOcrIcrProcessor.__name__](work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True))
     # print(RegistryHolder.REGISTRY[TrOcrIcrProcessor.__name__](work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True))
-    icr = TrOcrIcrProcessor(
-        work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True
-    )
+    icr = TrOcrIcrProcessor(work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True)
 
     if True:
-        box = BoxProcessorCraft(
-            work_dir=work_dir_boxes, models_dir="../../model_zoo/craft", cuda=True
-        )
+        box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir="../../model_zoo/craft", cuda=True)
 
-        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
-            key, "field", snippet
-        )
+        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", snippet)
 
         start = time.time()
         for xx in range(0, 1):

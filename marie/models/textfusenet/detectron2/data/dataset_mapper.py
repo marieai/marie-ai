@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import copy
 import logging
+
 import numpy as np
 import torch
 from fvcore.common.file_io import PathManager
@@ -55,9 +56,7 @@ class DatasetMapper:
         if self.load_proposals:
             self.min_box_side_len = cfg.MODEL.PROPOSAL_GENERATOR.MIN_SIZE
             self.proposal_topk = (
-                cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TRAIN
-                if is_train
-                else cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST
+                cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TRAIN if is_train else cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST
             )
         self.is_train = is_train
 
@@ -75,9 +74,7 @@ class DatasetMapper:
         utils.check_image_size(dataset_dict, image)
 
         if "annotations" not in dataset_dict:
-            image, transforms = T.apply_transform_gens(
-                ([self.crop_gen] if self.crop_gen else []) + self.tfm_gens, image
-            )
+            image, transforms = T.apply_transform_gens(([self.crop_gen] if self.crop_gen else []) + self.tfm_gens, image)
         else:
             # Crop around an instance if there are instances in the image.
             # USER: Remove if you don't use cropping
@@ -103,7 +100,11 @@ class DatasetMapper:
         # USER: Remove if you don't use pre-computed proposals.
         if self.load_proposals:
             utils.transform_proposals(
-                dataset_dict, image_shape, transforms, self.min_box_side_len, self.proposal_topk
+                dataset_dict,
+                image_shape,
+                transforms,
+                self.min_box_side_len,
+                self.proposal_topk,
             )
 
         if not self.is_train:
@@ -122,14 +123,15 @@ class DatasetMapper:
             # USER: Implement additional transformations if you have other types of data
             annos = [
                 utils.transform_instance_annotations(
-                    obj, transforms, image_shape, keypoint_hflip_indices=self.keypoint_hflip_indices
+                    obj,
+                    transforms,
+                    image_shape,
+                    keypoint_hflip_indices=self.keypoint_hflip_indices,
                 )
                 for obj in dataset_dict.pop("annotations")
                 if obj.get("iscrowd", 0) == 0
             ]
-            instances = utils.annotations_to_instances(
-                annos, image_shape, mask_format=self.mask_format
-            )
+            instances = utils.annotations_to_instances(annos, image_shape, mask_format=self.mask_format)
             # Create a tight bounding box from masks, useful when image is cropped
             if self.crop_gen and instances.has("gt_masks"):
                 instances.gt_boxes = instances.gt_masks.get_bounding_boxes()

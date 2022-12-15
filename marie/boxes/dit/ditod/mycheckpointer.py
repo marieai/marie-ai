@@ -1,15 +1,16 @@
-from detectron2.checkpoint import DetectionCheckpointer
-
 from typing import Any
+
+import numpy as np
 import torch
 import torch.nn as nn
-#from fvcore.common.checkpoint import _IncompatibleKeys, _strip_prefix_if_present, TORCH_VERSION, quantization, \
-#    ObserverBase, FakeQuantizeBase
-from fvcore.common.checkpoint import _IncompatibleKeys, _strip_prefix_if_present, TORCH_VERSION
-from torch import distributed as dist
-from scipy import interpolate
-import numpy as np
 import torch.nn.functional as F
+from detectron2.checkpoint import DetectionCheckpointer
+
+# from fvcore.common.checkpoint import _IncompatibleKeys, _strip_prefix_if_present, TORCH_VERSION, quantization, \
+#    ObserverBase, FakeQuantizeBase
+from fvcore.common.checkpoint import TORCH_VERSION, _IncompatibleKeys, _strip_prefix_if_present
+from scipy import interpolate
+from torch import distributed as dist
 
 
 def append_prefix(k):
@@ -58,13 +59,12 @@ def modify_ckpt_state(model, state_dict, logger=None):
             dst_size = int((dst_num_pos - num_extra_tokens) ** 0.5)
             if src_size != dst_size:
                 if rank == 0:
-                    print("Position interpolate for %s from %dx%d to %dx%d" % (
-                        key, src_size, src_size, dst_size, dst_size))
+                    print("Position interpolate for %s from %dx%d to %dx%d" % (key, src_size, src_size, dst_size, dst_size))
                 extra_tokens = rel_pos_bias[-num_extra_tokens:, :]
                 rel_pos_bias = rel_pos_bias[:-num_extra_tokens, :]
 
                 def geometric_progression(a, r, n):
-                    return a * (1.0 - r ** n) / (1.0 - r)
+                    return a * (1.0 - r**n) / (1.0 - r)
 
                 left, right = 1.01, 1.5
                 while right - left > 1e-6:
@@ -101,8 +101,7 @@ def modify_ckpt_state(model, state_dict, logger=None):
                 for i in range(num_attn_heads):
                     z = rel_pos_bias[:, i].view(src_size, src_size).float().numpy()
                     f = interpolate.interp2d(x, y, z, kind='cubic')
-                    all_rel_pos_bias.append(
-                        torch.Tensor(f(dx, dy)).contiguous().view(-1, 1).to(rel_pos_bias.device))
+                    all_rel_pos_bias.append(torch.Tensor(f(dx, dy)).contiguous().view(-1, 1).to(rel_pos_bias.device))
 
                 rel_pos_bias = torch.cat(all_rel_pos_bias, dim=-1)
                 new_rel_pos_bias = torch.cat((rel_pos_bias, extra_tokens), dim=0)
@@ -128,7 +127,11 @@ def modify_ckpt_state(model, state_dict, logger=None):
             pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
             pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
             pos_tokens = torch.nn.functional.interpolate(
-                pos_tokens, size=(new_size_w, new_size_h), mode='bicubic', align_corners=False)
+                pos_tokens,
+                size=(new_size_w, new_size_h),
+                mode='bicubic',
+                align_corners=False,
+            )
             pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
             new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
             state_dict[append_prefix('pos_embed')] = new_pos_embed
@@ -146,17 +149,21 @@ def modify_ckpt_state(model, state_dict, logger=None):
             logger.warning(f"Error in loading {table_key}, pass")
         else:
             if L1 != L2:
-                S1 = int(L1 ** 0.5)
-                S2 = int(L2 ** 0.5)
+                S1 = int(L1**0.5)
+                S2 = int(L2**0.5)
                 table_pretrained_resized = F.interpolate(
                     table_pretrained.permute(1, 0).view(1, nH1, S1, S1),
-                    size=(S2, S2), mode='bicubic')
+                    size=(S2, S2),
+                    mode='bicubic',
+                )
                 state_dict[table_key] = table_pretrained_resized.view(nH2, L2).permute(1, 0)
 
-    if append_prefix('rel_pos_bias.relative_position_bias_table') in state_dict and \
-            model.backbone.bottom_up.backbone.use_rel_pos_bias and \
-            not model.backbone.bottom_up.backbone.use_shared_rel_pos_bias and \
-            append_prefix('blocks.0.attn.relative_position_bias_table') not in state_dict:
+    if (
+        append_prefix('rel_pos_bias.relative_position_bias_table') in state_dict
+        and model.backbone.bottom_up.backbone.use_rel_pos_bias
+        and not model.backbone.bottom_up.backbone.use_shared_rel_pos_bias
+        and append_prefix('blocks.0.attn.relative_position_bias_table') not in state_dict
+    ):
         logger.info("[BEIT] Expand the shared relative position embedding to each transformer block. ")
         num_layers = model.backbone.bottom_up.backbone.get_num_layers()
         rel_pos_bias = state_dict[append_prefix("rel_pos_bias.relative_position_bias_table")]
@@ -201,10 +208,7 @@ class MyDetectionCheckpointer(DetectionCheckpointer):
         # rename the para in checkpoint_state_dict
         # some bug here, do not support re load
 
-        checkpoint_state_dict = {
-            append_prefix(k): checkpoint_state_dict[k]
-            for k in checkpoint_state_dict.keys()
-        }
+        checkpoint_state_dict = {append_prefix(k): checkpoint_state_dict[k] for k in checkpoint_state_dict.keys()}
 
         checkpoint_state_dict = modify_ckpt_state(self.model, checkpoint_state_dict, logger=self.logger)
 
@@ -212,25 +216,21 @@ class MyDetectionCheckpointer(DetectionCheckpointer):
             if k in model_state_dict:
                 model_param = model_state_dict[k]
                 # Allow mismatch for uninitialized parameters
-                if TORCH_VERSION >= (1, 8) and isinstance(
-                        model_param, nn.parameter.UninitializedParameter
-                ):
+                if TORCH_VERSION >= (1, 8) and isinstance(model_param, nn.parameter.UninitializedParameter):
                     continue
                 shape_model = tuple(model_param.shape)
                 shape_checkpoint = tuple(checkpoint_state_dict[k].shape)
                 if shape_model != shape_checkpoint:
 
                     has_observer_base_classes = (
-                            TORCH_VERSION >= (1, 8)
-                            and hasattr(quantization, "ObserverBase")
-                            and hasattr(quantization, "FakeQuantizeBase")
+                        TORCH_VERSION >= (1, 8)
+                        and hasattr(quantization, "ObserverBase")
+                        and hasattr(quantization, "FakeQuantizeBase")
                     )
                     if has_observer_base_classes:
                         # Handle the special case of quantization per channel observers,
                         # where buffer shape mismatches are expected.
-                        def _get_module_for_key(
-                                model: torch.nn.Module, key: str
-                        ) -> torch.nn.Module:
+                        def _get_module_for_key(model: torch.nn.Module, key: str) -> torch.nn.Module:
                             # foo.bar.param_or_buffer_name -> [foo, bar]
                             key_parts = key.split(".")[:-1]
                             cur_module = model

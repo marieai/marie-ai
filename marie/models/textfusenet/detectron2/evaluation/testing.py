@@ -1,9 +1,10 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
-import numpy as np
 import pprint
 import sys
 from collections import Mapping, OrderedDict
+
+import numpy as np
 
 
 def print_csv_format(results):

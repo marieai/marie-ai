@@ -6,11 +6,10 @@ MIT License
 import math
 import os
 
-# -*- coding: utf-8 -*-
-import numpy as np
-
 import cv2
 
+# -*- coding: utf-8 -*-
+import numpy as np
 
 """ auxilary functions """
 # unwarp corodinates
@@ -33,14 +32,15 @@ def getDetBoxes_core(textmap, linkmap, text_threshold, link_threshold, low_text)
     ret, link_score = cv2.threshold(linkmap, link_threshold, 1, 0)
 
     text_score_comb = np.clip(text_score + link_score, 0, 1)
-    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        text_score_comb.astype(np.uint8), connectivity=4
-    )
+    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(text_score_comb.astype(np.uint8), connectivity=4)
 
     if True:
         cv2.imwrite(os.path.join("/tmp/fragments/", "linkmap.png"), linkmap * 255)
         cv2.imwrite(os.path.join("/tmp/fragments/", "textmap.png"), textmap * 255)
-        cv2.imwrite(os.path.join("/tmp/fragments/", "text_score_comb.png"), text_score_comb * 255)
+        cv2.imwrite(
+            os.path.join("/tmp/fragments/", "text_score_comb.png"),
+            text_score_comb * 255,
+        )
 
     det = []
     mapper = []
@@ -162,7 +162,10 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                 # average previous segment
                 if num_sec == 0:
                     break
-                cp_section[seg_num] = [cp_section[seg_num][0] / num_sec, cp_section[seg_num][1] / num_sec]
+                cp_section[seg_num] = [
+                    cp_section[seg_num][0] / num_sec,
+                    cp_section[seg_num][1] / num_sec,
+                ]
                 num_sec = 0
 
                 # reset variables
@@ -172,7 +175,10 @@ def getPoly_core(boxes, labels, mapper, linkmap):
             # accumulate center points
             cy = (sy + ey) * 0.5
             cur_h = ey - sy + 1
-            cp_section[seg_num] = [cp_section[seg_num][0] + x, cp_section[seg_num][1] + cy]
+            cp_section[seg_num] = [
+                cp_section[seg_num][0] + x,
+                cp_section[seg_num][1] + cy,
+            ]
             num_sec += 1
 
             if seg_num % 2 == 0:
@@ -217,7 +223,13 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                 line_img = np.zeros(word_label.shape, dtype=np.uint8)
                 dy = grad_s * dx
                 p = np.array(new_pp[0]) - np.array([dx, dy, dx, dy])
-                cv2.line(line_img, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), 1, thickness=1)
+                cv2.line(
+                    line_img,
+                    (int(p[0]), int(p[1])),
+                    (int(p[2]), int(p[3])),
+                    1,
+                    thickness=1,
+                )
                 if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
                     spp = p
                     isSppFound = True
@@ -225,7 +237,13 @@ def getPoly_core(boxes, labels, mapper, linkmap):
                 line_img = np.zeros(word_label.shape, dtype=np.uint8)
                 dy = grad_e * dx
                 p = np.array(new_pp[-1]) + np.array([dx, dy, dx, dy])
-                cv2.line(line_img, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), 1, thickness=1)
+                cv2.line(
+                    line_img,
+                    (int(p[0]), int(p[1])),
+                    (int(p[2]), int(p[3])),
+                    1,
+                    thickness=1,
+                )
                 if np.sum(np.logical_and(word_label, line_img)) == 0 or r + 2 * step_r >= max_r:
                     epp = p
                     isEppFound = True

@@ -4,16 +4,16 @@ __license__ = "Apache-2.0"
 import datetime
 import hashlib
 import json
-from typing import Generator, List, Optional, Tuple, Any
+from typing import Any, Generator, List, Optional, Tuple
 
 import jsons
 import numpy as np
 import psycopg2
 import psycopg2.extras
-from marie import Document, DocumentArray
-from marie.logging.logger import MarieLogger
 from psycopg2 import pool  # noqa: F401
 
+from marie import Document, DocumentArray
+from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
 
 
@@ -178,39 +178,33 @@ class PostgreSQLHandler:
 
     def _table_exists(self):
         return self._execute_sql_gracefully(
-            "SELECT EXISTS"
-            "("
-            "SELECT * FROM information_schema.tables "
-            "WHERE table_name=%s"
-            ")",
+            "SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s)",
             (self.table,),
         ).fetchall()[0][0]
 
     def _assert_table_schema_version(self):
         cursor = self.connection.cursor()
         cursor.execute(
-            f"SELECT schema_version FROM "
-            f"{META_TABLE_NAME} "
-            f"WHERE table_name=%s;",
+            f"SELECT schema_version FROM {META_TABLE_NAME} WHERE table_name=%s;",
             (self.table,),
         )
         result = cursor.fetchone()
         if result:
             if result[0] != SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"The schema versions of the database "
+                    "The schema versions of the database "
                     f"(version {result[0]}) and the Executor "
                     f"(version {SCHEMA_VERSION}) do not match. "
-                    f"Please migrate your data to the latest "
-                    f"version or use an Executor version with a "
-                    f"matching schema version."
+                    "Please migrate your data to the latest "
+                    "version or use an Executor version with a "
+                    "matching schema version."
                 )
         else:
             raise RuntimeError(
-                f"The schema versions of the database "
-                f"(NO version number) and the Executor "
+                "The schema versions of the database "
+                "(NO version number) and the Executor "
                 f"(version {SCHEMA_VERSION}) do not match."
-                f"Please migrate your data to the latest version."
+                "Please migrate your data to the latest version."
             )
 
     def add(self, docs: DocumentArray, *args, **kwargs):
@@ -230,20 +224,16 @@ class PostgreSQLHandler:
             try:
                 psycopg2.extras.execute_batch(
                     cursor,
-                    f"INSERT INTO {self.table} "
-                    f"(doc_id, ref_id, ref_type, embedding, content, doc, shard, created_at, updated_at) "
-                    f"VALUES (%s, %s, %s, %s, %s, %s, %s, current_timestamp, current_timestamp)",
+                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, embedding,"
+                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s,"
+                    " %s, %s, %s, %s, current_timestamp, current_timestamp)",
                     [
                         (
                             doc.id,
                             ref_id,
                             ref_type,
-                            doc.embedding.astype(self.dump_dtype).tobytes()
-                            if doc.embedding is not None
-                            else None,
-                            serialize_to_json(doc.content)
-                            if doc.content is not None
-                            else None,
+                            doc.embedding.astype(self.dump_dtype).tobytes() if doc.embedding is not None else None,
+                            serialize_to_json(doc.content) if doc.content is not None else None,
                             doc_without_embedding(doc),
                             self._get_next_shard(doc.id),
                         )
@@ -251,10 +241,7 @@ class PostgreSQLHandler:
                     ],
                 )
             except psycopg2.errors.UniqueViolation as e:
-                self.logger.warning(
-                    f"Document already exists in PSQL database."
-                    f" {e}. Skipping entire transaction..."
-                )
+                self.logger.warning(f"Document already exists in PSQL database. {e}. Skipping entire transaction...")
                 self.connection.rollback()
             self.connection.commit()
 
@@ -269,12 +256,9 @@ class PostgreSQLHandler:
         cursor = self.connection.cursor()
         psycopg2.extras.execute_batch(
             cursor,
-            f"UPDATE {self.table}\
-             SET embedding = %s,\
-             doc = %s,\
-             is_deleted = false, \
-             updated_at = current_timestamp \
-            WHERE doc_id = %s",
+            f"UPDATE {self.table}             SET embedding = %s,             doc = %s,"
+            "             is_deleted = false,              updated_at ="
+            " current_timestamp             WHERE doc_id = %s",
             [
                 (
                     doc.embedding.astype(self.dump_dtype).tobytes(),
@@ -293,7 +277,8 @@ class PostgreSQLHandler:
         """
         cursor = self.connection.cursor()
         psycopg2.extras.execute_batch(
-            cursor, f"DELETE FROM {self.table} " f"WHERE is_deleted = true",
+            cursor,
+            f"DELETE FROM {self.table} WHERE is_deleted = true",
         )
         self.connection.commit()
         return
@@ -331,10 +316,7 @@ class PostgreSQLHandler:
             # )
             psycopg2.extras.execute_batch(
                 cursor,
-                f"UPDATE {self.table} "
-                f"SET is_deleted = true, "
-                f"updated_at = current_timestamp "
-                f"WHERE doc_id = %s;",
+                f"UPDATE {self.table} SET is_deleted = true, updated_at = current_timestamp WHERE doc_id = %s;",
                 [(doc.id,) for doc in docs],
             )
         else:
@@ -382,9 +364,7 @@ class PostgreSQLHandler:
         """
         cursor = self.connection.cursor()
         cursor.execute(
-            f"SELECT model_blob, model_checksum FROM "
-            f"{MODEL_TABLE_NAME} "
-            f"WHERE table_name=%s;",
+            f"SELECT model_blob, model_checksum FROM {MODEL_TABLE_NAME} WHERE table_name=%s;",
             (self.table,),
         )
 
@@ -402,10 +382,10 @@ class PostgreSQLHandler:
         cursor = self.connection.cursor()
         cursor.execute(
             f"UPDATE {MODEL_TABLE_NAME} "
-            f"SET model_blob = %s, "
-            f"model_checksum = %s, "
-            f"updated_at = current_timestamp "
-            f"where table_name = %s",
+            "SET model_blob = %s, "
+            "model_checksum = %s, "
+            "updated_at = current_timestamp "
+            "where table_name = %s",
             (model, checksum, self.table),
         )
         self.connection.commit()
@@ -451,9 +431,7 @@ class PostgreSQLHandler:
             )
             self.connection.commit()
             cursor = self.connection.cursor()
-            cursor.execute(
-                f"insert into {self.snapshot_table} (select * from {self.table});"
-            )
+            cursor.execute(f"insert into {self.snapshot_table} (select * from {self.table});")
             self.connection.commit()
             self.logger.info("Successfully created snapshot")
         except (Exception, psycopg2.Error) as error:
@@ -493,8 +471,8 @@ class PostgreSQLHandler:
             cursor = self.connection.cursor("doc_iterator")
             cursor.itersize = 10000
             cursor.execute(
-                f"SELECT doc_id, doc, embedding from {self.table} "
-                f"WHERE is_deleted = false" + (f" limit = {limit}" if limit > 0 else "")
+                f"SELECT doc_id, doc, embedding from {self.table} WHERE is_deleted = false"
+                + (f" limit = {limit}" if limit > 0 else "")
             )
             for sample in cursor:
                 doc_id = sample[0]
@@ -556,9 +534,7 @@ class PostgreSQLHandler:
                 )
 
             for record in cursor:
-                yield record[0], np.frombuffer(
-                    record[1], dtype=self.dump_dtype
-                ) if record[1] is not None else None, record[
+                yield record[0], np.frombuffer(record[1], dtype=self.dump_dtype) if record[1] is not None else None, record[
                     2
                 ] if include_metas else None
         except (Exception, psycopg2.Error) as error:
@@ -592,20 +568,13 @@ class PostgreSQLHandler:
         cursor.itersize = 10000
         shards_quoted = tuple(int(shard) for shard in shards_to_get)
         cursor.execute(
-            f"SELECT doc_id, embedding, updated_at, is_deleted "
-            f"from {self.table} "
-            f"WHERE shard in %s "
-            f"and updated_at > %s"
+            f"SELECT doc_id, embedding, updated_at, is_deleted from {self.table} WHERE shard in %s and updated_at > %s"
             + (" and is_deleted = false" if filter_deleted else ""),
             (shards_quoted, timestamp),
         )
 
         for rec in cursor:
-            second_val = (
-                np.frombuffer(rec[1], dtype=self.dump_dtype)
-                if rec[1] is not None
-                else None
-            )
+            second_val = np.frombuffer(rec[1], dtype=self.dump_dtype) if rec[1] is not None else None
             yield rec[0], second_val, rec[2], rec[3]
         self._close_connection(connection)
 
@@ -616,9 +585,7 @@ class PostgreSQLHandler:
         """
         try:
             cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false"
-            )
+            cursor.execute(f"SELECT COUNT(*) FROM {self.snapshot_table} WHERE is_deleted = false")
             records = cursor.fetchall()
             return records[0][0]
         except Exception as e:

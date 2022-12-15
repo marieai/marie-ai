@@ -2,7 +2,7 @@ from typing import Dict
 
 from marie.helper import TYPE_CHECKING, T, deprecate_by, typename
 
-if TYPE_CHECKING: # pragma: no cover
+if TYPE_CHECKING:  # pragma: no cover
     from marie.proto import jina_pb2
 
 
@@ -30,9 +30,7 @@ class ProtoTypeMixin:
         """
         from google.protobuf.json_format import MessageToJson
 
-        return MessageToJson(
-            self.proto, preserving_proto_field_name=True, sort_keys=True
-        )
+        return MessageToJson(self.proto, preserving_proto_field_name=True, sort_keys=True)
 
     def to_dict(self, **kwargs) -> Dict:
         """Return the object in Python dictionary.

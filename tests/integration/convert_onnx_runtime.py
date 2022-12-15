@@ -1,28 +1,26 @@
-from typing import Mapping, Any
+import os
+from timeit import timeit
+from typing import Any, Mapping
 
+import numpy as np
+import onnxruntime
 import torch
 import torchvision.models as models
-import onnxruntime
-
-from timeit import timeit
-import numpy as np
-import os
 from PIL import Image
-
-# Optimizations :
-#  export LD_PRELOAD=/usr/local/lib/libjemalloc.so:$LD_PRELOAD &&  python ./check_onnx_runtime.py
-# https://github.com/regisss/transformers/blob/main/src/transformers/models/layoutlmv3/configuration_layoutlmv3.py
-
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers import (
-    LayoutLMv3Processor,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
     LayoutLMv3FeatureExtractor,
     LayoutLMv3ForTokenClassification,
+    LayoutLMv3Processor,
     LayoutLMv3TokenizerFast,
 )
 from transformers.onnx import OnnxConfig
 from transformers.onnx.utils import compute_effective_axis_dimension
+
+# Optimizations :
+#  export LD_PRELOAD=/usr/local/lib/libjemalloc.so:$LD_PRELOAD &&  python ./check_onnx_runtime.py
+# https://github.com/regisss/transformers/blob/main/src/transformers/models/layoutlmv3/configuration_layoutlmv3.py
 
 
 def profile():
@@ -125,12 +123,8 @@ def generate_dummy_inputs(
     dummy_bboxes = [[[48, 84, 73, 128]]] * batch_size
 
     # If dynamic axis (-1) we forward with a fixed dimension of 2 samples to avoid optimizations made by ONNX
-    batch_size = compute_effective_axis_dimension(
-        batch_size, fixed_dimension=OnnxConfig.default_fixed_batch
-    )
-    dummy_image = _generate_dummy_images(
-        batch_size, num_channels, image_height, image_width
-    )
+    batch_size = compute_effective_axis_dimension(batch_size, fixed_dimension=OnnxConfig.default_fixed_batch)
+    dummy_image = _generate_dummy_images(batch_size, num_channels, image_height, image_width)
 
     inputs = dict(
         processor(
@@ -154,9 +148,7 @@ def export():
     # Max model size is 512, so we will need to handle any documents larger thjan ath
     feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
     tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
-    processor = LayoutLMv3Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
+    processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
     model = LayoutLMv3ForTokenClassification.from_pretrained(model_id)
 
     input_dict = generate_dummy_inputs(processor)

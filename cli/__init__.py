@@ -31,11 +31,7 @@ def _get_run_args(print_args: bool = True):
             from marie import __resources_path__
 
             p = parser._actions[-1].choices[sys.argv[1]]
-            default_args = {
-                a.dest: a.default
-                for a in p._actions
-                if isinstance(a, (_StoreAction, _StoreTrueAction))
-            }
+            default_args = {a.dest: a.default for a in p._actions if isinstance(a, (_StoreAction, _StoreTrueAction))}
 
             with open(os.path.join(__resources_path__, 'marie.logo')) as fp:
                 logo_str = fp.read()
@@ -120,9 +116,9 @@ def _try_plugin_command():
         project, package = cmd_info['display-name'], cmd_info['pip-package']
         console = get_rich_console()
         console.print(
-            f"It seems like [yellow]{project}[/yellow] is not installed in your environment."
-            f"To use it via the [green]'jina {subcommand}'[/green] command, "
-            f"install it first: [green]'pip install {package}'[/green]."
+            f"It seems like [yellow]{project}[/yellow] is not installed in your"
+            f" environment.To use it via the [green]'jina {subcommand}'[/green]"
+            f" command, install it first: [green]'pip install {package}'[/green]."
         )
         return True
     return False

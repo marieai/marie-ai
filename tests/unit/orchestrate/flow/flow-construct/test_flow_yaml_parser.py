@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
-
 from jina import Executor, Flow
 from jina.enums import GatewayProtocolType
 from jina.excepts import BadYAMLVersion
@@ -65,9 +64,7 @@ def test_load_dump_load(tmpdir):
     f2.save_config(str(Path(tmpdir) / 'a1.yml'))
 
 
-@pytest.mark.parametrize(
-    'yaml_file', ['yaml/flow-gateway.yml', 'yaml/flow-gateway-api.yml']
-)
+@pytest.mark.parametrize('yaml_file', ['yaml/flow-gateway.yml', 'yaml/flow-gateway-api.yml'])
 def test_load_modify_dump_load(tmpdir, yaml_file):
     f: Flow = Flow.load_config(yaml_file)
     # assert vars inside `with`
@@ -171,9 +168,7 @@ def test_flow_yaml_from_string():
         f2 = Flow.load_config(str_yaml)
         assert f1 == f2
 
-    f3 = Flow.load_config(
-        '!Flow\nversion: 1.0\ndeployments: [{name: ppp0, uses: _merge}, name: aaa1]'
-    )
+    f3 = Flow.load_config('!Flow\nversion: 1.0\ndeployments: [{name: ppp0, uses: _merge}, name: aaa1]')
     assert 'ppp0' in f3._deployment_nodes.keys()
     assert 'aaa1' in f3._deployment_nodes.keys()
     assert f3.num_deployments == 2
@@ -192,9 +187,7 @@ def test_flow_uses_from_dict():
 def test_flow_yaml_override_with_protocol():
     from jina.enums import GatewayProtocolType
 
-    path = os.path.join(
-        cur_dir.parent.parent.parent, 'yaml/examples/faiss/flow-index.yml'
-    )
+    path = os.path.join(cur_dir.parent.parent.parent, 'yaml/examples/faiss/flow-index.yml')
     f1 = Flow.load_config(path)
     assert f1.protocol == GatewayProtocolType.GRPC
     f2 = Flow.load_config(path, uses_with={'protocol': 'http'})

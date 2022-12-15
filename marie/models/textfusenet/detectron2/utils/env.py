@@ -2,11 +2,12 @@
 import importlib
 import importlib.util
 import logging
-import numpy as np
 import os
 import random
 import sys
 from datetime import datetime
+
+import numpy as np
 import torch
 
 __all__ = ["seed_all_rng"]
@@ -20,11 +21,7 @@ def seed_all_rng(seed=None):
         seed (int): if None, will use a strong random seed.
     """
     if seed is None:
-        seed = (
-            os.getpid()
-            + int(datetime.now().strftime("%S%f"))
-            + int.from_bytes(os.urandom(2), "big")
-        )
+        seed = os.getpid() + int(datetime.now().strftime("%S%f")) + int.from_bytes(os.urandom(2), "big")
         logger = logging.getLogger(__name__)
         logger.info("Using a generated random seed {}".format(seed))
     np.random.seed(seed)
@@ -99,7 +96,6 @@ def setup_custom_environment(custom_module):
     else:
         module = importlib.import_module(custom_module)
     assert hasattr(module, "setup_environment") and callable(module.setup_environment), (
-        "Custom environment module defined in {} does not have the "
-        "required callable attribute 'setup_environment'."
+        "Custom environment module defined in {} does not have the required callable attribute 'setup_environment'."
     ).format(custom_module)
     module.setup_environment()

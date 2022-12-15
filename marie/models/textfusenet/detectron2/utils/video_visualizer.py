@@ -1,13 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import numpy as np
 import pycocotools.mask as mask_util
-
-from detectron2.utils.visualizer import (
-    ColorMode,
-    Visualizer,
-    _create_text_labels,
-    _PanopticPrediction,
-)
+from detectron2.utils.visualizer import ColorMode, Visualizer, _create_text_labels, _PanopticPrediction
 
 from .colormap import random_color
 
@@ -81,10 +75,7 @@ class VideoVisualizer:
         else:
             masks = None
 
-        detected = [
-            _DetectedInstance(classes[i], boxes[i], mask_rle=None, color=None, ttl=8)
-            for i in range(num_instances)
-        ]
+        detected = [_DetectedInstance(classes[i], boxes[i], mask_rle=None, color=None, ttl=8) for i in range(num_instances)]
         colors = self._assign_colors(detected)
 
         labels = _create_text_labels(classes, scores, self.metadata.get("thing_classes", None))
@@ -121,16 +112,12 @@ class VideoVisualizer:
         frame_visualizer.draw_sem_seg(sem_seg, area_threshold=None)
         return frame_visualizer.output
 
-    def draw_panoptic_seg_predictions(
-        self, frame, panoptic_seg, segments_info, area_threshold=None, alpha=0.5
-    ):
+    def draw_panoptic_seg_predictions(self, frame, panoptic_seg, segments_info, area_threshold=None, alpha=0.5):
         frame_visualizer = Visualizer(frame, self.metadata)
         pred = _PanopticPrediction(panoptic_seg, segments_info)
 
         if self._instance_mode == ColorMode.IMAGE_BW:
-            frame_visualizer.output.img = frame_visualizer._create_grayscale_image(
-                pred.non_empty_mask()
-            )
+            frame_visualizer.output.img = frame_visualizer._create_grayscale_image(pred.non_empty_mask())
 
         # draw mask for all semantic segments first i.e. "stuff"
         for mask, sinfo in pred.semantic_masks():
@@ -154,9 +141,7 @@ class VideoVisualizer:
         # draw mask for all instances second
         masks, sinfo = list(zip(*all_instances))
         num_instances = len(masks)
-        masks_rles = mask_util.encode(
-            np.asarray(np.asarray(masks).transpose(1, 2, 0), dtype=np.uint8, order="F")
-        )
+        masks_rles = mask_util.encode(np.asarray(np.asarray(masks).transpose(1, 2, 0), dtype=np.uint8, order="F"))
         assert len(masks_rles) == num_instances
 
         category_ids = [x["category_id"] for x in sinfo]

@@ -16,15 +16,22 @@ def set_ping_parser(parser=None):
         'target',
         type=str,
         choices=['flow', 'executor', 'gateway'],
-        help='The target type to ping. For `executor` and `gateway`, checks the readiness of the individual service. '
-        'For `flow` it checks the connectivity of the complete microservice architecture.',
+        help=(
+            'The target type to ping. For `executor` and `gateway`, checks the'
+            ' readiness of the individual service. For `flow` it checks the'
+            ' connectivity of the complete microservice architecture.'
+        ),
         default='executor',
     )
 
     parser.add_argument(
         'host',
         type=str,
-        help='The host address with port of a target Executor, Gateway or a Flow, e.g. 0.0.0.0:8000. For Flow or Gateway, host can also indicate the protocol, grpc will be used if not provided, e.g http://0.0.0.0:8000',
+        help=(
+            'The host address with port of a target Executor, Gateway or a Flow, e.g.'
+            ' 0.0.0.0:8000. For Flow or Gateway, host can also indicate the protocol,'
+            ' grpc will be used if not provided, e.g http://0.0.0.0:8000'
+        ),
     )
 
     parser.add_argument(

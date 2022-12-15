@@ -10,50 +10,30 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
 import yaml
 from yaml.constructor import FullConstructor
 
-from marie.jaml.helper import (
-    JinaLoader,
-    JinaResolver,
-    get_jina_loader_with_runtime,
-    load_py_modules,
-    parse_config_source,
-)
+from marie.jaml.helper import JinaLoader, JinaResolver, get_jina_loader_with_runtime, load_py_modules, parse_config_source
 
 __all__ = ['JAML', 'JAMLCompatible']
 
 from marie.excepts import BadConfigSource
 
-internal_var_regex = re.compile(
-    r'{.+}|\$[a-zA-Z0-9_]*\b'
-)  # detects exp's of the form {var} or $var
+internal_var_regex = re.compile(r'{.+}|\$[a-zA-Z0-9_]*\b')  # detects exp's of the form {var} or $var
 
 context_regex_str = r'\${{\s[a-zA-Z0-9_]*\s}}'
-context_var_regex = re.compile(
-    context_regex_str
-)  # matches expressions of form '${{ var }}'
+context_var_regex = re.compile(context_regex_str)  # matches expressions of form '${{ var }}'
 
-context_dot_regex_str = (
-    r'\${{\sCONTEXT\.[a-zA-Z0-9_]*\s}}|\${{\scontext\.[a-zA-Z0-9_]*\s}}'
-)
-context_dot_regex = re.compile(
-    context_dot_regex_str
-)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
+context_dot_regex_str = r'\${{\sCONTEXT\.[a-zA-Z0-9_]*\s}}|\${{\scontext\.[a-zA-Z0-9_]*\s}}'
+context_dot_regex = re.compile(context_dot_regex_str)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
 
 new_env_regex_str = r'\${{\sENV\.[a-zA-Z0-9_]*\s}}|\${{\senv\.[a-zA-Z0-9_]*\s}}'
-new_env_var_regex = re.compile(
-    new_env_regex_str
-)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
+new_env_var_regex = re.compile(new_env_regex_str)  # matches expressions of form '${{ ENV.var }}' or '${{ env.var }}'
 
 env_var_deprecated_regex_str = r'\$[a-zA-Z0-9_]*'
-env_var_deprecated_regex = re.compile(
-    r'\$[a-zA-Z0-9_]*'
-)  # matches expressions of form '$var'
+env_var_deprecated_regex = re.compile(r'\$[a-zA-Z0-9_]*')  # matches expressions of form '$var'
 
 env_var_regex_str = env_var_deprecated_regex_str + '|' + new_env_regex_str
 env_var_regex = re.compile(env_var_regex_str)  # matches either of the above
 
-yaml_ref_regex = re.compile(
-    r'\${{([\w\[\].]+)}}'
-)  # matches expressions of form '${{root.name[0].var}}'
+yaml_ref_regex = re.compile(r'\${{([\w\[\].]+)}}')  # matches expressions of form '${{root.name[0].var}}'
 
 
 class ContextVarTemplate(string.Template):
@@ -224,11 +204,7 @@ class JAML:
 
         :return: tags
         """
-        return list(
-            v[1:]
-            for v in set(JinaLoader.yaml_constructors.keys())
-            if v and v.startswith('!')
-        )
+        return list(v[1:] for v in set(JinaLoader.yaml_constructors.keys()) if v and v.startswith('!'))
 
     @staticmethod
     def registered_classes() -> Dict:
@@ -237,11 +213,7 @@ class JAML:
 
         :return: tags and classes
         """
-        return {
-            k[1:]: v
-            for k, v in JinaLoader.yaml_constructors.items()
-            if k and k.startswith('!')
-        }
+        return {k[1:]: v for k, v in JinaLoader.yaml_constructors.items() if k and k.startswith('!')}
 
     @staticmethod
     def cls_from_tag(tag: str) -> Optional['JAMLCompatible']:
@@ -377,29 +349,20 @@ class JAML:
             # 2) env variables placeholder are cast to $var then we leverage the os.path.expandvars to replace by
             # environment variables.
 
-            if env_var_deprecated_regex.findall(v) and not env_var_regex.findall(
-                v
-            ):  # catch expressions of form '$var'
+            if env_var_deprecated_regex.findall(v) and not env_var_regex.findall(v):  # catch expressions of form '$var'
                 warnings.warn(
-                    'Specifying environment variables via the syntax `$var` is deprecated.'
-                    'Use `${{ ENV.var }}` instead.',
+                    'Specifying environment variables via the syntax `$var` is deprecated.Use `${{ ENV.var }}` instead.',
                     category=DeprecationWarning,
                 )
-            if new_env_var_regex.findall(
-                v
-            ):  # handle expressions of form '${{ ENV.var}}',
+            if new_env_var_regex.findall(v):  # handle expressions of form '${{ ENV.var}}',
                 v = _to_env_var_synatx(v)
             if context_dot_regex.findall(v):
                 v = _to_normal_context_var(v)
             if context_var_regex.findall(v):  # handle expressions of form '${{ var }}'
                 v = _var_to_substitutable(v)
                 if context:
-                    v = ContextVarTemplate(v).safe_substitute(
-                        context
-                    )  # use vars provided in context
-            v = os.path.expandvars(
-                v
-            )  # gets env var and parses to python objects if neededd
+                    v = ContextVarTemplate(v).safe_substitute(context)  # use vars provided in context
+            v = os.path.expandvars(v)  # gets env var and parses to python objects if neededd
             return parse_arg(v)
 
         def _resolve_yaml_reference(v, p):
@@ -411,18 +374,14 @@ class JAML:
                 match_str = matchobj.group(0)
                 match_str_origin = match_str
 
-                match_str = re.sub(
-                    yaml_ref_regex, '{\\1}', match_str
-                )  # from ${{var}} to {var} to leverage python formatter
+                match_str = re.sub(yaml_ref_regex, '{\\1}', match_str)  # from ${{var}} to {var} to leverage python formatter
 
                 try:
                     # "root" context is now the global namespace
                     # "this" context is now the current node namespace
                     match_str = match_str.format(root=expand_map, this=p, ENV=env_map)
                 except AttributeError as ex:
-                    raise AttributeError(
-                        'variable replacement is failed, please check your YAML file.'
-                    ) from ex
+                    raise AttributeError('variable replacement is failed, please check your YAML file.') from ex
                 except KeyError:
                     return match_str_origin
 
@@ -462,9 +421,7 @@ class JAML:
         :param kwargs: other kwargs
         :return: the yaml output
         """
-        return yaml.dump(
-            data, stream=stream, default_flow_style=False, sort_keys=False, **kwargs
-        )
+        return yaml.dump(data, stream=stream, default_flow_style=False, sort_keys=False, **kwargs)
 
     @staticmethod
     def register(cls):
@@ -492,9 +449,7 @@ class JAML:
                 :param data: state of the representer
                 :return: node
                 """
-                return representer.represent_yaml_object(
-                    tag, data, cls, flow_style=representer.default_flow_style
-                )
+                return representer.represent_yaml_object(tag, data, cls, flow_style=representer.default_flow_style)
 
             yaml.add_representer(cls, t_y)
         try:
@@ -555,15 +510,11 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         from marie.jaml.parsers import get_parser
 
         config_dict = get_parser(cls, version=data._version).dump(data)
-        config_dict_with_jtype = {
-            'jtype': cls.__name__
-        }  # specifies the type of Jina object that is represented
+        config_dict_with_jtype = {'jtype': cls.__name__}  # specifies the type of Jina object that is represented
         config_dict_with_jtype.update(config_dict)
         # To maintain compatibility with off-the-shelf parsers we don't want any tags ('!...') to show up in the output
         # Since pyyaml insists on receiving a tag, we need to pass the default map tag. This won't show up in the output
-        return representer.represent_mapping(
-            representer.DEFAULT_MAPPING_TAG, config_dict_with_jtype
-        )
+        return representer.represent_mapping(representer.DEFAULT_MAPPING_TAG, config_dict_with_jtype)
 
     @classmethod
     def _from_yaml(cls, constructor: FullConstructor, node):
@@ -579,9 +530,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         data = constructor.construct_mapping(node, deep=True)
         from marie.jaml.parsers import get_parser
 
-        return get_parser(cls, version=data.get('version', None)).parse(
-            cls, data, runtime_args=constructor.runtime_args
-        )
+        return get_parser(cls, version=data.get('version', None)).parse(cls, data, runtime_args=constructor.runtime_args)
 
     def save_config(self, filename: Optional[str] = None):
         """
@@ -595,9 +544,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
                 'w',
                 delete=False,
             ).name
-            warnings.warn(
-                f'no "filename" is given, {self!r}\'s config will be saved to: {f}'
-            )
+            warnings.warn(f'no "filename" is given, {self!r}\'s config will be saved to: {f}')
         with open(f, 'w', encoding='utf8') as fp:
             JAML.dump(self, fp)
 
@@ -676,9 +623,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         if runtime_args:
             kwargs[
                 'runtimes_args'
-            ] = (
-                dict()
-            )  # when we have runtime args it is needed to have an empty runtime args session in the yam config
+            ] = dict()  # when we have runtime args it is needed to have an empty runtime args session in the yam config
 
         if py_modules:
             kwargs['runtimes_args']['py_modules'] = py_modules
@@ -686,9 +631,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
         if isinstance(source, str) and os.path.exists(source):
             extra_search_paths = (extra_search_paths or []) + [os.path.dirname(source)]
 
-        stream, s_path = parse_config_source(
-            source, extra_search_paths=extra_search_paths, **kwargs
-        )
+        stream, s_path = parse_config_source(source, extra_search_paths=extra_search_paths, **kwargs)
         with stream as fp:
             # first load yml with no tag
             no_tag_yml = JAML.load_no_tags(fp)
@@ -719,14 +662,10 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
                 cls._override_yml_params(no_tag_yml, 'with', uses_with)
                 cls._override_yml_params(no_tag_yml, 'metas', uses_metas)
                 cls._override_yml_params(no_tag_yml, 'requests', uses_requests)
-                cls._override_yml_params(
-                    no_tag_yml, 'dynamic_batching', uses_dynamic_batching
-                )
+                cls._override_yml_params(no_tag_yml, 'dynamic_batching', uses_dynamic_batching)
 
             else:
-                raise BadConfigSource(
-                    f'can not construct {cls} from an empty {source}. nothing to read from there'
-                )
+                raise BadConfigSource(f'can not construct {cls} from an empty {source}. nothing to read from there')
             if substitute:
                 # expand variables
                 no_tag_yml = JAML.expand_dict(no_tag_yml, context)
@@ -735,9 +674,7 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
                 _extra_search_paths = extra_search_paths or []
                 load_py_modules(
                     no_tag_yml,
-                    extra_search_paths=(_extra_search_paths + [os.path.dirname(s_path)])
-                    if s_path
-                    else _extra_search_paths,
+                    extra_search_paths=(_extra_search_paths + [os.path.dirname(s_path)]) if s_path else _extra_search_paths,
                 )
 
             from marie.orchestrate.flow.base import Flow
@@ -747,9 +684,9 @@ class JAMLCompatible(metaclass=JAMLCompatibleType):
                 # only needed for Flow
                 if no_tag_yml_copy.get('with') is None:
                     no_tag_yml_copy['with'] = {}
-                no_tag_yml_copy['with']['extra_search_paths'] = (
-                    no_tag_yml_copy['with'].get('extra_search_paths') or []
-                ) + (extra_search_paths or [])
+                no_tag_yml_copy['with']['extra_search_paths'] = (no_tag_yml_copy['with'].get('extra_search_paths') or []) + (
+                    extra_search_paths or []
+                )
 
                 if cls.is_valid_jaml(no_tag_yml_copy):
                     no_tag_yml = no_tag_yml_copy

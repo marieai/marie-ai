@@ -49,9 +49,7 @@ if __name__ == "__main__":
                 save_path = os.path.join(stack_dir, f"{docId}.png")
                 imwrite(save_path, stacked)
 
-            save_path = os.path.join(
-                clean_dir, f"{docId}.tif"
-            )  # This will have the .tif extension
+            save_path = os.path.join(clean_dir, f"{docId}.tif")  # This will have the .tif extension
             imwrite(save_path, blended)
             print(f"Saving  document : {save_path}")
 

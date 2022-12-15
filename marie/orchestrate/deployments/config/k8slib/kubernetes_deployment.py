@@ -106,21 +106,13 @@ def get_template_yamls(
 
     template_name = 'deployment-executor' if name != 'gateway' else 'deployment-gateway'
 
-    template_params['ports-section'] = ''.join(
-        [f'\n            - containerPort: {_p}' for _p in ports]
-    )
+    template_params['ports-section'] = ''.join([f'\n            - containerPort: {_p}' for _p in ports])
 
     if volumes:
         template_name = 'statefulset-executor'
-        template_params['accessModes'] = json.loads(
-            os.environ.get('JINA_K8S_ACCESS_MODES', '["ReadWriteOnce"]')
-        )
-        template_params['storageClassName'] = os.environ.get(
-            'JINA_K8S_STORAGE_CLASS_NAME', 'standard'
-        )
-        template_params['storageCapacity'] = os.environ.get(
-            'JINA_K8S_STORAGE_CAPACITY', '10G'
-        )
+        template_params['accessModes'] = json.loads(os.environ.get('JINA_K8S_ACCESS_MODES', '["ReadWriteOnce"]'))
+        template_params['storageClassName'] = os.environ.get('JINA_K8S_STORAGE_CLASS_NAME', 'standard')
+        template_params['storageCapacity'] = os.environ.get('JINA_K8S_STORAGE_CAPACITY', '10G')
     elif image_name_uses_before and image_name_uses_after:
         template_name = 'deployment-uses-before-after'
     elif image_name_uses_before:
@@ -202,9 +194,7 @@ def get_template_yamls(
     return yamls
 
 
-def get_cli_params(
-    arguments: Namespace, skip_list: Tuple[str] = (), port: Optional[int] = None
-) -> str:
+def get_cli_params(arguments: Namespace, skip_list: Tuple[str] = (), port: Optional[int] = None) -> str:
     """Get cli parameters based on the arguments.
 
     :param arguments: arguments where the cli parameters are generated from
@@ -227,10 +217,7 @@ def get_cli_params(
     ] + list(skip_list)
     if port:
         arguments.port = port
-    arg_list = [
-        [attribute, attribute.replace('_', '-'), value]
-        for attribute, value in arguments.__dict__.items()
-    ]
+    arg_list = [[attribute, attribute.replace('_', '-'), value] for attribute, value in arguments.__dict__.items()]
     cli_args = []
     for attribute, cli_attribute, value in arg_list:
         # TODO: This should not be here, its a workaround for our parser design with boolean values

@@ -61,8 +61,7 @@ def _prettyprint_help(d, also_in=None):
         )
     else:
         availables = '  '.join(
-            colored(v, attrs='underline')
-            for v in (set(h['usage'] for h in also_in) if also_in else {d['usage']})
+            colored(v, attrs='underline') for v in (set(h['usage'] for h in also_in) if also_in else {d['usage']})
         )
         option_str = '  '.join(colored(v, attrs='bold') for v in d['option_strings'])
         if option_str:
@@ -76,13 +75,9 @@ def _prettyprint_help(d, also_in=None):
         if not d['default_random'] and d['default'] is not None:
             table['Default'] = d['default']
         if d['default_random']:
-            table['Remark'] = colored(
-                'This argument has a random default value!', 'yellow'
-            )
+            table['Remark'] = colored('This argument has a random default value!', 'yellow')
 
-        table_str = '\n    '.join(
-            f'{k + ": " + colored(v, attrs="bold")}' for k, v in table.items()
-        )
+        table_str = '\n    '.join(f'{k + ": " + colored(v, attrs="bold")}' for k, v in table.items())
 
         lb = '\033[F'
         import argparse
@@ -111,7 +106,7 @@ def lookup_and_print(query: str):
 
         print(
             f'Can not find argument {colored(query, attrs="bold")}, '
-            f'maybe it\'s a misspelling or Marie does not have this argument.'
+            'maybe it\'s a misspelling or Marie does not have this argument.'
         )
     else:
         helps = kw2info[nkw2kw[query]]  # type: list
@@ -128,9 +123,7 @@ def lookup_and_print(query: str):
             for h in helps:
                 help_group[h['help']].append(h)
 
-            print(
-                colored(f'Found {len(help_group)} mentions in Jina API.', attrs='dark')
-            )
+            print(colored(f'Found {len(help_group)} mentions in Jina API.', attrs='dark'))
 
             for hg in help_group.values():
                 _prettyprint_help(hg[0], also_in=hg)

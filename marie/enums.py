@@ -93,9 +93,7 @@ class BetterEnum(IntEnum, metaclass=EnumType):
         try:
             return cls[s.upper()]
         except KeyError:
-            raise ValueError(
-                f"{s.upper()} is not a valid enum for {cls!r}, must be one of {list(cls)}"
-            )
+            raise ValueError(f"{s.upper()} is not a valid enum for {cls!r}, must be one of {list(cls)}")
 
     @classmethod
     def _to_yaml(cls, representer, data):
@@ -108,9 +106,7 @@ class BetterEnum(IntEnum, metaclass=EnumType):
         :param data: enum value
         :return: yaml representation
         """
-        return representer.represent_scalar(
-            "tag:yaml.org,2002:str", str(data), style='"'
-        )
+        return representer.represent_scalar("tag:yaml.org,2002:str", str(data), style='"')
 
     @classmethod
     def _from_yaml(cls, constructor, node):

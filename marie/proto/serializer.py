@@ -23,9 +23,7 @@ class DataRequestProto:
             r = x.buffer
         else:
             r = x.proto.SerializePartialToString()
-        os.environ['JINA_GRPC_SEND_BYTES'] = str(
-            len(r) + int(os.environ.get('JINA_GRPC_SEND_BYTES', 0))
-        )
+        os.environ['JINA_GRPC_SEND_BYTES'] = str(len(r) + int(os.environ.get('JINA_GRPC_SEND_BYTES', 0)))
         return r
 
     @staticmethod
@@ -35,9 +33,7 @@ class DataRequestProto:
         # noqa: DAR102
         # noqa: DAR201
         """
-        os.environ['JINA_GRPC_RECV_BYTES'] = str(
-            len(x) + int(os.environ.get('JINA_GRPC_RECV_BYTES', 0))
-        )
+        os.environ['JINA_GRPC_RECV_BYTES'] = str(len(x) + int(os.environ.get('JINA_GRPC_RECV_BYTES', 0)))
         return DataRequest(x)
 
 

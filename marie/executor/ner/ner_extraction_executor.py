@@ -1,67 +1,53 @@
+import logging
 import os
-import cv2
-import torch
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from docarray import DocumentArray
-from torch.backends import cudnn
+import cv2
+import numpy as np
+import torch
 import torch.nn.functional as nn
 
-from marie import Executor, requests, __model_path__, __marie_home__
-from marie.executor.ner.utils import (
-    normalize_bbox,
-    unnormalize_box,
-    iob_to_label,
-    get_font,
-    get_random_color,
-    draw_box,
-    visualize_icr,
-    visualize_prediction,
-    visualize_extract_kv,
-)
-
-from marie.logging.logger import MarieLogger
-from marie.registry.model_registry import ModelRegistry
-from marie.timer import Timer
-from marie.utils.utils import ensure_exists
-from marie.utils.overlap import find_overlap_horizontal
-from marie.utils.overlap import merge_bboxes_as_block
-
+# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
+from detectron2.config import get_cfg
+from docarray import DocumentArray
 from PIL import Image, ImageDraw, ImageFont
-import logging
-from typing import Optional, List, Any, Tuple, Dict, Union
-
-import numpy as np
-
-from PIL import Image
-from transformers import AutoModelForTokenClassification, AutoProcessor
-
+from torch.backends import cudnn
 from transformers import (
-    LayoutLMv3Processor,
+    AutoModelForTokenClassification,
+    AutoProcessor,
     LayoutLMv3FeatureExtractor,
     LayoutLMv3ForTokenClassification,
+    LayoutLMv3Processor,
     LayoutLMv3TokenizerFast,
 )
-
 from transformers.utils import check_min_version
+
+from marie import Executor, __marie_home__, __model_path__, requests
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from marie.boxes.line_processor import find_line_number
 from marie.executor import TextExtractionExecutor
-from marie.executor.text_extraction_executor import CoordinateFormat
-from marie.utils.docs import (
-    docs_from_file,
-    array_from_docs,
-    docs_from_image,
-    load_image,
-    convert_frames,
+from marie.executor.ner.utils import (
+    draw_box,
+    get_font,
+    get_random_color,
+    iob_to_label,
+    normalize_bbox,
+    unnormalize_box,
+    visualize_extract_kv,
+    visualize_icr,
+    visualize_prediction,
 )
-
-from marie.utils.image_utils import viewImage, read_image, hash_file
-from marie.utils.json import store_json_object, load_json_file
-from pathlib import Path
-
-# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
-from detectron2.config import get_cfg
+from marie.executor.text_extraction_executor import CoordinateFormat
+from marie.logging.logger import MarieLogger
+from marie.registry.model_registry import ModelRegistry
+from marie.timer import Timer
+from marie.utils.docs import array_from_docs, convert_frames, docs_from_file, docs_from_image, load_image
+from marie.utils.image_utils import hash_file, read_image, viewImage
+from marie.utils.json import load_json_file, store_json_object
+from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
+from marie.utils.utils import ensure_exists
 
 check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
@@ -86,14 +72,10 @@ class NerExtractionExecutor(Executor):
     aka bounding boxes.
     """
 
-    def __init__(
-        self, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs
-    ):
+    def __init__(self, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-        self.logger = MarieLogger(
-            getattr(self.metas, "name", self.__class__.__name__)
-        ).logger
+        self.logger = MarieLogger(getattr(self.metas, "name", self.__class__.__name__)).logger
 
         self.logger.info(f"NER Extraction Executor : {pretrained_model_name_or_path}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -117,13 +99,9 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        pretrained_model_name_or_path = str(
-            ModelRegistry.get_local_path(pretrained_model_name_or_path)
-        )
+        pretrained_model_name_or_path = str(ModelRegistry.get_local_path(pretrained_model_name_or_path))
         if not os.path.isdir(pretrained_model_name_or_path):
-            raise Exception(
-                f"Expected model directory but got : {pretrained_model_name_or_path}"
-            )
+            raise Exception(f"Expected model directory but got : {pretrained_model_name_or_path}")
 
         config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
         if not os.path.exists(config_path):
@@ -132,14 +110,10 @@ class NerExtractionExecutor(Executor):
         self.init_configuration = load_json_file(config_path)
 
         self.debug_visuals = self.init_configuration["debug"]["visualize"]["enabled"]
-        self.debug_visuals_overlay = self.init_configuration["debug"]["visualize"][
-            "overlay"
-        ]
+        self.debug_visuals_overlay = self.init_configuration["debug"]["visualize"]["overlay"]
         self.debug_visuals_icr = self.init_configuration["debug"]["visualize"]["icr"]
         self.debug_visuals_ner = self.init_configuration["debug"]["visualize"]["ner"]
-        self.debug_visuals_prediction = self.init_configuration["debug"]["visualize"][
-            "prediction"
-        ]
+        self.debug_visuals_prediction = self.init_configuration["debug"]["visualize"]["prediction"]
 
         self.debug_scores = self.init_configuration["debug"]["scores"]
         self.debug_colors = self.init_configuration["debug"]["colors"]
@@ -157,9 +131,7 @@ class NerExtractionExecutor(Executor):
             "microsoft/layoutlmv3-large"
             # only_label_first_subword = True
         )
-        processor = LayoutLMv3Processor(
-            feature_extractor=feature_extractor, tokenizer=tokenizer
-        )
+        processor = LayoutLMv3Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
         return processor
 
@@ -168,9 +140,7 @@ class NerExtractionExecutor(Executor):
         Create token classification model
         """
         labels, _, _ = self.get_label_info()
-        model = AutoModelForTokenClassification.from_pretrained(
-            model_dir, num_labels=len(labels)
-        )
+        model = AutoModelForTokenClassification.from_pretrained(model_dir, num_labels=len(labels))
 
         model.eval()
         model.to(device)
@@ -189,12 +159,8 @@ class NerExtractionExecutor(Executor):
         logger.info(f"Self : {self}")
         return {"index": "ner-complete"}
 
-    def _filter(
-        self, values: List[Any], probabilities: List[float], threshold: float
-    ) -> List[Any]:
-        return [
-            value for probs, value in zip(probabilities, values) if probs >= threshold
-        ]
+    def _filter(self, values: List[Any], probabilities: List[float], threshold: float) -> List[Any]:
+        return [value for probs, value in zip(probabilities, values) if probs >= threshold]
 
     def inference(
         self,
@@ -212,9 +178,7 @@ class NerExtractionExecutor(Executor):
         id2label = {v: k for v, k in enumerate(labels)}
 
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        logger.info(
-            f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
-        )
+        logger.info(f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}")
 
         width, height = image.size
         # Encode the image
@@ -235,9 +199,7 @@ class NerExtractionExecutor(Executor):
         if self.debug_visuals:
             # img_tensor = encoded_inputs["image"] # v2
             img_tensor = encoding["pixel_values"]  # v3
-            img = Image.fromarray(
-                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
-            )
+            img = Image.fromarray((img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0))
             # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
 
         # ensure proper device placement
@@ -248,9 +210,7 @@ class NerExtractionExecutor(Executor):
         with torch.no_grad():
             outputs = model(**encoding)
             # Get the predictions and probabilities
-            probs = (
-                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
-            )
+            probs = nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
             _predictions = outputs.logits.argmax(-1).squeeze().tolist()
             _token_boxes = encoding.bbox.squeeze().tolist()
             normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
@@ -264,23 +224,11 @@ class NerExtractionExecutor(Executor):
 
         # Only keep non-subword predictions
         is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
-        true_predictions = [
-            id2label[pred]
-            for idx, pred in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+        true_predictions = [id2label[pred] for idx, pred in enumerate(predictions) if not is_subword[idx]]
 
-        true_boxes = [
-            unnormalize_box(box, width, height)
-            for idx, box in enumerate(token_boxes)
-            if not is_subword[idx]
-        ]
+        true_boxes = [unnormalize_box(box, width, height) for idx, box in enumerate(token_boxes) if not is_subword[idx]]
 
-        true_scores = [
-            round(normalized_logits[idx][val], 6)
-            for idx, val in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+        true_scores = [round(normalized_logits[idx][val], 6) for idx, val in enumerate(predictions) if not is_subword[idx]]
 
         assert len(true_predictions) == len(true_boxes) == len(true_scores)
 
@@ -299,15 +247,11 @@ class NerExtractionExecutor(Executor):
 
         for data in ocr_results:
             for word in data["words"]:
-                word["box"] = CoordinateFormat.convert(
-                    word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
-                )
+                word["box"] = CoordinateFormat.convert(word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH)
 
         for data in annotations:
             for i, box in enumerate(data["boxes"]):
-                box = CoordinateFormat.convert(
-                    box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
-                )
+                box = CoordinateFormat.convert(box, CoordinateFormat.XYXY, CoordinateFormat.XYWH)
                 data["boxes"][i] = box
 
         aggregated_ner = []
@@ -319,9 +263,7 @@ class NerExtractionExecutor(Executor):
         expected_keys = self.init_configuration["expected_keys"]
         expected_pair = self.init_configuration["expected_pair"]
 
-        for i, (ocr, annotation, frame) in enumerate(
-            zip(ocr_results, annotations, frames)
-        ):
+        for i, (ocr, annotation, frame) in enumerate(zip(ocr_results, annotations, frames)):
             logger.info(f"Processing page # {i}")
             # lines and boxes are already in the right reading order TOP->BOTTOM, LEFT-TO-RIGHT so no need to sort
             lines_bboxes = np.array(ocr["meta"]["lines_bboxes"])
@@ -335,17 +277,13 @@ class NerExtractionExecutor(Executor):
             # aggregate prediction by their line numbers
 
             groups = {}
-            for pred_idx, (prediction, pred_box, pred_score) in enumerate(
-                zip(true_predictions, true_boxes, true_scores)
-            ):
+            for pred_idx, (prediction, pred_box, pred_score) in enumerate(zip(true_predictions, true_boxes, true_scores)):
                 # discard 'O' other
                 label = prediction[2:]
                 if not label:
                     continue
                 # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
-                if np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or (
-                    pred_box[2] == 0 and pred_box[3] == 0
-                ):
+                if np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or (pred_box[2] == 0 and pred_box[3] == 0):
                     continue
 
                 line_number = find_line_number(lines_bboxes, pred_box)
@@ -358,9 +296,7 @@ class NerExtractionExecutor(Executor):
 
             for line_idx, line_box in enumerate(lines_bboxes):
                 if line_idx not in groups:
-                    logger.debug(
-                        f"Line does not have any groups : {line_idx} : {line_box}"
-                    )
+                    logger.debug(f"Line does not have any groups : {line_idx} : {line_box}")
                     continue
 
                 prediction_indexes = np.array(groups[line_idx])
@@ -421,11 +357,7 @@ class NerExtractionExecutor(Executor):
 
                         if self.debug_visuals:
                             color_map = self.init_configuration["debug"]["colors"]
-                            color = (
-                                color_map[field]
-                                if field in color_map
-                                else get_random_color()
-                            )
+                            color = color_map[field] if field in color_map else get_random_color()
 
                             draw_box(
                                 draw,
@@ -451,9 +383,7 @@ class NerExtractionExecutor(Executor):
                                 continue
                             visited[idx] = True
                             box = bboxes[idx]
-                            overlaps, indexes, scores = find_overlap_horizontal(
-                                box, bboxes
-                            )
+                            overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
                             to_merge[ag_key] = [idx]
 
                             for _, overlap_idx in zip(overlaps, indexes):
@@ -471,20 +401,14 @@ class NerExtractionExecutor(Executor):
                             picks = items[idxs]
                             remaining = np.delete(items, idxs)
 
-                            score_avg = round(
-                                np.average([item["score"] for item in picks]), 6
-                            )
-                            block = merge_bboxes_as_block(
-                                [item["bbox"] for item in picks]
-                            )
+                            score_avg = round(np.average([item["score"] for item in picks]), 6)
+                            block = merge_bboxes_as_block([item["bbox"] for item in picks])
 
                             new_item = picks[0]
                             new_item["score"] = score_avg
                             new_item["bbox"] = block
 
-                            aggregated_keys[_k] = np.concatenate(
-                                ([new_item], remaining)
-                            )
+                            aggregated_keys[_k] = np.concatenate(([new_item], remaining))
 
             # expected fields groups that indicate that the field could have been present
             # but it might not have been associated with KV pair mapping, does not apply to NER
@@ -534,9 +458,7 @@ class NerExtractionExecutor(Executor):
                                 bbox_a = found_val["bbox"]
 
                                 if bbox_a[0] < bbox_q[0]:
-                                    logger.warning(
-                                        "Answer is not on the right of question"
-                                    )
+                                    logger.warning("Answer is not on the right of question")
                                     continue
 
                                 category = found_key["key"]
@@ -725,9 +647,7 @@ class NerExtractionExecutor(Executor):
 
             for i, word in enumerate(result["words"]):
                 words[k].append(word["text"])
-                boxes[k].append(
-                    normalize_bbox(word["box"], (image.size[0], image.size[1]))
-                )
+                boxes[k].append(normalize_bbox(word["box"], (image.size[0], image.size[1])))
                 # This is to prevent following error
                 # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
                 if len(boxes[k]) == 512:
@@ -788,9 +708,7 @@ class NerExtractionExecutor(Executor):
                     label2color=self.debug_colors,
                 )
 
-        annotation_json_path = os.path.join(
-            __marie_home__, "annotation", f"{file_hash}.json"
-        )
+        annotation_json_path = os.path.join(__marie_home__, "annotation", f"{file_hash}.json")
         ensure_exists(os.path.join(__marie_home__, "annotation"))
         store_json_object(annotations, annotation_json_path)
 
@@ -810,9 +728,7 @@ class NerExtractionExecutor(Executor):
         for key, value in kwargs.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
-            image_src
-        )
+        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(image_src)
 
         annotations = self.process(frames, boxes, words, file_hash)
         ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)

@@ -1,20 +1,18 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import io
-import logging
 import contextlib
-import os
 import datetime
+import io
 import json
-import numpy as np
+import logging
+import os
 
+import numpy as np
+from detectron2.structures import Boxes, BoxMode, PolygonMasks
+from fvcore.common.file_io import PathManager
+from fvcore.common.timer import Timer
 from PIL import Image
 
-from fvcore.common.timer import Timer
-from detectron2.structures import BoxMode, PolygonMasks, Boxes
-from fvcore.common.file_io import PathManager
-
-
-from .. import MetadataCatalog, DatasetCatalog
+from .. import DatasetCatalog, MetadataCatalog
 
 """
 This file contains functions to parse COCO-format annotations into dicts in "Detectron2 format".
@@ -120,9 +118,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
         # However the ratio of buggy annotations there is tiny and does not affect accuracy.
         # Therefore we explicitly white-list them.
         ann_ids = [ann["id"] for anns_per_image in anns for ann in anns_per_image]
-        assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(
-            json_file
-        )
+        assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(json_file)
 
     imgs_anns = list(zip(imgs, anns))
 
@@ -134,7 +130,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
 
     num_instances_without_valid_segmentation = 0
 
-    for (img_dict, anno_dict_list) in imgs_anns:
+    for img_dict, anno_dict_list in imgs_anns:
         record = {}
         record["file_name"] = os.path.join(image_root, img_dict["file_name"])
         record["height"] = img_dict["height"]
@@ -187,9 +183,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
     if num_instances_without_valid_segmentation > 0:
         logger.warn(
             "Filtered out {} instances without valid segmentation. "
-            "There might be issues in your dataset generation process.".format(
-                num_instances_without_valid_segmentation
-            )
+            "There might be issues in your dataset generation process.".format(num_instances_without_valid_segmentation)
         )
     return dataset_dicts
 
@@ -256,12 +250,10 @@ def load_sem_seg(gt_root, image_root, gt_ext="png", image_ext="jpg"):
         input_files = [os.path.join(image_root, f + image_ext) for f in intersect]
         gt_files = [os.path.join(gt_root, f + gt_ext) for f in intersect]
 
-    logger.info(
-        "Loaded {} images with semantic segmentation from {}".format(len(input_files), image_root)
-    )
+    logger.info("Loaded {} images with semantic segmentation from {}".format(len(input_files), image_root))
 
     dataset_dicts = []
-    for (img_path, gt_path) in zip(input_files, gt_files):
+    for img_path, gt_path in zip(input_files, gt_files):
         record = {}
         record["file_name"] = img_path
         record["sem_seg_file_name"] = gt_path
@@ -294,10 +286,7 @@ def convert_to_coco_dict(dataset_name):
     """
 
     dataset_dicts = DatasetCatalog.get(dataset_name)
-    categories = [
-        {"id": id, "name": name}
-        for id, name in enumerate(MetadataCatalog.get(dataset_name).thing_classes)
-    ]
+    categories = [{"id": id, "name": name} for id, name in enumerate(MetadataCatalog.get(dataset_name).thing_classes)]
 
     logger.info("Converting dataset dicts into COCO format")
     coco_images = []
@@ -367,10 +356,7 @@ def convert_to_coco_dict(dataset_name):
 
             coco_annotations.append(coco_annotation)
 
-    logger.info(
-        "Conversion finished, "
-        f"num images: {len(coco_images)}, num annotations: {len(coco_annotations)}"
-    )
+    logger.info(f"Conversion finished, num images: {len(coco_images)}, num annotations: {len(coco_annotations)}")
 
     info = {
         "date_created": str(datetime.datetime.now()),
@@ -429,10 +415,11 @@ if __name__ == "__main__":
         "dataset_name" can be "coco_2014_minival_100", or other
         pre-registered ones
     """
+    import sys
+
+    import detectron2.data.datasets  # noqa # add pre-defined metadata
     from detectron2.utils.logger import setup_logger
     from detectron2.utils.visualizer import Visualizer
-    import detectron2.data.datasets  # noqa # add pre-defined metadata
-    import sys
 
     logger = setup_logger(name=__name__)
     assert sys.argv[3] in DatasetCatalog.list()

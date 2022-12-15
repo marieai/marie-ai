@@ -1,13 +1,12 @@
 import os
 
+import cv2
 import numpy as np
 import tqdm
 
-import cv2
-from marie.renderer.text_renderer import TextRenderer
 from marie.boxes.box_processor import PSMode
+from marie.renderer.text_renderer import TextRenderer
 from marie.utils.utils import ensure_exists
-
 
 if True:
     from marie.boxes.craft_box_processor import BoxProcessorCraft
@@ -43,18 +42,12 @@ if __name__ == "__main__":
         mean, std = cv2.meanStdDev(image)
 
         # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='./model_zoo/craft', cuda=True)
-        box = BoxProcessorTextFuseNet(
-            work_dir=work_dir_boxes, models_dir="./models/fusenet", cuda=False
-        )
-        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(
-            key, "field", image, PSMode.SPARSE
-        )
+        box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir="./models/fusenet", cuda=False)
+        boxes, img_fragments, lines, _ = box.extract_bounding_boxes(key, "field", image, PSMode.SPARSE)
 
         if True:
             icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
-            result, overlay_image = icr.recognize(
-                key, "test", image, boxes, img_fragments, lines
-            )
+            result, overlay_image = icr.recognize(key, "test", image, boxes, img_fragments, lines)
 
             print("Testing text render")
 

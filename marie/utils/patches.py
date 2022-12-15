@@ -1,8 +1,7 @@
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.core.fromnumeric import size
-
-import cv2
 
 from .resize_image import resize_image
 
@@ -202,7 +201,10 @@ def get_patches_2(img_arr, size_h=None, stride_h=None, size_w=None, stride_w=Non
                 # print(i*stride_h, i*stride_h+size_h)
                 # print(j*stride_w, j*stride_w+size_w)
                 # img[starty:starty+cropy,startx:startx+cropx]
-                snip = img_arr[i * stride_h : i * stride_h + size_h, j * stride_w : j * stride_w + size_w]
+                snip = img_arr[
+                    i * stride_h : i * stride_h + size_h,
+                    j * stride_w : j * stride_w + size_w,
+                ]
 
                 # this is not ana empyt border
                 if np.count_nonzero(snip != 255) > 0:
@@ -261,7 +263,7 @@ def reconstruct_from_patches(img_arr, org_img_size, stride=None, size=None):
     i_max = (org_img_size[0] // stride) + 1 - (size // stride)
     j_max = (org_img_size[1] // stride) + 1 - (size // stride)
 
-    total_nm_images = img_arr.shape[0] // (i_max ** 2)
+    total_nm_images = img_arr.shape[0] // (i_max**2)
     nm_images = img_arr.shape[0]
 
     averaging_value = size // stride
@@ -349,7 +351,7 @@ def reconstruct_from_patches_2(img_arr, org_img_size, size_h=None, stride_h=None
     j_max = (org_img_size[1] // stride_w) + 1 - (size_w // stride_w)
 
     # FIXME :
-    total_nm_images = img_arr.shape[0] // (i_max ** 2)
+    total_nm_images = img_arr.shape[0] // (i_max**2)
     total_nm_images = 1
 
     nm_images = img_arr.shape[0]

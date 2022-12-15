@@ -1,9 +1,8 @@
 import base64
 import json
 
-import numpy as np
-
 import cv2
+import numpy as np
 
 
 def encodeimg2b64(img: np.array) -> str:

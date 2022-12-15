@@ -1,4 +1,4 @@
-from typing import MutableMapping, OrderedDict, Any, Callable, Dict
+from typing import Any, Callable, Dict, MutableMapping, OrderedDict
 
 
 class RouteHandler:

@@ -62,11 +62,7 @@ def executor_native(args: 'Namespace'):
         )
 
     with runtime_cls(args) as rt:
-        name = (
-            rt._worker_request_handler._executor.metas.name
-            if hasattr(rt, '_worker_request_handler')
-            else rt.name
-        )
+        name = rt._worker_request_handler._executor.metas.name if hasattr(rt, '_worker_request_handler') else rt.name
         rt.logger.info(f'Executor {name} started')
         rt.run_forever()
 
@@ -94,9 +90,7 @@ def worker_runtime(args: 'Namespace'):
     from marie.serve.runtimes.worker import WorkerRuntime
 
     with WorkerRuntime(args) as runtime:
-        runtime.logger.info(
-            f'Executor {runtime._worker_request_handler._executor.metas.name} started'
-        )
+        runtime.logger.info(f'Executor {runtime._worker_request_handler._executor.metas.name} started')
         runtime.run_forever()
 
 
@@ -196,9 +190,7 @@ def new(args: 'Namespace'):
 
     from marie import __resources_path__
 
-    shutil.copytree(
-        os.path.join(__resources_path__, 'project-template'), os.path.abspath(args.name)
-    )
+    shutil.copytree(os.path.join(__resources_path__, 'project-template'), os.path.abspath(args.name))
 
 
 def help(args: 'Namespace'):

@@ -15,8 +15,7 @@ def set_export_parser(parser=None):
 
     spp = parser.add_subparsers(
         dest='export',
-        description='use `%(prog)-8s [sub-command] --help` '
-        'to get detailed information about each sub-command',
+        description='use `%(prog)-8s [sub-command] --help` to get detailed information about each sub-command',
         required=True,
     )
 
@@ -60,9 +59,7 @@ def mixin_base_io_parser(parser):
     :param parser: the parser configure
 
     """
-    parser.add_argument(
-        'flowpath', type=str, metavar='INPUT', help='The input file path of a Flow YAML'
-    )
+    parser.add_argument('flowpath', type=str, metavar='INPUT', help='The input file path of a Flow YAML')
     parser.add_argument(
         'outpath',
         type=str,

@@ -2,13 +2,12 @@ import json
 import os
 
 from marie.executor import TextExtractionExecutor
+from marie.executor.ner.utils import visualize_icr
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer import PdfRenderer, TextRenderer
-from marie.utils.docs import docs_from_file, array_from_docs
-from marie.utils.json import store_json_object, load_json_file
+from marie.utils.docs import array_from_docs, docs_from_file
+from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
-
-from marie.executor.ner.utils import visualize_icr
 
 if __name__ == "__main__":
 
@@ -46,12 +45,8 @@ if __name__ == "__main__":
     visualize_icr(frames, results)
 
     renderer = TextRenderer(config={"preserve_interword_spaces": True})
-    renderer.render(
-        frames, results, output_filename=os.path.join(work_dir_icr, "results.txt")
-    )
+    renderer.render(frames, results, output_filename=os.path.join(work_dir_icr, "results.txt"))
 
     if True:
         renderer = PdfRenderer(config={})
-        renderer.render(
-            frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf")
-        )
+        renderer.render(frames, results, output_filename=os.path.join(work_dir_icr, "results.pdf"))

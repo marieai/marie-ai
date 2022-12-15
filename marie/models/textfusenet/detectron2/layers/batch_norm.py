@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
+
 import torch
 import torch.distributed as dist
+from detectron2.utils import comm
 from torch import nn
 from torch.autograd.function import Function
-
-from detectron2.utils import comm
 
 from .wrappers import BatchNorm2d
 
@@ -49,7 +49,14 @@ class FrozenBatchNorm2d(nn.Module):
         return x * scale + bias
 
     def _load_from_state_dict(
-        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
     ):
         version = local_metadata.get("version", None)
 
@@ -68,7 +75,13 @@ class FrozenBatchNorm2d(nn.Module):
             state_dict[prefix + "running_var"] -= self.eps
 
         super()._load_from_state_dict(
-            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
         )
 
     def __repr__(self):

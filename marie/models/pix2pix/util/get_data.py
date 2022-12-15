@@ -1,11 +1,13 @@
 from __future__ import print_function
+
 import os
 import tarfile
-import requests
+from os.path import abspath, basename, isdir, join
 from warnings import warn
 from zipfile import ZipFile
+
+import requests
 from bs4 import BeautifulSoup
-from os.path import abspath, isdir, join, basename
 
 
 class GetData(object):
@@ -27,7 +29,7 @@ class GetData(object):
     def __init__(self, technique='cyclegan', verbose=True):
         url_dict = {
             'pix2pix': 'http://efrosgans.eecs.berkeley.edu/pix2pix/datasets/',
-            'cyclegan': 'https://people.eecs.berkeley.edu/~taesung_park/CycleGAN/datasets'
+            'cyclegan': 'https://people.eecs.berkeley.edu/~taesung_park/CycleGAN/datasets',
         }
         self.url = url_dict.get(technique.lower())
         self._verbose = verbose
@@ -39,8 +41,7 @@ class GetData(object):
     @staticmethod
     def _get_options(r):
         soup = BeautifulSoup(r.text, 'lxml')
-        options = [h.text for h in soup.find_all('a', href=True)
-                   if h.text.endswith(('.zip', 'tar.gz'))]
+        options = [h.text for h in soup.find_all('a', href=True) if h.text.endswith(('.zip', 'tar.gz'))]
         return options
 
     def _present_options(self):
@@ -49,8 +50,7 @@ class GetData(object):
         print('Options:\n')
         for i, o in enumerate(options):
             print("{0}: {1}".format(i, o))
-        choice = input("\nPlease enter the number of the "
-                       "dataset above you wish to download:")
+        choice = input("\nPlease enter the number of the dataset above you wish to download:")
         return options[int(choice)]
 
     def _download_data(self, dataset_url, save_path):
@@ -100,8 +100,7 @@ class GetData(object):
         save_path_full = join(save_path, selected_dataset.split('.')[0])
 
         if isdir(save_path_full):
-            warn("\n'{0}' already exists. Voiding Download.".format(
-                save_path_full))
+            warn("\n'{0}' already exists. Voiding Download.".format(save_path_full))
         else:
             self._print('Downloading Data...')
             url = "{0}/{1}".format(self.url, selected_dataset)

@@ -5,6 +5,7 @@ import logging
 import os
 from collections import defaultdict
 from contextlib import contextmanager
+
 import torch
 from fvcore.common.file_io import PathManager
 from fvcore.common.history_buffer import HistoryBuffer
@@ -13,9 +14,7 @@ _CURRENT_STORAGE_STACK = []
 
 
 def get_event_storage():
-    assert len(
-        _CURRENT_STORAGE_STACK
-    ), "get_event_storage() has to be called inside a 'with EventStorage(...)' context!"
+    assert len(_CURRENT_STORAGE_STACK), "get_event_storage() has to be called inside a 'with EventStorage(...)' context!"
     return _CURRENT_STORAGE_STACK[-1]
 
 
@@ -180,11 +179,7 @@ lr: {lr}  {memory}\
                 eta=eta_string,
                 iter=iteration,
                 losses="  ".join(
-                    [
-                        "{}: {:.3f}".format(k, v.median(20))
-                        for k, v in storage.histories().items()
-                        if "loss" in k
-                    ]
+                    ["{}: {:.3f}".format(k, v.median(20)) for k, v in storage.histories().items() if "loss" in k]
                 ),
                 time="time: {:.4f}".format(time) if time is not None else "",
                 data_time="data_time: {:.4f}".format(data_time) if data_time is not None else "",
@@ -233,9 +228,7 @@ class EventStorage:
 
         existing_hint = self._smoothing_hints.get(name)
         if existing_hint is not None:
-            assert (
-                existing_hint == smoothing_hint
-            ), "Scalar {} was put with a different smoothing_hint!".format(name)
+            assert existing_hint == smoothing_hint, "Scalar {} was put with a different smoothing_hint!".format(name)
         else:
             self._smoothing_hints[name] = smoothing_hint
 

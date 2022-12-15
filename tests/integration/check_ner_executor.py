@@ -4,19 +4,14 @@ from typing import Dict
 
 import transformers
 
-from marie.conf.helper import storage_provider_config, load_yaml
+from marie import Document, DocumentArray, __config_dir__, __model_path__
+from marie.conf.helper import load_yaml, storage_provider_config
 from marie.executor import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
-from marie.utils.image_utils import hash_file, hash_bytes
+from marie.utils.image_utils import hash_bytes, hash_file
 from marie.utils.json import store_json_object
-from marie import (
-    Document,
-    DocumentArray,
-    __model_path__,
-    __config_dir__,
-)
 
 
 def process_file(

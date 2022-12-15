@@ -15,7 +15,6 @@ limitations under the License.
 """
 
 import torch.nn as nn
-
 from modules.feature_extraction import RCNN_FeatureExtractor, ResNet_FeatureExtractor, VGG_FeatureExtractor
 from modules.prediction import Attention
 from modules.sequence_modeling import BidirectionalLSTM
@@ -23,17 +22,24 @@ from modules.transformation import TPS_SpatialTransformerNetwork
 
 
 class Model(nn.Module):
-
     def __init__(self, opt):
         super(Model, self).__init__()
         self.opt = opt
-        self.stages = {'Trans': opt.Transformation, 'Feat': opt.FeatureExtraction,
-                       'Seq': opt.SequenceModeling, 'Pred': opt.Prediction}
+        self.stages = {
+            'Trans': opt.Transformation,
+            'Feat': opt.FeatureExtraction,
+            'Seq': opt.SequenceModeling,
+            'Pred': opt.Prediction,
+        }
 
         """ Transformation """
         if opt.Transformation == 'TPS':
             self.Transformation = TPS_SpatialTransformerNetwork(
-                F=opt.num_fiducial, I_size=(opt.imgH, opt.imgW), I_r_size=(opt.imgH, opt.imgW), I_channel_num=opt.input_channel)
+                F=opt.num_fiducial,
+                I_size=(opt.imgH, opt.imgW),
+                I_r_size=(opt.imgH, opt.imgW),
+                I_channel_num=opt.input_channel,
+            )
         else:
             print('No Transformation module specified')
 
@@ -53,7 +59,8 @@ class Model(nn.Module):
         if opt.SequenceModeling == 'BiLSTM':
             self.SequenceModeling = nn.Sequential(
                 BidirectionalLSTM(self.FeatureExtraction_output, opt.hidden_size, opt.hidden_size),
-                BidirectionalLSTM(opt.hidden_size, opt.hidden_size, opt.hidden_size))
+                BidirectionalLSTM(opt.hidden_size, opt.hidden_size, opt.hidden_size),
+            )
             self.SequenceModeling_output = opt.hidden_size
         else:
             print('No SequenceModeling module specified')
@@ -68,7 +75,7 @@ class Model(nn.Module):
             raise Exception('Prediction is neither CTC or Attn')
 
     def forward(self, input, text, is_train=True):
-        """ Transformation stage """
+        """Transformation stage"""
         if not self.stages['Trans'] == "None":
             input = self.Transformation(input)
 
@@ -87,6 +94,11 @@ class Model(nn.Module):
         if self.stages['Pred'] == 'CTC':
             prediction = self.Prediction(contextual_feature.contiguous())
         else:
-            prediction = self.Prediction(contextual_feature.contiguous(), text, is_train, batch_max_length=self.opt.batch_max_length)
+            prediction = self.Prediction(
+                contextual_feature.contiguous(),
+                text,
+                is_train,
+                batch_max_length=self.opt.batch_max_length,
+            )
 
         return prediction

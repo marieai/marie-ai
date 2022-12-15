@@ -7,15 +7,15 @@ import os
 import tempfile
 import time
 from collections import Counter
+
+import detectron2.utils.comm as comm
 import torch
+from detectron2.evaluation.testing import flatten_results_dict
+from detectron2.utils.events import EventStorage, EventWriter
 from fvcore.common.checkpoint import PeriodicCheckpointer as _PeriodicCheckpointer
 from fvcore.common.file_io import PathManager
 from fvcore.common.timer import Timer
 from fvcore.nn.precise_bn import get_bn_modules, update_bn_stats
-
-import detectron2.utils.comm as comm
-from detectron2.evaluation.testing import flatten_results_dict
-from detectron2.utils.events import EventStorage, EventWriter
 
 from .train_loop import HookBase
 
@@ -159,9 +159,7 @@ class PeriodicWriter(HookBase):
         self._period = period
 
     def after_step(self):
-        if (self.trainer.iter + 1) % self._period == 0 or (
-            self.trainer.iter == self.trainer.max_iter - 1
-        ):
+        if (self.trainer.iter + 1) % self._period == 0 or (self.trainer.iter == self.trainer.max_iter - 1):
             for writer in self._writers:
                 writer.write()
 
@@ -278,9 +276,7 @@ class AutogradProfiler(HookBase):
         if self._profiler is None:
             return
         self._profiler.__exit__(None, None, None)
-        out_file = os.path.join(
-            self._output_dir, "profiler-trace-iter{}.json".format(self.trainer.iter)
-        )
+        out_file = os.path.join(self._output_dir, "profiler-trace-iter{}.json".format(self.trainer.iter))
         if "://" not in out_file:
             self._profiler.export_chrome_trace(out_file)
         else:
@@ -323,9 +319,7 @@ class EvalHook(HookBase):
             results = self._func()
 
             if results:
-                assert isinstance(
-                    results, dict
-                ), "Eval function must return a dict. Got {} instead.".format(results)
+                assert isinstance(results, dict), "Eval function must return a dict. Got {} instead.".format(results)
 
                 flattened_results = flatten_results_dict(results)
                 for k, v in flattened_results.items():
@@ -333,8 +327,7 @@ class EvalHook(HookBase):
                         v = float(v)
                     except Exception:
                         raise ValueError(
-                            "[EvalHook] eval_function should return a nested dict of float. "
-                            "Got '{}: {}' instead.".format(k, v)
+                            "[EvalHook] eval_function should return a nested dict of float. Got '{}: {}' instead.".format(k, v)
                         )
                 self.trainer.storage.put_scalars(**flattened_results, smoothing_hint=False)
 
@@ -373,9 +366,7 @@ class PreciseBN(HookBase):
         """
         self._logger = logging.getLogger(__name__)
         if len(get_bn_modules(model)) == 0:
-            self._logger.info(
-                "PreciseBN is disabled because model does not contain BN layers in training mode."
-            )
+            self._logger.info("PreciseBN is disabled because model does not contain BN layers in training mode.")
             self._disabled = True
             return
 
@@ -410,9 +401,7 @@ class PreciseBN(HookBase):
             while True:
                 num_iter += 1
                 if num_iter % 100 == 0:
-                    self._logger.info(
-                        "Running precise-BN ... {}/{} iterations.".format(num_iter, self._num_iter)
-                    )
+                    self._logger.info("Running precise-BN ... {}/{} iterations.".format(num_iter, self._num_iter))
                 # This way we can reuse the same iterator
                 yield next(self._data_iter)
 

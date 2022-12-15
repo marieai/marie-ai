@@ -34,9 +34,9 @@ class Registry(object):
         self._obj_map = {}
 
     def _do_register(self, name, obj):
-        assert (
-            name not in self._obj_map
-        ), "An object named '{}' was already registered in '{}' registry!".format(name, self._name)
+        assert name not in self._obj_map, "An object named '{}' was already registered in '{}' registry!".format(
+            name, self._name
+        )
         self._obj_map[name] = obj
 
     def register(self, obj=None):

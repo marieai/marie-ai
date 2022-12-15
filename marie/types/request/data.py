@@ -9,9 +9,7 @@ from marie.helper import cached_property, random_identity, typename
 from marie.proto import jina_pb2
 from marie.types.request import Request
 
-RequestSourceType = TypeVar(
-    'RequestSourceType', jina_pb2.DataRequestProto, str, Dict, bytes
-)
+RequestSourceType = TypeVar('RequestSourceType', jina_pb2.DataRequestProto, str, Dict, bytes)
 
 
 class DataRequest(Request):
@@ -35,13 +33,9 @@ class DataRequest(Request):
             .. # noqa: DAR201"""
             if not self._loaded_doc_array:
                 if self._content.WhichOneof('documents') == 'docs_bytes':
-                    self._loaded_doc_array = DocumentArray.from_bytes(
-                        self._content.docs_bytes
-                    )
+                    self._loaded_doc_array = DocumentArray.from_bytes(self._content.docs_bytes)
                 else:
-                    self._loaded_doc_array = DocumentArray.from_protobuf(
-                        self._content.docs
-                    )
+                    self._loaded_doc_array = DocumentArray.from_protobuf(self._content.docs)
 
             return self._loaded_doc_array
 
@@ -53,9 +47,7 @@ class DataRequest(Request):
             """
             self.set_docs_convert_arrays(value, None)
 
-        def set_docs_convert_arrays(
-                self, value: DocumentArray, ndarray_type: Optional[str] = None
-        ):
+        def set_docs_convert_arrays(self, value: DocumentArray, ndarray_type: Optional[str] = None):
             """ " Convert embedding and tensor to given type, then set DocumentArray
 
             :param value: a DocumentArray
@@ -63,9 +55,7 @@ class DataRequest(Request):
             """
             if value is not None:
                 self._loaded_doc_array = None
-                self._content.docs.CopyFrom(
-                    value.to_protobuf(ndarray_type=ndarray_type)
-                )
+                self._content.docs.CopyFrom(value.to_protobuf(ndarray_type=ndarray_type))
 
         @property
         def docs_bytes(self) -> bytes:
@@ -100,8 +90,8 @@ class DataRequest(Request):
     """
 
     def __init__(
-            self,
-            request: Optional[RequestSourceType] = None,
+        self,
+        request: Optional[RequestSourceType] = None,
     ):
         self.buffer = None
         self._pb_body = None
@@ -124,9 +114,7 @@ class DataRequest(Request):
                 self._pb_body = jina_pb2.DataRequestProto()
                 self._pb_body.header.request_id = random_identity()
         except Exception as ex:
-            raise BadRequestType(
-                f'fail to construct a {self.__class__} object from {request}'
-            ) from ex
+            raise BadRequestType(f'fail to construct a {self.__class__} object from {request}') from ex
 
     @property
     def is_decompressed(self) -> bool:
@@ -159,7 +147,7 @@ class DataRequest(Request):
 
     @property
     def proto_wo_data(
-            self,
+        self,
     ) -> Union['jina_pb2.DataRequestProtoWoData', 'jina_pb2.DataRequestProto']:
         """
         Transform the current buffer to a :class:`jina_pb2.DataRequestProtoWoData` unless the full proto has already
@@ -173,7 +161,7 @@ class DataRequest(Request):
 
     @property
     def proto(
-            self,
+        self,
     ) -> Union['jina_pb2.DataRequestProto', 'jina_pb2.DataRequestProtoWoData']:
         """
         Cast ``self`` to a :class:`jina_pb2.DataRequestProto` or a :class:`jina_pb2.DataRequestProto`. Laziness will be broken and serialization will be recomputed when calling.
@@ -187,7 +175,7 @@ class DataRequest(Request):
 
     @property
     def proto_with_data(
-            self,
+        self,
     ) -> 'jina_pb2.DataRequestProto':
         """
         Cast ``self`` to a :class:`jina_pb2.DataRequestProto`. Laziness will be broken and serialization will be recomputed when calling.
@@ -235,7 +223,9 @@ class DataRequest(Request):
         from google.protobuf.json_format import MessageToDict
 
         d = MessageToDict(
-            self.proto_wo_data, preserving_proto_field_name=True, use_integers_for_enums=True
+            self.proto_wo_data,
+            preserving_proto_field_name=True,
+            use_integers_for_enums=True,
         )
         d['data'] = da.to_dict()
         return d

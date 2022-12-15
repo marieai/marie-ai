@@ -1,7 +1,7 @@
 import pytest
-
 from jina import Flow
 from jina.enums import GatewayProtocolType
+
 from tests import random_docs
 
 

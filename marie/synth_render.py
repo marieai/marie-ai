@@ -1,22 +1,20 @@
 import argparse
 import copy
 import glob
+import io
 import os
 import time
+
 import cv2
 import numpy as np
 import torch
-from reportlab.lib.utils import ImageReader
-import io
-from PIL import Image
 from models.textfusenet.detectron2.config import get_cfg
+from models.textfusenet.detectron2.engine.defaults import DefaultPredictor
 from models.textfusenet.detectron2.structures import Boxes, RotatedBoxes
 from models.textfusenet.detectron2.utils.colormap import random_color
-
-from models.textfusenet.detectron2.engine.defaults import DefaultPredictor
-
-
-from PyPDF4 import PdfFileWriter, PdfFileReader
+from PIL import Image
+from PyPDF4 import PdfFileReader, PdfFileWriter
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 
@@ -56,14 +54,16 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--input", default="./assets/private/*.*", nargs="+", help="the folder of totaltext test images"
+        "--input",
+        default="./assets/private/*.*",
+        nargs="+",
+        help="the folder of totaltext test images",
     )
 
     parser.add_argument(
         "--output",
         default="./test_synth/",
-        help="A file or directory to save output visualizations. "
-        "If not given, will show output in an OpenCV window.",
+        help="A file or directory to save output visualizations. If not given, will show output in an OpenCV window.",
     )
 
     parser.add_argument(

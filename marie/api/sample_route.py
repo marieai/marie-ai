@@ -7,7 +7,12 @@ class SampleRouter(Executor):
             raise RuntimeError("Expected app arguments is null")
         prefix = "/api"
         app.add_url_rule(rule=f"{prefix}/info", endpoint="info", view_func=self.info, methods=["GET"])
-        app.add_url_rule(rule=f"{prefix}/status/<queue_id>", endpoint="status", view_func=self.status, methods=["GET"])
+        app.add_url_rule(
+            rule=f"{prefix}/status/<queue_id>",
+            endpoint="status",
+            view_func=self.status,
+            methods=["GET"],
+        )
 
     # @requests('xx')
     def status(self, queue_id):

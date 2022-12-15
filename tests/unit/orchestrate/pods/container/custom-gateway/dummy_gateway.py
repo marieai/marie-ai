@@ -1,11 +1,10 @@
 from typing import Optional
 
 from docarray import Document, DocumentArray
-from pydantic import BaseModel
-from uvicorn import Config, Server
-
 from jina import Gateway, __default_host__
 from jina.clients.request import request_generator
+from pydantic import BaseModel
+from uvicorn import Config, Server
 
 
 class DummyResponseModel(BaseModel):
@@ -20,9 +19,7 @@ class ProcessedResponseModel(BaseModel):
 
 
 class DummyGateway(Gateway):
-    def __init__(
-        self, arg1: str = None, arg2: str = None, arg3: str = 'default-arg3', **kwargs
-    ):
+    def __init__(self, arg1: str = None, arg2: str = None, arg3: str = 'default-arg3', **kwargs):
         super().__init__(**kwargs)
         self.arg1 = arg1
         self.arg2 = arg2

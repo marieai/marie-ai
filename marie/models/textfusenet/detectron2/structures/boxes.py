@@ -1,9 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import numpy as np
 from enum import Enum, unique
 from typing import Iterator, List, Tuple, Union
-import torch
 
+import numpy as np
+import torch
 from detectron2.layers import cat
 
 _RawBoxType = Union[List[float], Tuple[float, ...], torch.Tensor, np.ndarray]
@@ -45,9 +45,7 @@ class BoxMode(Enum):
         single_box = isinstance(box, (list, tuple))
         if single_box:
             arr = np.array(box)
-            assert arr.shape == (
-                4,
-            ), "BoxMode.convert takes either a 4-tuple/list or a Nx4 array/tensor"
+            assert arr.shape == (4,), "BoxMode.convert takes either a 4-tuple/list or a Nx4 array/tensor"
         else:
             arr = box
 
@@ -283,9 +281,8 @@ def matched_boxlist_iou(boxes1: Boxes, boxes2: Boxes) -> torch.Tensor:
     Returns:
         (tensor) iou, sized [N].
     """
-    assert len(boxes1) == len(boxes2), (
-        "boxlists should have the same"
-        "number of entries, got {}, {}".format(len(boxes1), len(boxes2))
+    assert len(boxes1) == len(boxes2), "boxlists should have the samenumber of entries, got {}, {}".format(
+        len(boxes1), len(boxes2)
     )
     area1 = boxes1.area()  # [N]
     area2 = boxes2.area()  # [N]

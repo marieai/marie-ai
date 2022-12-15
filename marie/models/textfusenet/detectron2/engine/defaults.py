@@ -13,24 +13,12 @@ import argparse
 import logging
 import os
 from collections import OrderedDict
-import torch
-from fvcore.common.file_io import PathManager
-from fvcore.nn.precise_bn import get_bn_modules
-from torch.nn.parallel import DistributedDataParallel
 
 import detectron2.data.transforms as T
+import torch
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.data import (
-    MetadataCatalog,
-    build_detection_test_loader,
-    build_detection_train_loader,
-)
-from detectron2.evaluation import (
-    DatasetEvaluator,
-    inference_on_dataset,
-    print_csv_format,
-    verify_results,
-)
+from detectron2.data import MetadataCatalog, build_detection_test_loader, build_detection_train_loader
+from detectron2.evaluation import DatasetEvaluator, inference_on_dataset, print_csv_format, verify_results
 from detectron2.modeling import build_model
 from detectron2.solver import build_lr_scheduler, build_optimizer
 from detectron2.utils import comm
@@ -38,11 +26,19 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
 from detectron2.utils.logger import setup_logger
+from fvcore.common.file_io import PathManager
+from fvcore.nn.precise_bn import get_bn_modules
+from torch.nn.parallel import DistributedDataParallel
 
 from . import hooks
 from .train_loop import SimpleTrainer
 
-__all__ = ["default_argument_parser", "default_setup", "DefaultPredictor", "DefaultTrainer"]
+__all__ = [
+    "default_argument_parser",
+    "default_setup",
+    "DefaultPredictor",
+    "DefaultTrainer",
+]
 
 
 def default_argument_parser():
@@ -63,7 +59,12 @@ def default_argument_parser():
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
     parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
     parser.add_argument("--num-machines", type=int, default=1)
-    parser.add_argument("--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)")
+    parser.add_argument(
+        "--machine-rank",
+        type=int,
+        default=0,
+        help="the rank of this machine (unique per machine)",
+    )
 
     # PyTorch still may leave orphan processes in multi-gpu training.
     # Therefore we use a deterministic way to obtain port,
@@ -105,9 +106,7 @@ def default_setup(cfg, args):
     logger.info("Command line arguments: " + str(args))
     if hasattr(args, "config_file"):
         logger.info(
-            "Contents of args.config_file={}:\n{}".format(
-                args.config_file, PathManager.open(args.config_file, "r").read()
-            )
+            "Contents of args.config_file={}:\n{}".format(args.config_file, PathManager.open(args.config_file, "r").read())
         )
 
     logger.info("Running with full config:\n{}".format(cfg))
@@ -153,9 +152,7 @@ class DefaultPredictor:
         # False : whether from last_checkpoint
         checkpointer.load(cfg.MODEL.WEIGHTS, False)
 
-        self.transform_gen = T.ResizeShortestEdge(
-            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
-        )
+        self.transform_gen = T.ResizeShortestEdge([cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST)
 
         self.input_format = cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
@@ -229,7 +226,10 @@ class DefaultTrainer(SimpleTrainer):
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
-                model, device_ids=[comm.get_local_rank()], broadcast_buffers=False, find_unused_parameters=True
+                model,
+                device_ids=[comm.get_local_rank()],
+                broadcast_buffers=False,
+                find_unused_parameters=True,
             )
         super().__init__(model, data_loader, optimizer)
 
@@ -260,9 +260,7 @@ class DefaultTrainer(SimpleTrainer):
         """
         # The checkpoint stores the training iteration that just finished, thus we start
         # at the next iteration (or iter zero if there's no checkpoint).
-        self.start_iter = (
-            self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
-        )
+        self.start_iter = self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
 
     def build_hooks(self):
         """
@@ -438,9 +436,7 @@ class DefaultTrainer(SimpleTrainer):
         if isinstance(evaluators, DatasetEvaluator):
             evaluators = [evaluators]
         if evaluators is not None:
-            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
-                len(cfg.DATASETS.TEST), len(evaluators)
-            )
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(len(cfg.DATASETS.TEST), len(evaluators))
 
         results = OrderedDict()
         for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
@@ -462,9 +458,9 @@ class DefaultTrainer(SimpleTrainer):
             results_i = inference_on_dataset(model, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():
-                assert isinstance(
-                    results_i, dict
-                ), "Evaluator must return a dict on the main process. Got {} instead.".format(results_i)
+                assert isinstance(results_i, dict), "Evaluator must return a dict on the main process. Got {} instead.".format(
+                    results_i
+                )
                 logger.info("Evaluation results for {} in csv format:".format(dataset_name))
                 print_csv_format(results_i)
 

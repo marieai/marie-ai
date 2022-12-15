@@ -7,7 +7,6 @@ import logging
 
 import numpy as np
 import torch
-
 from detectron2.data import detection_utils as utils
 from detectron2.data import transforms as T
 
@@ -90,9 +89,7 @@ class DetrDatasetMapper:
             if np.random.rand() > 0.5:
                 image, transforms = T.apply_transform_gens(self.tfm_gens, image)
             else:
-                image, transforms = T.apply_transform_gens(
-                    self.tfm_gens[:-1] + self.crop_gen + self.tfm_gens[-1:], image
-                )
+                image, transforms = T.apply_transform_gens(self.tfm_gens[:-1] + self.crop_gen + self.tfm_gens[-1:], image)
 
         image_shape = image.shape[:2]  # h, w
 

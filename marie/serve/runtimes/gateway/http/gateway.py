@@ -19,7 +19,7 @@ class HTTPGateway(FastAPIBaseGateway):
         expose_endpoints: Optional[str] = None,
         expose_graphql_endpoint: Optional[bool] = False,
         cors: Optional[bool] = False,
-        **kwargs
+        **kwargs,
     ):
         """Initialize the gateway
             Get the app from FastAPI as the REST interface.

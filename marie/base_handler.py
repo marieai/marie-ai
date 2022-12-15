@@ -7,8 +7,9 @@ import abc
 import logging
 import os
 import time
+
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from marie.logger import setup_logger
 from marie.registry_base import RegistryHolder
@@ -155,7 +156,10 @@ class BaseHandler(metaclass=RegistryHolder):
         # Setting the default profiler arguments to profile cpu, gpu usage and record shapes
         # User can override this argument based on the requirement
         if not self.profiler_args:
-            self.profiler_args["activities"] = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+            self.profiler_args["activities"] = [
+                ProfilerActivity.CPU,
+                ProfilerActivity.CUDA,
+            ]
             self.profiler_args["record_shapes"] = True
 
         if "on_trace_ready" not in self.profiler_args:

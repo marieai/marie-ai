@@ -38,15 +38,14 @@ def avoid_concurrent_lock_cls(cls):
         @functools.wraps(func)
         def arg_wrapper(self, *args, **kwargs):
             if func.__name__ != '__init__':
-                raise TypeError(
-                    'this decorator should only be used on __init__ method of an executor'
-                )
+                raise TypeError('this decorator should only be used on __init__ method of an executor')
 
             if self.__class__ == cls:
                 with ImportExtensions(
                     required=False,
-                    help_text=f'FileLock is needed to guarantee non-concurrent initialization of replicas in the '
-                    f'same machine.',
+                    help_text=(
+                        f'FileLock is needed to guarantee non-concurrent initialization of replicas in the same machine.'
+                    ),
                 ):
                     import filelock
 
@@ -161,12 +160,10 @@ def requests(
             self._batching_decorator = None
             fn = self._unwrap_batching_decorator(fn)
             arg_spec = inspect.getfullargspec(fn)
-            if not arg_spec.varkw and not __args_executor_func__.issubset(
-                arg_spec.args
-            ):
+            if not arg_spec.varkw and not __args_executor_func__.issubset(arg_spec.args):
                 raise TypeError(
                     f'{fn} accepts only {arg_spec.args} which is fewer than expected, '
-                    f'please add `**kwargs` to the function signature.'
+                    'please add `**kwargs` to the function signature.'
                 )
 
             if iscoroutinefunction(fn):
@@ -202,9 +199,7 @@ def requests(
                 for o in on:
                     owner.requests_by_class[owner.__name__][o] = self.fn
             else:
-                owner.requests_by_class[owner.__name__][
-                    on or __default_endpoint__
-                ] = self.fn
+                owner.requests_by_class[owner.__name__][on or __default_endpoint__] = self.fn
 
             setattr(owner, name, self.fn)
 
@@ -218,6 +213,7 @@ def requests(
         def __call__(self, *args, **kwargs):
             # this is needed to make this decorator work in combination with `@requests`
             return self.fn(*args, **kwargs)
+
     if func:
         return FunctionMapper(func)
     else:
@@ -294,9 +290,7 @@ def dynamic_batching(
             if not owner.dynamic_batching.get(fn_name):
                 owner.dynamic_batching[fn_name] = {}
 
-            owner.dynamic_batching[fn_name][
-                'preferred_batch_size'
-            ] = preferred_batch_size
+            owner.dynamic_batching[fn_name]['preferred_batch_size'] = preferred_batch_size
             owner.dynamic_batching[fn_name]['timeout'] = timeout
             setattr(owner, name, self.fn)
 
@@ -387,11 +381,7 @@ def monitor(
 
     def _decorator(func: Callable):
         name_ = name if name else f'{func.__name__}_seconds'
-        documentation_ = (
-            documentation
-            if documentation
-            else f'Time spent calling method {func.__name__}'
-        )
+        documentation_ = documentation if documentation else f'Time spent calling method {func.__name__}'
 
         @functools.wraps(func)
         def _f(self, *args, **kwargs):

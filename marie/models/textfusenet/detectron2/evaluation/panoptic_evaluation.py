@@ -7,12 +7,12 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
-from fvcore.common.file_io import PathManager
-from PIL import Image
-from tabulate import tabulate
 
 from detectron2.data import MetadataCatalog
 from detectron2.utils import comm
+from fvcore.common.file_io import PathManager
+from PIL import Image
+from tabulate import tabulate
 
 from .evaluator import DatasetEvaluator
 
@@ -34,12 +34,8 @@ class COCOPanopticEvaluator(DatasetEvaluator):
             output_dir (str): output directory to save results for evaluation
         """
         self._metadata = MetadataCatalog.get(dataset_name)
-        self._thing_contiguous_id_to_dataset_id = {
-            v: k for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()
-        }
-        self._stuff_contiguous_id_to_dataset_id = {
-            v: k for k, v in self._metadata.stuff_dataset_id_to_contiguous_id.items()
-        }
+        self._thing_contiguous_id_to_dataset_id = {v: k for k, v in self._metadata.thing_dataset_id_to_contiguous_id.items()}
+        self._stuff_contiguous_id_to_dataset_id = {v: k for k, v in self._metadata.stuff_dataset_id_to_contiguous_id.items()}
 
         self._predictions_json = os.path.join(output_dir, "predictions.json")
 
@@ -52,13 +48,9 @@ class COCOPanopticEvaluator(DatasetEvaluator):
             # the model produces panoptic category id directly. No more conversion needed
             return segment_info
         if isthing is True:
-            segment_info["category_id"] = self._thing_contiguous_id_to_dataset_id[
-                segment_info["category_id"]
-            ]
+            segment_info["category_id"] = self._thing_contiguous_id_to_dataset_id[segment_info["category_id"]]
         else:
-            segment_info["category_id"] = self._stuff_contiguous_id_to_dataset_id[
-                segment_info["category_id"]
-            ]
+            segment_info["category_id"] = self._stuff_contiguous_id_to_dataset_id[segment_info["category_id"]]
         return segment_info
 
     def process(self, inputs, outputs):
@@ -139,7 +131,12 @@ def _print_panoptic_results(pq_res):
         row = [name] + [pq_res[name][k] * 100 for k in ["pq", "sq", "rq"]] + [pq_res[name]["n"]]
         data.append(row)
     table = tabulate(
-        data, headers=headers, tablefmt="pipe", floatfmt=".3f", stralign="center", numalign="center"
+        data,
+        headers=headers,
+        tablefmt="pipe",
+        floatfmt=".3f",
+        stralign="center",
+        numalign="center",
     )
     logger.info("Panoptic Evaluation Results:\n" + table)
 
@@ -161,6 +158,9 @@ if __name__ == "__main__":
 
     with contextlib.redirect_stdout(io.StringIO()):
         pq_res = pq_compute(
-            args.gt_json, args.pred_json, gt_folder=args.gt_dir, pred_folder=args.pred_dir
+            args.gt_json,
+            args.pred_json,
+            gt_folder=args.gt_dir,
+            pred_folder=args.pred_dir,
         )
         _print_panoptic_results(pq_res)

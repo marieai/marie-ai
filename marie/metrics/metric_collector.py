@@ -1,5 +1,3 @@
-
-
 """
 Single start point for system metrics and process metrics script
 
@@ -14,12 +12,7 @@ from metrics.process_memory_metric import check_process_mem_usage
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        "--gpu",
-        action="store",
-        help="number of GPU",
-        type=int
-    )
+    parser.add_argument("--gpu", action="store", help="number of GPU", type=int)
     arguments = parser.parse_args()
 
     logging.basicConfig(stream=sys.stdout, format="%(message)s", level=logging.INFO)

@@ -8,8 +8,8 @@ from threading import Event
 import grpc
 import pytest
 import requests as req
-
 from docarray import Document
+
 from marie import DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.parsers import set_pod_parser
@@ -243,9 +243,7 @@ async def test_worker_runtime_slow_init_exec():
         ready_or_shutdown_event=Event(),
     )
 
-    result = await GrpcConnectionPool.send_request_async(
-        _create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0
-    )
+    result = await GrpcConnectionPool.send_request_async(_create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0)
 
     assert len(result.docs) == 1
 
@@ -320,9 +318,7 @@ async def test_decorator_monitoring(port_generator):
             ...
 
     port = port_generator()
-    args = set_pod_parser().parse_args(
-        ['--monitoring', '--port-monitoring', str(port), '--uses', 'DummyExecutor']
-    )
+    args = set_pod_parser().parse_args(['--monitoring', '--port-monitoring', str(port), '--uses', 'DummyExecutor'])
 
     cancel_event = multiprocessing.Event()
 
@@ -349,9 +345,7 @@ async def test_decorator_monitoring(port_generator):
         ready_or_shutdown_event=Event(),
     )
 
-    await GrpcConnectionPool.send_request_async(
-        _create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0
-    )
+    await GrpcConnectionPool.send_request_async(_create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0)
 
     resp = req.get(f'http://localhost:{port}/')
     assert f'jina_metrics_name_count{{runtime_name="None"}} 1.0' in str(resp.content)
@@ -371,14 +365,10 @@ async def test_decorator_monitoring(port_generator):
         @requests
         def foo(self, docs, **kwargs):
 
-            with self.monitor(
-                name='process_seconds', documentation='process time in seconds '
-            ):
+            with self.monitor(name='process_seconds', documentation='process time in seconds '):
                 self._proces(docs)
 
-            with self.monitor(
-                name='process_2_seconds', documentation='process 2 time in seconds '
-            ):
+            with self.monitor(name='process_2_seconds', documentation='process 2 time in seconds '):
                 self.process_2(docs)
 
         def _proces(self, docs):
@@ -388,9 +378,7 @@ async def test_decorator_monitoring(port_generator):
             ...
 
     port = port_generator()
-    args = set_pod_parser().parse_args(
-        ['--monitoring', '--port-monitoring', str(port), '--uses', 'DummyExecutor']
-    )
+    args = set_pod_parser().parse_args(['--monitoring', '--port-monitoring', str(port), '--uses', 'DummyExecutor'])
 
     cancel_event = multiprocessing.Event()
 
@@ -417,9 +405,7 @@ async def test_decorator_monitoring(port_generator):
         ready_or_shutdown_event=Event(),
     )
 
-    await GrpcConnectionPool.send_request_async(
-        _create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0
-    )
+    await GrpcConnectionPool.send_request_async(_create_test_data_message(), f'{args.host}:{args.port}', timeout=1.0)
 
     resp = req.get(f'http://localhost:{port}/')
     assert f'jina_process_seconds_count{{runtime_name="None"}} 1.0' in str(resp.content)
@@ -460,9 +446,7 @@ async def test_error_in_worker_runtime_with_exit_on_exceptions(monkeypatch):
     )
 
     target = f'{args.host}:{args.port}'
-    response = await GrpcConnectionPool.send_request_async(
-        _create_test_data_message(), target
-    )
+    response = await GrpcConnectionPool.send_request_async(_create_test_data_message(), target)
     assert response.header.status.code == jina_pb2.StatusProto.ERROR
 
     cancel_event.set()

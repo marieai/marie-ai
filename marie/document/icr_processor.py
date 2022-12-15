@@ -1,20 +1,20 @@
+import base64
+import json
 import os
 import sys
 import typing
 from abc import ABC
 
-import numpy as np
 import cv2
-import base64
-import json
+import numpy as np
 
 from marie.base_handler import BaseHandler
+from marie.logging.predefined import default_logger
+from marie.numpyencoder import NumpyEncoder
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 from marie.utils.draw_truetype import drawTrueTypeTextOnImage
 from marie.utils.utils import ensure_exists
-from marie.numpyencoder import NumpyEncoder
-from marie.logging.predefined import default_logger
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
@@ -45,17 +45,13 @@ class IcrProcessor(BaseHandler):
         """
 
         logger.debug("ICR processing : {}, {}".format(_id, key))
-        results = self.recognize_from_boxes(
-            [image], [0, 0, image.shape[1], image.shape[0]]
-        )
+        results = self.recognize_from_boxes([image], [0, 0, image.shape[1], image.shape[0]])
         if len(results) == 1:
             r = results[0]
             return r["text"], r["confidence"]
         return None, 0
 
-    def recognize_from_boxes(
-        self, image, boxes, **kwargs
-    ) -> typing.List[typing.Dict[str, any]]:
+    def recognize_from_boxes(self, image, boxes, **kwargs) -> typing.List[typing.Dict[str, any]]:
         """Recognize text from image using lists of bounding boxes.
 
         Args:
@@ -86,12 +82,8 @@ class IcrProcessor(BaseHandler):
         """
 
         logger.debug(f"ICR recognize : {_id}, {key}")
-        assert len(boxes) == len(
-            fragments
-        ), "You must provide the same number of box groups as images."
-        assert len(boxes) == len(
-            lines
-        ), "You must provide the same number of lines as boxes."
+        assert len(boxes) == len(fragments), "You must provide the same number of box groups as images."
+        assert len(boxes) == len(lines), "You must provide the same number of lines as boxes."
         encode_fragments = False
 
         try:
@@ -132,11 +124,12 @@ class IcrProcessor(BaseHandler):
 
                 txt_label = extraction["text"]
                 confidence = extraction["confidence"]
+                conf_label = round(confidence, 4)
 
                 payload = {
                     "id": i,
                     "text": txt_label,
-                    "confidence": round(confidence, 4),
+                    "confidence": conf_label,
                     "box": box,
                     "line": line,
                 }
@@ -228,9 +221,7 @@ class IcrProcessor(BaseHandler):
             }
 
             if len(words) != len(aligned_words):
-                raise Exception(
-                    f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}"
-                )
+                raise Exception(f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}")
 
             if False:
                 with open("/tmp/icr/data.json", "w") as f:

@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from collections import Counter
+
 from fvcore.common.file_io import PathManager
 from tabulate import tabulate
 from termcolor import colored
@@ -30,9 +31,7 @@ class _ColorfulFormatter(logging.Formatter):
 
 
 @functools.lru_cache()  # so that calling setup_logger multiple times won't add many handlers
-def setup_logger(
-    output=None, distributed_rank=0, *, color=True, name="detectron2", abbrev_name=None
-):
+def setup_logger(output=None, distributed_rank=0, *, color=True, name="detectron2", abbrev_name=None):
     """
     Args:
         output (str): a file name or a directory to save log. If None, will not save log file.
@@ -51,9 +50,7 @@ def setup_logger(
     if abbrev_name is None:
         abbrev_name = "d2" if name == "detectron2" else name
 
-    plain_formatter = logging.Formatter(
-        "[%(asctime)s] %(name)s %(levelname)s: %(message)s", datefmt="%m/%d %H:%M:%S"
-    )
+    plain_formatter = logging.Formatter("[%(asctime)s] %(name)s %(levelname)s: %(message)s", datefmt="%m/%d %H:%M:%S")
     # stdout logging: master only
     if distributed_rank == 0:
         ch = logging.StreamHandler(stream=sys.stdout)

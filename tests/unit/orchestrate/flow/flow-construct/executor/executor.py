@@ -1,4 +1,4 @@
-from jina import Executor, DocumentArray, requests
+from jina import DocumentArray, Executor, requests
 
 
 class CustomExec(Executor):

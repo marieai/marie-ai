@@ -1,7 +1,8 @@
-from .pix2pix_model import Pix2PixModel
+import numpy as np
 import torch
 from skimage import color  # used for lab2rgb
-import numpy as np
+
+from .pix2pix_model import Pix2PixModel
 
 
 class ColorizationModel(Pix2PixModel):
@@ -11,6 +12,7 @@ class ColorizationModel(Pix2PixModel):
     It trains a pix2pix model, mapping from L channel to ab channels in Lab color space.
     By default, the colorization dataset will automatically set '--input_nc 1' and '--output_nc 2'.
     """
+
     @staticmethod
     def modify_commandline_options(parser, is_train=True):
         """Add new dataset-specific options, and rewrite default values for existing options.

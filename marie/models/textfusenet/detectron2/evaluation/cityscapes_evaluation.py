@@ -4,11 +4,11 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
-import torch
-from PIL import Image
 
+import torch
 from detectron2.data import MetadataCatalog
 from detectron2.utils import comm
+from PIL import Image
 
 from .evaluator import DatasetEvaluator
 
@@ -41,9 +41,7 @@ class CityscapesEvaluator(DatasetEvaluator):
         self._temp_dir = comm.all_gather(self._temp_dir)[0]
         if self._temp_dir != self._working_dir.name:
             self._working_dir.cleanup()
-        self._logger.info(
-            "Writing cityscapes results to temporary directory {} ...".format(self._temp_dir)
-        )
+        self._logger.info("Writing cityscapes results to temporary directory {} ...".format(self._temp_dir))
 
     def process(self, inputs, outputs):
         from cityscapesscripts.helpers.labels import name2label
@@ -62,9 +60,7 @@ class CityscapesEvaluator(DatasetEvaluator):
                     class_id = name2label[classes].id
                     score = output.scores[i]
                     mask = output.pred_masks[i].numpy().astype("uint8")
-                    png_filename = os.path.join(
-                        self._temp_dir, basename + "_{}_{}.png".format(i, classes)
-                    )
+                    png_filename = os.path.join(self._temp_dir, basename + "_{}_{}.png".format(i, classes))
 
                     Image.fromarray(mask * 255).save(png_filename)
                     fout.write("{} {} {}\n".format(os.path.basename(png_filename), class_id, score))
@@ -77,9 +73,7 @@ class CityscapesEvaluator(DatasetEvaluator):
         comm.synchronize()
         if comm.get_rank() > 0:
             return
-        os.environ["CITYSCAPES_DATASET"] = os.path.abspath(
-            os.path.join(self._metadata.gt_dir, "..", "..")
-        )
+        os.environ["CITYSCAPES_DATASET"] = os.path.abspath(os.path.join(self._metadata.gt_dir, "..", ".."))
         # Load the Cityscapes eval script *after* setting the required env var,
         # since the script reads CITYSCAPES_DATASET into global variables at load time.
         import cityscapesscripts.evaluation.evalInstanceLevelSemanticLabeling as cityscapes_eval
@@ -96,17 +90,13 @@ class CityscapesEvaluator(DatasetEvaluator):
         # These lines are adopted from
         # https://github.com/mcordts/cityscapesScripts/blob/master/cityscapesscripts/evaluation/evalInstanceLevelSemanticLabeling.py # noqa
         groundTruthImgList = glob.glob(cityscapes_eval.args.groundTruthSearch)
-        assert len(
-            groundTruthImgList
-        ), "Cannot find any ground truth images to use for evaluation. Searched for: {}".format(
+        assert len(groundTruthImgList), "Cannot find any ground truth images to use for evaluation. Searched for: {}".format(
             cityscapes_eval.args.groundTruthSearch
         )
         predictionImgList = []
         for gt in groundTruthImgList:
             predictionImgList.append(cityscapes_eval.getPrediction(gt, cityscapes_eval.args))
-        results = cityscapes_eval.evaluateImgLists(
-            predictionImgList, groundTruthImgList, cityscapes_eval.args
-        )["averages"]
+        results = cityscapes_eval.evaluateImgLists(predictionImgList, groundTruthImgList, cityscapes_eval.args)["averages"]
 
         ret = OrderedDict()
         ret["segm"] = {"AP": results["allAp"] * 100, "AP50": results["allAp50%"] * 100}

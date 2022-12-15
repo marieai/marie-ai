@@ -1,18 +1,10 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import numpy as np
 import fvcore.nn.weight_init as weight_init
+import numpy as np
 import torch
 import torch.nn.functional as F
+from detectron2.layers import Conv2d, DeformConv, FrozenBatchNorm2d, ModulatedDeformConv, ShapeSpec, get_norm
 from torch import nn
-
-from detectron2.layers import (
-    Conv2d,
-    DeformConv,
-    FrozenBatchNorm2d,
-    ModulatedDeformConv,
-    ShapeSpec,
-    get_norm,
-)
 
 from .backbone import Backbone
 from .build import BACKBONE_REGISTRY
@@ -353,9 +345,7 @@ class ResNet(Backbone):
             name = "res" + str(i + 2)
             self.add_module(name, stage)
             self.stages_and_names.append((stage, name))
-            self._out_feature_strides[name] = current_stride = int(
-                current_stride * np.prod([k.stride for k in blocks])
-            )
+            self._out_feature_strides[name] = current_stride = int(current_stride * np.prod([k.stride for k in blocks]))
             self._out_feature_channels[name] = blocks[-1].out_channels
 
         if num_classes is not None:
@@ -395,7 +385,8 @@ class ResNet(Backbone):
     def output_shape(self):
         return {
             name: ShapeSpec(
-                channels=self._out_feature_channels[name], stride=self._out_feature_strides[name]
+                channels=self._out_feature_channels[name],
+                stride=self._out_feature_strides[name],
             )
             for name in self._out_features
         }

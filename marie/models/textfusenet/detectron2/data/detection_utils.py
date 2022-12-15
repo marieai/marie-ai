@@ -7,20 +7,12 @@ typical object detection data pipeline.
 """
 import logging
 import random
+
 import numpy as np
 import torch
+from detectron2.structures import BitMasks, Boxes, BoxMode, Instances, Keypoints, PolygonMasks, RotatedBoxes
 from fvcore.common.file_io import PathManager
 from PIL import Image, ImageOps
-
-from detectron2.structures import (
-    BitMasks,
-    Boxes,
-    BoxMode,
-    Instances,
-    Keypoints,
-    PolygonMasks,
-    RotatedBoxes,
-)
 
 from . import transforms as T
 from .catalog import MetadataCatalog
@@ -75,9 +67,7 @@ def check_image_size(dataset_dict, image):
         if not image_wh == expected_wh:
             raise SizeMismatchError(
                 "Mismatched (W,H){}, got {}, expect {}".format(
-                    " for image " + dataset_dict["file_name"]
-                    if "file_name" in dataset_dict
-                    else "",
+                    " for image " + dataset_dict["file_name"] if "file_name" in dataset_dict else "",
                     image_wh,
                     expected_wh,
                 )
@@ -117,9 +107,7 @@ def transform_proposals(dataset_dict, image_shape, transforms, min_box_side_len,
             )
         )
         boxes = Boxes(boxes)
-        objectness_logits = torch.as_tensor(
-            dataset_dict.pop("proposal_objectness_logits").astype("float32")
-        )
+        objectness_logits = torch.as_tensor(dataset_dict.pop("proposal_objectness_logits").astype("float32"))
 
         boxes.clip(image_shape)
         keep = boxes.nonempty(threshold=min_box_side_len)
@@ -132,9 +120,7 @@ def transform_proposals(dataset_dict, image_shape, transforms, min_box_side_len,
         dataset_dict["proposals"] = proposals
 
 
-def transform_instance_annotations(
-    annotation, transforms, image_size, *, keypoint_hflip_indices=None
-):
+def transform_instance_annotations(annotation, transforms, image_size, *, keypoint_hflip_indices=None):
     """
     Apply transforms to box, segmentation and keypoints of annotations of a single instance.
 
@@ -166,9 +152,7 @@ def transform_instance_annotations(
         annotation["segmentation"] = [p.reshape(-1) for p in transforms.apply_polygons(polygons)]
 
     if "keypoints" in annotation:
-        keypoints = transform_keypoint_annotations(
-            annotation["keypoints"], transforms, image_size, keypoint_hflip_indices
-        )
+        keypoints = transform_keypoint_annotations(annotation["keypoints"], transforms, image_size, keypoint_hflip_indices)
         annotation["keypoints"] = keypoints
 
     return annotation
@@ -371,14 +355,8 @@ def check_metadata_consistency(key, dataset_names):
     entries_per_dataset = [getattr(MetadataCatalog.get(d), key) for d in dataset_names]
     for idx, entry in enumerate(entries_per_dataset):
         if entry != entries_per_dataset[0]:
-            logger.error(
-                "Metadata '{}' for dataset '{}' is '{}'".format(key, dataset_names[idx], str(entry))
-            )
-            logger.error(
-                "Metadata '{}' for dataset '{}' is '{}'".format(
-                    key, dataset_names[0], str(entries_per_dataset[0])
-                )
-            )
+            logger.error("Metadata '{}' for dataset '{}' is '{}'".format(key, dataset_names[idx], str(entry)))
+            logger.error("Metadata '{}' for dataset '{}' is '{}'".format(key, dataset_names[0], str(entries_per_dataset[0])))
             raise ValueError("Datasets have different metadata '{}'!".format(key))
 
 
@@ -399,18 +377,16 @@ def build_transform_gen(cfg, is_train):
         max_size = cfg.INPUT.MAX_SIZE_TEST
         sample_style = "choice"
     if sample_style == "range":
-        assert len(min_size) == 2, "more than 2 ({}) min_size(s) are provided for ranges".format(
-            len(min_size)
-        )
+        assert len(min_size) == 2, "more than 2 ({}) min_size(s) are provided for ranges".format(len(min_size))
 
     logger = logging.getLogger(__name__)
     tfm_gens = []
     tfm_gens.append(T.ResizeShortestEdge(min_size, max_size, sample_style))
     if is_train:
         tfm_gens.append(T.RandomFlip())
-        tfm_gens.append(T.RandomContrast(0.5,1.5))
-        tfm_gens.append(T.RandomBrightness(0.5,1.5))
-        tfm_gens.append(T.RandomSaturation(0.5,1.5))
-        tfm_gens.append(T.RandomLighting(random.random()+0.5))
+        tfm_gens.append(T.RandomContrast(0.5, 1.5))
+        tfm_gens.append(T.RandomBrightness(0.5, 1.5))
+        tfm_gens.append(T.RandomSaturation(0.5, 1.5))
+        tfm_gens.append(T.RandomLighting(random.random() + 0.5))
         logger.info("TransformGens used in training: " + str(tfm_gens))
     return tfm_gens

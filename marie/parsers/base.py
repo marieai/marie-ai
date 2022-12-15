@@ -18,10 +18,7 @@ def set_base_parser():
         'Docs': ('📖', 'https://github.com/gregbugaj/marie-ai/tree/main/docs'),
         'Help': ('💬', 'https://github.com/gregbugaj/marie-ai'),
     }
-    url_str = '\n'.join(
-        f'- {v[0]:<10} {k:10.10}\t{colored(v[1], "cyan", attrs=["underline"])}'
-        for k, v in urls.items()
-    )
+    url_str = '\n'.join(f'- {v[0]:<10} {k:10.10}\t{colored(v[1], "cyan", attrs=["underline"])}' for k, v in urls.items())
 
     parser = argparse.ArgumentParser(
         epilog=f'''

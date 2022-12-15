@@ -3,20 +3,18 @@ import os
 import re
 import sys
 
+import lmdb
 import numpy as np
+import six
 import torch
 import torchvision.transforms as transforms
+from natsort import natsorted
 from PIL import Image
 from torch._utils import _accumulate
 from torch.utils.data import ConcatDataset, Dataset, Subset
 
-import lmdb
-import six
-from natsort import natsorted
-
 
 class Batch_Balanced_Dataset(object):
-
     def __init__(self, opt):
         """
         Modulate the data ratio in the batch.
@@ -52,20 +50,32 @@ class Batch_Balanced_Dataset(object):
             number_dataset = int(total_number_dataset * float(opt.total_data_usage_ratio))
             dataset_split = [number_dataset, total_number_dataset - number_dataset]
             indices = range(total_number_dataset)
-            _dataset, _ = [Subset(_dataset, indices[offset - length:offset])
-                           for offset, length in zip(_accumulate(dataset_split), dataset_split)]
-            selected_d_log = f'num total samples of {selected_d}: {total_number_dataset} x {opt.total_data_usage_ratio} (total_data_usage_ratio) = {len(_dataset)}\n'
-            selected_d_log += f'num samples of {selected_d} per batch: {opt.batch_size} x {float(batch_ratio_d)} (batch_ratio) = {_batch_size}'
+            _dataset, _ = [
+                Subset(_dataset, indices[offset - length : offset])
+                for offset, length in zip(_accumulate(dataset_split), dataset_split)
+            ]
+            selected_d_log = (
+                f'num total samples of {selected_d}: {total_number_dataset} x'
+                f' {opt.total_data_usage_ratio} (total_data_usage_ratio) ='
+                f' {len(_dataset)}\n'
+            )
+            selected_d_log += (
+                f'num samples of {selected_d} per batch: {opt.batch_size} x'
+                f' {float(batch_ratio_d)} (batch_ratio) = {_batch_size}'
+            )
             print(selected_d_log)
             log.write(selected_d_log + '\n')
             batch_size_list.append(str(_batch_size))
             Total_batch_size += _batch_size
 
             _data_loader = torch.utils.data.DataLoader(
-                _dataset, batch_size=_batch_size,
+                _dataset,
+                batch_size=_batch_size,
                 shuffle=True,
                 num_workers=int(opt.workers),
-                collate_fn=_AlignCollate, pin_memory=True)
+                collate_fn=_AlignCollate,
+                pin_memory=True,
+            )
             self.data_loader_list.append(_data_loader)
             self.dataloader_iter_list.append(iter(_data_loader))
 
@@ -102,12 +112,12 @@ class Batch_Balanced_Dataset(object):
 
 
 def hierarchical_dataset(root, opt, select_data='/'):
-    """ select_data='/' contains all sub-directory of root directory """
+    """select_data='/' contains all sub-directory of root directory"""
     dataset_list = []
     dataset_log = f'dataset_root:    {root}\t dataset: {select_data[0]}'
     print(dataset_log)
     dataset_log += '\n'
-    for dirpath, dirnames, filenames in os.walk(root+'/'):
+    for dirpath, dirnames, filenames in os.walk(root + '/'):
         if not dirnames:
             select_flag = False
             for selected_d in select_data:
@@ -128,12 +138,18 @@ def hierarchical_dataset(root, opt, select_data='/'):
 
 
 class LmdbDataset(Dataset):
-
     def __init__(self, root, opt):
 
         self.root = root
         self.opt = opt
-        self.env = lmdb.open(root, max_readers=32, readonly=True, lock=False, readahead=False, meminit=False)
+        self.env = lmdb.open(
+            root,
+            max_readers=32,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+        )
         if not self.env:
             print('cannot create lmdb from %s' % (root))
             sys.exit(0)
@@ -146,7 +162,7 @@ class LmdbDataset(Dataset):
                 # for fast check or benchmark evaluation with no filtering
                 self.filtered_index_list = [index + 1 for index in range(self.nSamples)]
             else:
-                """ Filtering part
+                """Filtering part
                 If you want to evaluate IC15-2077 & CUTE datasets which have special character labels,
                 use --data_filtering_off and only evaluate on alphabets and digits.
                 see https://github.com/clovaai/deep-text-recognition-benchmark/blob/6593928855fb7abb999a99f428b3e4477d4ae356/dataset.py#L190-L192
@@ -218,7 +234,6 @@ class LmdbDataset(Dataset):
 
 
 class RawDataset(Dataset):
-
     def __init__(self, root, opt):
         self.opt = opt
         self.image_path_list = []
@@ -255,7 +270,6 @@ class RawDataset(Dataset):
 
 
 class ResizeNormalize(object):
-
     def __init__(self, size, interpolation=Image.BICUBIC):
         self.size = size
         self.interpolation = interpolation
@@ -269,7 +283,6 @@ class ResizeNormalize(object):
 
 
 class NormalizePAD(object):
-
     def __init__(self, max_size, PAD_type='right'):
         self.toTensor = transforms.ToTensor()
         self.max_size = max_size
@@ -289,7 +302,6 @@ class NormalizePAD(object):
 
 
 class AlignCollate(object):
-
     def __init__(self, imgH=32, imgW=100, keep_ratio_with_pad=False):
         self.imgH = imgH
         self.imgW = imgW

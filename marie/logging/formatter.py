@@ -49,9 +49,7 @@ class JsonFormatter(Formatter):
         """
         cr = copy(record)
         cr.msg = re.sub(r'\u001b\[.*?[@-~]', '', str(cr.msg))
-        return json.dumps(
-            {k: getattr(cr, k) for k in self.KEYS if hasattr(cr, k)}, sort_keys=True
-        )
+        return json.dumps({k: getattr(cr, k) for k in self.KEYS if hasattr(cr, k)}, sort_keys=True)
 
 
 class ProfileFormatter(Formatter):
@@ -68,9 +66,7 @@ class ProfileFormatter(Formatter):
 
         cr = copy(record)
         if isinstance(cr.msg, dict):
-            cr.msg.update(
-                {k: getattr(cr, k) for k in ['created', 'module', 'process', 'thread']}
-            )
+            cr.msg.update({k: getattr(cr, k) for k in ['created', 'module', 'process', 'thread']})
             cr.msg['memory'] = used_memory(unit=1)
             return json.dumps(cr.msg, sort_keys=True)
         else:

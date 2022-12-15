@@ -3,14 +3,10 @@
 import logging
 import os
 from collections import OrderedDict
-from typing import (
-    Any,
-    Dict,
-    List,
-    MutableMapping,
-    Optional,
-)
+from typing import Any, Dict, List, MutableMapping, Optional
 from urllib.parse import urlparse
+
+import portalocker
 
 __all__ = ["PathManager", "get_cache_dir", "file_lock", "PathHandler"]
 

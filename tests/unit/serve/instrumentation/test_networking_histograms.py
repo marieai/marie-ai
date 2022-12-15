@@ -1,12 +1,9 @@
+from typing import Dict, List, Tuple
+
 import pytest
-from typing import Tuple, List, Dict
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import (
-    InMemoryMetricReader,
-    Metric,
-    HistogramDataPoint,
-)
 from opentelemetry.metrics import Meter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, Metric
 
 from marie.serve.networking import _NetworkingHistograms
 
@@ -55,9 +52,7 @@ def test_recording_methods(metrics_setup: Tuple[InMemoryMetricReader, Meter]):
     a.record_send_requests_bytes_metrics(20)
     a.record_received_response_bytes(30)
 
-    histogram_metrics: List[Metric] = (
-        metric_reader.get_metrics_data().resource_metrics[0].scope_metrics[0].metrics
-    )
+    histogram_metrics: List[Metric] = metric_reader.get_metrics_data().resource_metrics[0].scope_metrics[0].metrics
     data_points_sums: Dict[str, HistogramDataPoint] = {
         hist.name: next(hist.data.data_points).sum for hist in histogram_metrics
     }

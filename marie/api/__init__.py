@@ -1,31 +1,25 @@
+import hashlib
+import imghdr
+import io
+import os
+from datetime import datetime
+
+import cv2
+import numpy as np
+from flask_restful import Api
+
 import marie.conf
 from marie.api.BoxAPI import BoxAPI, BoxListAPI
 from marie.api.MarkAPI import MarkAPI, MarkListAPI
 from marie.api.QueueAPI import QueueAPI, QueueListAPI
 from marie.api.SegmenterAPI import SegmenterAPI, SegmenterListAPI
-from flask_restful import Api
-
-
-import io
-import os
-
-import hashlib
-import imghdr
-import numpy as np
-
-import cv2
-
 from marie.logging.logger import MarieLogger
-from marie.utils.utils import FileSystem, ensure_exists, current_milli_time
 from marie.utils.base64 import base64StringToBytes, encodeToBase64
-
-from datetime import datetime
+from marie.utils.utils import FileSystem, current_milli_time, ensure_exists
 
 logger = MarieLogger("")
 
-api = Api(
-    prefix=marie.conf.API_PREFIX
-)  # AttributeError: module 'config' has no attribute 'API_PREFIX
+api = Api(prefix=marie.conf.API_PREFIX)  # AttributeError: module 'config' has no attribute 'API_PREFIX
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}

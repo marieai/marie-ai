@@ -1,9 +1,10 @@
 #!/usr/bin/env mdl
-import socket
 import base64
+import socket
+from collections import OrderedDict
+
 import cv2
 import numpy as np
-from collections import OrderedDict
 
 from .server import get_server
 
@@ -53,5 +54,5 @@ class Manager:
         # self._queue = OrderedDict()
         return self._conn.recv()
 
-global_manager = Manager()
 
+global_manager = Manager()

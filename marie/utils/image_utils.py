@@ -1,9 +1,9 @@
-import PIL.Image
-import numpy as np
-from PIL import Image
+import hashlib
 
 import cv2
-import hashlib
+import numpy as np
+import PIL.Image
+from PIL import Image
 
 
 def read_image(image):
@@ -37,9 +37,7 @@ def read_image(image):
 def paste_fragment(overlay, fragment, pos=(0, 0)):
     col = list(np.random.choice(range(256), size=3))
     color = [int(col[0]), int(col[1]), int(col[2])]
-    fragment = cv2.copyMakeBorder(
-        fragment, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=color
-    )
+    fragment = cv2.copyMakeBorder(fragment, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=color)
 
     fragment = cv2.cvtColor(fragment, cv2.COLOR_BGR2RGB)
     fragment_pil = Image.fromarray(fragment)

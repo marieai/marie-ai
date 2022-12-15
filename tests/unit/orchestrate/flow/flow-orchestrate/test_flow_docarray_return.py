@@ -1,6 +1,5 @@
 import pytest
 from docarray import DocumentArray
-
 from jina import Client, Document, Executor, Flow, requests, types
 from jina.excepts import BadServer
 

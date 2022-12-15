@@ -107,7 +107,11 @@ Defaults to retaining whatever type is returned by the Executor.
         '--disable-reduce',
         action='store_true',
         default=False,
-        help='Disable the built-in reduction mechanism. Set this if the reduction is to be handled by the Executor itself by operating on a `docs_matrix` or `docs_map`',
+        help=(
+            'Disable the built-in reduction mechanism. Set this if the reduction is to'
+            ' be handled by the Executor itself by operating on a `docs_matrix` or'
+            ' `docs_map`'
+        ),
     )
 
     mixin_base_runtime_parser(gp)

@@ -5,31 +5,42 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
-
 from dataset import AlignCollate, RawDataset
 from model import Model
-from utils import AttnLabelConverter, CTCLabelConverter
 
+from utils import AttnLabelConverter, CTCLabelConverter
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device('cpu')
 
 
 def run_tests(opt):
-    """ model configuration """
+    """model configuration"""
     if 'CTC' in opt.Prediction:
         converter = CTCLabelConverter(opt.character)
     else:
         converter = AttnLabelConverter(opt.character)
     opt.num_class = len(converter.character)
 
-    print('Evaluating on device : %s' %(device))
+    print('Evaluating on device : %s' % (device))
     if opt.rgb:
         opt.input_channel = 3
     model = Model(opt)
-    print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
-          opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
-          opt.SequenceModeling, opt.Prediction)
+    print(
+        'model input parameters',
+        opt.imgH,
+        opt.imgW,
+        opt.num_fiducial,
+        opt.input_channel,
+        opt.output_channel,
+        opt.hidden_size,
+        opt.num_class,
+        opt.batch_max_length,
+        opt.Transformation,
+        opt.FeatureExtraction,
+        opt.SequenceModeling,
+        opt.Prediction,
+    )
     model = torch.nn.DataParallel(model).to(device)
 
     # load model
@@ -40,10 +51,13 @@ def run_tests(opt):
     AlignCollate_demo = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
     demo_data = RawDataset(root=opt.image_folder, opt=opt)  # use RawDataset
     demo_loader = torch.utils.data.DataLoader(
-        demo_data, batch_size=opt.batch_size,
+        demo_data,
+        batch_size=opt.batch_size,
         shuffle=False,
         num_workers=int(opt.workers),
-        collate_fn=AlignCollate_demo, pin_memory=True)
+        collate_fn=AlignCollate_demo,
+        pin_memory=True,
+    )
 
     # predict
     model.eval()
@@ -71,11 +85,10 @@ def run_tests(opt):
                 _, preds_index = preds.max(2)
                 preds_str = converter.decode(preds_index, length_for_pred)
 
-
             log = open(f'./log_validation_result.txt', 'a')
             dashed_line = '-' * 120
             head = f'{"image_path":25s}\t{"predicted_labels":32s}\tconfidence score'
-            
+
             print(f'{dashed_line}\n{head}\n{dashed_line}')
             log.write(f'{dashed_line}\n{head}\n{dashed_line}\n')
 
@@ -99,9 +112,14 @@ def run_tests(opt):
 
             log.close()
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--image_folder', required=True, help='path to image_folder which contains text images')
+    parser.add_argument(
+        '--image_folder',
+        required=True,
+        help='path to image_folder which contains text images',
+    )
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
     parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
@@ -110,18 +128,56 @@ if __name__ == '__main__':
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
     parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
     parser.add_argument('--rgb', action='store_true', help='use rgb input')
-    parser.add_argument('--character', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz', help='character label')
+    parser.add_argument(
+        '--character',
+        type=str,
+        default='0123456789abcdefghijklmnopqrstuvwxyz',
+        help='character label',
+    )
     parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
-    parser.add_argument('--PAD', action='store_true', help='whether to keep ratio then pad for image resize')
+    parser.add_argument(
+        '--PAD',
+        action='store_true',
+        help='whether to keep ratio then pad for image resize',
+    )
     """ Model Architecture """
-    parser.add_argument('--Transformation', type=str, required=True, help='Transformation stage. None|TPS')
-    parser.add_argument('--FeatureExtraction', type=str, required=True, help='FeatureExtraction stage. VGG|RCNN|ResNet')
-    parser.add_argument('--SequenceModeling', type=str, required=True, help='SequenceModeling stage. None|BiLSTM')
+    parser.add_argument(
+        '--Transformation',
+        type=str,
+        required=True,
+        help='Transformation stage. None|TPS',
+    )
+    parser.add_argument(
+        '--FeatureExtraction',
+        type=str,
+        required=True,
+        help='FeatureExtraction stage. VGG|RCNN|ResNet',
+    )
+    parser.add_argument(
+        '--SequenceModeling',
+        type=str,
+        required=True,
+        help='SequenceModeling stage. None|BiLSTM',
+    )
     parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
-    parser.add_argument('--num_fiducial', type=int, default=20, help='number of fiducial points of TPS-STN')
-    parser.add_argument('--input_channel', type=int, default=1, help='the number of input channel of Feature extractor')
-    parser.add_argument('--output_channel', type=int, default=512,
-                        help='the number of output channel of Feature extractor')
+    parser.add_argument(
+        '--num_fiducial',
+        type=int,
+        default=20,
+        help='number of fiducial points of TPS-STN',
+    )
+    parser.add_argument(
+        '--input_channel',
+        type=int,
+        default=1,
+        help='the number of input channel of Feature extractor',
+    )
+    parser.add_argument(
+        '--output_channel',
+        type=int,
+        default=512,
+        help='the number of output channel of Feature extractor',
+    )
     parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
 
     opt = parser.parse_args()
@@ -133,12 +189,12 @@ if __name__ == '__main__':
     opt.character = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"!\#&\'()*+,./=<>`[]${}~@|^%_:;?-'
     opt.character = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"!\#&\'()*+,./=<>`[]${}~@|^%_:;?-'
     opt.character = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\]^_`{|}~'
-    opt.character = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\]^_{|}~ ' 
+    opt.character = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\]^_{|}~ '
     opt.character = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\]^_`{|}~'
     opt.character = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\]^_`{|}~'
-    
+
     cudnn.benchmark = True
     cudnn.deterministic = True
-    opt.num_gpu = 0# torch.cuda.device_count()
+    opt.num_gpu = 0  # torch.cuda.device_count()
 
     run_tests(opt)

@@ -11,7 +11,7 @@ from marie.helper import T, parse_client, send_telemetry_event, typename
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 
-if TYPE_CHECKING: # pragma: no cover
+if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.request import GeneratorSourceType
     from marie.types.request import Request, Response
 
@@ -48,9 +48,7 @@ class BaseClient(InstrumentationMixin, ABC):
             os.unsetenv('https_proxy')
         self._inputs = None
         self._setup_instrumentation(
-            name=self.args.name
-            if hasattr(self.args, 'name')
-            else self.__class__.__name__,
+            name=self.args.name if hasattr(self.args, 'name') else self.__class__.__name__,
             tracing=self.args.tracing,
             traces_exporter_host=self.args.traces_exporter_host,
             traces_exporter_port=self.args.traces_exporter_port,
@@ -80,9 +78,7 @@ class BaseClient(InstrumentationMixin, ABC):
         kwargs['exec_endpoint'] = '/'
 
         if inspect.isasyncgenfunction(inputs) or inspect.isasyncgen(inputs):
-            raise BadClientInput(
-                'checking the validity of an async generator is not implemented yet'
-            )
+            raise BadClientInput('checking the validity of an async generator is not implemented yet')
 
         try:
             from marie.clients.request import request_generator
@@ -96,9 +92,7 @@ class BaseClient(InstrumentationMixin, ABC):
             default_logger.error(f'inputs is not valid!')
             raise BadClientInput from ex
 
-    def _get_requests(
-        self, **kwargs
-    ) -> Union[Iterator['Request'], AsyncIterator['Request']]:
+    def _get_requests(self, **kwargs) -> Union[Iterator['Request'], AsyncIterator['Request']]:
         """
         Get request in generator.
 

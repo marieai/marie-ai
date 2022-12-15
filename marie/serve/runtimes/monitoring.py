@@ -31,9 +31,7 @@ class MonitoringMixin:
         if self.args.monitoring:
             from prometheus_client import start_http_server
 
-            start_http_server(
-                int(self.args.port_monitoring), registry=self.metrics_registry
-            )
+            start_http_server(int(self.args.port_monitoring), registry=self.metrics_registry)
 
 
 class MonitoringRequestMixin:
@@ -163,9 +161,7 @@ class MonitoringRequestMixin:
         if self._request_size_metrics:
             self._request_size_metrics.observe(request.nbytes)
         if self._request_size_histogram:
-            self._request_size_histogram.record(
-                request.nbytes, attributes=self._metric_labels
-            )
+            self._request_size_histogram.record(request.nbytes, attributes=self._metric_labels)
 
         if self._receiving_request_metrics:
             self._request_init_time[request.request_id] = time.time()
@@ -175,34 +171,22 @@ class MonitoringRequestMixin:
         if self._pending_requests_metrics:
             self._pending_requests_metrics.inc()
         if self._pending_requests_up_down_counter:
-            self._pending_requests_up_down_counter.add(
-                1, attributes=self._metric_labels
-            )
+            self._pending_requests_up_down_counter.add(1, attributes=self._metric_labels)
 
     def _update_end_successful_requests_metrics(self, result: 'Request'):
-        if (
-            self._receiving_request_metrics
-        ):  # this one should only be observed when the metrics is succesful
-            init_time = self._request_init_time.pop(
-                result.request_id
-            )  # need to pop otherwise it stays in memory forever
+        if self._receiving_request_metrics:  # this one should only be observed when the metrics is succesful
+            init_time = self._request_init_time.pop(result.request_id)  # need to pop otherwise it stays in memory forever
             self._receiving_request_metrics.observe(time.time() - init_time)
-        if (
-            self._receiving_request_histogram
-        ):  # this one should only be observed when the metrics is succesful
+        if self._receiving_request_histogram:  # this one should only be observed when the metrics is succesful
             init_time = self._meter_request_init_time.pop(
                 result.request_id
             )  # need to pop otherwise it stays in memory forever
-            self._receiving_request_histogram.record(
-                time.time() - init_time, attributes=self._metric_labels
-            )
+            self._receiving_request_histogram.record(time.time() - init_time, attributes=self._metric_labels)
 
         if self._pending_requests_metrics:
             self._pending_requests_metrics.dec()
         if self._pending_requests_up_down_counter:
-            self._pending_requests_up_down_counter.add(
-                -1, attributes=self._metric_labels
-            )
+            self._pending_requests_up_down_counter.add(-1, attributes=self._metric_labels)
 
         if self._successful_requests_metrics:
             self._successful_requests_metrics.inc()
@@ -212,17 +196,13 @@ class MonitoringRequestMixin:
         if self._sent_response_bytes:
             self._sent_response_bytes.observe(result.nbytes)
         if self._sent_response_bytes_histogram:
-            self._sent_response_bytes_histogram.record(
-                result.nbytes, attributes=self._metric_labels
-            )
+            self._sent_response_bytes_histogram.record(result.nbytes, attributes=self._metric_labels)
 
     def _update_end_failed_requests_metrics(self):
         if self._pending_requests_metrics:
             self._pending_requests_metrics.dec()
         if self._pending_requests_up_down_counter:
-            self._pending_requests_up_down_counter.add(
-                -1, attributes=self._metric_labels
-            )
+            self._pending_requests_up_down_counter.add(-1, attributes=self._metric_labels)
 
         if self._failed_requests_metrics:
             self._failed_requests_metrics.inc()

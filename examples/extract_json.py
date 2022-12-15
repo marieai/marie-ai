@@ -154,9 +154,7 @@ def visualize_icr(image, icr_data):
                 fill=(0, 180, 0, 125),
                 width=1,
             )
-            draw.text(
-                (box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0
-            )
+            draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
 
         viz_img.show()
         viz_img.save("/tmp/snippet/extract.png")
@@ -165,9 +163,7 @@ def visualize_icr(image, icr_data):
 def process_dir(image_dir: str):
     for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
         try:
-            icr_data = process_extract(
-                queue_id=default_queue_id, mode="multiline", file_location=img_path
-            )
+            icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=img_path)
             print(icr_data)
             image = Image.open(src).convert("RGB")
             visualize_icr(image, icr_data)
@@ -195,9 +191,7 @@ if __name__ == "__main__":
         src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6501_0_158095129.tif"
         src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6503_0_158095036.tif"
 
-        icr_data = process_extract(
-            queue_id=default_queue_id, mode="multiline", file_location=src
-        )
+        icr_data = process_extract(queue_id=default_queue_id, mode="multiline", file_location=src)
 
         print(icr_data)
         image = Image.open(src).convert("RGB")

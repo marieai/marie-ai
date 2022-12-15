@@ -2,12 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class Attention(nn.Module):
-
     def __init__(self, input_size, hidden_size, num_classes):
         super(Attention, self).__init__()
         self.attention_cell = AttentionCell(input_size, hidden_size, num_classes)
@@ -33,8 +31,10 @@ class Attention(nn.Module):
         num_steps = batch_max_length + 1  # +1 for [s] at end of sentence.
 
         output_hiddens = torch.FloatTensor(batch_size, num_steps, self.hidden_size).fill_(0).to(device)
-        hidden = (torch.FloatTensor(batch_size, self.hidden_size).fill_(0).to(device),
-                  torch.FloatTensor(batch_size, self.hidden_size).fill_(0).to(device))
+        hidden = (
+            torch.FloatTensor(batch_size, self.hidden_size).fill_(0).to(device),
+            torch.FloatTensor(batch_size, self.hidden_size).fill_(0).to(device),
+        )
 
         if is_train:
             for i in range(num_steps):
@@ -61,7 +61,6 @@ class Attention(nn.Module):
 
 
 class AttentionCell(nn.Module):
-
     def __init__(self, input_size, hidden_size, num_embeddings):
         super(AttentionCell, self).__init__()
         self.i2h = nn.Linear(input_size, hidden_size, bias=False)

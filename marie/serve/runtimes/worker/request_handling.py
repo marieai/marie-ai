@@ -56,11 +56,7 @@ class WorkerRequestHandler:
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
         )
-        meter = (
-            meter_provider.get_meter(self.__class__.__name__)
-            if meter_provider
-            else None
-        )
+        meter = meter_provider.get_meter(self.__class__.__name__) if meter_provider else None
         self._init_monitoring(metrics_registry, meter)
         self.deployment_name = deployment_name
         # In order to support batching parameters separately, we have to lazily create batch queues
@@ -75,9 +71,7 @@ class WorkerRequestHandler:
         :return: List of all batch queues for this request handler
         """
         return [
-            batch_queue
-            for param_to_queue in self._batchqueue_instances.values()
-            for batch_queue in param_to_queue.values()
+            batch_queue for param_to_queue in self._batchqueue_instances.values() for batch_queue in param_to_queue.values()
         ]
 
     def _init_batchqueue_dict(self):
@@ -102,9 +96,7 @@ class WorkerRequestHandler:
                 self._batchqueue_config[endpoint] = dbatch_config
 
             # Process function configs
-            func_endpoints: Dict[str, List[str]] = {
-                func.__name__: [] for func in self._executor.requests.values()
-            }
+            func_endpoints: Dict[str, List[str]] = {func.__name__: [] for func in self._executor.requests.values()}
             for endpoint, func in self._executor.requests.items():
                 func_endpoints[func.__name__].append(endpoint)
             for func_name, dbatch_config in dbatch_functions:
@@ -112,16 +104,10 @@ class WorkerRequestHandler:
                     if endpoint not in self._batchqueue_config:
                         self._batchqueue_config[endpoint] = dbatch_config
 
-            self.logger.debug(
-                f'Executor Dynamic Batching configs: {self._executor.dynamic_batching}'
-            )
-            self.logger.debug(
-                f'Endpoint Batch Queue Configs: {self._batchqueue_config}'
-            )
+            self.logger.debug(f'Executor Dynamic Batching configs: {self._executor.dynamic_batching}')
+            self.logger.debug(f'Endpoint Batch Queue Configs: {self._batchqueue_config}')
 
-            self._batchqueue_instances = {
-                endpoint: {} for endpoint in self._batchqueue_config.keys()
-            }
+            self._batchqueue_instances = {endpoint: {} for endpoint in self._batchqueue_config.keys()}
 
     def _init_monitoring(
         self,
@@ -135,9 +121,8 @@ class WorkerRequestHandler:
                 required=True,
                 help_text='You need to install the `prometheus_client` to use the montitoring functionality of jina',
             ):
-                from prometheus_client import Counter, Summary
-
                 from jina.serve.monitoring import _SummaryDeprecated
+                from prometheus_client import Counter, Summary
 
                 self._document_processed_metrics = Counter(
                     'document_processed',
@@ -239,22 +224,15 @@ class WorkerRequestHandler:
         import sys
 
         try:
-            sys_mod_files_modules = {
-                getattr(module, '__file__', ''): module
-                for module in sys.modules.values()
-            }
+            sys_mod_files_modules = {getattr(module, '__file__', ''): module for module in sys.modules.values()}
 
             for file in changed_files:
                 if file in sys_mod_files_modules:
                     importlib.reload(sys_mod_files_modules[file])
                 else:
-                    self.logger.debug(
-                        f'Changed file {file} was not previously imported.'
-                    )
+                    self.logger.debug(f'Changed file {file} was not previously imported.')
         except Exception as exc:
-            self.logger.error(
-                f' Exception when refreshing Executor when changes detected in {changed_files}'
-            )
+            self.logger.error(f' Exception when refreshing Executor when changes detected in {changed_files}')
             raise exc
 
         importlib.reload(inspect.getmodule(self._executor.__class__))
@@ -331,9 +309,7 @@ class WorkerRequestHandler:
                 self._executor.__class__.__name__,
                 self.args.name,
             )
-            self._sent_response_size_histogram.record(
-                requests[0].nbytes, attributes=attributes
-            )
+            self._sent_response_size_histogram.record(requests[0].nbytes, attributes=attributes)
 
     def _set_result(self, requests, return_data, docs):
         # assigning result back to request
@@ -351,19 +327,12 @@ class WorkerRequestHandler:
                 requests[0].parameters = params
 
             else:
-                raise TypeError(
-                    f'The return type must be DocumentArray / Dict / `None`, '
-                    f'but getting {return_data!r}'
-                )
+                raise TypeError(f'The return type must be DocumentArray / Dict / `None`, but getting {return_data!r}')
 
-        WorkerRequestHandler.replace_docs(
-            requests[0], docs, self.args.output_array_type
-        )
+        WorkerRequestHandler.replace_docs(requests[0], docs, self.args.output_array_type)
         return docs
 
-    async def handle(
-        self, requests: List['DataRequest'], tracing_context: Optional['Context'] = None
-    ) -> DataRequest:
+    async def handle(self, requests: List['DataRequest'], tracing_context: Optional['Context'] = None) -> DataRequest:
         """Initialize private parameters and execute private loading functions.
 
         :param requests: The messages to handle containing a DataRequest
@@ -378,7 +347,7 @@ class WorkerRequestHandler:
                 exec_endpoint = __default_endpoint__
             else:
                 self.logger.debug(
-                    f'skip executor: endpoint mismatch. '
+                    'skip executor: endpoint mismatch. '
                     f'Request endpoint: `{exec_endpoint}`. '
                     'Available endpoints: '
                     f'{", ".join(list(self._executor.requests.keys()))}'
@@ -401,9 +370,7 @@ class WorkerRequestHandler:
                     **self._batchqueue_config[exec_endpoint],
                 )
             # This is necessary because push might need to await for the queue to be emptied
-            task = await self._batchqueue_instances[exec_endpoint][param_key].push(
-                requests[0]
-            )
+            task = await self._batchqueue_instances[exec_endpoint][param_key].push(requests[0])
             await task
         else:
             docs = WorkerRequestHandler.get_docs_from_request(
@@ -411,9 +378,7 @@ class WorkerRequestHandler:
                 field='docs',
             )
 
-            docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(
-                requests
-            )
+            docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(requests)
             return_data = await self._executor.__acall__(
                 req_endpoint=requests[0].header.exec_endpoint,
                 docs=docs,
@@ -434,9 +399,7 @@ class WorkerRequestHandler:
         return requests[0]
 
     @staticmethod
-    def replace_docs(
-        request: List['DataRequest'], docs: 'DocumentArray', ndarrray_type: str = None
-    ) -> None:
+    def replace_docs(request: List['DataRequest'], docs: 'DocumentArray', ndarrray_type: str = None) -> None:
         """Replaces the docs in a message with new Documents.
 
         :param request: The request object
@@ -534,13 +497,7 @@ class WorkerRequestHandler:
         :returns: DocumentArray extracted from the field from all messages
         """
         if len(requests) > 1:
-            result = DocumentArray(
-                [
-                    d
-                    for r in reversed([request for request in requests])
-                    for d in getattr(r, field)
-                ]
-            )
+            result = DocumentArray([d for r in reversed([request for request in requests]) for d in getattr(r, field)])
         else:
             result = getattr(requests[0], field)
 

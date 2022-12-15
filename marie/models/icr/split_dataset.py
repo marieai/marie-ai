@@ -23,6 +23,7 @@ def split(inputPath, outputPath, datalist):
             data.write(line)
             data.write('\n')
 
+
 def splitDataset(inputPath, gtFile, outputPath, train_percentage):
     """
     Split dataset for training and evaluation.
@@ -40,7 +41,7 @@ def splitDataset(inputPath, gtFile, outputPath, train_percentage):
 
     test_dir = os.path.join(outputPath, 'test')
     train_dir = os.path.join(outputPath, 'train')
-    
+
     os.makedirs(outputPath, exist_ok=True)
     os.makedirs(test_dir, exist_ok=True)
     os.makedirs(train_dir, exist_ok=True)
@@ -59,7 +60,8 @@ def splitDataset(inputPath, gtFile, outputPath, train_percentage):
 
     split(inputPath, train_dir, datalist[0:train_count])
     split(inputPath, test_dir, datalist[train_count:])
-   
+
+
 if __name__ == '__main__':
     # python ./split_dataset.py --inputPath ~/datasets/icr-finetune --gtFile ~/datasets/icr-finetune/labels.txt --outputPath ~/datasets/icr-finetune-split  --train_percentage .8
     fire.Fire(splitDataset)

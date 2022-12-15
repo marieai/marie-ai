@@ -148,18 +148,11 @@ def test_topology_graph_build_bifurcation(bifurcation_graph_dict, conditions):
     graph = TopologyGraph(bifurcation_graph_dict, conditions)
     node_names_list = [node.name for node in graph.origin_nodes]
     assert set(node_names_list) == {'deployment0', 'deployment4', 'deployment6'}
-    assert (
-        len(graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes)
-        == 2
-    )
-    assert set(
-        [
-            node.name
-            for node in graph.origin_nodes[
-                node_names_list.index('deployment0')
-            ].outgoing_nodes
-        ]
-    ) == {'deployment1', 'deployment2'}
+    assert len(graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes) == 2
+    assert set([node.name for node in graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes]) == {
+        'deployment1',
+        'deployment2',
+    }
 
     node_deployment0 = graph.origin_nodes[node_names_list.index('deployment0')]
     assert not node_deployment0.floating
@@ -167,9 +160,7 @@ def test_topology_graph_build_bifurcation(bifurcation_graph_dict, conditions):
     assert node_deployment0.number_of_parts == 1
     outgoing_deployment0_list = [node.name for node in node_deployment0.outgoing_nodes]
 
-    node_deployment1 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment1')
-    ]
+    node_deployment1 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment1')]
     assert node_deployment1.name == 'deployment1'
     if conditions == {}:
         assert node_deployment1._filter_condition is None
@@ -179,9 +170,7 @@ def test_topology_graph_build_bifurcation(bifurcation_graph_dict, conditions):
     assert len(node_deployment1.outgoing_nodes) == 0
     assert node_deployment1.floating
 
-    node_deployment2 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment2')
-    ]
+    node_deployment2 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment2')]
     assert node_deployment2.name == 'deployment2'
     if conditions == {}:
         assert node_deployment2._filter_condition is None
@@ -203,14 +192,9 @@ def test_topology_graph_build_bifurcation(bifurcation_graph_dict, conditions):
     assert node_deployment4.number_of_parts == 1
     assert len(node_deployment4.outgoing_nodes) == 1
     assert not node_deployment4.floating
-    assert set(
-        [
-            node.name
-            for node in graph.origin_nodes[
-                node_names_list.index('deployment4')
-            ].outgoing_nodes
-        ]
-    ) == {'deployment5'}
+    assert set([node.name for node in graph.origin_nodes[node_names_list.index('deployment4')].outgoing_nodes]) == {
+        'deployment5'
+    }
 
     node_deployment5 = node_deployment4.outgoing_nodes[0]
     assert node_deployment5.name == 'deployment5'
@@ -240,26 +224,20 @@ def test_topology_graph_build_merge_in_gateway(
     outgoing_deployment0_list = [node.name for node in node_deployment0.outgoing_nodes]
     assert node_deployment0.number_of_parts == 1
 
-    node_deployment1 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment1')
-    ]
+    node_deployment1 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment1')]
     assert node_deployment1.name == 'deployment1'
     assert len(node_deployment1.outgoing_nodes) == 1
     assert node_deployment1.outgoing_nodes[0].name == 'merger'
     assert node_deployment1.number_of_parts == 1
     assert not node_deployment1.floating
 
-    node_deployment2 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment2')
-    ]
+    node_deployment2 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment2')]
     assert node_deployment2.name == 'deployment2'
     assert len(node_deployment2.outgoing_nodes) == 1
     assert node_deployment2.outgoing_nodes[0].name == 'merger'
     assert node_deployment2.number_of_parts == 1
     assert not node_deployment2.floating
-    assert id(node_deployment1.outgoing_nodes[0]) == id(
-        node_deployment2.outgoing_nodes[0]
-    )
+    assert id(node_deployment1.outgoing_nodes[0]) == id(node_deployment2.outgoing_nodes[0])
 
     merger_deployment = node_deployment1.outgoing_nodes[0]
     assert merger_deployment.name == 'merger'
@@ -281,25 +259,19 @@ def test_topology_graph_build_merge_in_last_deployment(
     assert not node_deployment0.floating
     outgoing_deployment0_list = [node.name for node in node_deployment0.outgoing_nodes]
 
-    node_deployment1 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment1')
-    ]
+    node_deployment1 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment1')]
     assert node_deployment1.number_of_parts == 1
     assert len(node_deployment1.outgoing_nodes) == 1
     assert node_deployment1.outgoing_nodes[0].name == 'merger'
     assert not node_deployment1.floating
 
-    node_deployment2 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment2')
-    ]
+    node_deployment2 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment2')]
     assert node_deployment2.number_of_parts == 1
     assert len(node_deployment2.outgoing_nodes) == 1
     assert node_deployment2.outgoing_nodes[0].name == 'merger'
     assert not node_deployment2.floating
 
-    assert id(node_deployment1.outgoing_nodes[0]) == id(
-        node_deployment2.outgoing_nodes[0]
-    )
+    assert id(node_deployment1.outgoing_nodes[0]) == id(node_deployment2.outgoing_nodes[0])
 
     merger_deployment = node_deployment1.outgoing_nodes[0]
     assert merger_deployment.name == 'merger'
@@ -329,17 +301,13 @@ def test_topology_graph_build_complete(complete_graph_dict):
     assert not node_deployment0.floating
     outgoing_deployment0_list = [node.name for node in node_deployment0.outgoing_nodes]
 
-    node_deployment1 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment1')
-    ]
+    node_deployment1 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment1')]
     assert node_deployment1.number_of_parts == 1
     assert not node_deployment1.floating
     assert len(node_deployment1.outgoing_nodes) == 1
     assert node_deployment1.outgoing_nodes[0].name == '__end_gateway__'
 
-    node_deployment2 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment2')
-    ]
+    node_deployment2 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment2')]
     assert len(node_deployment2.outgoing_nodes) == 1
     assert node_deployment2.number_of_parts == 1
     assert not node_deployment2.floating
@@ -363,9 +331,7 @@ def test_topology_graph_build_complete(complete_graph_dict):
     assert node_deployment5.outgoing_nodes[0].name == 'merger'
     assert not node_deployment5.floating
 
-    assert id(node_deployment3.outgoing_nodes[0]) == id(
-        node_deployment5.outgoing_nodes[0]
-    )
+    assert id(node_deployment3.outgoing_nodes[0]) == id(node_deployment5.outgoing_nodes[0])
 
     merger_deployment = node_deployment3.outgoing_nodes[0]
     assert merger_deployment.name == 'merger'
@@ -396,18 +362,11 @@ def test_topology_graph_build_hanging_after_merge(graph_hanging_deployment_after
         'deployment6',
         'deployment8',
     }
-    assert (
-        len(graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes)
-        == 2
-    )
-    assert set(
-        [
-            node.name
-            for node in graph.origin_nodes[
-                node_names_list.index('deployment0')
-            ].outgoing_nodes
-        ]
-    ) == {'deployment1', 'deployment2'}
+    assert len(graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes) == 2
+    assert set([node.name for node in graph.origin_nodes[node_names_list.index('deployment0')].outgoing_nodes]) == {
+        'deployment1',
+        'deployment2',
+    }
 
     node_deployment0 = graph.origin_nodes[node_names_list.index('deployment0')]
     assert node_deployment0.name == 'deployment0'
@@ -415,17 +374,13 @@ def test_topology_graph_build_hanging_after_merge(graph_hanging_deployment_after
     assert not node_deployment0.floating
     outgoing_deployment0_list = [node.name for node in node_deployment0.outgoing_nodes]
 
-    node_deployment1 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment1')
-    ]
+    node_deployment1 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment1')]
     assert node_deployment1.name == 'deployment1'
     assert node_deployment1.number_of_parts == 1
     assert len(node_deployment1.outgoing_nodes) == 0
     assert node_deployment1.floating
 
-    node_deployment2 = node_deployment0.outgoing_nodes[
-        outgoing_deployment0_list.index('deployment2')
-    ]
+    node_deployment2 = node_deployment0.outgoing_nodes[outgoing_deployment0_list.index('deployment2')]
     assert node_deployment2.name == 'deployment2'
     assert node_deployment2.number_of_parts == 1
     assert len(node_deployment2.outgoing_nodes) == 1
@@ -442,14 +397,9 @@ def test_topology_graph_build_hanging_after_merge(graph_hanging_deployment_after
     assert node_deployment4.name == 'deployment4'
     assert node_deployment4.number_of_parts == 1
     assert len(node_deployment4.outgoing_nodes) == 1
-    assert set(
-        [
-            node.name
-            for node in graph.origin_nodes[
-                node_names_list.index('deployment4')
-            ].outgoing_nodes
-        ]
-    ) == {'deployment5'}
+    assert set([node.name for node in graph.origin_nodes[node_names_list.index('deployment4')].outgoing_nodes]) == {
+        'deployment5'
+    }
     assert not node_deployment4.floating
 
     node_deployment5 = node_deployment4.outgoing_nodes[0]
@@ -473,9 +423,7 @@ def test_topology_graph_build_hanging_after_merge(graph_hanging_deployment_after
     assert node_deployment8.outgoing_nodes[0].name == 'deployment7'
     assert not node_deployment8.floating
 
-    assert id(node_deployment6.outgoing_nodes[0]) == id(
-        node_deployment8.outgoing_nodes[0]
-    )
+    assert id(node_deployment6.outgoing_nodes[0]) == id(node_deployment8.outgoing_nodes[0])
 
     node_deployment7 = node_deployment6.outgoing_nodes[0]
     assert node_deployment7.name == 'deployment7'
@@ -563,9 +511,7 @@ class DummyMockConnectionPool:
         for doc in requests[0].docs:
             clientid = doc.text[0:7]
             self.sent_msg[clientid][deployment] = doc.text
-            new_doc = Document(
-                text=doc.text + f'-{clientid}-{deployment}', tags=doc.tags
-            )
+            new_doc = Document(text=doc.text + f'-{clientid}-{deployment}', tags=doc.tags)
             new_docs.append(new_doc)
             self.responded_messages[clientid][deployment] = new_doc.text
 
@@ -666,9 +612,7 @@ async def test_message_ordering_linear_graph(linear_graph_dict):
         ),
     ],
 )
-async def test_message_ordering_bifurcation_graph(
-    bifurcation_graph_dict, conditions, node_skipped
-):
+async def test_message_ordering_bifurcation_graph(bifurcation_graph_dict, conditions, node_skipped):
     runtime = DummyMockGatewayRuntime(bifurcation_graph_dict, conditions)
     resps = await asyncio.gather(
         runtime.receive_from_client(0, create_req_from_text('client0-Request')),
@@ -712,30 +656,20 @@ async def test_message_ordering_bifurcation_graph(
         if node_skipped != 'deployment1':
             assert (
                 f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1'
-                == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                    'deployment1'
-                ]
+                == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment1']
             )
             assert (
                 f'client{client_id}-Request-client{client_id}-deployment0'
                 == runtime.connection_pool.sent_msg[f'client{client_id}']['deployment1']
             )
         else:
-            assert (
-                'deployment1'
-                not in runtime.connection_pool.sent_msg[f'client{client_id}']
-            )
+            assert 'deployment1' not in runtime.connection_pool.sent_msg[f'client{client_id}']
 
         assert (
             f'client{client_id}-Request-client{client_id}-deployment6'
-            == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                'deployment6'
-            ]
+            == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment6']
         )
-        assert (
-            f'client{client_id}-Request'
-            == runtime.connection_pool.sent_msg[f'client{client_id}']['deployment6']
-        )
+        assert f'client{client_id}-Request' == runtime.connection_pool.sent_msg[f'client{client_id}']['deployment6']
 
 
 @pytest.mark.asyncio
@@ -758,9 +692,7 @@ async def test_message_ordering_merge_in_gateway_graph(
     assert len(resps) == 10
     for client_id, client_resps in resps:
         assert len(client_resps) == 2
-        assert (
-            None in client_resps
-        )  # at the merge branch, only responds to the last part
+        assert None in client_resps  # at the merge branch, only responds to the last part
         filtered_client_resps = [resp for resp in client_resps if resp is not None]
         deployment2_path = (
             f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger'
@@ -778,9 +710,7 @@ async def test_message_ordering_merge_in_gateway_graph(
 async def test_message_ordering_merge_in_last_deployment_graph(
     merge_graph_dict_directly_merge_in_last_deployment,
 ):
-    runtime = DummyMockGatewayRuntime(
-        merge_graph_dict_directly_merge_in_last_deployment
-    )
+    runtime = DummyMockGatewayRuntime(merge_graph_dict_directly_merge_in_last_deployment)
     resps = await asyncio.gather(
         runtime.receive_from_client(0, create_req_from_text('client0-Request')),
         runtime.receive_from_client(1, create_req_from_text('client1-Request')),
@@ -796,9 +726,7 @@ async def test_message_ordering_merge_in_last_deployment_graph(
     assert len(resps) == 10
     for client_id, client_resps in resps:
         assert len(client_resps) == 2
-        assert (
-            None in client_resps
-        )  # at the merge branch, only responds to the last part
+        assert None in client_resps  # at the merge branch, only responds to the last part
         filtered_client_resps = [resp for resp in client_resps if resp is not None]
         deployment2_path = (
             f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger-client{client_id}-deployment_last'
@@ -831,14 +759,10 @@ async def test_message_ordering_complete_graph(complete_graph_dict):
     await asyncio.sleep(0.1)  # need to terminate the floating deployments tasks
     for client_id, client_resps in resps:
         assert len(client_resps) == 3
-        assert (
-            None in client_resps
-        )  # at the merge branch, only responds to the last part
+        assert None in client_resps  # at the merge branch, only responds to the last part
         filtered_client_resps = [resp for resp in client_resps if resp is not None]
         assert len(filtered_client_resps) == 2
-        sorted_filtered_client_resps = list(
-            sorted(filtered_client_resps, key=lambda msg: msg.docs[0].text)
-        )
+        sorted_filtered_client_resps = list(sorted(filtered_client_resps, key=lambda msg: msg.docs[0].text))
         assert (
             f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1'
             == sorted_filtered_client_resps[0].docs[0].text
@@ -858,14 +782,9 @@ async def test_message_ordering_complete_graph(complete_graph_dict):
         # assert the floating deployment was sent message
         assert (
             f'client{client_id}-Request-client{client_id}-deployment6'
-            == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                'deployment6'
-            ]
+            == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment6']
         )
-        assert (
-            f'client{client_id}-Request'
-            == runtime.connection_pool.sent_msg[f'client{client_id}']['deployment6']
-        )
+        assert f'client{client_id}-Request' == runtime.connection_pool.sent_msg[f'client{client_id}']['deployment6']
 
 
 @pytest.mark.asyncio
@@ -901,9 +820,7 @@ async def test_message_ordering_hanging_after_merge_graph(
         # assert the floating deployment was sent message
         assert (
             f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1'
-            == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                'deployment1'
-            ]
+            == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment1']
         )
         assert (
             f'client{client_id}-Request-client{client_id}-deployment0'
@@ -912,15 +829,11 @@ async def test_message_ordering_hanging_after_merge_graph(
 
         path6 = (
             f'client{client_id}-Request-client{client_id}-deployment6-client{client_id}-deployment7-client{client_id}-deployment9'
-            == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                'deployment9'
-            ]
+            == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment9']
         )
         path8 = (
             f'client{client_id}-Request-client{client_id}-deployment8-client{client_id}-deployment7-client{client_id}-deployment9'
-            == runtime.connection_pool.responded_messages[f'client{client_id}'][
-                'deployment9'
-            ]
+            == runtime.connection_pool.responded_messages[f'client{client_id}']['deployment9']
         )
         assert path6 or path8
 
@@ -992,9 +905,7 @@ async def test_message_ordering_two_joins_graph(
     ],
 )
 async def test_deployment_metadata_in_graph(linear_graph_dict, deployments_metadata):
-    runtime = DummyMockGatewayRuntime(
-        linear_graph_dict, deployments_metadata=deployments_metadata
-    )
+    runtime = DummyMockGatewayRuntime(linear_graph_dict, deployments_metadata=deployments_metadata)
     for node in runtime.graph.origin_nodes:
         if node.name in deployments_metadata:
             assert node._metadata == deployments_metadata[node.name]

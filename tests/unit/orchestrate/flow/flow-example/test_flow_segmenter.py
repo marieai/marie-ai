@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from marie import Document, requests, Executor, Flow
+from marie import Document, Executor, Flow, requests
 from tests import random_docs, validate_callback
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

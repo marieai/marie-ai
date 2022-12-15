@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from typing import Dict, List
+
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 from detectron2.layers import ShapeSpec
 from detectron2.utils.registry import Registry
+from torch import nn
 
 from ..anchor_generator import build_anchor_generator
 from ..box_regression import Box2BoxTransform
@@ -50,9 +50,7 @@ class StandardRPNHead(nn.Module):
         anchor_generator = build_anchor_generator(cfg, input_shape)
         num_cell_anchors = anchor_generator.num_cell_anchors
         box_dim = anchor_generator.box_dim
-        assert (
-            len(set(num_cell_anchors)) == 1
-        ), "Each level must have the same number of cell anchors"
+        assert len(set(num_cell_anchors)) == 1, "Each level must have the same number of cell anchors"
         num_cell_anchors = num_cell_anchors[0]
 
         # 3x3 conv for the hidden representation
@@ -60,9 +58,7 @@ class StandardRPNHead(nn.Module):
         # 1x1 conv for predicting objectness logits
         self.objectness_logits = nn.Conv2d(in_channels, num_cell_anchors, kernel_size=1, stride=1)
         # 1x1 conv for predicting box2box transform deltas
-        self.anchor_deltas = nn.Conv2d(
-            in_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1
-        )
+        self.anchor_deltas = nn.Conv2d(in_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1)
 
         for l in [self.conv, self.objectness_logits, self.anchor_deltas]:
             nn.init.normal_(l.weight, std=0.01)
@@ -112,12 +108,12 @@ class RPN(nn.Module):
         }
         self.boundary_threshold = cfg.MODEL.RPN.BOUNDARY_THRESH
 
-        self.anchor_generator = build_anchor_generator(
-            cfg, [input_shape[f] for f in self.in_features]
-        )
+        self.anchor_generator = build_anchor_generator(cfg, [input_shape[f] for f in self.in_features])
         self.box2box_transform = Box2BoxTransform(weights=cfg.MODEL.RPN.BBOX_REG_WEIGHTS)
         self.anchor_matcher = Matcher(
-            cfg.MODEL.RPN.IOU_THRESHOLDS, cfg.MODEL.RPN.IOU_LABELS, allow_low_quality_matches=True
+            cfg.MODEL.RPN.IOU_THRESHOLDS,
+            cfg.MODEL.RPN.IOU_LABELS,
+            allow_low_quality_matches=True,
         )
         self.rpn_head = build_rpn_head(cfg, [input_shape[f] for f in self.in_features])
 
