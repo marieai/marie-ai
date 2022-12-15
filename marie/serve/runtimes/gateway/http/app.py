@@ -59,7 +59,8 @@ def get_fastapi_app(
     app = FastAPI(
         title=title or 'My Marie Service',
         description=description
-        or 'This is my awesome service. You can set `title` and `description` in your `Flow` or `Gateway` to customize the title and description.',
+        or 'This is my awesome service. You can set `title` and `description` in your `Flow` or `Gateway` '
+        'to customize the title and description.',
         version=__version__,
     )
 
@@ -87,10 +88,8 @@ def get_fastapi_app(
         openapi_tags.append(
             {
                 'name': 'Debug',
-                'description': (
-                    'Debugging interface. In production, you should hide them by'
-                    ' setting `--no-debug-endpoints` in `Flow`/`Gateway`.'
-                ),
+                'description': 'Debugging interface. In production, you should hide them by setting '
+                '`--no-debug-endpoints` in `Flow`/`Gateway`.',
             }
         )
 
@@ -106,10 +105,8 @@ def get_fastapi_app(
 
         @app.get(
             path='/dry_run',
-            summary=(
-                'Get the readiness of Marie Flow service, sends an empty DocumentArray'
-                ' to the complete Flow to validate connectivity'
-            ),
+            summary='Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to '
+            'validate connectivity',
             response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
         )
         async def _flow_health():
@@ -272,11 +269,8 @@ def get_fastapi_app(
         openapi_tags.append(
             {
                 'name': 'CRUD',
-                'description': (
-                    'CRUD interface. If your service does not implement those'
-                    ' interfaces, you can should hide them by setting'
-                    ' `--no-crud-endpoints` in `Flow`/`Gateway`.'
-                ),
+                'description': 'CRUD interface. If your service does not implement those interfaces, you can should '
+                'hide them by setting `--no-crud-endpoints` in `Flow`/`Gateway`.',
             }
         )
         crud = {

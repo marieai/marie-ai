@@ -381,7 +381,8 @@ class JAML:
                 v
             ):  # catch expressions of form '$var'
                 warnings.warn(
-                    'Specifying environment variables via the syntax `$var` is deprecated.Use `${{ ENV.var }}` instead.',
+                    'Specifying environment variables via the syntax `$var` is deprecated.'
+                    'Use `${{ ENV.var }}` instead.',
                     category=DeprecationWarning,
                 )
             if new_env_var_regex.findall(

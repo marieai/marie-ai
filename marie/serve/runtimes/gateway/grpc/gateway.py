@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, AsyncIterator, TYPE_CHECKING
 
 import grpc
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
@@ -9,6 +9,10 @@ from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.gateway import BaseGateway
 from marie.serve.runtimes.helper import _get_grpc_server_options
 from marie.types.request.status import StatusMessage
+from marie.types.request.data import DataRequest
+
+if TYPE_CHECKING:  # pragma: no cover
+    from marie.types.request import Request
 
 
 class GRPCGateway(BaseGateway):
@@ -42,15 +46,16 @@ class GRPCGateway(BaseGateway):
             interceptors=self.grpc_tracing_server_interceptors,
         )
 
-        jina_pb2_grpc.add_JinaRPCServicer_to_server(
-            self.streamer._streamer, self.server
-        )
+        jina_pb2_grpc.add_JinaRPCServicer_to_server(self, self.server)
+
+        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(self, self.server)
 
         jina_pb2_grpc.add_JinaGatewayDryRunRPCServicer_to_server(self, self.server)
         jina_pb2_grpc.add_JinaInfoRPCServicer_to_server(self, self.server)
 
         service_names = (
             jina_pb2.DESCRIPTOR.services_by_name['JinaRPC'].full_name,
+            jina_pb2.DESCRIPTOR.services_by_name['JinaSingleDataRequestRPC'].full_name,
             jina_pb2.DESCRIPTOR.services_by_name['JinaGatewayDryRunRPC'].full_name,
             jina_pb2.DESCRIPTOR.services_by_name['JinaInfoRPC'].full_name,
             reflection.SERVICE_NAME,
@@ -142,3 +147,32 @@ class GRPCGateway(BaseGateway):
         for k, v in env_info.items():
             info_proto.envs[k] = str(v)
         return info_proto
+
+    async def stream(
+        self, request_iterator, context=None, *args, **kwargs
+    ) -> AsyncIterator['Request']:
+        """
+        stream requests from client iterator and stream responses back.
+
+        :param request_iterator: iterator of requests
+        :param context: context of the grpc call
+        :param args: positional arguments
+        :param kwargs: keyword arguments
+        :yield: responses to the request after streaming to Executors in Flow
+        """
+        async for resp in self.streamer.stream(
+            request_iterator=request_iterator, context=context, *args, **kwargs
+        ):
+            yield resp
+
+    async def process_single_data(
+        self, request: DataRequest, context=None
+    ) -> DataRequest:
+        """Implements request and response handling of a single DataRequest
+        :param request: DataRequest from Client
+        :param context: grpc context
+        :return: response DataRequest
+        """
+        return await self.streamer.process_single_data(request, context)
+
+    Call = stream

@@ -41,7 +41,7 @@ class EnumType(EnumMeta):
         :param cls: Target class.
         :return: Registered class.
         """
-        reg_cls_set = getattr(cls, "_registered_class", set())
+        reg_cls_set = getattr(cls, '_registered_class', set())
         if cls.__name__ not in reg_cls_set:
             reg_cls_set.add(cls.__name__)
             setattr(cls, "_registered_class", reg_cls_set)
@@ -94,7 +94,7 @@ class BetterEnum(IntEnum, metaclass=EnumType):
             return cls[s.upper()]
         except KeyError:
             raise ValueError(
-                f"{s.upper()} is not a valid enum for {cls!r}, must be one of {list(cls)}"
+                f'{s.upper()} is not a valid enum for {cls!r}, must be one of {list(cls)}'
             )
 
     @classmethod
@@ -109,7 +109,7 @@ class BetterEnum(IntEnum, metaclass=EnumType):
         :return: yaml representation
         """
         return representer.represent_scalar(
-            "tag:yaml.org,2002:str", str(data), style='"'
+            'tag:yaml.org,2002:str', str(data), style='"'
         )
 
     @classmethod
@@ -251,8 +251,8 @@ class DataInputType(BetterEnum):
 class WebsocketSubProtocols(str, Enum):
     """Subprotocol supported with Websocket Gateway"""
 
-    JSON = "json"
-    BYTES = "bytes"
+    JSON = 'json'
+    BYTES = 'bytes'
 
 
 def replace_enum_to_str(obj):

@@ -53,8 +53,7 @@ class GRPCBaseClient(BaseClient):
                     return True
                 else:
                     self.logger.error(
-                        'Returned code is not expected! Exception:'
-                        f' {response.exception}'
+                        f'Returned code is not expected! Exception: {response.exception}'
                     )
         except RpcError as e:
             self.logger.error(f'RpcError: {e.details()}')
@@ -256,21 +255,16 @@ class GRPCBaseClient(BaseClient):
                         trailing_metadata = extract_trailing_metadata(err)
                         msg = f'gRPC error: {my_code} {my_details}'
                         if trailing_metadata:
-                            msg = (
-                                'gRPC error:'
-                                f' {my_code} {my_details}\n{trailing_metadata}'
-                            )
+                            msg = f'gRPC error: {my_code} {my_details}\n{trailing_metadata}'
 
                         if my_code == grpc.StatusCode.UNAVAILABLE:
                             self.logger.error(
-                                f'{msg}\nThe ongoing request is terminated as the'
-                                ' server is not available or closed already.'
+                                f'{msg}\nThe ongoing request is terminated as the server is not available or closed already.'
                             )
                             raise ConnectionError(my_details)
                         elif my_code == grpc.StatusCode.DEADLINE_EXCEEDED:
                             self.logger.error(
-                                f'{msg}\nThe ongoing request is terminated due to a'
-                                ' server-side timeout.'
+                                f'{msg}\nThe ongoing request is terminated due to a server-side timeout.'
                             )
                             raise ConnectionError(my_details)
                         elif my_code == grpc.StatusCode.INTERNAL:
@@ -283,9 +277,9 @@ class GRPCBaseClient(BaseClient):
                             and 'asyncio.exceptions.TimeoutError' in my_details
                         ):
                             raise BadClientInput(
-                                f'{msg}\noften the case is that you define/send a'
-                                ' bad input iterator to jina, please double check'
-                                ' your input iterator'
+                                f'{msg}\n'
+                                'often the case is that you define/send a bad input iterator to jina, '
+                                'please double check your input iterator'
                             ) from err
                         else:
                             raise BadServerFlow(msg) from err
