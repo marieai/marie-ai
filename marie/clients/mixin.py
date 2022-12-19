@@ -21,9 +21,8 @@ def _include_results_field_in_param(parameters: Optional['Dict']) -> 'Dict':
         if key_result in parameters:
             if not isinstance(parameters[key_result], dict):
                 warnings.warn(
-                    f'It looks like you passed a dictionary with the key `{key_result}`'
-                    ' to `parameters`.This key is reserved, so the associated value'
-                    ' will be deleted.'
+                    f'It looks like you passed a dictionary with the key `{key_result}` to `parameters`.'
+                    'This key is reserved, so the associated value will be deleted.'
                 )
                 parameters.update({key_result: dict()})
     else:
@@ -180,7 +179,7 @@ class ProfileMixin:
         from marie import Document
 
         st = time.perf_counter()
-        r = self.client.post('/', Document, return_responses=True)
+        r = self.client.post(on='/', inputs=Document(), return_responses=True)
         ed = time.perf_counter()
         return _render_response_table(r[0], st, ed, show_table=show_table)
 
@@ -197,7 +196,9 @@ class AsyncProfileMixin:
         from marie import Document
 
         st = time.perf_counter()
-        async for r in self.client.post('/', Document, return_responses=True):
+        async for r in self.client.post(
+            on='/', inputs=Document(), return_responses=True
+        ):
             ed = time.perf_counter()
             return _render_response_table(r, st, ed, show_table=show_table)
 

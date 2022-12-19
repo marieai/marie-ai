@@ -12,10 +12,8 @@ def mixin_container_runtime_parser(parser, pod_type: str = 'executor'):
     gp.add_argument(
         '--entrypoint',
         type=str,
-        help=(
-            'The entrypoint command overrides the ENTRYPOINT in Docker image. '
-            'when not set then the Docker image ENTRYPOINT takes effective.'
-        ),
+        help='The entrypoint command overrides the ENTRYPOINT in Docker image. '
+        'when not set then the Docker image ENTRYPOINT takes effective.',
     )
     gp.add_argument(
         '--docker-kwargs',

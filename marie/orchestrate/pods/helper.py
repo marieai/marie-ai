@@ -1,17 +1,21 @@
 import multiprocessing
+import re
 from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING
 
-from marie.enums import PodRoleType
-from marie.parsers.helper import _update_gateway_args
-
 # from hubble.executor.helper import is_valid_huburi
 # from hubble.executor.hubio import HubIO
 
+from marie.enums import PodRoleType
+from marie.parsers.helper import _update_gateway_args
 
 if TYPE_CHECKING:  # pragma: no cover
     from argparse import Namespace
+
+
+def is_valid_huburi():
+    raise NotImplemented
 
 
 def _get_event(obj) -> multiprocessing.Event:
@@ -77,12 +81,11 @@ def update_runtime_cls(args, copy=False) -> 'Namespace':
     """
     _args = deepcopy(args) if copy else args
 
-    # TODO : Reimplement
-    # if _args.runtime_cls == 'WorkerRuntime' and is_valid_huburi(_args.uses):
-    #     _hub_args = deepcopy(_args)
-    #     _hub_args.uri = _args.uses
-    #     _hub_args.no_usage = True
-    #     _args.uses = HubIO(_hub_args).pull()
+    if _args.runtime_cls == 'WorkerRuntime' and is_valid_huburi(_args.uses):
+        _hub_args = deepcopy(_args)
+        _hub_args.uri = _args.uses
+        _hub_args.no_usage = True
+        # _args.uses = HubIO(_hub_args).pull()
 
     if hasattr(_args, 'protocol') and _args.pod_role == PodRoleType.GATEWAY:
         _update_gateway_args(_args)

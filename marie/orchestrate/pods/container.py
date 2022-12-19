@@ -2,10 +2,10 @@ import argparse
 import asyncio
 import copy
 import multiprocessing
+import threading
 import os
 import re
 import signal
-import threading
 import time
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
@@ -50,9 +50,8 @@ def _docker_run(
     # docker daemon versions below 20.0x do not support "host.docker.internal:host-gateway"
     if docker_version < ('20',):
         raise DockerVersionError(
-            f'docker version {".".join(docker_version)} is below 20.0.0 and does not'
-            ' support "host.docker.internal:host-gateway" :'
-            ' https://github.com/docker/cli/issues/2664'
+            f'docker version {".".join(docker_version)} is below 20.0.0 and does not '
+            f'support "host.docker.internal:host-gateway" : https://github.com/docker/cli/issues/2664'
         )
 
     if args.uses.startswith('docker://'):
@@ -60,8 +59,8 @@ def _docker_run(
         logger.debug(f'will use Docker image: {uses_img}')
     else:
         warnings.warn(
-            f'you are using legacy image format {args.uses}, this may create some'
-            f' ambiguity. please use the new format: "--uses docker://{args.uses}"'
+            f'you are using legacy image format {args.uses}, this may create some ambiguity. '
+            f'please use the new format: "--uses docker://{args.uses}"'
         )
         uses_img = args.uses
 
@@ -205,7 +204,8 @@ def run(
                 signal.signal(signame, lambda *args, **kwargs: cancel.set())
         except (ValueError, RuntimeError) as exc:
             logger.warning(
-                f' The process starting the container for {name} will not be able to handle termination signals.  {repr(exc)}'
+                f' The process starting the container for {name} will not be able to handle termination signals. '
+                f' {repr(exc)}'
             )
     else:
         with ImportExtensions(
@@ -290,8 +290,7 @@ def run(
 
 class ContainerPod(BasePod):
     """
-    :class:`ContainerPod` starts a runtime of :class:`BaseRuntime` inside a container. It leverages :class:`threading.Thread`
-    or :class:`multiprocessing.Process` to manage the logs and the lifecycle of docker container object in a robust way.
+    :class:`ContainerPod` starts a runtime of :class:`BaseRuntime` inside a container. It leverages :class:`multiprocessing.Process` to manage the logs and the lifecycle of docker container object in a robust way.
     """
 
     def __init__(self, args: 'argparse.Namespace'):
@@ -383,7 +382,6 @@ class ContainerPod(BasePod):
 
     def start(self):
         """Start the ContainerPod.
-        This method calls :meth:`start` in :class:`threading.Thread` or :class:`multiprocesssing.Process`.
         .. #noqa: DAR201
         """
         self.worker = multiprocessing.Process(
@@ -408,7 +406,7 @@ class ContainerPod(BasePod):
 
     def _terminate(self):
         """Terminate the Pod.
-        This method calls :meth:`terminate` in :class:`threading.Thread` or :class:`multiprocesssing.Process`.
+        This method kills the container inside the Pod
         """
         # terminate the docker
         try:
@@ -421,7 +419,6 @@ class ContainerPod(BasePod):
 
     def join(self, *args, **kwargs):
         """Joins the Pod.
-        This method calls :meth:`join` in :class:`threading.Thread` or :class:`multiprocesssing.Process`.
 
         :param args: extra positional arguments to pass to join
         :param kwargs: extra keyword arguments to pass to join

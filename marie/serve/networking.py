@@ -258,14 +258,12 @@ class ReplicaList:
             if all_connections_unavailable:
                 if num_retries <= 0:
                     raise EstablishGrpcConnectionError(
-                        f'Error while resetting connections {self._connections} for'
-                        f' {self._deployment_name}. Connections cannot be used.'
+                        f'Error while resetting connections {self._connections} for {self._deployment_name}. Connections cannot be used.'
                     )
             elif connection is None:
                 # give control back to async event loop so connection resetting can be completed; then retry
                 self._logger.debug(
-                    f' No valid connection found for {self._deployment_name}, give'
-                    ' chance for potential resetting of connection'
+                    f' No valid connection found for {self._deployment_name}, give chance for potential resetting of connection'
                 )
                 try:
                     await asyncio.wait_for(
@@ -616,10 +614,7 @@ class GrpcConnectionPool:
                         deployment, type_, 0, increase_access_count
                     )
                 self._logger.debug(
-                    f'did not find a connection for deployment {deployment}, type'
-                    f' {type_} and entity_id {entity_id}. There are'
-                    f' {len(self._deployments[deployment][type_]) if deployment in self._deployments else 0} available'
-                    ' connections for this deployment and type. '
+                    f'did not find a connection for deployment {deployment}, type {type_} and entity_id {entity_id}. There are {len(self._deployments[deployment][type_]) if deployment in self._deployments else 0} available connections for this deployment and type. '
                 )
                 return None
 
@@ -975,8 +970,7 @@ class GrpcConnectionPool:
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
         self._logger.debug(
-            f'GRPC call to {current_deployment} errored, with error'
-            f' {format_grpc_error(error)} and for the {retry_i + 1}th time.'
+            f'GRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
         )
         if (
             error.code() != grpc.StatusCode.UNAVAILABLE
@@ -1010,10 +1004,8 @@ class GrpcConnectionPool:
             )
         else:
             self._logger.debug(
-                f'GRPC call to deployment {current_deployment} failed with error'
-                f' {format_grpc_error(error)}, for retry attempt'
-                f' {retry_i + 1}/{total_num_tries - 1}. Trying next replica, if'
-                ' available.'
+                f'GRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
+                f' Trying next replica, if available.'
             )
             return None
 

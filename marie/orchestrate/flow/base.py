@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import base64
 import copy
 import inspect
@@ -1805,6 +1806,15 @@ class Flow(
         results = {}
         threads = []
 
+        async def _async_wait_ready(_deployment_name, _deployment):
+            try:
+                if not _deployment.external:
+                    results[_deployment_name] = 'pending'
+                    await _deployment.async_wait_start_success()
+                    results[_deployment_name] = 'done'
+            except Exception as ex:
+                results[_deployment_name] = repr(ex)
+
         def _wait_ready(_deployment_name, _deployment):
             try:
                 if not _deployment.external:
@@ -1841,6 +1851,13 @@ class Flow(
                     break
                 time.sleep(0.1)
 
+        wait_for_ready_coros = []
+        for k, v in self:
+            wait_for_ready_coros.append(_async_wait_ready(k, v))
+
+        async def _async_wait_all():
+            await asyncio.gather(*wait_for_ready_coros)
+
         progress = Progress(
             SpinnerColumn(),
             TextColumn('Waiting [b]{task.fields[pending_str]}[/]...', justify='right'),
@@ -1851,20 +1868,8 @@ class Flow(
         )
         with progress:
             task = progress.add_task(
-                'wait', total=len(threads), pending_str='', start=False
+                'wait', total=len(wait_for_ready_coros), pending_str='', start=False
             )
-
-            # kick off all deployments wait-ready threads
-            for k, v in self:
-                t = threading.Thread(
-                    target=_wait_ready,
-                    args=(
-                        k,
-                        v,
-                    ),
-                    daemon=True,
-                )
-                threads.append(t)
 
             # kick off ip getter thread, address, http, graphq
             all_panels = []
@@ -1882,6 +1887,34 @@ class Flow(
 
             for t in threads:
                 t.start()
+
+            # kick off all deployments wait-ready tasks
+            try:
+                _ = asyncio.get_event_loop()
+            except Exception as e:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            async def _f():
+                pass
+
+            running_in_event_loop = False
+            try:
+                asyncio.get_event_loop().run_until_complete(_f())
+            except:
+                running_in_event_loop = True
+
+            if not running_in_event_loop:
+                asyncio.get_event_loop().run_until_complete(_async_wait_all())
+            else:
+                new_threads = []
+                for k, v in self:
+                    new_threads.append(
+                        threading.Thread(target=_wait_ready, args=(k, v), daemon=True)
+                    )
+                threads.extend(new_threads)
+                for t in new_threads:
+                    t.start()
 
             for t in threads:
                 t.join()

@@ -45,9 +45,8 @@ def avoid_concurrent_lock_cls(cls):
             if self.__class__ == cls:
                 with ImportExtensions(
                     required=False,
-                    help_text=(
-                        f'FileLock is needed to guarantee non-concurrent initialization of replicas in the same machine.'
-                    ),
+                    help_text=f'FileLock is needed to guarantee non-concurrent initialization of replicas in the '
+                    f'same machine.',
                 ):
                     import filelock
 

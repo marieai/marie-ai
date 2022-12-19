@@ -15,7 +15,8 @@ def set_export_parser(parser=None):
 
     spp = parser.add_subparsers(
         dest='export',
-        description='use `%(prog)-8s [sub-command] --help` to get detailed information about each sub-command',
+        description='use `%(prog)-8s [sub-command] --help` '
+        'to get detailed information about each sub-command',
         required=True,
     )
 

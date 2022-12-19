@@ -117,21 +117,17 @@ class BatchQueue:
                 if isinstance(return_docs, DocumentArray):
                     if not len(return_docs) == input_len_before_call:
                         raise ValueError(
-                            'Dynamic Batching requires input size to equal output'
-                            f' size. Expected output size {input_len_before_call}, but'
-                            f' got {len(return_docs)}'
+                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(return_docs)}'
                         )
                 elif return_docs is None:
                     if not len(self._big_doc) == input_len_before_call:
                         raise ValueError(
-                            'Dynamic Batching requires input size to equal output'
-                            f' size. Expected output size {input_len_before_call}, but'
-                            f' got {len(self._big_doc)}'
+                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(self._big_doc)}'
                         )
                 else:
                     raise TypeError(
-                        'The return type must be DocumentArray / `None` when using'
-                        f' dynamic batching, but getting {return_docs!r}'
+                        f'The return type must be DocumentArray / `None` when using dynamic batching, '
+                        f'but getting {return_docs!r}'
                     )
 
                 # We need to re-slice the big doc array into the original requests

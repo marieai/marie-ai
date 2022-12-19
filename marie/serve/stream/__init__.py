@@ -6,8 +6,8 @@ from typing import (
     Callable,
     Iterator,
     Optional,
-    Tuple,
     Union,
+    Tuple,
 )
 
 from aiostream.aiter_utils import anext
