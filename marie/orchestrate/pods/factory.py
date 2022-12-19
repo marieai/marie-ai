@@ -5,16 +5,16 @@ from typing import TYPE_CHECKING, Type
 # from hubble.executor.helper import is_valid_huburi
 # from hubble.executor.hubio import HubIO
 
-from jina.enums import PodRoleType
-from jina.orchestrate.pods import Pod
-from jina.orchestrate.pods.container import ContainerPod
+from marie.enums import PodRoleType
+from marie.orchestrate.pods import Pod
+from marie.orchestrate.pods.container import ContainerPod
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.orchestrate.pods import BasePod
 
 
-def is_valid_huburi():
-    raise NotImplemented
+def is_valid_huburi(uses: str):
+    return False
 
 
 class PodFactory:
