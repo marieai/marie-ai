@@ -201,7 +201,8 @@ def parse_config_source(
             raise BadConfigSource(path)
     else:
         raise BadConfigSource(
-            f'{path} can not be resolved, it should be a readable stream, or a valid file path, or a supported class name.'
+            f'{path} can not be resolved, it should be a readable stream,'
+            ' or a valid file path, or a supported class name.'
         )
 
 

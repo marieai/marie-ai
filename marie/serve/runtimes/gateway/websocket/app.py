@@ -78,7 +78,8 @@ def get_fastapi_app(
             await websocket.accept()
             subprotocol = self.get_subprotocol(dict(websocket.scope['headers']))
             logger.info(
-                f'client {websocket.client.host}:{websocket.client.port} connected with subprotocol {subprotocol}'
+                f'client {websocket.client.host}:{websocket.client.port} connected '
+                f'with subprotocol {subprotocol}'
             )
             self.active_connections.append(websocket)
             self.protocol_dict[self.get_client(websocket)] = subprotocol
@@ -193,9 +194,7 @@ def get_fastapi_app(
             fallback_msg = (
                 f'Connection to deployment at {err.dest_addr} timed out. You can adjust `timeout_send` attribute.'
                 if err.code() == grpc.StatusCode.DEADLINE_EXCEEDED
-                else (
-                    f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
-                )
+                else f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
             )
             msg = (
                 err.details()
@@ -228,10 +227,8 @@ def get_fastapi_app(
 
     @app.get(
         path='/dry_run',
-        summary=(
-            'Get the readiness of Jina Flow service, sends an empty DocumentArray to'
-            ' the complete Flow to validate connectivity'
-        ),
+        summary='Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to '
+        'validate connectivity',
         response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
     )
     async def _dry_run_http():
@@ -286,9 +283,7 @@ def get_fastapi_app(
             msg = (
                 err.details()
                 if _fits_ws_close_msg(err.details())  # some messages are too long
-                else (
-                    f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
-                )
+                else f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
         except WebSocketDisconnect:

@@ -3,10 +3,7 @@ DEPRECATED_ARGS_MAPPING = {
     'override_metas': 'uses_metas',
     'override_requests': 'uses_requests',
     'port_expose': 'port',
-    'parallel': (
-        'One of "shards" (when dividing data in indexers) or "replicas" (replicating'
-        ' Executors for performance and reliability)'
-    ),
+    'parallel': 'One of "shards" (when dividing data in indexers) or "replicas" (replicating Executors for performance and reliability)',
     'port_in': 'port',
     'host_in': 'host',
     'https': 'tls',

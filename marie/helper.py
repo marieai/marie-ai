@@ -105,9 +105,8 @@ def deprecated_alias(**aliases):
         for alias, new_arg in aliases.items():
             if not isinstance(new_arg, tuple):
                 raise ValueError(
-                    f'{new_arg} must be a tuple, with first element as the new name,'
-                    ' second element as the deprecated level: 0 as warning, 1 as'
-                    ' exception'
+                    f'{new_arg} must be a tuple, with first element as the new name, '
+                    f'second element as the deprecated level: 0 as warning, 1 as exception'
                 )
             if alias in kwargs:
                 new_name, dep_level = new_arg
@@ -118,9 +117,8 @@ def deprecated_alias(**aliases):
 
                 if dep_level == 0:
                     warnings.warn(
-                        f'`{alias}` is renamed to `{new_name}` in `{func_name}()`, the'
-                        f' usage of `{alias}` is deprecated and will be removed in the'
-                        ' next version.',
+                        f'`{alias}` is renamed to `{new_name}` in `{func_name}()`, the usage of `{alias}` is '
+                        f'deprecated and will be removed in the next version.',
                         DeprecationWarning,
                     )
                     kwargs[new_name] = kwargs.pop(alias)
@@ -156,8 +154,8 @@ def deprecated_method(new_function_name):
     def deco(func):
         def wrapper(*args, **kwargs):
             warnings.warn(
-                f'`{func.__name__}` is renamed to `{new_function_name}`, the usage of'
-                f' `{func.__name__}` is deprecated and will be removed.',
+                f'`{func.__name__}` is renamed to `{new_function_name}`, the usage of `{func.__name__}` is '
+                f'deprecated and will be removed.',
                 DeprecationWarning,
             )
             return func(*args, **kwargs)
@@ -507,8 +505,7 @@ def random_port() -> Optional[int]:
                 break
         else:
             raise OSError(
-                f'can not find an available port in {len(unassigned_ports)} unassigned'
-                f' ports, assigned already {len(assigned_ports)} ports'
+                f'can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports'
             )
         int_port = int(_port)
         unassigned_ports.pop(idx)
@@ -943,6 +940,15 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     from google.protobuf.internal import api_implementation
     from grpc import _grpcio_metadata
 
+    try:
+        from hubble import __version__ as __hubble_version__
+    except:
+        __hubble_version__ = 'not-available'
+    try:
+        from jcloud import __version__ as __jcloud_version__
+    except:
+        __jcloud_version__ = 'not-available'
+
     from marie import (
         __docarray_version__,
         __marie_env__,
@@ -958,6 +964,8 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
         info = {
             'marie': __version__,
             'docarray': __docarray_version__,
+            'jcloud': __jcloud_version__,
+            'jina-hubble-sdk': __hubble_version__,
             'marie-proto': __proto_version__,
             'protobuf': google.protobuf.__version__,
             'proto-backend': api_implementation.Type(),
@@ -1329,10 +1337,10 @@ def run_async(func, *args, **kwargs):
         else:
 
             raise RuntimeError(
-                'you have an eventloop running but not using Jupyter/ipython, this may'
-                ' mean you are using Jina with other integration? if so, then you may'
-                ' want to use Client/Flow(asyncio=True). If not, then please report'
-                ' this issue here: https://github.com/jina-ai/jina'
+                'you have an eventloop running but not using Jupyter/ipython, '
+                'this may mean you are using Jina with other integration? if so, then you '
+                'may want to use Client/Flow(asyncio=True). If not, then '
+                'please report this issue here: https://github.com/jina-ai/jina'
             )
     else:
         return asyncio.run(func(*args, **kwargs))
@@ -1507,8 +1515,8 @@ def deprecate_by(new_fn):
 
         old_fn_name = inspect.stack()[1][4][0].strip().split("=")[0].strip()
         warnings.warn(
-            f'`{old_fn_name}` is renamed to `{new_fn.__name__}` with the same usage,'
-            ' please use the latter instead. The old function will be removed soon.',
+            f'`{old_fn_name}` is renamed to `{new_fn.__name__}` with the same usage, please use the latter instead. '
+            f'The old function will be removed soon.',
             DeprecationWarning,
         )
         return new_fn(*args, **kwargs)

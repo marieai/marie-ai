@@ -120,26 +120,27 @@ __default_host__ = _os.environ.get(
 )
 __default_port_monitoring__ = 9090
 __docker_host__ = 'host.docker.internal'
-__default_executor__ = "BaseExecutor"
+__default_executor__ = 'BaseExecutor'
 __default_gateway__ = 'BaseGateway'
 __default_http_gateway__ = 'HTTPGateway'
 __default_websocket_gateway__ = 'WebSocketGateway'
 __default_grpc_gateway__ = 'GRPCGateway'
-__default_endpoint__ = "/default"
+__default_composite_gateway__ = 'CompositeGateway'
+__default_endpoint__ = '/default'
 __ready_msg__ = 'ready and listening'
 __stop_msg__ = 'terminated'
-__unset_msg__ = "(unset)"
+__unset_msg__ = '(unset)'
 
 __args_executor_func__ = {
-    "docs",
-    "parameters",
-    "docs_matrix",
+    'docs',
+    'parameters',
+    'docs_matrix',
 }
 
 __args_executor_init__ = {'metas', 'requests', 'runtime_args'}
-# __resources_path__ = _os.path.join(
-#    _os.path.dirname(_sys.modules['marie'].__file__), 'resources'
-# )
+__resources_path__ = _os.path.join(
+    _os.path.dirname(_sys.modules['marie'].__file__), 'resources'
+)
 __cache_path__ = f'{_os.path.expanduser("~")}/.cache/{__package__}'
 if not _Path(__cache_path__).exists():
     _Path(__cache_path__).mkdir(parents=True, exist_ok=True)

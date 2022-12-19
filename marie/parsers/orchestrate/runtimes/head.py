@@ -11,11 +11,8 @@ def mixin_head_parser(parser):
     gp.add_argument(
         '--compression',
         choices=['NoCompression', 'Deflate', 'Gzip'],
-        help=(
-            'The compression mechanism used when sending requests from the Head to the'
-            ' WorkerRuntimes. For more details, check'
-            ' https://grpc.github.io/grpc/python/grpc.html#compression.'
-        ),
+        help='The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, '
+        'check https://grpc.github.io/grpc/python/grpc.html#compression.',
     )
 
     gp.add_argument(
@@ -40,8 +37,5 @@ def mixin_head_parser(parser):
         '--timeout-send',
         type=int,
         default=None,
-        help=(
-            'The timeout in milliseconds used when sending data requests to Executors,'
-            ' -1 means no timeout, disabled by default'
-        ),
+        help='The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default',
     )

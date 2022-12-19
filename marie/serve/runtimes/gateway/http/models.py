@@ -302,9 +302,6 @@ class JinaEndpointRequestModel(JinaRequestModel):
     exec_endpoint: str = Field(
         default='/',
         example='/',
-        description=(
-            'The endpoint string, by convention starts with `/`. If you specify it as'
-            ' `/foo`, then all executors bind with `@requests(on="/foo")` will receive'
-            ' the request.'
-        ),
+        description='The endpoint string, by convention starts with `/`. '
+        'If you specify it as `/foo`, then all executors bind with `@requests(on="/foo")` will receive the request.',
     )

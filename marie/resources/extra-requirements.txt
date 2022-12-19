@@ -76,3 +76,4 @@ pytest-custom_exit_code:    test
 
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel
+watchfiles>=0.18.0:         devel

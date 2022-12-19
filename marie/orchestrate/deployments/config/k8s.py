@@ -222,9 +222,8 @@ class K8sDeploymentConfig:
         assert not (hasattr(args, 'external') and args.external)
         if not validate_uses(args.uses):
             raise NoContainerizedError(
-                f'Executor "{args.uses}" is not valid to be used in K8s. You need to'
-                ' use a containerized Executor. You may check `jina hub --help` to see'
-                ' how Jina Hub can help you building containerized Executors.'
+                f'Executor "{args.uses}" is not valid to be used in K8s. '
+                'You need to use a containerized Executor. You may check `jina hub --help` to see how Jina Hub can help you building containerized Executors.'
             )
         self.k8s_namespace = k8s_namespace
         self.k8s_deployments_addresses = k8s_deployments_addresses
@@ -332,6 +331,7 @@ class K8sDeploymentConfig:
 
         for i in range(shards):
             cargs = copy.deepcopy(args)
+            cargs.host = args.host[0]
             cargs.shard_id = i
             cargs.uses_before = None
             cargs.uses_after = None

@@ -6,13 +6,12 @@ schema_deployment = _cli_to_schema(
     'deployment',
     extras={
         'needs': {
-            'description': (
-                'The name of the Deployment(s) that this Deployment receives data from.'
-                ' One can also use `gateway` to indicate the connection with the'
-                ' gateway.\nThis is useful to create parallelization. By default the'
-                ' Flow always works sequentially following the defined order of the'
-                ' Deployments.'
-            ),
+            'description': 'The name of the Deployment(s) that this Deployment receives data from. '
+            'One can also use `gateway` to '
+            'indicate the connection with the gateway.\n'
+            'This is useful to create parallelization. '
+            'By default the Flow always works sequentially '
+            'following the defined order of the Deployments.',
             'type': ['array', 'string'],
             'items': {'type': 'string', 'minItems': 1, "uniqueItems": True},
         },

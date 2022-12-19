@@ -66,7 +66,8 @@ def get_parser(
             # fallback to major
             if version.split('.')[0] == p.version:
                 warnings.warn(
-                    f'can not find parser for version: {version}, fallback to parser for version: {p.version}',
+                    f'can not find parser for version: {version}, '
+                    f'fallback to parser for version: {p.version}',
                     UserWarning,
                 )
                 return p()
@@ -75,8 +76,8 @@ def get_parser(
         if version is not None:
             warnings.warn(
                 f'can not find parser for version: {version}, '
-                'fallback to legacy parser. '
-                'this usually mean you are using a deprecated YAML format.',
+                f'fallback to legacy parser. '
+                f'this usually mean you are using a deprecated YAML format.',
                 DeprecationWarning,
             )
         # fallback to legacy parser
