@@ -14,8 +14,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from argparse import Namespace
 
 
-def is_valid_huburi():
-    raise NotImplemented
+def is_valid_huburi(uses: str):
+    return False
 
 
 def _get_event(obj) -> multiprocessing.Event:

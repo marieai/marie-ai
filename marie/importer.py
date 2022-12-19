@@ -69,9 +69,8 @@ class ImportExtensions:
                     colored(f'[{tag}]', attrs='bold') for tag in self._tags
                 )
                 err_msg += (
-                    '\n\nTo enable this feature, use'
-                    f' {colored("pip install jina[TAG]", attrs="bold")}, where'
-                    f' {colored("[TAG]", attrs="bold")} is one of {avail_tags}.\n'
+                    f'\n\nTo enable this feature, use {colored("pip install jina[TAG]", attrs="bold")}, '
+                    f'where {colored("[TAG]", attrs="bold")} is one of {avail_tags}.\n'
                 )
 
             else:

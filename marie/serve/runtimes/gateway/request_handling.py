@@ -66,9 +66,7 @@ class GatewayRequestHandler(MonitoringRequestMixin):
                 if err_code == grpc.StatusCode.UNAVAILABLE:
                     err._details = (
                         err.details()
-                        + ' |Gateway: Communication error while gathering endpoints'
-                        f' with deployment at address(es) {err.dest_addr}. Head or'
-                        ' worker(s) may be down.'
+                        + f' |Gateway: Communication error while gathering endpoints with deployment at address(es) {err.dest_addr}. Head or worker(s) may be down.'
                     )
                     raise err
                 else:

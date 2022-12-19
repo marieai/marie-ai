@@ -166,7 +166,7 @@ def requests(
             ):
                 raise TypeError(
                     f'{fn} accepts only {arg_spec.args} which is fewer than expected, '
-                    'please add `**kwargs` to the function signature.'
+                    f'please add `**kwargs` to the function signature.'
                 )
 
             if iscoroutinefunction(fn):
