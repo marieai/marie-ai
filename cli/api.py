@@ -1,9 +1,5 @@
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from argparse import Namespace
-
-from typing import TYPE_CHECKING
 
 from marie.parsers.helper import _update_gateway_args
 
@@ -79,6 +75,10 @@ def executor(args: 'Namespace'):
 
     :returns: return the same as `pod` or `worker_runtime`
     """
+    args.host = args.host[0]
+    args.port = args.port[0]
+    args.port_monitoring = args.port_monitoring[0]
+
     if args.native:
         return executor_native(args)
     else:
@@ -108,6 +108,7 @@ def gateway(args: 'Namespace'):
     """
     from marie.serve.runtimes import get_runtime
 
+    args.port_monitoring = args.port_monitoring[0]
     _update_gateway_args(args)
 
     runtime_cls = get_runtime('GatewayRuntime')
@@ -128,38 +129,37 @@ def ping(args: 'Namespace'):
     NetworkChecker(args)
 
 
-#
-# def dryrun(args: 'Namespace'):
-#     """
-#     Check the health of a Flow
-#
-#     :param args: arguments coming from the CLI.
-#     """
-#     from marie.checker import dry_run_checker
-#
-#     dry_run_checker(args)
-#
-#
-# def client(args: 'Namespace'):
-#     """
-#     Start a client connects to the gateway
-#
-#     :param args: arguments coming from the CLI.
-#     """
-#     from jina.clients import Client
-#
-#     Client(args)
-#
-#
-# def export(args: 'Namespace'):
-#     """
-#     Export the API
-#
-#     :param args: arguments coming from the CLI.
-#     """
-#     from marie import exporter
-#
-#     getattr(exporter, f'export_{args.export.replace("-", "_")}')(args)
+def dryrun(args: 'Namespace'):
+    """
+    Check the health of a Flow
+
+    :param args: arguments coming from the CLI.
+    """
+    from marie.checker import dry_run_checker
+
+    dry_run_checker(args)
+
+
+def client(args: 'Namespace'):
+    """
+    Start a client connects to the gateway
+
+    :param args: arguments coming from the CLI.
+    """
+    from marie.clients import Client
+
+    Client(args)
+
+
+def export(args: 'Namespace'):
+    """
+    Export the API
+
+    :param args: arguments coming from the CLI.
+    """
+    from marie import exporter
+
+    getattr(exporter, f'export_{args.export.replace("-", "_")}')(args)
 
 
 def flow(args: 'Namespace'):
@@ -183,7 +183,9 @@ def hub(args: 'Namespace'):
     Start a hub builder for push, pull
     :param args: arguments coming from the CLI.
     """
-    pass
+    from hubble.executor.hubio import HubIO
+
+    getattr(HubIO(args), args.hub_cli)()
 
 
 def new(args: 'Namespace'):
@@ -217,7 +219,9 @@ def auth(args: 'Namespace'):
     Authenticate a user
     :param args: arguments coming from the CLI.
     """
-    pass
+    from hubble import api
+
+    getattr(api, args.auth_cli.replace('-', '_'))(args)
 
 
 def cloud(args: 'Namespace'):
@@ -225,4 +229,6 @@ def cloud(args: 'Namespace'):
     Use jcloud (Jina Cloud) commands
     :param args: arguments coming from the CLI.
     """
-    pass
+    # from jcloud import api
+    #
+    # getattr(api, args.jc_cli.replace('-', '_'))(args)

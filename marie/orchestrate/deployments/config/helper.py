@@ -1,8 +1,8 @@
 import os
 from typing import Dict
 
-# from hubble.executor.helper import is_valid_docker_uri, parse_hub_uri
-# from hubble.executor.hubio import HubIO
+from hubble.executor.helper import is_valid_docker_uri, parse_hub_uri
+from hubble.executor.hubio import HubIO
 from marie import (
     __default_composite_gateway__,
     __default_executor__,
@@ -12,18 +12,6 @@ from marie import (
     __version__,
 )
 from marie.enums import PodRoleType
-
-
-def parse_hub_uri():
-    raise NotImplemented
-
-
-def fetch_meta():
-    raise NotImplemented
-
-
-def is_valid_docker_uri():
-    raise NotImplemented
 
 
 def get_image_name(uses: str) -> str:
@@ -41,7 +29,7 @@ def get_image_name(uses: str) -> str:
     try:
         rebuild_image = 'JINA_HUB_NO_IMAGE_REBUILD' not in os.environ
         scheme, name, tag, secret = parse_hub_uri(uses)
-        meta_data, _ = fetch_meta(
+        meta_data, _ = HubIO.fetch_meta(
             name, tag, secret=secret, rebuild_image=rebuild_image, force=True
         )
         image_name = meta_data.image_name

@@ -12,6 +12,9 @@ from contextlib import ExitStack
 from itertools import cycle
 from typing import Dict, List, Optional, Set, Union
 
+from hubble.executor.helper import replace_secret_of_hub_uri
+from hubble.executor.hubio import HubIO
+
 from marie import __default_executor__, __default_host__, __docker_host__, helper
 from marie.enums import DeploymentRoleType, PodRoleType, PollingType
 from marie.helper import (
@@ -27,14 +30,6 @@ from marie.parsers.helper import _update_gateway_args
 from marie.serve.networking import host_is_local, in_docker
 
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
-
-
-def deploy_public_sandbox():
-    raise NotImplemented
-
-
-def replace_secret_of_hub_uri():
-    raise NotImplemented
 
 
 class BaseDeployment(ExitStack):
@@ -342,7 +337,7 @@ class Deployment(BaseDeployment):
     def update_sandbox_args(self):
         """Update args of all its pods based on the host and port returned by Hubble"""
         if self.is_sandbox:
-            host, port = deploy_public_sandbox(self.args)
+            host, port = HubIO.deploy_public_sandbox(self.args)
             self._sandbox_deployed = True
             self.first_pod_args.host = host
             self.first_pod_args.port = port

@@ -2,8 +2,8 @@ from argparse import Namespace
 from copy import deepcopy
 from typing import TYPE_CHECKING, Type
 
-# from hubble.executor.helper import is_valid_huburi
-# from hubble.executor.hubio import HubIO
+from hubble.executor.helper import is_valid_huburi
+from hubble.executor.hubio import HubIO
 
 from marie.enums import PodRoleType
 from marie.orchestrate.pods import Pod
@@ -11,10 +11,6 @@ from marie.orchestrate.pods.container import ContainerPod
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.orchestrate.pods import BasePod
-
-
-def is_valid_huburi(uses: str):
-    return False
 
 
 class PodFactory:
@@ -37,7 +33,7 @@ class PodFactory:
             _hub_args = deepcopy(args)
             _hub_args.uri = args.uses
             _hub_args.no_usage = True
-            # cargs.uses = HubIO(_hub_args).pull()
+            cargs.uses = HubIO(_hub_args).pull()
 
         if (
             cargs.pod_role != PodRoleType.HEAD

@@ -494,18 +494,19 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             )
 
         """
-
-        def is_valid_huburi(uri):
-            return False
+        from hubble.executor.helper import is_valid_huburi
 
         _source = None
         if is_valid_huburi(uri):
+            from hubble.executor.hubio import HubIO
+            from hubble.executor.parsers import set_hub_pull_parser
+
             _args = ArgNamespace.kwargs2namespace(
                 {'no_usage': True, **kwargs},
-                # set_hub_pull_parser(),
+                set_hub_pull_parser(),
                 positional_args=(uri,),
             )
-            _source = ""
+            _source = HubIO(args=_args).pull()
 
         if not _source or _source.startswith('docker://'):
             raise ValueError(

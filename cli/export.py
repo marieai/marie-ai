@@ -1,6 +1,8 @@
 import argparse
 import os
-from typing import List
+from typing import List, Union
+
+from marie.parsers.helper import CastHostAction
 
 
 def api_to_dict(show_all_args: bool = False):
@@ -23,9 +25,9 @@ def api_to_dict(show_all_args: bool = False):
         'vendor': 'Marie AI Limited',
         'source': 'https://github.com/gregbugaj/marie-ai'
         + os.environ.get('MARIE_VCS_VERSION', 'main'),
-        'url': 'https://jina.ai',
-        'docs': 'https://docs.marie-ai.com',
-        'authors': 'dev-team@marie-ai.com',
+        'url': 'https://marieai.co',
+        'docs': 'https://docs.marieai.co',
+        'authors': 'dev-team@marieai.co',
         'version': __version__,
         'methods': [],
         'revision': os.environ.get('MARIE_VCS_VERSION'),
@@ -58,7 +60,7 @@ def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
     from argparse import _StoreAction, _StoreTrueAction
 
     from marie.enums import BetterEnum
-    from marie.parsers.helper import _SHOW_ALL_ARGS, KVAppendAction
+    from marie.parsers.helper import _SHOW_ALL_ARGS, CastToIntAction, KVAppendAction
 
     port_attr = ('help', 'choices', 'default', 'required', 'option_strings', 'dest')
     parser = parser_fn(**kwargs)
@@ -68,7 +70,16 @@ def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
         if a.default != b.default:
             random_dest.add(a.dest)
     for a in parser._actions:
-        if isinstance(a, (_StoreAction, _StoreTrueAction, KVAppendAction)):
+        if isinstance(
+            a,
+            (
+                _StoreAction,
+                _StoreTrueAction,
+                KVAppendAction,
+                CastToIntAction,
+                CastHostAction,
+            ),
+        ):
             if not _SHOW_ALL_ARGS and a.help == argparse.SUPPRESS:
                 continue
             ddd = {p: getattr(a, p) for p in port_attr}
@@ -76,6 +87,10 @@ def _export_parser_args(parser_fn, type_as_str: bool = False, **kwargs):
                 ddd['type'] = bool
             elif isinstance(a, KVAppendAction):
                 ddd['type'] = dict
+            elif isinstance(a, CastToIntAction):
+                ddd['type'] = int
+            elif isinstance(a, CastHostAction):
+                ddd['type'] = str
             else:
                 ddd['type'] = a.type
             if ddd['choices']:

@@ -10,7 +10,7 @@ def _get_run_args(print_args: bool = True):
 
     console = get_rich_console()
 
-    silent_print = {'help', 'hub', 'export', 'auth'}
+    silent_print = {'help', 'hub', 'export', 'auth', 'cloud', 'ping'}
 
     parser = get_main_parser()
     if len(sys.argv) > 1:
@@ -120,9 +120,9 @@ def _try_plugin_command():
         project, package = cmd_info['display-name'], cmd_info['pip-package']
         console = get_rich_console()
         console.print(
-            f"It seems like [yellow]{project}[/yellow] is not installed in your"
-            f" environment.To use it via the [green]'jina {subcommand}'[/green]"
-            f" command, install it first: [green]'pip install {package}'[/green]."
+            f"It seems like [yellow]{project}[/yellow] is not installed in your environment."
+            f"To use it via the [green]'jina {subcommand}'[/green] command, "
+            f"install it first: [green]'pip install {package}'[/green]."
         )
         return True
     return False
