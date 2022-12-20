@@ -1,0 +1,174 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {name}
+  namespace: {namespace}
+spec:
+  replicas: {replicas}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: {name}
+  template:
+    metadata:
+      labels:
+        app: {name}
+        jina_deployment_name: {jina_deployment_name}
+        shard_id: {shard_id}
+        pod_type: {pod_type}
+        ns: {namespace}
+      annotations:
+        linkerd.io/inject: enabled
+    spec:
+      containers:
+      - name: executor
+        image: {image}
+        imagePullPolicy: {pull_policy}
+        command: {command}
+        args: {args}
+        ports:
+          - containerPort: {port}
+        envFrom:
+          - configMapRef:
+              name: {name}-configmap
+        env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: JINA_DEPLOYMENT_NAME
+          value: {jina_deployment_name}
+        - name: K8S_DEPLOYMENT_NAME
+          value: {name}
+        - name: K8S_NAMESPACE_NAME
+          value: {namespace}
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        startupProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port_uses}
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 10
+        livenessProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port}
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 10
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 2"]
+      - name: uses-before
+        image: {image_uses_before}
+        imagePullPolicy: {pull_policy}
+        command: {command_uses_before}
+        args: {args_uses_before}
+        ports:
+          - containerPort: {port_uses_before}
+        envFrom:
+          - configMapRef:
+              name: {name}-configmap
+        env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: JINA_DEPLOYMENT_NAME
+          value: {jina_deployment_name}
+        - name: K8S_DEPLOYMENT_NAME
+          value: {name}
+        - name: K8S_NAMESPACE_NAME
+          value: {namespace}
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        startupProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port_uses_before}
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 10
+        livenessProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port_uses_before}
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 10
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 2"]
+      - name: uses-after
+        image: {image_uses_after}
+        imagePullPolicy: {pull_policy}
+        command: {command_uses_after}
+        args: {args_uses_after}
+        ports:
+          - containerPort: {port_uses_after}
+        envFrom:
+          - configMapRef:
+              name: {name}-configmap
+        env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: JINA_DEPLOYMENT_NAME
+          value: {jina_deployment_name}
+        - name: K8S_DEPLOYMENT_NAME
+          value: {name}
+        - name: K8S_NAMESPACE_NAME
+          value: {namespace}
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        startupProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port_uses_after}
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 10
+        livenessProbe:
+          exec:
+            command:
+              - jina
+              - ping
+              - executor
+              - 127.0.0.1:{port_uses_after}
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 10
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 2"]

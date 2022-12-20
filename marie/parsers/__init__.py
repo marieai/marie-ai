@@ -15,10 +15,11 @@ def set_pod_parser(parser=None):
 
         parser = set_base_parser()
 
-    # from hubble.executor.parsers.pull import mixin_hub_pull_options_parser
-
     from marie.parsers.orchestrate.base import mixin_scalable_deployment_parser
-    from marie.parsers.orchestrate.pod import mixin_pod_parser
+    from marie.parsers.orchestrate.pod import (
+        mixin_pod_parser,
+        mixin_hub_pull_options_parser,
+    )
     from marie.parsers.orchestrate.runtimes.container import (
         mixin_container_runtime_parser,
     )
@@ -30,7 +31,7 @@ def set_pod_parser(parser=None):
     mixin_container_runtime_parser(parser)
     mixin_remote_runtime_parser(parser)
     mixin_pod_parser(parser)
-    # mixin_hub_pull_options_parser(parser)
+    mixin_hub_pull_options_parser(parser)
     mixin_head_parser(parser)
 
     return parser
@@ -247,35 +248,35 @@ def get_main_parser():
         )
     )
 
-    # from hubble.executor.parsers import get_main_parser as get_hub_parser
-    # from hubble.parsers import get_main_parser as get_auth_parser
-    #
-    # get_auth_parser(
-    #     sp.add_parser(
-    #         'auth',
-    #         description='Login to Jina AI with your GitHub/Google/Email account',
-    #         formatter_class=_chf,
-    #         help='Login to Jina AI',
-    #     )
-    # )
-    #
-    # get_hub_parser(
-    #     sp.add_parser(
-    #         'hub',
-    #         help='Manage Executor on Jina Hub',
-    #         description='Push/Pull an Executor to/from Jina Hub',
-    #         formatter_class=_chf,
-    #     )
-    # )
-    #
+    from hubble.executor.parsers import get_main_parser as get_hub_parser
+    from hubble.parsers import get_main_parser as get_auth_parser
+
+    get_auth_parser(
+        sp.add_parser(
+            'auth',
+            description='Login to Marie AI with your GitHub/Google/Email account',
+            formatter_class=_chf,
+            help='Login to Marie AI',
+        )
+    )
+
+    get_hub_parser(
+        sp.add_parser(
+            'hub',
+            help='Manage Executor on Marie Hub',
+            description='Push/Pull an Executor to/from Marie Hub',
+            formatter_class=_chf,
+        )
+    )
+
     # from jcloud.parsers import get_main_parser as get_jcloud_parser
     #
     # get_jcloud_parser(
     #     sp.add_parser(
     #         'cloud',
-    #         description='Manage Flows on Jina Cloud',
+    #         description='Manage Flows on Marie Cloud',
     #         formatter_class=_chf,
-    #         help='Manage Flows on Jina Cloud',
+    #         help='Manage Flows on Marie Cloud',
     #     )
     # )
 
@@ -314,7 +315,7 @@ def get_main_parser():
     set_client_cli_parser(
         sp.add_parser(
             'client',
-            description='Start a Python client that connects to a Jina Gateway',
+            description='Start a Python client that connects to a Marie Gateway',
             formatter_class=_chf,
             **(dict(help='Start a Client')) if _SHOW_ALL_ARGS else {},
         )
