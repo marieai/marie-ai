@@ -7,7 +7,7 @@ if typing.TYPE_CHECKING:
     from marie.logging.logger import MarieLogger
 
 
-from marie import __windows__
+from marie.constants import __windows__
 from marie.helper import get_readable_size, get_readable_time, colored, get_rich_console
 
 from rich.progress import (

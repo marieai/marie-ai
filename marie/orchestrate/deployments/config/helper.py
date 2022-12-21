@@ -3,13 +3,12 @@ from typing import Dict
 
 from hubble.executor.helper import is_valid_docker_uri, parse_hub_uri
 from hubble.executor.hubio import HubIO
-from marie import (
+from marie.constants import (
     __default_composite_gateway__,
     __default_executor__,
     __default_grpc_gateway__,
     __default_http_gateway__,
     __default_websocket_gateway__,
-    __version__,
 )
 from marie.enums import PodRoleType
 
@@ -58,7 +57,9 @@ def get_base_executor_version():
     import requests
 
     try:
-        url = 'https://registry.hub.docker.com/v2/repositories/jinaai/jina/tags'
+        from marie import __version__
+
+        url = 'https://registry.hub.docker.com/v2/repositories/marieai/marie/tags'
         result: Dict = requests.get(url, params={'name': __version__}).json()
         if result.get('count', 0) > 0:
             return __version__

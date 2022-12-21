@@ -12,7 +12,7 @@ from grpc_health.v1 import health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha.reflection_pb2 import ServerReflectionRequest
 from grpc_reflection.v1alpha.reflection_pb2_grpc import ServerReflectionStub
 
-from marie import __default_endpoint__
+from marie.constants import __default_endpoint__
 from marie.enums import PollingType
 from marie.excepts import EstablishGrpcConnectionError, InternalNetworkError
 from marie.importer import ImportExtensions
@@ -987,7 +987,7 @@ class GrpcConnectionPool:
             self._logger.debug(
                 f'GRPC call for {current_deployment} failed, retries exhausted'
             )
-            from jina.excepts import InternalNetworkError
+            from marie.excepts import InternalNetworkError
 
             # after connection failure the gRPC `channel` gets stuck in a failure state for a few seconds
             # removing and re-adding the connection (stub) is faster & more reliable than just waiting

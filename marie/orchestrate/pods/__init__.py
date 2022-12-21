@@ -5,7 +5,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Type, Union, TYPE_CHECKING
 
-from marie import __ready_msg__, __stop_msg__, __windows__
+from marie.constants import __ready_msg__, __stop_msg__, __windows__
 from marie.enums import PodRoleType
 from marie.excepts import RuntimeFailToStart, RuntimeRunForeverEarlyError
 from marie.helper import typename

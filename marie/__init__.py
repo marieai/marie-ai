@@ -6,21 +6,17 @@ interfaces into a single place. The interfaces themselves are located in
 sub-modules, as described below.
 
 """
-import datetime as _datetime
+
 import os as _os
 import platform as _platform
 import signal as _signal
 import sys as _sys
 import warnings as _warnings
-from distutils.util import strtobool as strtobool
-from pathlib import Path as _Path
-
 import docarray as _docarray
+from distutils.util import strtobool as strtobool
 
 if _sys.version_info < (3, 8, 0):
     raise OSError(f"Marie requires Python >= 3.8, but yours is {_sys.version_info}")
-
-__windows__ = _sys.platform == 'win32'
 
 if strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
     import warnings
@@ -74,7 +70,7 @@ __version__ = '2.2.5'
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
-__proto_version__ = '0.1.14'
+__proto_version__ = '0.1.13'
 
 try:
     __docarray_version__ = _docarray.__version__
@@ -82,82 +78,6 @@ except AttributeError as e:
     raise RuntimeError(
         '`docarray` dependency is not installed correctly, please reinstall with `pip install -U --force-reinstall docarray`'
     )
-
-__uptime__ = _datetime.datetime.now().isoformat()
-
-# update on MacOS
-# 1. clean this tuple,
-# 2. grep -rohEI --exclude-dir=jina/hub --exclude-dir=tests --include \*.py "\'MARIE_.*?\'" jina  | sort -u | sed "s/$/,/g"
-# 3. copy all lines EXCEPT the first (which is the grep command in the last line)
-__marie_env__ = (
-    "MARIE_DEFAULT_HOST",
-    "MARIE_DEFAULT_TIMEOUT_CTRL",
-    "MARIE_DEFAULT_WORKSPACE_BASE",
-    "MARIE_DEPLOYMENT_NAME",
-    "MARIE_DISABLE_UVLOOP",
-    "MARIE_CHECK_VERSION",
-)
-
-__args_executor_init__ = {"metas", "requests", "runtime_args"}
-__root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
-__resources_path__ = _os.path.join(
-    _os.path.dirname(_sys.modules["marie"].__file__), "resources"
-)
-# __resources_path__ = _os.path.join(
-#     _os.path.abspath(_os.path.join(__root_dir__, "..")), "resources"
-# )
-__model_path__ = _os.path.join(
-    _os.path.abspath(_os.path.join(__root_dir__, "..")), "model_zoo"
-)
-__config_dir__ = _os.path.join(
-    _os.path.abspath(_os.path.join(__root_dir__, "..")), "config"
-)
-
-__marie_home__ = _os.path.join(str(_Path.home()), ".marie")
-
-__default_host__ = _os.environ.get(
-    "MARIE_DEFAULT_HOST", "127.0.0.1" if __windows__ else "0.0.0.0"
-)
-__default_port_monitoring__ = 9090
-__docker_host__ = 'host.docker.internal'
-__default_executor__ = 'BaseExecutor'
-__default_gateway__ = 'BaseGateway'
-__default_http_gateway__ = 'HTTPGateway'
-__default_websocket_gateway__ = 'WebSocketGateway'
-__default_grpc_gateway__ = 'GRPCGateway'
-__default_composite_gateway__ = 'CompositeGateway'
-__default_endpoint__ = '/default'
-__ready_msg__ = 'ready and listening'
-__stop_msg__ = 'terminated'
-__unset_msg__ = '(unset)'
-
-__args_executor_func__ = {
-    'docs',
-    'parameters',
-    'docs_matrix',
-}
-
-__args_executor_init__ = {'metas', 'requests', 'runtime_args'}
-__resources_path__ = _os.path.join(
-    _os.path.dirname(_sys.modules['marie'].__file__), 'resources'
-)
-__cache_path__ = f'{_os.path.expanduser("~")}/.cache/{__package__}'
-if not _Path(__cache_path__).exists():
-    _Path(__cache_path__).mkdir(parents=True, exist_ok=True)
-
-_names_with_underscore = [
-    '__version__',
-    '__proto_version__',
-    '__default_host__',
-    '__ready_msg__',
-    '__stop_msg__',
-    '__jina_env__',
-    '__uptime__',
-    '__default_endpoint__',
-    '__default_executor__',
-    '__unset_msg__',
-    '__windows__',
-]
 
 try:
     _signal.signal(_signal.SIGINT, _signal.default_int_handler)
@@ -226,6 +146,3 @@ from marie.serve.gateway import BaseGateway as Gateway
 
 # ONLY FIRST CLASS CITIZENS ARE ALLOWED HERE, namely Document, Executor Flow
 from marie.version import __version__
-
-__all__ = [_s for _s in dir() if not _s.startswith('_')]
-__all__.extend(_names_with_underscore)

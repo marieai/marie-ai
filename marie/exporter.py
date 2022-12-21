@@ -1,7 +1,7 @@
 import json
 
 from cli.export import api_to_dict
-from marie import Flow, __version__
+from marie.orchestrate.flow.base import Flow
 from marie.jaml import JAML
 from marie.logging.predefined import default_logger
 from marie.schemas import get_full_schema
@@ -43,6 +43,8 @@ def export_schema(args):
 
     :param args: args from CLI
     """
+    from marie import __version__
+
     if args.yaml_path:
         dump_api = api_to_dict()
         for yp in args.yaml_path:

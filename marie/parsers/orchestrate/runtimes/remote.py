@@ -1,6 +1,6 @@
 """Argparser module for remote runtime"""
 
-from marie import __default_host__, helper
+from marie.constants import __default_host__
 from marie.parsers.helper import CastHostAction, KVAppendAction, add_arg_group
 from marie.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
 

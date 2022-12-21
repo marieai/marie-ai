@@ -1,11 +1,11 @@
 import os
 import sys
-from typing import TYPE_CHECKING, Iterator
+from typing import Iterator, TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from marie import Document
+    from docarray import Document
 
 file_dir = os.path.dirname(__file__)
 sys.path.append(os.path.dirname(file_dir))

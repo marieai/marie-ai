@@ -2,7 +2,7 @@ import asyncio
 from asyncio import Event, Task
 from typing import Any, Callable, Dict, List, Optional
 
-from marie import DocumentArray
+from docarray import DocumentArray
 from marie.types.request.data import DataRequest
 
 

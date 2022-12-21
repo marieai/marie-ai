@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from marie import Document
+from docarray import Document
 from marie.clients.request import request_generator
 from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter
 

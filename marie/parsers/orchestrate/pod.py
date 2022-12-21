@@ -4,7 +4,7 @@ import argparse
 from dataclasses import dataclass
 from typing import Dict
 
-from marie import helper
+from marie.helper import random_port
 from marie.enums import PodRoleType
 from marie.parsers.helper import (
     _SHOW_ALL_ARGS,
@@ -143,7 +143,7 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
             '--port-in',
             type=str,
             nargs='+',
-            default=[helper.random_port()],
+            default=[random_port()],
             action=CastToIntAction,
             help=port_description,
         )
@@ -176,7 +176,7 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         '--port-monitoring',
         type=str,
         nargs='+',
-        default=[helper.random_port()],
+        default=[random_port()],
         action=CastToIntAction,
         dest='port_monitoring',
         help=f'The port on which the prometheus server is exposed, default is a random port between [49152, 65535]',

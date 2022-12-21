@@ -2,8 +2,7 @@ import argparse
 import os
 from typing import Any, Dict, Optional
 
-from marie import Flow
-from marie.enums import DeploymentRoleType
+from marie.orchestrate.flow.base import Flow
 from marie.helper import GATEWAY_NAME, ArgNamespace, expand_env_var
 from marie.jaml.parsers.base import VersionedYAMLParser
 from marie.parsers import set_deployment_parser, set_gateway_parser

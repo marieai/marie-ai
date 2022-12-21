@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from docarray import DocumentArray
 
-from marie import __default_endpoint__
+from marie.constants import __default_endpoint__
 from marie.excepts import BadConfigSource
 from marie.importer import ImportExtensions
 from marie.serve.executors import BaseExecutor

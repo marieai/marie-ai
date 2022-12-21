@@ -1,7 +1,5 @@
 import json
 from typing import TYPE_CHECKING, Dict, List, Optional
-
-from marie import __version__
 from marie.clients.request import request_generator
 from marie.enums import DataInputType
 from marie.excepts import InternalNetworkError
@@ -55,6 +53,7 @@ def get_fastapi_app(
             JinaRequestModel,
             JinaResponseModel,
         )
+    from marie import __version__
 
     app = FastAPI(
         title=title or 'My Marie Service',

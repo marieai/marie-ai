@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import grpc.aio
 
-from marie import __default_endpoint__
+from marie.constants import __default_endpoint__
 from marie.excepts import InternalNetworkError
 from marie.logging.logger import MarieLogger
 from marie.serve.networking import GrpcConnectionPool

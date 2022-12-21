@@ -5,12 +5,12 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Union
 
-from marie import __cache_path__
+from marie.constants import __cache_path__
 from marie.helper import iscoroutinefunction
 from marie.importer import ImportExtensions
 
 if TYPE_CHECKING:  # pragma: no cover
-    from marie import DocumentArray
+    from docarray import DocumentArray
 
 
 @functools.lru_cache()
@@ -154,7 +154,7 @@ def requests(
     :param on: the endpoint string, by convention starts with `/`
     :return: decorated function
     """
-    from marie import __args_executor_func__, __default_endpoint__
+    from marie.constants import __args_executor_func__, __default_endpoint__
 
     class FunctionMapper:
         def __init__(self, fn):

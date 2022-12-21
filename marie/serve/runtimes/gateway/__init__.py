@@ -3,8 +3,6 @@ import asyncio
 import urllib
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Optional, Union
-
-from marie import __default_host__
 from marie.enums import GatewayProtocolType
 from marie.excepts import PortAlreadyUsed
 from marie.helper import is_port_free, send_telemetry_event

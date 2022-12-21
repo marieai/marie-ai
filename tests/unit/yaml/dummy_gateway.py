@@ -4,8 +4,7 @@ from docarray import Document, DocumentArray
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from marie import Gateway, __default_host__
-from marie.clients.request import request_generator
+from marie import Gateway
 
 
 class DummyResponseModel(BaseModel):

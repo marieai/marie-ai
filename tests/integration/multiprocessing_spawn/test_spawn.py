@@ -10,11 +10,7 @@ def test_launch_spawn_empty():
     subprocess.run(
         [sys.executable, 'main_empty.py'],
         check=True,
-        env={
-            'JINA_MP_START_METHOD': 'spawn',
-            'PATH': os.environ['PATH'],
-            'PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION': 'python',
-        },
+        env={'JINA_MP_START_METHOD': 'spawn', 'PATH': os.environ['PATH']},
         cwd=Path(__file__).parent / 'modules',
     )
 
@@ -24,11 +20,7 @@ def test_launch_spawn_cls():
     subprocess.run(
         [sys.executable, 'main_cls.py'],
         check=True,
-        env={
-            'JINA_MP_START_METHOD': 'spawn',
-            'PATH': os.environ['PATH'],
-            'PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION': 'python',
-        },
+        env={'JINA_MP_START_METHOD': 'spawn', 'PATH': os.environ['PATH']},
         cwd=Path(__file__).parent / 'modules',
     )
 
