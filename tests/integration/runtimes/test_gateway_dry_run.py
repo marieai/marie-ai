@@ -3,14 +3,15 @@ import multiprocessing
 import pytest
 
 from marie import Client
-from marie.parsers import set_gateway_parser, set_pod_parser
+from marie.parsers import set_gateway_parser
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway import GatewayRuntime
 from marie.serve.runtimes.worker import WorkerRuntime
+from tests.helper import _generate_pod_args
 
 
 def _create_worker_runtime(port, name='', executor=None):
-    args = set_pod_parser().parse_args([])
+    args = _generate_pod_args()
     args.port = port
     args.name = name
     if executor:
@@ -93,10 +94,8 @@ def test_dry_run_of_flow(port_generator, protocol):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('protocol', ['http'])
-# @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
 async def test_async_dry_run_of_flow(port_generator, protocol):
-    print(f"protocol = {protocol}")
     worker_port = port_generator()
     port = port_generator()
     worker_process, gateway_process = _setup(worker_port, port, protocol)
@@ -104,7 +103,7 @@ async def test_async_dry_run_of_flow(port_generator, protocol):
     c = Client(host='localhost', asyncio=True, port=port, protocol=protocol)
     dry_run_alive = await c.is_flow_ready()
 
-    # _teardown(worker_process, gateway_process, dry_run_alive
+    # _teardown(worker_process, gateway_process, dry_run_alive)
     worker_process.terminate()
     worker_process.join()
 

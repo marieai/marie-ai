@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from grpc import RpcError
 
-from marie import __windows__
+from marie.constants import __windows__
 from marie.helper import send_telemetry_event
 from marie.serve.instrumentation import InstrumentationMixin
 from marie.serve.networking import GrpcConnectionPool

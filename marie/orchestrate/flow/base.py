@@ -37,7 +37,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from marie import __default_host__, __docker_host__, __windows__, helper
+from marie.constants import __default_host__, __docker_host__, __windows__
 from marie.clients import Client
 from marie.clients.mixin import (
     AsyncPostMixin,
@@ -67,6 +67,7 @@ from marie.helper import (
     is_port_free,
     send_telemetry_event,
     typename,
+    random_ports,
 )
 from marie.importer import ImportExtensions
 from marie.jaml import JAMLCompatible
@@ -642,7 +643,7 @@ class Flow(
         )
 
         if not args.port:
-            args.port = helper.random_ports(len(args.protocol))
+            args.port = random_ports(len(args.protocol))
         args.noblock_on_start = True
         args.graph_description = json.dumps(graph_description)
         args.graph_conditions = json.dumps(graph_conditions)
@@ -1891,7 +1892,7 @@ class Flow(
             # kick off all deployments wait-ready tasks
             try:
                 _ = asyncio.get_event_loop()
-            except Exception as e:
+            except:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 

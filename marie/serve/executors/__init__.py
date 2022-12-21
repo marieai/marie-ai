@@ -9,7 +9,7 @@ import warnings
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union, overload
 
-from marie import __args_executor_init__, __cache_path__, __default_endpoint__
+from marie.constants import __args_executor_init__, __cache_path__, __default_endpoint__
 from marie.enums import BetterEnum
 from marie.helper import (
     ArgNamespace,
@@ -715,7 +715,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
 
         """
-        from marie import Flow
+        from marie.orchestrate.flow.base import Flow
 
         f = Flow(**kwargs).add(
             uses=cls,
@@ -766,7 +766,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's dynamic_batching field
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
         """
-        from marie import Flow
+        from marie.orchestrate.flow.base import Flow
 
         Flow(**kwargs).add(
             uses=uses,
@@ -809,7 +809,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's requests field
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
         """
-        from marie import Flow
+        from marie.orchestrate.flow.base import Flow
 
         f = Flow(**kwargs).add(
             uses=uses,

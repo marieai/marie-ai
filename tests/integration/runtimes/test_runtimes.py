@@ -11,13 +11,14 @@ import pytest
 from marie import Client, Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.enums import PollingType
-from marie.parsers import set_gateway_parser, set_pod_parser
+from marie.parsers import set_gateway_parser
 from marie.proto import jina_pb2_grpc
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway import GatewayRuntime
 from marie.serve.runtimes.head import HeadRuntime
 from marie.serve.runtimes.worker import WorkerRuntime
+from tests.helper import _generate_pod_args
 
 
 @pytest.mark.asyncio
@@ -683,7 +684,7 @@ async def _create_worker(pod, port_generator, type='worker', executor=None):
 
 
 def _create_worker_runtime(port, name='', executor=None):
-    args = set_pod_parser().parse_args([])
+    args = _generate_pod_args()
     args.port = port
     args.name = name
     if executor:
@@ -701,7 +702,7 @@ def _create_head_runtime(
     uses_after=None,
     retries=-1,
 ):
-    args = set_pod_parser().parse_args([])
+    args = _generate_pod_args()
     args.port = port
     args.name = name
     args.retries = retries

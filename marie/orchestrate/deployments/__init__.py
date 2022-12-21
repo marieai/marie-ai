@@ -15,12 +15,9 @@ from typing import Dict, List, Optional, Set, Union
 from hubble.executor.helper import replace_secret_of_hub_uri
 from hubble.executor.hubio import HubIO
 
-from marie import __default_executor__, __default_host__, __docker_host__, helper
+from marie.constants import __default_executor__, __default_host__, __docker_host__
 from marie.enums import DeploymentRoleType, PodRoleType, PollingType
-from marie.helper import (
-    CatchAllCleanupContextManager,
-    parse_host_scheme,
-)
+from marie.helper import CatchAllCleanupContextManager, parse_host_scheme, random_port
 from marie.orchestrate.deployments.install_requirements_helper import (
     install_package_dependencies,
     _get_package_path_from_uses,
@@ -868,29 +865,29 @@ class Deployment(BaseDeployment):
 
                     elif shards == 1:
                         _args.port_monitoring = (
-                            helper.random_port()
+                            random_port()
                             if replica_id >= len(self.args.all_port_monitoring)
                             else self.args.all_port_monitoring[replica_id]
                         )
                         # if there are no shards/replicas, we dont need to distribute ports randomly
                         # we should rather use the pre assigned one
-                        _args.port = helper.random_port()
+                        _args.port = random_port()
                     elif shards > 1:
                         port_monitoring_index = (
                             replica_id + replicas * shard_id + 1
                         )  # the first index is for the head
                         _args.port_monitoring = (
-                            helper.random_port()
+                            random_port()
                             if port_monitoring_index
                             >= len(self.args.all_port_monitoring)
                             else self.args.all_port_monitoring[
                                 port_monitoring_index
                             ]  # we skip the head port here
                         )
-                        _args.port = helper.random_port()
+                        _args.port = random_port()
                     else:
-                        _args.port = helper.random_port()
-                        _args.port_monitoring = helper.random_port()
+                        _args.port = random_port()
+                        _args.port_monitoring = random_port()
 
                 else:
                     _args.port = self.ext_repl_ports[replica_id]
@@ -911,7 +908,7 @@ class Deployment(BaseDeployment):
         _args = copy.deepcopy(args)
         _args.pod_role = PodRoleType.WORKER
         _args.host = _args.host[0] or __default_host__
-        _args.port = helper.random_port()
+        _args.port = random_port()
 
         if _args.name:
             _args.name += f'/{entity_type}-0'

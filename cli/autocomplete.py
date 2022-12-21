@@ -3,7 +3,6 @@ ac_table = {
         '--help',
         '--version',
         '--version-full',
-        'hello',
         'executor',
         'flow',
         'ping',
@@ -19,25 +18,6 @@ ac_table = {
         'client',
     ],
     'completions': {
-        'hello chatbot': [
-            '--help',
-            '--workdir',
-            '--download-proxy',
-            '--index-data-url',
-            '--port',
-            '--replicas',
-            '--unblock-query-flow',
-        ],
-        'hello multimodal': [
-            '--help',
-            '--workdir',
-            '--download-proxy',
-            '--index-data-url',
-            '--port',
-            '--unblock-query-flow',
-        ],
-        'hello fork': ['--help', 'fashion', 'chatbot', 'multimodal'],
-        'hello': ['--help', 'fashion', 'chatbot', 'multimodal', 'fork'],
         'executor': [
             '--help',
             '--name',
@@ -315,7 +295,6 @@ ac_table = {
             '--uses-before-address',
             '--uses-after-address',
             '--connection-list',
-            '--disable-reduce',
             '--timeout-send',
         ],
         'deployment': [

@@ -9,7 +9,7 @@ import signal
 import time
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
-from marie import __docker_host__, __windows__
+from marie.constants import __docker_host__, __windows__
 from marie.enums import PodRoleType
 from marie.excepts import BadImageNameError, DockerVersionError
 from marie.helper import random_name, slugify

@@ -4,9 +4,9 @@ import time
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
-from jina import Document, Executor, Flow, requests
-from jina.excepts import BadServer, RuntimeFailToStart
-from jina.proto import jina_pb2
+from marie import Document, Executor, Flow, requests
+from marie.excepts import BadServer, RuntimeFailToStart
+from marie.proto import jina_pb2
 
 from tests import validate_callback
 
@@ -225,7 +225,7 @@ class ExceptionExecutor1(Executor):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_startup_exception_not_hanging1(protocol):
     f = Flow(protocol=protocol).add(uses=ExceptionExecutor1)
-    from jina.excepts import RuntimeFailToStart
+    from marie.excepts import RuntimeFailToStart
 
     with pytest.raises(RuntimeFailToStart):
         with f:
@@ -243,7 +243,7 @@ class ExceptionExecutor2(Executor):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_startup_exception_not_hanging2(protocol):
     f = Flow(protocol=protocol).add(uses=ExceptionExecutor2)
-    from jina.excepts import RuntimeFailToStart
+    from marie.excepts import RuntimeFailToStart
 
     with pytest.raises(RuntimeFailToStart):
         with f:
@@ -254,7 +254,7 @@ def test_flow_startup_exception_not_hanging2(protocol):
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_flow_startup_exception_not_hanging_filenotfound(protocol):
     f = Flow(protocol=protocol).add(uses='doesntexist.yml')
-    from jina.excepts import RuntimeFailToStart
+    from marie.excepts import RuntimeFailToStart
 
     with pytest.raises(RuntimeFailToStart):
         with f:
@@ -313,7 +313,7 @@ def test_flow_timeout_send():
 
 
 def test_flow_head_runtime_failure(monkeypatch):
-    from jina.serve.runtimes.worker.request_handling import WorkerRequestHandler
+    from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
     def fail(*args, **kwargs):
         raise NotImplementedError('Intentional error')

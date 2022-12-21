@@ -10,7 +10,7 @@ def mixin_worker_runtime_parser(parser):
     """
 
     gp = add_arg_group(parser, title='WorkerRuntime')
-    from marie import __default_executor__
+    from marie.constants import __default_executor__
 
     gp.add_argument(
         '--uses',

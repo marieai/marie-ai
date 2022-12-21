@@ -5,17 +5,18 @@ import grpc
 import pytest
 import requests
 
-from marie import __marie_env__, __version__
-from marie.parsers import set_pod_parser
+from marie import __version__
+from marie.constants import __marie_env__
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.worker import WorkerRuntime
+from tests.helper import _generate_pod_args
 
 from .test_runtimes import _create_gateway_runtime, _create_head_runtime
 
 
 def _create_worker_runtime(port, name='', executor=None):
-    args = set_pod_parser().parse_args([])
+    args = _generate_pod_args()
     args.port = port
     args.name = name
     if executor:

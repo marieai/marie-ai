@@ -3,20 +3,18 @@ import pytest
 from marie import Flow
 
 
-# @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
-@pytest.mark.parametrize('protocol', ['http'])
+@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
 def test_dry_run(protocol):
     f = Flow(protocol=protocol).add()
     with f:
         dry_run = f.is_flow_ready()
-    dry_run_negative = False  # f.is_flow_ready()
+    dry_run_negative = f.is_flow_ready()
 
     assert dry_run
     assert not dry_run_negative
 
 
-# @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
-@pytest.mark.parametrize('protocol', ['http'])
+@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
 @pytest.mark.parametrize('show_table', [True, False])
 def test_profiling(protocol, show_table):
     f = Flow(protocol=protocol).add(name='hello').add(name='world')

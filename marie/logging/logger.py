@@ -9,7 +9,7 @@ from typing import Optional
 from rich.logging import LogRender as _LogRender
 from rich.logging import RichHandler as _RichHandler
 
-from marie import __resources_path__, __uptime__, __windows__
+from marie.constants import __resources_path__, __uptime__, __windows__
 from marie.enums import LogVerbosity
 from marie.jaml import JAML
 from marie.logging import formatter

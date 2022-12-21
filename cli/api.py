@@ -196,7 +196,7 @@ def new(args: 'Namespace'):
     import os
     import shutil
 
-    from marie import __resources_path__
+    from marie.constants import __resources_path__
 
     shutil.copytree(
         os.path.join(__resources_path__, 'project-template'), os.path.abspath(args.name)
@@ -229,6 +229,6 @@ def cloud(args: 'Namespace'):
     Use jcloud (Jina Cloud) commands
     :param args: arguments coming from the CLI.
     """
-    # from jcloud import api
-    #
-    # getattr(api, args.jc_cli.replace('-', '_'))(args)
+    from jcloud import api
+
+    getattr(api, args.jc_cli.replace('-', '_'))(args)

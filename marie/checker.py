@@ -17,7 +17,7 @@ class NetworkChecker:
 
         import time
 
-        from marie import Client
+        from marie.clients import Client
         from marie.logging.profile import TimeContext
         from marie.serve.runtimes.gateway import GatewayRuntime
         from marie.serve.runtimes.worker import WorkerRuntime

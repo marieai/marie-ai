@@ -5,7 +5,7 @@ import warnings
 from types import SimpleNamespace
 from typing import Optional
 
-from marie import __resources_path__
+from marie.constants import __resources_path__
 
 IMPORTED = SimpleNamespace()
 IMPORTED.executors = False
