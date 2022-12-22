@@ -1,4 +1,6 @@
 import argparse
+import builtins
+
 import asyncio
 import base64
 import copy
@@ -1929,6 +1931,7 @@ class Flow(
                 raise RuntimeFailToStart
             from rich.rule import Rule
 
+            builtins.print('TESTING***')
             print(
                 Rule(':tada: Flow is ready to serve!'), *all_panels
             )  # can't use logger here see : https://github.com/Textualize/rich/discussions/2024
