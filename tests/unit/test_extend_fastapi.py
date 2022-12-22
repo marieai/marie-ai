@@ -1,7 +1,7 @@
 import requests
 
-import jina.helper
-from jina import Flow
+import marie.helper
+from marie import Flow
 
 
 def test_extend_fastapi():
@@ -12,7 +12,7 @@ def test_extend_fastapi():
 
         return app
 
-    jina.helper.extend_rest_interface = extend_rest_function
+    marie.helper.extend_rest_interface = extend_rest_function
     f = Flow(protocol='http')
 
     with f:
