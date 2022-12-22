@@ -210,9 +210,12 @@ def _get_package_path_from_uses(uses: str) -> Optional['Path']:
 
         return Path(os.path.dirname(os.path.abspath(uses)))
     else:
-        from marie.logging.predefined import default_logger
+        from hubble.executor.helper import is_valid_huburi
 
-        default_logger.warning(
-            f'Error getting the directory name from {uses}. `--install-requirements` option is only valid when `uses` is a configuration file.'
-        )
+        if not is_valid_huburi(uses):
+            from marie.logging.predefined import default_logger
+
+            default_logger.warning(
+                f'Error getting the directory name from {uses}. `--install-requirements` option is only valid when `uses` is a configuration file.'
+            )
         return None
