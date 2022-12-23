@@ -21,7 +21,7 @@ class ExtractExecutor(Executor):
 
 
 def extend_rest_interface(app):
-    @app.get('/extension1')
+    @app.get('/extension-a')
     async def root():
         return {"message": "Hello World"}
 
