@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 from marie.jaml import JAMLCompatible
 from marie.logging.logger import MarieLogger
+from marie.serve.discovery import DiscoveryServiceMixin
 from marie.serve.helper import store_init_kwargs, wrap_func
 
 __all__ = ['BaseGateway']
@@ -46,7 +47,7 @@ class GatewayType(type(JAMLCompatible), type):
         return cls
 
 
-class BaseGateway(JAMLCompatible, metaclass=GatewayType):
+class BaseGateway(JAMLCompatible, DiscoveryServiceMixin, metaclass=GatewayType):
     """
     The base class of all custom Gateways, can be used to build a custom interface to a Jina Flow that supports
     gateway logic

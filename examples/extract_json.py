@@ -12,26 +12,13 @@ from PIL import Image, ImageDraw, ImageFont
 from marie.helper import random_uuid
 from marie.utils.utils import ensure_exists
 
-#
-api_base_url = "http://184.105.3.112:6000/api"  # marie-017
-api_base_url = "http://172.83.14.129:6000/api"  # marie-016
-api_base_url = "http://184.105.180.186:6001/api"  # marie-015
-api_base_url = "http://184.105.3.109:6000/api"  # marie-014 - Failing
-api_base_url = "http://184.105.180.179:6001/api"  # marie-013
-api_base_url = "http://74.82.31.171:6000/api"  # marie-010
-api_base_url = "http://172.83.15.97:6000/api"  # marie-009  FAILING
-api_base_url = "http://184.105.180.27:6000/api"  # marie-008
-api_base_url = "http://184.105.180.25:6000/api"  # marie-007
-api_base_url = "http://184.105.180.21:6000/api"  # marie-006
-api_base_url = "http://172.83.13.210:6000/api"  # marie-004
-# api_base_url = "http://184.105.180.15:6000/api"  # marie-003
 api_base_url = "http://184.105.180.6:6000/api"  # marie-002 NEEDS UPDATE
 
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 #
-# api_base_url = "http://127.0.0.1:59235/api"
-api_base_url = "http://asp-gpu002:6000/api"
-api_base_url = "http://traefik.localhost:5000/api"
+api_base_url = "http://127.0.0.1:54321"
+# api_base_url = "http://asp-gpu002:6000/api"
+# api_base_url = "http://traefik.localhost:5000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -50,7 +37,8 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
-    upload_url = f"{api_base_url}/ner/{queue_id}"
+    upload_url = f"{api_base_url}/extract"
+    # upload_url = f"{api_base_url}/ner/{queue_id}"
 
     print(api_base_url)
     if False and not online(api_base_url):
@@ -89,6 +77,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         # print(json_payload)
         # Upload file to api
         print(f"Uploading to marie-ai for processing : {file}")
+        print(upload_url)
 
         for k in range(1):
             start = time.time()
