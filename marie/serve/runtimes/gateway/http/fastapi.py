@@ -4,6 +4,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional
 
 from marie.importer import ImportExtensions
+from marie.serve.discovery import DiscoveryServiceMixin
 from marie.serve.gateway import BaseGateway
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ class FastAPIBaseGateway(BaseGateway):
 
     async def setup_server(self):
         """
-        Initialize and return GRPC server
+        Initialize and return HTTP server
         """
         with ImportExtensions(required=True):
             from uvicorn import Config, Server
@@ -95,6 +96,16 @@ class FastAPIBaseGateway(BaseGateway):
         # app property will generate a new fastapi app each time called
         app = self.app
         _install_health_check(app, self.logger)
+        self._setup_service_discovery(
+            name=self.name,
+            host=self.host,
+            port=self.port,
+            discovery=True,
+            discovery_host='127.0.0.1',
+            discovery_port=8500,
+            discovery_watchdog_interval=5,
+        )
+
         self.server = UviServer(
             config=Config(
                 app=app,

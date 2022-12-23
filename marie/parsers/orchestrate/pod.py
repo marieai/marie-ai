@@ -281,3 +281,10 @@ def mixin_gateway_discovery_parser(parser, pod_type='worker'):
         default=None,
         help='If discovery is enabled, this port will be used to configure the discovery agent.',
     )
+
+    gp.add_argument(
+        '--discovery-watchdog-interval',
+        type=int,
+        default=60,
+        help='If discovery is enabled, watchdog interval in seconds',
+    )
