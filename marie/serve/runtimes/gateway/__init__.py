@@ -99,6 +99,7 @@ class GatewayRuntime(AsyncNewLoopRuntime):
                 'discovery': self.args.discovery,
                 'discovery_host': self.args.discovery_host,
                 'discovery_port': self.args.discovery_port,
+                'discovery_watchdog_interval': self.args.discovery_watchdog_interval,
             },
             py_modules=self.args.py_modules,
             extra_search_paths=self.args.extra_search_paths,

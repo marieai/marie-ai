@@ -3,6 +3,7 @@ import os
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional
 
+from marie.helper import get_internal_ip
 from marie.importer import ImportExtensions
 from marie.serve.discovery import DiscoveryServiceMixin
 from marie.serve.gateway import BaseGateway
@@ -34,12 +35,14 @@ class FastAPIBaseGateway(BaseGateway):
         """
         super().__init__(**kwargs)
         self.uvicorn_kwargs = uvicorn_kwargs or {}
+        self.scheme = 'http'
 
         if ssl_keyfile and 'ssl_keyfile' not in self.uvicorn_kwargs.keys():
             self.uvicorn_kwargs['ssl_keyfile'] = ssl_keyfile
 
         if ssl_certfile and 'ssl_certfile' not in self.uvicorn_kwargs.keys():
             self.uvicorn_kwargs['ssl_certfile'] = ssl_certfile
+            self.scheme = 'https'
 
         if not proxy and os.name != 'nt':
             os.unsetenv('http_proxy')
@@ -98,12 +101,15 @@ class FastAPIBaseGateway(BaseGateway):
         _install_health_check(app, self.logger)
         self._setup_service_discovery(
             name=self.name,
-            host=self.host,
+            host=self.host
+            if self.runtime_args.host != '0.0.0.0'
+            else get_internal_ip(),
             port=self.port,
-            discovery=True,
-            discovery_host='127.0.0.1',
-            discovery_port=8500,
-            discovery_watchdog_interval=5,
+            scheme=self.scheme if self.scheme else 'http',
+            discovery=self.runtime_args.discovery,
+            discovery_host=self.runtime_args.discovery_host,
+            discovery_port=self.runtime_args.discovery_port,
+            discovery_watchdog_interval=self.runtime_args.discovery_watchdog_interval,
         )
 
         self.server = UviServer(
@@ -123,6 +129,7 @@ class FastAPIBaseGateway(BaseGateway):
         Free resources allocated when setting up HTTP server
         """
         self.server.should_exit = True
+        self._teardown_service_discovery()
         await self.server.shutdown()
 
     async def run_server(self):
