@@ -2199,7 +2199,10 @@ class Flow(
         if GATEWAY_NAME in self._deployment_nodes:
             return self._deployment_nodes[GATEWAY_NAME].host
         else:
-            return self._gateway_kwargs.get('host', __default_host__)
+            return self._gateway_kwargs.get(
+                'host', get_internal_ip()
+            )  # Ban advertising 0.0.0.0 or setting it as a service address #2961
+            # return self._gateway_kwargs.get('host', __default_host__)
 
     @host.setter
     def host(self, value: str):
@@ -2369,6 +2372,17 @@ class Flow(
                     ':strawberry:',
                     'GraphQL UI',
                     '.../graphql',
+                )
+
+            if self.gateway_args.discovery:
+                _address = [
+                    f'[link=http://{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}]Service Discovery[/]',
+                ]
+
+                http_ext_table.add_row(
+                    ':compass:',
+                    'Service Discovery',
+                    f'[link=http://{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}]{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}[/]',
                 )
 
             all_panels.append(

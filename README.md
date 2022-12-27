@@ -100,6 +100,10 @@ ln -s ./config/.env.dev ./.env
 docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml  --project-directory . up --build --remove-orphans
 ```
 
+Start consul server
+```sh
+docker compose -f ./Dockerfiles/docker-compose.yml --project-directory . up consul-server  --build  --remove-orphans
+```
 
 ## Docker 
 
