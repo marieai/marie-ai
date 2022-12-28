@@ -34,7 +34,6 @@ RUN apt-get update && \
         imagemagick \
         libmagickwand-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get autoremove \
     && apt-get clean
 
 # Install requirements
@@ -62,8 +61,7 @@ RUN git clone https://github.com/ying09/TextFuseNet.git&& \
 
 RUN python3 -m pip install transformers
 
-#FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
-FROM build-image as marie
+FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
 
 ARG http_proxy
 ARG https_proxy
@@ -103,7 +101,6 @@ RUN apt-get update && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/* \
-    && apt-get autoremove \
     && apt-get clean
 
 # Add a non-root user
