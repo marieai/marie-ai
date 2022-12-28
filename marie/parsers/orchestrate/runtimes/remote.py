@@ -2,6 +2,7 @@
 
 from marie.constants import __default_host__
 from marie.parsers.helper import CastHostAction, KVAppendAction, add_arg_group
+from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 from marie.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
 
 
@@ -161,6 +162,7 @@ which should be structured as a python package.
 
     mixin_base_runtime_parser(gp)
     mixin_gateway_streamer_parser(gp)
+    mixin_gateway_discovery_parser(gp)
 
 
 def mixin_gateway_protocol_parser(parser):

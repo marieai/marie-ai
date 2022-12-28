@@ -124,7 +124,7 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
             help='If set, the Gateway will restart while serving if YAML configuration source is changed.',
         )
     mixin_pod_runtime_args_parser(gp, pod_type=pod_type)
-    mixin_gateway_discovery_parser(gp, pod_type=pod_type)
+    # mixin_gateway_discovery_parser(gp)
 
 
 def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
@@ -251,40 +251,37 @@ def mixin_hub_pull_options_parser(parser):
     )
 
 
-def mixin_gateway_discovery_parser(parser, pod_type='worker'):
+def mixin_gateway_discovery_parser(parser):
     """Add the arguments for the Gateway
 
     :param parser: the parser configured
     :param pod_type: the pod_type configured by the parser. Can be either 'worker' for WorkerRuntime or 'gateway' for GatewayRuntime
     """
-    if pod_type != 'gateway':
-        return
-    gp = add_arg_group(parser, title='Service Discovery')
-
-    gp.add_argument(
+    # gp = add_arg_group(parser, title='Service Discovery')
+    parser.add_argument(
         '--discovery',
         action='store_true',
         default=False,
         help='If set, service discovery will be enabled. Default service discovery provider will use Consul',
     )
 
-    gp.add_argument(
+    parser.add_argument(
         '--discovery-host',
         type=str,
         default=None,
         help='If discovery is enabled, this hostname will be used to configure the discovery agent.',
     )
 
-    gp.add_argument(
+    parser.add_argument(
         '--discovery-port',
         type=int,
         default=None,
         help='If discovery is enabled, this port will be used to configure the discovery agent.',
     )
 
-    gp.add_argument(
+    parser.add_argument(
         '--discovery-watchdog-interval',
         type=int,
         default=60,
-        help='If discovery is enabled, watchdog interval in seconds',
+        help='Time interval (seconds) between sending system health checks',
     )
