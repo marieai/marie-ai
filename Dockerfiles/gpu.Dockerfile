@@ -1,6 +1,8 @@
-FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
+# !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
+ARG CUDA_VERSION=11.3.1
 
-ARG PYTHON_VERSION=3.8
+#FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu20.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
@@ -9,7 +11,29 @@ ARG socks_proxy
 ARG TZ="Etc/UTC"
 ARG MARIE_CONFIGURATION="production"
 
+# given by builder's env
+ARG VCS_REF
+ARG PY_VERSION=3.8
+ARG BUILD_DATE
+ARG MARIE_VERSION
+ARG TARGETPLATFORM
+ARG PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
+
+# constant, wont invalidate cache
+LABEL org.opencontainers.image.vendor="Marie AI" \
+      org.opencontainers.image.licenses="Apache 2.0" \
+      org.opencontainers.image.title="MarieAI " \
+      org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
+      org.opencontainers.image.authors="hello@marieai.co" \
+      org.opencontainers.image.url="https://github.com/jina-ai/jina" \
+      org.opencontainers.image.documentation="https://github.com/gregbugaj/marie-ai"
+
+
 ENV DEBIAN_FRONTEND=noninteractive
+
+# constant, wont invalidate cache
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update && \
         apt-get --no-install-recommends install -yq \
@@ -21,8 +45,10 @@ RUN apt-get update && \
         pkg-config \
         python3-dev \
         python3-pip \
+        python3-wheel \
         python3-opencv \
         python3-venv \
+        python3-setuptools \
         libopenblas-dev \
         libopenmpi-dev \
         openmpi-bin \
@@ -38,32 +64,19 @@ RUN apt-get update && \
     && apt-get clean
 
 # Install requirements
+# change on extra-requirements.txt, setup.py will invalid the cache
+COPY requirements.txt extra-requirements.txt setup.py /tmp/
+
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
-COPY requirements.txt /tmp/requirements/${MARIE_CONFIGURATION}.txt
-RUN python3 -m pip install -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
-RUN python3 -m pip install  Cython
+RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
-#RUN #python3 -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
-RUN python3 -m pip install  -r /tmp/requirements/${MARIE_CONFIGURATION}.txt
-
-RUN python3 -m pip install -U 'git+https://github.com/facebookresearch/fvcore'
-RUN python3 -m pip install Wand
-
-RUN git clone https://github.com/pytorch/fairseq.git && \
-    cd fairseq  && \
-    python setup.py build install
+RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
+RUN cd /tmp/ && \
+    python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
 
-RUN git clone https://github.com/ying09/TextFuseNet.git&& \
-    cd TextFuseNet  && \
-    python setup.py build install
-
-
-RUN python3 -m pip install transformers
-
-#FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04
-FROM build-image as marie
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu20.04
 
 ARG http_proxy
 ARG https_proxy
@@ -89,7 +102,6 @@ ENV MARIE_CONFIGURATION=${MARIE_CONFIGURATION}
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
         ca-certificates \
-        supervisor \
         tzdata \
         python3-distutils \
         python3-opencv \
@@ -97,6 +109,7 @@ RUN apt-get update && \
         git-lfs \
         ssh \
         curl \
+        vim \
         imagemagick \
         libtiff-dev \
         libmagickwand-dev && \
@@ -107,11 +120,10 @@ RUN apt-get update && \
     && apt-get clean
 
 # Add a non-root user
-
 ENV USER=${USER}
 ENV GROUP=${USER}
 ENV HOME /home/${USER}
-ENV WORKDIR /opt/marie-icr
+ENV WORKDIR /marie
 
 # Setup users
 RUN groupadd -r app-svc -g 433
@@ -129,40 +141,38 @@ COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
 # Install and initialize MARIE-AI, copy all necessary files
-
-# RUN python3 --version
+# copy will almost always invalididate the cache
 COPY --chown=${USER} ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
 # Copy app resources
 COPY --chown=${USER} ./marie/info.py ${HOME}/
 COPY --chown=${USER} ./ssh ${HOME}/.ssh
-# COPY --chown=${USER} supervisord.conf ${HOME}/
 
-COPY --chown=${USER} ./marie/ /opt/marie-icr/marie
-# FIXME : this should be mouted so it can be edited
-COPY --chown=${USER} marie/resources/ /opt/marie-icr/resources
-
-COPY --chown=${USER} ./.build /opt/marie-icr/
-COPY --chown=${USER} ./version.txt /opt/marie-icr/
-
-RUN mkdir -p /var/log/supervisor
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+### FIXME : this should be mouted so it can be edited
+#COPY --chown=${USER} ./version.txt /
 
 # This is where we will map all of our configs
 RUN mkdir -p /etc/marie
 COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
 
 # this is important otherwise we will get python error that module is not found
-RUN export PYTHONPATH="/opt/marie-icr/"
+#RUN export PYTHONPATH="/marie"
+
+# copy will almost always invalid the cache
+COPY --chown=${USER} . /marie/
+
+# install marie again but this time no deps
+RUN cd /marie && \
+    pip install --no-deps --compile . && \
+    rm -rf /tmp/* && rm -rf /marie
 
 # RUN all commands below as container user
 USER ${USER}
 WORKDIR ${WORKDIR}
 
-RUN mkdir ${HOME}/logs /tmp/supervisord
+RUN mkdir ${HOME}/logs
 RUN chown ${USER} ${HOME}/logs
 
-EXPOSE 5000
-ENTRYPOINT ["/usr/bin/supervisord"]
+ENTRYPOINT ["marie"]
 
-
+#docker run --gpus all --rm -it marieai/marie:3.0-cuda

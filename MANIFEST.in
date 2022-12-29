@@ -1,0 +1,6 @@
+recursive-include docarray/resources *
+recursive-include marie/resources *
+include extra-requirements.txt
+include LICENSE
+prune tests/
+prune **/tests/

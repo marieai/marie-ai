@@ -1,9 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cu113
-torch
-torchvision
-torchaudio
 Cython
 pybind11[global]
+git+https://github.com/facebookresearch/fvcore
+git+https://github.com/ying09/TextFuseNet.git
+git+https://github.com/pytorch/fairseq.git
+# fairseq  # installed from source
 # wheel
 # pybind11
 fastwer==0.1.3
@@ -19,11 +19,9 @@ flask_restful
 Werkzeug
 opencv-python~=4.5.4.60
 imagecodecs
-python-consul
 imutils
 PyPDF4
 reportlab
-# fairseq  # installed from source
 pycocotools
 nltk
 timm
@@ -49,3 +47,4 @@ onnxruntime-gpu==1.13.1
 onnx==1.12.0
 onnxconverter_common==1.13.0
 opentelemetry-api
+python-consul2
