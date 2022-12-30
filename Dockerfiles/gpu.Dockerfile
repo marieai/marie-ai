@@ -13,7 +13,7 @@ ARG MARIE_CONFIGURATION="production"
 
 # given by builder's env
 ARG VCS_REF
-ARG PY_VERSION=3.8
+ARG PY_VERSION=3.9
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
@@ -25,8 +25,8 @@ LABEL org.opencontainers.image.vendor="Marie AI" \
       org.opencontainers.image.title="MarieAI " \
       org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
       org.opencontainers.image.authors="hello@marieai.co" \
-      org.opencontainers.image.url="https://github.com/jina-ai/jina" \
-      org.opencontainers.image.documentation="https://github.com/gregbugaj/marie-ai"
+      org.opencontainers.image.url="https://github.com/gregbugaj/marie-ai" \
+      org.opencontainers.image.documentation="https://docs.marieai.co"
 
 
 ENV DEBIAN_FRONTEND=noninteractive
