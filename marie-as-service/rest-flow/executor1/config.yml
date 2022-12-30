@@ -1,3 +1,0 @@
-jtype: ExtractExecutor
-py_modules:
-  - executor.py

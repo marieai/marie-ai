@@ -1,0 +1,39 @@
+jtype: Flow
+version: '1'
+with:
+  port: 51000
+  protocol: http
+  discovery: True
+  discovery_host: 127.0.0.1
+  discovery_port: 8500
+
+  expose_endpoints:
+    /extract:
+      methods: ["POST"]
+      summary: Extract data
+      tags:
+        - extract
+
+    /work:
+      methods: [ "POST" ]
+      summary: Work
+      tags:
+        - extract
+
+#    /extension:
+#      methods: [ "POST" ]
+#      summary: Extension
+#      tags:
+#        - extension
+
+executors:
+  - name: clip_t
+    uses:
+      jtype: ExtractExecutor
+      metas:
+        py_modules:
+          - marie_server.executors.clip_torch
+    timeout_ready: 3000000
+    replicas: 1
+
+#    --discovery --discovery-host 127.0.0.1 --discovery-port 8500 --host 192.168.102.65 --port 5555
