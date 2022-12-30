@@ -2374,14 +2374,14 @@ class Flow(
                     '.../graphql',
                 )
 
-            if self.gateway_args.discovery:
+            if True or self.gateway_args.discovery:
                 _address = [
                     f'[link=http://{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}]Service Discovery[/]',
                 ]
 
                 http_ext_table.add_row(
                     ':compass:',
-                    'Service Discovery',
+                    'Discovery',
                     f'[link=http://{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}]{self.gateway_args.discovery_host}:{self.gateway_args.discovery_port}[/]',
                 )
 
