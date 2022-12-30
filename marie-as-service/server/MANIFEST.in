@@ -1,0 +1,2 @@
+recursive-include marie_server/resources *
+include marie_server/*.yml
