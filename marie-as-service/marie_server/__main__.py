@@ -3,7 +3,7 @@ import os
 import sys
 import marie
 
-from marie_server.executors.clip_torch import extend_rest_interface
+from marie_server.rest_extension import extend_rest_interface
 
 if __name__ == '__main__':
     if 'NO_VERSION_CHECK' not in os.environ:

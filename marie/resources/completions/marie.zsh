@@ -5,16 +5,16 @@ if [[ ! -o interactive ]]; then
     return
 fi
 
-compctl -K _marie marie
+compctl -K _marie marieai
 
 _marie() {
   local words completions
   read -cA words
 
   if [ "${#words}" -eq 2 ]; then
-    completions="$(marie commands)"
+    completions="$(marieai commands)"
   else
-    completions="$(marie completions ${words[2,-2]})"
+    completions="$(marieai completions ${words[2,-2]})"
   fi
 
   reply=(${(ps:\n:)completions})

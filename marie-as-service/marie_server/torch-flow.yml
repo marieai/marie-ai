@@ -20,6 +20,18 @@ with:
       tags:
         - extract
 
+    /ner:
+      methods: ["POST"]
+      summary: Extract data
+      tags:
+        - ner
+
+    /ner-work:
+      methods: [ "POST" ]
+      summary: Work
+      tags:
+        - ner
+
 #    /extension:
 #      methods: [ "POST" ]
 #      summary: Extension
@@ -27,13 +39,24 @@ with:
 #        - extension
 
 executors:
-  - name: clip_t
+  - name: extract_t
     uses:
       jtype: ExtractExecutor
       metas:
         py_modules:
-          - marie_server.executors.clip_torch
+          - marie_server.executors.extract.mserve_torch
     timeout_ready: 3000000
     replicas: 1
+
+  - name: ner_t
+    uses:
+      jtype: NerExecutor
+      metas:
+        py_modules:
+          - marie_server.executors.ner.mserve_torch
+    timeout_ready: 3000000
+    replicas: 1
+
+
 
 #    --discovery --discovery-host 127.0.0.1 --discovery-port 8500 --host 192.168.102.65 --port 5555
