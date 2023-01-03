@@ -3,7 +3,7 @@
 ## autocomplete
 function __fish_marie_needs_command
   set cmd (commandline -opc)
-  if [ (count $cmd) -eq 1 -a $cmd[1] = 'marie' ]
+  if [ (count $cmd) -eq 1 -a $cmd[1] = 'marieai' ]
     return 0
   end
   return 1
@@ -19,10 +19,10 @@ function __fish_marie_using_command
   return 1
 end
 
-complete -f -c marie -n '__fish_marie_needs_command' -a '(marie commands)'
+complete -f -c marie -n '__fish_marie_needs_command' -a '(marieai commands)'
 for cmd in (marie commands)
   complete -f -c marie -n "__fish_marie_using_command $cmd" -a \
-    "(marie completions (commandline -opc)[2..-1])"
+    "(marieai completions (commandline -opc)[2..-1])"
 end
 
 # session-wise fix

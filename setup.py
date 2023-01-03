@@ -15,6 +15,7 @@ if sys.version_info < (3, 8, 0):
     raise OSError(f'Marie requires Python >=3.8, but yours is {sys.version}')
 
 try:
+    # marie was already taken by PIP
     pkg_name = 'marie'
     libinfo_py = path.join(pkg_name, '__init__.py')
     libinfo_content = open(libinfo_py, 'r', encoding='utf8').readlines()
@@ -138,7 +139,7 @@ setup(
     include_package_data=True,
     description='Python library to Integrate AI-powered features into your applications',
     author='Marie AI',
-    author_email='greg@marieai.co',
+    author_email='hello@marieai.co',
     license='Apache 2.0',
     url='https://github.com/gregbugaj/marie-ai/',
     download_url='https://github.com/gregbugaj/marie-ai/tags',

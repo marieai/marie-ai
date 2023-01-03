@@ -8,15 +8,12 @@ from marie import DocumentArray, Executor, requests
 from marie.logging.predefined import default_logger
 
 
-class ExtractExecutor(Executor):
+class NerExecutor(Executor):
     def __init__(
         self,
-        name: str = 'ViT-B-32::openai',
+        name: str = '',
         device: Optional[str] = None,
-        jit: bool = False,
         num_worker_preprocess: int = 4,
-        minibatch_size: int = 32,
-        access_paths: str = '@r',
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -28,26 +25,16 @@ class ExtractExecutor(Executor):
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         """
         super().__init__(**kwargs)
-        marie.helper.extend_rest_interface = extend_rest_interface
 
-    @requests(on="/extract")
+    @requests(on="/ner")
     def extract(self, docs: DocumentArray, **kwargs):
-        default_logger.info("Executing extract")
+        default_logger.info("Executing NER")
         default_logger.info(kwargs)
         docs[0].text = 'AA - hello, world!'
         docs[1].text = 'AA - goodbye, world!'
 
-    @requests(on='/work')
+    @requests(on='/ner-work')
     def work(self, parameters, **kwargs):
-        default_logger.info("Executing work")
+        default_logger.info("Executing NER work")
         print(parameters)
         default_logger.info(kwargs)
-
-
-def extend_rest_interface(app):
-    @app.get('/extension', tags=['My Extended APIs'])
-    async def extension():
-        default_logger.info("Executing extension")
-        return {"message": "Greg ABCD World"}
-
-    return app

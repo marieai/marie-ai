@@ -3,8 +3,8 @@ from os import path
 
 from setuptools import find_packages, setup
 
-if sys.version_info < (3, 7, 0):
-    raise OSError(f'CLIP-as-service requires Python >=3.7, but yours is {sys.version}')
+if sys.version_info < (3, 8, 0):
+    raise OSError(f'marie-as-service requires Python >=3.8, but yours is {sys.version}')
 
 try:
     pkg_name = 'marie-server'
@@ -30,24 +30,20 @@ setup(
     packages=find_packages(),
     version=__version__,
     include_package_data=True,
-    description='Embed images and sentences into fixed-length vectors via CLIP',
-    author='Jina AI',
-    author_email='hello@jina.ai',
+    description='AI-powered Document Analysis Pipelines server',
+    author='Marie AI',
+    author_email='hello@marieai.co',
     license='Apache 2.0',
-    url='https://github.com/jina-ai/clip-as-service',
-    download_url='https://github.com/jina-ai/clip-as-service/tags',
+    url='https://github.com/gregbugaj/marie-ai',
+    download_url='https://github.com/gregbugaj/marie-ai/tags',
     long_description=_long_description,
     long_description_content_type='text/markdown',
     zip_safe=False,
     setup_requires=['setuptools>=18.0', 'wheel'],
     install_requires=[
-        'ftfy',
         'torch',
-        'regex',
-        'torchvision<=0.13.0' if sys.version_info <= (3, 7, 2) else 'torchvision',
-        'jina>=3.12.0',
-        'prometheus-client',
-        'open_clip_torch>=2.8.0',
+        'torchvision',
+        'marie>=3.0.0',
     ],
     extras_require={
         'onnx': [
@@ -55,21 +51,16 @@ setup(
             'onnx',
             'onnxmltools',
         ]
-        + (['onnxruntime-gpu>=1.8.0'] if sys.platform != 'darwin' else []),
-        'tensorrt': ['nvidia-tensorrt'],
-        'transformers': ['transformers>=4.16.2'],
-        'search': ['annlite>=0.3.10'],
-        'flash-attn': ['flash-attn'],
     },
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
         'Intended Audience :: Education',
         'Intended Audience :: Science/Research',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
         'Programming Language :: Unix Shell',
         'Environment :: Console',
         'License :: OSI Approved :: Apache Software License',
@@ -86,9 +77,12 @@ setup(
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     project_urls={
-        'Documentation': 'https://clip-as-service.jina.ai',
-        'Source': 'https://github.com/jina-ai/clip-as-service/',
-        'Tracker': 'https://github.com/jina-ai/clip-as-service/issues',
+        'Documentation': 'https://docs.marieai.co',
+        'Source': 'https://github.com/gregbugaj/marie-ai/',
+        'Tracker': 'https://github.com/gregbugaj/marie-ai/issues',
     },
-    keywords='jina openai clip deep-learning cross-modal multi-modal neural-search',
+    keywords=(
+        'marie-ai ocr icr index elastic neural-network encoding '
+        'embedding serving docker container image video audio deep-learning mlops'
+    ),
 )
