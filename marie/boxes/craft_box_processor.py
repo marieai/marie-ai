@@ -16,7 +16,7 @@ from torch.autograd import Variable
 import marie.models.craft.craft_utils
 import marie.models.craft.file_utils
 import marie.models.craft.imgproc
-from marie import __model_path__
+from marie.constants import __model_path__
 from marie.boxes.box_processor import (
     BoxProcessor,
     PSMode,

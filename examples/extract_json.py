@@ -12,11 +12,8 @@ from PIL import Image, ImageDraw, ImageFont
 from marie.helper import random_uuid
 from marie.utils.utils import ensure_exists
 
-api_base_url = "http://184.105.180.6:6000/api"  # marie-002 NEEDS UPDATE
-
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
-#
-api_base_url = "http://127.0.0.1:54321"
+api_base_url = "http://192.168.102.65:51000/api"
 # api_base_url = "http://asp-gpu002:6000/api"
 # api_base_url = "http://traefik.localhost:5000/api"
 

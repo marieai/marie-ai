@@ -18,7 +18,8 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 
-from marie import Executor, __marie_home__
+from marie import Executor
+from marie.constants import __marie_home__
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from marie.boxes.line_processor import find_line_number

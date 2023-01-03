@@ -15,15 +15,14 @@ from werkzeug.exceptions import HTTPException
 
 import marie.api.IcrAPIRoutes as IcrAPIRoutes
 import marie.api.WorkflowRoutes as WorkflowRoutes
-from marie import __cache_dir__, __cache_path__
+from marie.constants import __cache_path__
 from marie.api.icr_router import ICRRouter
 from marie.api.ner_router import NERRouter
 from marie.api.route_handler import RouteHandler
-from marie.api.sample_route import SampleRouter
 from marie.common.file_io import PathManager
 from marie.common.volume_handler import VolumeHandler
 from marie.conf.helper import executor_config, load_yaml
-from marie.executor import NerExtractionExecutor
+from marie.executor.ner import NerExtractionExecutor
 from marie.healthchecks.health_check_router import HealthCheckRouter
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger

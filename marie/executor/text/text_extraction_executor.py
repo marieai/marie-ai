@@ -3,28 +3,27 @@ import os
 from datetime import datetime
 from distutils.util import strtobool as strtobool
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Union, Optional, TYPE_CHECKING
 
-import cv2
 import numpy as np
 import torch
 from docarray import DocumentArray
+from rich import print
 from torch.backends import cudnn
 
 from marie import Executor, requests
 
-# from marie.boxes import BoxProcessorCraft
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.document import TrOcrIcrProcessor
-from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer.text_renderer import TextRenderer
 from marie.utils.base64 import encodeToBase64
 from marie.utils.docs import array_from_docs
 from marie.utils.image_utils import hash_bytes
 from marie.utils.utils import ensure_exists
+from marie.logging.predefined import default_logger
 
-logger = MarieLogger("")
+logger = default_logger
 
 
 class OutputFormat(Enum):
@@ -127,11 +126,12 @@ class TextExtractionExecutor(Executor):
         if True:
             self.box_processor = BoxProcessorUlimDit(
                 work_dir=work_dir_boxes,
-                models_dir="./model_zoo/unilm/dit/text_detection",
+                models_dir="../model_zoo/unilm/dit/text_detection",
                 cuda=True,
             )
         self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
 
+    @requests(on="/text/status")
     def info(self, **kwargs):
         logger.info(f"Self : {self}")
         return {"index": "complete"}
@@ -306,25 +306,33 @@ class TextExtractionExecutor(Executor):
 
         return {"regions": output, "extended": extended}
 
+    @requests(on="/text/status")
+    def status(self, parameters, **kwargs):
+        logger.info(f"Self : {self}")
+        return {"index": "complete"}
+
     @requests(on="/text/extract")
-    def extract(self, docs: Optional[DocumentArray] = None, **kwargs):
+    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+        """Load the image from `uri`, extract text and bounding boxes.
+        :param parameters:
+        :param docs: Documents to process
+        :param kwargs:
+        :return:
         """
-        Load the image from `uri`, extract text and bounding boxes.
-         Args:
-             docs : Documents to process
-             queue_id: Unique queue to tie the extraction to
-        """
-        queue_id: str = kwargs.get("queue_id", "0000-0000-0000-0000")
-        for key, value in kwargs.items():
+        logger.info("Starting ICR processing request")
+
+        for doc in docs:
+            doc.text = "Hello XX"
+
+        queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
+        for key, value in parameters.items():
             logger.info("The value of {} is {}".format(key, value))
 
-        logger.info("Starting ICR processing request", extra={"session": queue_id})
-
         try:
-            if "payload" not in kwargs or kwargs["payload"] is None:
-                return {"error": "empty payload"}, 200
+            if "payload" not in parameters or parameters["payload"] is None:
+                return {"error": "empty payload"}
             else:
-                payload = kwargs["payload"]
+                payload = parameters["payload"]
 
             pms_mode = PSMode.from_value(payload["mode"] if "mode" in payload else "")
 
@@ -425,3 +433,43 @@ class TextExtractionExecutor(Executor):
         text_results = self.render_as_text(queue_id, checksum, frames, results)
 
         raise Exception("Not Implemented")
+
+
+class ExtractExecutor(Executor):
+    def __init__(
+        self,
+        name: str = '',
+        device: Optional[str] = None,
+        num_worker_preprocess: int = 4,
+        dtype: Optional[Union[str, torch.dtype]] = None,
+        **kwargs,
+    ):
+        """
+        :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
+        :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
+        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
+            number if you encounter OOM errors.
+        :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
+        """
+        super().__init__(**kwargs)
+
+    @requests(on="/text/extract")
+    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+        default_logger.info(f"Executing extract : {len(docs)}")
+        default_logger.info(kwargs)
+        default_logger.info(parameters)
+
+        logger.info("Processing docs : ")
+        logger.info(docs)
+        import threading
+        import time
+
+        time.sleep(1.3)
+
+        for doc in docs:
+            doc.text = f"{doc.text} : >> {threading.current_thread().name}  : {threading.get_ident()}"
+
+    @requests(on="/status")
+    def status(self, parameters, **kwargs):
+        logger.info(f"Self : {self}")
+        return {"index": "complete"}

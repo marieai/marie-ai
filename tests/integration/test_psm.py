@@ -1,10 +1,10 @@
 import os
 
 import cv2
-from boxes.craft_box_processor import BoxProcessorCraft, PSMode
-from document.craft_icr_processor import CraftIcrProcessor
+from marie.boxes.craft_box_processor import BoxProcessorCraft, PSMode
+from marie.document.craft_icr_processor import CraftIcrProcessor
 
-from utils.utils import ensure_exists
+from marie.utils.utils import ensure_exists
 
 if __name__ == '__main__':
 

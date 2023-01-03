@@ -192,7 +192,7 @@ class BoxProcessorUlimDit(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = "./model_zoo/unilm/dit/text_detection",
+        models_dir: str = "../model_zoo/unilm/dit/text_detection",
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
@@ -202,7 +202,7 @@ class BoxProcessorUlimDit(BoxProcessor):
         args = get_parser().parse_args(
             [
                 "--config-file",
-                "./config/zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                "../config/zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
                 "--opts",
                 "MODEL.WEIGHTS",
                 os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
