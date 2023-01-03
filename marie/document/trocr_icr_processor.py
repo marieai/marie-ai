@@ -14,7 +14,7 @@ from fairseq import utils
 from fairseq_cli import generate
 from torchvision.transforms import Compose, InterpolationMode
 
-from marie import __model_path__
+from marie.constants import __model_path__
 from marie.document.icr_processor import IcrProcessor
 from marie.lang import Object
 from marie.logging.predefined import default_logger

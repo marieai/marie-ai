@@ -21,11 +21,12 @@ if __name__ == '__main__':
     else:
         _input = 'torch-flow.yml'
 
-    marie.helper.extend_rest_interface = extend_rest_interface
-
     f = Flow.load_config(
         _input,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
     )
+
+    marie.helper.extend_rest_interface = extend_rest_interface
+
     with f:
         f.block()

@@ -13,14 +13,19 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
-    @app.get('/extension-a', tags=['Extract - REST API', 'extract-rest'])
-    async def extension_A():
-        default_logger.info("Executing A extension")
-        return {"message": "ABC"}
+    """Register executors REST endpoints that do not depend on DocumentArray
+    :param app:
+    :return:
+    """
 
-    @app.get('/extension-b', tags=['Extract - REST API', 'extract-rest'])
-    async def extension_B():
-        default_logger.info("Executing B extension")
-        return {"message": "XYZ"}
+    from .executors.extract.mserve_torch import (
+        extend_rest_interface_extract_mixin,
+    )
+    from .executors.ner.mserve_torch import (
+        extend_rest_interface_ner_mixin,
+    )
+
+    extend_rest_interface_extract_mixin(app)
+    extend_rest_interface_ner_mixin(app)
 
     return app

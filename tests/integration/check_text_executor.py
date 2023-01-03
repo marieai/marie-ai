@@ -1,7 +1,7 @@
 import json
 import os
 
-from marie.executor import TextExtractionExecutor
+from marie.executor.text import TextExtractionExecutor
 from marie.executor.ner.utils import visualize_icr
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer import PdfRenderer, TextRenderer

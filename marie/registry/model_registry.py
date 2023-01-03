@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any, Dict, List, MutableMapping, Optional, OrderedDict, Tuple, Union
 
-from marie import __model_path__
+from marie.constants import __model_path__
 
 logger = logging.getLogger(__name__)
 

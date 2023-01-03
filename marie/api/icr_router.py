@@ -4,7 +4,7 @@ from flask import jsonify, url_for
 from flask_restful import Resource, reqparse, request
 
 from marie.api import extract_payload
-from marie.executor import TextExtractionExecutor
+from marie.executor.text import TextExtractionExecutor
 from marie.logging.logger import MarieLogger
 from marie.utils.docs import docs_from_file
 from marie.utils.network import get_ip_address

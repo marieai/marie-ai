@@ -10,11 +10,11 @@ from typing import Dict
 import pytest
 
 from docarray import Document, DocumentArray
-from jina.clients import Client
-from jina.helper import random_port
-from jina.parsers import set_gateway_parser
-from jina.serve import networking
-from jina.serve.runtimes.gateway import GatewayRuntime
+from marie.clients import Client
+from marie.helper import random_port
+from marie.parsers import set_gateway_parser
+from marie.serve import networking
+from marie.serve.runtimes.gateway import GatewayRuntime
 
 INPUT_LEN = 4
 INPUT_GEN_SLEEP_TIME = 1
@@ -48,8 +48,8 @@ def simple_graph_dict_indexer():
 class DummyMockConnectionPool:
     def send_discover_endpoint(self, *args, **kwargs):
         async def task_wrapper():
-            from jina.constants import __default_endpoint__
-            from jina.proto import jina_pb2
+            from marie.constants import __default_endpoint__
+            from marie.proto import jina_pb2
 
             ep = jina_pb2.EndpointsProto()
             ep.endpoints.extend([__default_endpoint__])

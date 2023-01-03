@@ -3,9 +3,12 @@ import torch
 import marie
 import marie.helper
 
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, TYPE_CHECKING
 from marie import DocumentArray, Executor, requests
 from marie.logging.predefined import default_logger
+
+if TYPE_CHECKING:  # pragma: no cover
+    from fastapi import FastAPI
 
 
 class NerExecutor(Executor):
@@ -38,3 +41,10 @@ class NerExecutor(Executor):
         default_logger.info("Executing NER work")
         print(parameters)
         default_logger.info(kwargs)
+
+
+def extend_rest_interface_ner_mixin(app: 'FastAPI') -> 'FastAPI':
+    @app.get('/extension-b', tags=['Extract - REST API', 'ner-rest'])
+    async def extension_A():
+        default_logger.info("Executing NER extension")
+        return {"message": "XYZ"}
