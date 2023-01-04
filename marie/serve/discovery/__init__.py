@@ -4,6 +4,7 @@ import time
 
 import requests
 
+from marie.helper import get_internal_ip
 from marie.importer import ImportExtensions
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,6 +69,10 @@ class DiscoveryServiceMixin:
                 help_text='You need to install the `python-consul` to use the service discovery functionality of marie',
             ):
                 import consul
+
+                # Ban advertising 0.0.0.0 or setting it as a service address #2961
+                if host == '0.0.0.0':
+                    host = get_internal_ip()
 
                 def _watchdog_target():
                     return self._start_discovery_watchdog(
