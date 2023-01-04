@@ -22,6 +22,8 @@ from marie.utils.utils import ensure_exists
 
 # from detectron2.utils.visualizer import ColorMode, Visualizer
 
+strict_box_segmentation = False
+
 
 def setup_cfg(args, device):
     """
@@ -72,7 +74,9 @@ def _convert_boxes(boxes):
         return np.asarray(boxes)
 
 
-def visualize_bboxes(image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy") -> PIL.Image:
+def visualize_bboxes(
+    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
         image(Union[np.ndarray | PIL.Image.Image]): numpy array of shape (H, W), where H is the image height and W is the image width.
@@ -120,7 +124,9 @@ def lines_from_bboxes(image, bboxes):
 
     if False:
         viz_img = visualize_bboxes(image, bboxes)
-        viz_img.save(os.path.join("/tmp/fragments", f"line_refiner_initial.png"), format="PNG")
+        viz_img.save(
+            os.path.join("/tmp/fragments", f"line_refiner_initial.png"), format="PNG"
+        )
 
     # create a box overlay with adjusted coordinates
     overlay = np.ones((image.shape[0], image.shape[1], 1), dtype=np.uint8) * 100
@@ -162,7 +168,9 @@ def lines_from_bboxes(image, bboxes):
     binary_mask = cv2.bitwise_not(horizontal)
     connectivity = 4
 
-    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity, cv2.CV_32S)
+    nLabels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary_mask, connectivity, cv2.CV_32S
+    )
 
     line_bboxes = []
 
@@ -181,7 +189,9 @@ def lines_from_bboxes(image, bboxes):
 
     if False:
         viz_img = visualize_bboxes(image, lines_bboxes, format="xywh")
-        viz_img.save(os.path.join("/tmp/fragments", f"line_refiner-final.png"), format="PNG")
+        viz_img.save(
+            os.path.join("/tmp/fragments", f"line_refiner-final.png"), format="PNG"
+        )
 
     return lines_bboxes
 
@@ -215,7 +225,9 @@ class BoxProcessorUlimDit(BoxProcessor):
         self.cpu_device = torch.device("cpu")
 
     def psm_word(self, image):
-        raise Exception("Not implemented")
+        if strict_box_segmentation:
+            raise Exception("Not implemented : PSM_WORD")
+        return self.psm_sparse(image)
 
     def psm_sparse(self, image):
         predictions = self.predictor(image)
@@ -235,15 +247,23 @@ class BoxProcessorUlimDit(BoxProcessor):
         return bboxes, classes, scores, lines, classes
 
     def psm_line(self, image):
-        raise Exception("Not implemented")
+        if strict_box_segmentation:
+            raise Exception("Not implemented : PSM_LINE")
+        return self.psm_sparse(image)
 
     def psm_raw_line(self, image):
-        raise Exception("Not implemented")
+        if strict_box_segmentation:
+            raise Exception("Not implemented : PSM_RAW_LINE")
+        return self.psm_sparse(image)
 
     def psm_multiline(self, image):
-        raise Exception("Not implemented")
+        if strict_box_segmentation:
+            raise Exception("Not implemented : PSM_MULTILINE")
+        return self.psm_sparse(image)
 
-    def extract_bounding_boxes(self, _id, key, img, psm=PSMode.SPARSE) -> Tuple[Any, Any, Any, Any, Any]:
+    def extract_bounding_boxes(
+        self, _id, key, img, psm=PSMode.SPARSE
+    ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
 
@@ -255,7 +275,9 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Expected image in numpy format")
 
         try:
-            crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(self.work_dir, _id, key)
+            crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
+                self.work_dir, _id, key
+            )
 
             start_time = time.time()
             # deepcopy image so that original is not altered
@@ -304,7 +326,9 @@ class BoxProcessorUlimDit(BoxProcessor):
             prediction_result["scores"] = scores
             prediction_result["heatmap"] = None
 
-            pil_image = Image.new("RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0))
+            pil_image = Image.new(
+                "RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0)
+            )
 
             rect_from_poly = []
             rect_line_numbers = []

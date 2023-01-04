@@ -218,14 +218,15 @@ def array_from_docs(docs: DocumentArray):
 def docs_from_file(img_path: str) -> DocumentArray:
     """Create DocumentArray from image"""
     if not os.path.exists(img_path):
-        raise Exception(f"File not found : {img_path}")
+        raise FileNotFoundError(f"File not found : {img_path}")
 
     loaded, frames = load_image(img_path)
     docs = DocumentArray()
 
-    for frame in frames:
-        document = Document(tensor=frame)
-        docs.append(document)
+    if loaded:
+        for frame in frames:
+            document = Document(content=frame)
+            docs.append(document)
 
     return docs
 
@@ -248,7 +249,7 @@ def docs_from_image(src: Union[Any, List]) -> DocumentArray:
     for img in arr:
         if isinstance(img, Image.Image):
             img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        document = Document(tensor=img)
+        document = Document(content=img)
         docs.append(document)
 
     return docs
