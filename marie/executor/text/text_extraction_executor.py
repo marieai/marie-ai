@@ -12,6 +12,7 @@ from rich import print
 from torch.backends import cudnn
 
 from marie import Executor, requests
+from marie.api import value_from_payload_or_args
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.document import TrOcrIcrProcessor
@@ -322,7 +323,7 @@ class TextExtractionExecutor(Executor):
         logger.info("Starting ICR processing request")
 
         for doc in docs:
-            doc.text = "Hello XX"
+            print(doc.tensor)
 
         queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
         for key, value in parameters.items():
@@ -334,25 +335,18 @@ class TextExtractionExecutor(Executor):
             else:
                 payload = parameters["payload"]
 
-            pms_mode = PSMode.from_value(payload["mode"] if "mode" in payload else "")
-
-            coordinate_format = CoordinateFormat.from_value(
-                payload["format"] if "format" in payload else "xywh"
-            )
-            output_format = OutputFormat.from_value(
-                payload["output"] if "output" in payload else "json"
-            )
-
             regions = payload["regions"] if "regions" in payload else []
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-            if "args" in payload:
-                pms_mode = PSMode.from_value(
-                    payload["args"]["mode"] if "mode" in payload["args"] else ""
-                )
-                output_format = OutputFormat.from_value(
-                    payload["args"]["output"] if "output" in payload["args"] else "json"
-                )
+            coordinate_format = CoordinateFormat.from_value(
+                value_from_payload_or_args(payload, "format", default="xywh")
+            )
+            pms_mode = PSMode.from_value(
+                value_from_payload_or_args(payload, "mode", default="")
+            )
+            output_format = OutputFormat.from_value(
+                value_from_payload_or_args(payload, "output", default="json")
+            )
 
             frames = array_from_docs(docs)
             frame_len = len(frames)
@@ -390,7 +384,7 @@ class TextExtractionExecutor(Executor):
             elif output_format == OutputFormat.ASSETS:
                 output = self.render_as_assets(queue_id, checksum, frames, results)
 
-            return output
+            return results
         except BaseException as error:
             logger.error("Extract error", error)
             if self.show_error:

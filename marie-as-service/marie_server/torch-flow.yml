@@ -58,15 +58,15 @@ with:
 executors:
   - name: extract_t
     uses:
-#      jtype: TextExtractionExecutor
-      jtype: ExtractExecutor
+      jtype: TextExtractionExecutor
+#      jtype: ExtractExecutor
       metas:
         py_modules:
 #          - marie_server.executors.extract.mserve_torch
           - marie.executor.text
     timeout_ready: 3000000
     replicas: 1
-#
+
 #  - name: ner_t
 #    uses:
 #      jtype: NerExecutor

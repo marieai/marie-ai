@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 
 
 from marie.api import extract_payload
-from marie.utils.docs import docs_from_file
+from marie.utils.docs import docs_from_file, array_from_docs
 
 # from marie.utils.network import get_ip_address
 
@@ -71,8 +71,9 @@ def extend_rest_interface_extract_mixin(app: FastAPI) -> None:
 
             tmp_file, checksum, file_type = extract_payload(payload, queue_id)
             input_docs = docs_from_file(tmp_file)
+            out_docs = array_from_docs(input_docs)
             payload["data"] = None
-            print(tmp_file)
+
             args = {
                 "queue_id": queue_id,
                 "payload": payload,
@@ -85,7 +86,7 @@ def extend_rest_interface_extract_mixin(app: FastAPI) -> None:
             outputs = DocumentArray()
             out_text = []
             async for resp in c.post(
-                '/text/extract', input_docs, request_size=1, parameters=args
+                '/text/extract', input_docs, request_size=-1, parameters=args
             ):
                 print('--' * 100)
                 print(resp)

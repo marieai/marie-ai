@@ -28,7 +28,14 @@ TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
 
 
 def store_temp_file(message_bytes, queue_id, file_type, store_raw):
-    """Store temp file from decoded payload"""
+    """Store temp file from decoded payloa
+    :param message_bytes:
+    :param queue_id:
+    :param file_type:
+    :param store_raw:
+    :return:
+    """
+
     m = hashlib.sha256()
     m.update(message_bytes)
     checksum = m.hexdigest()
@@ -38,7 +45,8 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
 
     current_datetime = datetime.now()
     str_current_datetime = str(current_datetime)
-    tmp_file = f"{upload_dir}/{checksum}_{str_current_datetime}.{ext}"
+    # tmp_file = f"{upload_dir}/{checksum}_{str_current_datetime}.{ext}"
+    tmp_file = f"{upload_dir}/{checksum}.{ext}"
 
     if store_raw:
         # message read directly from a file
@@ -108,10 +116,17 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
 
 
 def value_from_payload_or_args(payload, key, default=None):
-    """Get value from payload or from payloads args"""
+    """Get value from payload or from payloads args.
+    This is due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
+
+    :param payload: the payload to extract key from
+    :param key: the key to check
+    :param default: the default value to assign
+    :return:
+    """
     ret_type = default
     if key in payload:
         ret_type = payload[key]
-    elif key in payload["args"]:
+    elif "args" in payload and key in payload["args"]:
         ret_type = payload["args"][key]
     return ret_type
