@@ -2,8 +2,7 @@ import json
 import os
 from datetime import datetime
 from distutils.util import strtobool as strtobool
-from enum import Enum
-from typing import Dict, Union, Optional, TYPE_CHECKING
+from typing import Dict, Union, Optional
 
 import numpy as np
 import torch
@@ -16,85 +15,14 @@ from marie.api import value_from_payload_or_args
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.document import TrOcrIcrProcessor
-from marie.numpyencoder import NumpyEncoder
-from marie.renderer.text_renderer import TextRenderer
+from marie.executor.text.coordinate_format import CoordinateFormat
+from marie.executor.text.output_format import OutputFormat
+from marie.logging.logger import MarieLogger
 from marie.utils.base64 import encodeToBase64
 from marie.utils.docs import array_from_docs
 from marie.utils.image_utils import hash_bytes
 from marie.utils.utils import ensure_exists
 from marie.logging.predefined import default_logger
-
-logger = default_logger
-
-
-class OutputFormat(Enum):
-    """Output format for the document"""
-
-    JSON = "json"  # Render document as JSON output
-    PDF = "pdf"  # Render document as PDF
-    TEXT = "text"  # Render document as plain TEXT
-    ASSETS = "assets"  # Render and return all available assets
-
-    @staticmethod
-    def from_value(value: str):
-        if value is None:
-            return OutputFormat.JSON
-        for data in OutputFormat:
-            if data.value == value.lower():
-                return data
-        return OutputFormat.JSON
-
-
-class CoordinateFormat(Enum):
-    """Output format for the words
-    defaults to : xywh
-    """
-
-    XYWH = "xywh"  # Default
-    XYXY = "xyxy"
-
-    @staticmethod
-    def from_value(value: str):
-        if value is None:
-            return CoordinateFormat.XYWH
-        for data in CoordinateFormat:
-            if data.value == value.lower():
-                return data
-        return CoordinateFormat.XYWH
-
-    @staticmethod
-    def convert(
-        box: np.ndarray, from_mode: "CoordinateFormat", to_mode: "CoordinateFormat"
-    ) -> np.ndarray:
-        """
-        Args:
-            box: can be a 4-tuple,
-            from_mode, to_mode (CoordinateFormat)
-
-        Ref : Detectron boxes
-        Returns:
-            The converted box of the same type.
-        """
-        arr = np.array(box)
-        assert arr.shape == (4,), "CoordinateFormat.convert takes either a 4-tuple/list"
-
-        if from_mode == to_mode:
-            return box
-
-        original_type = type(box)
-        original_shape = arr.shape
-        arr = arr.reshape(-1, 4)
-
-        if to_mode == CoordinateFormat.XYXY and from_mode == CoordinateFormat.XYWH:
-            arr[:, 2] += arr[:, 0]
-            arr[:, 3] += arr[:, 1]
-        elif from_mode == CoordinateFormat.XYXY and to_mode == CoordinateFormat.XYWH:
-            arr[:, 2] -= arr[:, 0]
-            arr[:, 3] -= arr[:, 1]
-        else:
-            raise RuntimeError("Cannot be here!")
-
-        return original_type(arr.flatten())
 
 
 class TextExtractionExecutor(Executor):
@@ -107,7 +35,7 @@ class TextExtractionExecutor(Executor):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-
+        self.logger = MarieLogger(context=self.__class__.__name__)
         work_dir_boxes = ensure_exists("/tmp/boxes")
         work_dir_icr = ensure_exists("/tmp/icr")
 
@@ -127,14 +55,13 @@ class TextExtractionExecutor(Executor):
         if True:
             self.box_processor = BoxProcessorUlimDit(
                 work_dir=work_dir_boxes,
-                models_dir="../model_zoo/unilm/dit/text_detection",
-                cuda=True,
+                cuda=has_cuda,
             )
         self.icr_processor = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=has_cuda)
 
     @requests(on="/text/status")
     def info(self, **kwargs):
-        logger.info(f"Self : {self}")
+        self.logger.info(f"Self : {self}")
         return {"index": "complete"}
 
     def __process_extract_fullpage(
@@ -179,7 +106,7 @@ class TextExtractionExecutor(Executor):
             )
             # change from xywh -> xyxy
             if CoordinateFormat.XYXY == coordinate_format:
-                logger.info("Changing coordinate format from xywh -> xyxy")
+                self.logger.info("Changing coordinate format from xywh -> xyxy")
                 for word in result["words"]:
                     x, y, w, h = word["box"]
                     w_box = [x, y, x + w, y + h]
@@ -223,7 +150,7 @@ class TextExtractionExecutor(Executor):
 
         for region in regions:
             try:
-                logger.info(f"Extracting box : {region}")
+                self.logger.info(f"Extracting box : {region}")
                 rid = region["id"]
                 page_index = region["pageIndex"]
                 x = region["x"]
@@ -268,7 +195,7 @@ class TextExtractionExecutor(Executor):
                 # 2 - Full
                 # 3 - HOCR
 
-                logger.info(result)
+                self.logger.info(result)
                 rendering_mode = "simple"
                 region_result = {}
                 if rendering_mode == "simple":
@@ -280,7 +207,7 @@ class TextExtractionExecutor(Executor):
                         region_result["confidence"] = line["confidence"]
                         output.append(region_result)
             except Exception as ex:
-                logger.error(ex)
+                self.logger.error(ex)
                 raise ex
 
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
@@ -309,25 +236,23 @@ class TextExtractionExecutor(Executor):
 
     @requests(on="/text/status")
     def status(self, parameters, **kwargs):
-        logger.info(f"Self : {self}")
+        self.logger.info(f"Self : {self}")
         return {"index": "complete"}
 
     @requests(on="/text/extract")
-    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+    def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         """Load the image from `uri`, extract text and bounding boxes.
         :param parameters:
         :param docs: Documents to process
         :param kwargs:
         :return:
         """
-        logger.info("Starting ICR processing request")
-
-        for doc in docs:
-            print(doc.tensor)
+        self.logger.info("Starting ICR processing request")
+        print(parameters)
 
         queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
         for key, value in parameters.items():
-            logger.info("The value of {} is {}".format(key, value))
+            self.logger.info("The value of {} is {}".format(key, value))
 
         try:
             if "payload" not in parameters or parameters["payload"] is None:
@@ -356,7 +281,7 @@ class TextExtractionExecutor(Executor):
                 src = np.append(src, np.ravel(frame))
             checksum = hash_bytes(src)
 
-            logger.info(
+            self.logger.info(
                 "frames , regions , output_format, pms_mode, coordinate_format,"
                 f" checksum:  {frame_len}, {len(regions)}, {output_format}, {pms_mode},"
                 f" {coordinate_format}, {checksum}"
@@ -371,62 +296,13 @@ class TextExtractionExecutor(Executor):
                     frames, queue_id, checksum, pms_mode, regions
                 )
 
-            output = None
-
-            if output_format == OutputFormat.JSON:
-                output = self.render_as_json(queue_id, checksum, frames, results)
-            elif output_format == OutputFormat.PDF:
-                # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-                # renderer.render(image, result, output_filename)
-                raise Exception("PDF Not implemented")
-            elif output_format == OutputFormat.TEXT:
-                output = self.render_as_text(queue_id, checksum, frames, results)
-            elif output_format == OutputFormat.ASSETS:
-                output = self.render_as_assets(queue_id, checksum, frames, results)
-
             return results
         except BaseException as error:
-            logger.error("Extract error", error)
+            self.logger.error("Extract error", error)
             if self.show_error:
                 return {"error": str(error)}
             else:
                 return {"error": "inference exception"}
-
-    def render_as_json(self, queue_id, checksum, frames, results) -> Dict:
-        """Renders specific results as JSON"""
-        if False:
-            output = json.dumps(
-                results,
-                sort_keys=False,
-                separators=(",", ": "),
-                ensure_ascii=False,
-                indent=2,
-                cls=NumpyEncoder,
-            )
-
-        return results
-
-    def render_as_text(self, queue_id, checksum, frames, results) -> str:
-        """Renders specific results as text"""
-        try:
-            work_dir = ensure_exists(f"/tmp/marie/{queue_id}")
-            str_current_datetime = str(datetime.now())
-            output_filename = f"{work_dir}/{checksum}_{str_current_datetime}.txt"
-
-            renderer = TextRenderer(config={"preserve_interword_spaces": True})
-            output = renderer.render(frames, results, output_filename)
-            return output
-
-        except BaseException as e:
-            logger.error("Unable to render TEXT for document", e)
-
-    def render_as_assets(self, queue_id, checksum, frames, results):
-        """Render all documents as assets"""
-
-        json_results = self.render_as_json(queue_id, checksum, frames, results)
-        text_results = self.render_as_text(queue_id, checksum, frames, results)
-
-        raise Exception("Not Implemented")
 
 
 class ExtractExecutor(Executor):
@@ -453,8 +329,6 @@ class ExtractExecutor(Executor):
         default_logger.info(kwargs)
         default_logger.info(parameters)
 
-        logger.info("Processing docs : ")
-        logger.info(docs)
         import threading
         import time
 
@@ -465,5 +339,4 @@ class ExtractExecutor(Executor):
 
     @requests(on="/status")
     def status(self, parameters, **kwargs):
-        logger.info(f"Self : {self}")
         return {"index": "complete"}

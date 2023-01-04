@@ -2,7 +2,6 @@ from math import ceil
 from os import PathLike
 from typing import Any, Dict, Union
 
-import numpy
 import numpy as np
 
 from marie.renderer.renderer import ResultRenderer

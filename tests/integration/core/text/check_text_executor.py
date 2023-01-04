@@ -8,6 +8,7 @@ from marie.renderer import PdfRenderer, TextRenderer
 from marie.utils.docs import array_from_docs, docs_from_file
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
+from marie.constants import __model_path__
 
 if __name__ == "__main__":
 
@@ -19,13 +20,7 @@ if __name__ == "__main__":
     # img_path = "./assets/english/Scanned_documents/Picture_029.tif"
     # img_path = "./assets/english/Scanned_documents/Picture_010.tif"
     img_path = "./assets/english/Lines/002.png"
-    # img_path = "/home/gbugaj/tmp/PID_1028_7826_0_157684456.tif"
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
-    # img_path = "./assets/psm/block/block-002.png"
-    img_path = "/home/greg/tmp/PID_1925_9289_0_157186264.tif"
-    img_path = "/home/greg/tmp/snippet-002.png"
     img_path = "/home/gbugaj/dataset/funsd/dataset/training_data/images/00040534.png"
-
     img_path = "/home/gbugaj/clean_medical/PID_1038_7836_0_149512505_page_0021.tif"
 
     docs = docs_from_file(img_path)
@@ -36,7 +31,7 @@ if __name__ == "__main__":
 
     if True:
         executor = TextExtractionExecutor()
-        results = executor.extract(docs, **kwa)
+        results = executor.extract(docs, parameters=kwa)
 
         print(results)
         store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
