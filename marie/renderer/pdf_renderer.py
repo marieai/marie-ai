@@ -12,10 +12,11 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from marie.logging.logger import MarieLogger
+from marie.logging.predefined import default_logger
 from marie.renderer.renderer import ResultRenderer
 from marie.utils.docs import is_array_like
 
-logger = MarieLogger("")
+logger = default_logger
 
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java

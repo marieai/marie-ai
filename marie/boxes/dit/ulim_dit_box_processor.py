@@ -19,6 +19,7 @@ from marie.logger import setup_logger
 from marie.logging.logger import MarieLogger
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.utils import ensure_exists
+from marie.constants import __model_path__, __config_dir__
 
 # from detectron2.utils.visualizer import ColorMode, Visualizer
 
@@ -202,17 +203,19 @@ class BoxProcessorUlimDit(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = "../model_zoo/unilm/dit/text_detection",
+        models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
+        # models_dir: str = "../model_zoo/unilm/dit/text_detection",
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
+        print(f"models_dir = {models_dir}")
 
         args = get_parser().parse_args(
             [
                 "--config-file",
-                "../config/zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                os.path.join(__config_dir__, "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml"),
                 "--opts",
                 "MODEL.WEIGHTS",
                 os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
@@ -354,7 +357,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     # snippet = (snippet * 255).astype(np.uint8)
                     paste_fragment(pil_image, snippet, (x0, y0))
 
-            if False:
+            if True:
                 debug_dir = "/tmp/fragments"
                 savepath = os.path.join(debug_dir, "txt_overlay.jpg")
                 pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)

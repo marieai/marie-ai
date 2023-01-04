@@ -34,7 +34,7 @@ from marie.executor.ner.utils import (
     visualize_prediction,
 )
 from marie.executor.text import TextExtractionExecutor
-from marie.executor.text.text_extraction_executor import CoordinateFormat
+from marie.executor.text.coordinate_format import CoordinateFormat
 from marie.logging.logger import MarieLogger
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
@@ -613,7 +613,7 @@ class NerExtractionExecutor(Executor):
                     )
                 )
 
-        kwa = {
+        parameters = {
             "payload": {
                 "output": "json",
                 "mode": "raw_line",
@@ -627,7 +627,7 @@ class NerExtractionExecutor(Executor):
         if len(regions) == 0:
             return
 
-        region_results = self.text_executor.extract(docs_from_image(frames), **kwa)
+        region_results = self.text_executor.extract(docs_from_image(frames), parameters)
         # possible failure in extracting data for region
         if "regions" not in region_results:
             logger.warning("No regions returned")

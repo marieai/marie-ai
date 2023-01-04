@@ -2,7 +2,7 @@ import os
 
 import cv2
 
-from utils.utils import ensure_exists
+from marie.utils.utils import ensure_exists
 
 #
 # from boxes.box_processor import BoxProcessor, PSMode

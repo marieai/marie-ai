@@ -4,7 +4,7 @@ import cv2
 
 from marie.boxes.box_processor import PSMode
 from marie.document import TrOcrIcrProcessor
-from marie.executor.text.text_extraction_executor import CoordinateFormat
+from marie.executor.text.coordinate_format import CoordinateFormat
 from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.utils.json import store_json_object

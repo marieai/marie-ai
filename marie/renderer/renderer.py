@@ -9,7 +9,7 @@ from marie.logging.logger import MarieLogger
 
 class ResultRenderer(ABC):
     def __init__(self, config={}):
-        self.logger = MarieLogger("")
+        self.logger = MarieLogger(ResultRenderer.__name__)
         pass
 
     @property
