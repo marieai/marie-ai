@@ -3,7 +3,7 @@ import functools
 import inspect
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Union, Any
 
 from marie.constants import __cache_path__
 from marie.helper import iscoroutinefunction
@@ -184,7 +184,8 @@ def requests(
                 def arg_wrapper(
                     executor_instance, *args, **kwargs
                 ):  # we need to get the summary from the executor, so we need to access the self
-                    return fn(executor_instance, *args, **kwargs)
+                    result = fn(executor_instance, *args, **kwargs)
+                    return result
 
                 self.fn = arg_wrapper
 
@@ -402,3 +403,59 @@ def monitor(
         return _f
 
     return _decorator
+
+
+def safely_encoded(
+    func: Callable = None,
+    *,
+    convert: Optional[bool] = True,
+):
+    def _encode(obj: Any) -> Any:
+        """
+        Convert object to NumPy free object that can be serialized over the wire
+        :param obj:
+        :return:
+        """
+
+        try:
+            from marie.numpyencoder import NumpyEncoder
+            import json
+
+            tmp_str = json.dumps(
+                obj,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                # indent=2,
+                cls=NumpyEncoder,
+            )
+
+            return json.loads(tmp_str)
+        except Exception as e:
+            raise e
+
+    class SafelyEncodedDecorator:
+        def __init__(self, fn):
+            if iscoroutinefunction(fn):
+
+                @functools.wraps(fn)
+                async def arg_wrapper(obj, *args, **kwargs):
+                    return await fn(obj, *args, **kwargs)
+
+                self.fn = arg_wrapper
+            else:
+
+                @functools.wraps(fn)
+                def arg_wrapper(obj, *args, **kwargs):
+                    return fn(obj, *args, **kwargs)
+
+                self.fn = arg_wrapper
+
+        def __call__(self, *args, **kwargs):
+            # this is needed to make this decorator work in combination with `@requests`
+            val = self.fn(*args, **kwargs)
+            return _encode(val)
+
+    if func:
+        return SafelyEncodedDecorator(func)
+    else:
+        return SafelyEncodedDecorator

@@ -1,5 +1,6 @@
 import pytest
-from jina import Executor, Flow, __default_executor__, requests
+from marie import Executor, Flow, requests
+from marie.constants import __default_executor__
 
 from tests import random_docs
 

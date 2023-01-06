@@ -139,7 +139,12 @@ from marie.orchestrate.flow.base import Flow
 
 # Executor
 from marie.serve.executors import BaseExecutor as Executor
-from marie.serve.executors.decorators import dynamic_batching, monitor, requests
+from marie.serve.executors.decorators import (
+    dynamic_batching,
+    monitor,
+    requests,
+    safely_encoded,
+)
 
 # Custom Gateway
 from marie.serve.gateway import BaseGateway as Gateway
