@@ -9,7 +9,7 @@ from marie import Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.parsers import set_gateway_parser
 from marie.serve.networking import GrpcConnectionPool
-from cli.api import executor_native, gateway
+from marie_cli.api import executor_native, gateway
 from tests.helper import _generate_pod_args
 
 

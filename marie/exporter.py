@@ -1,6 +1,6 @@
 import json
 
-from cli.export import api_to_dict
+from marie_cli.export import api_to_dict
 from marie.orchestrate.flow.base import Flow
 from marie.jaml import JAML
 from marie.logging.predefined import default_logger

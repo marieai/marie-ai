@@ -1,4 +1,4 @@
-from cli.export import api_to_dict
+from marie_cli.export import api_to_dict
 from marie.schemas.helper import _cli_to_schema
 
 schema_gateway = _cli_to_schema(

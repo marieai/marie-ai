@@ -348,14 +348,18 @@ class WorkerRequestHandler:
         if return_data is not None:
             if isinstance(return_data, DocumentArray):
                 docs = return_data
-            elif isinstance(return_data, dict):
+            elif isinstance(return_data, (dict, list)):
                 params = requests[0].parameters
                 results_key = self._KEY_RESULT
 
                 if not results_key in params.keys():
                     params[results_key] = dict()
 
-                params[results_key].update({self.args.name: return_data})
+                if isinstance(return_data, (dict)):
+                    params[results_key].update({self.args.name: return_data})
+                else:
+                    params[results_key].update({self.args.name: return_data})
+
                 requests[0].parameters = params
 
             else:

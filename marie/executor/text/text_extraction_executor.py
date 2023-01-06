@@ -7,6 +7,7 @@ from typing import Dict, Union, Optional
 import numpy as np
 import torch
 from docarray import DocumentArray
+from marie.utils.json import load_json_file, store_json_object
 from rich import print
 from torch.backends import cudnn
 
@@ -296,6 +297,7 @@ class TextExtractionExecutor(Executor):
                     frames, queue_id, checksum, pms_mode, regions
                 )
 
+            # store_json_object(results, '/tmp/fragments/results-complex.json')
             return results
         except BaseException as error:
             self.logger.error("Extract error", error)
@@ -324,7 +326,9 @@ class ExtractExecutor(Executor):
         super().__init__(**kwargs)
 
     @requests(on="/text/extract")
-    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+    def extract(
+        self, parameters, docs: Optional[DocumentArray] = None, **kwargs
+    ) -> Dict:
         default_logger.info(f"Executing extract : {len(docs)}")
         default_logger.info(kwargs)
         default_logger.info(parameters)
@@ -336,6 +340,10 @@ class ExtractExecutor(Executor):
 
         for doc in docs:
             doc.text = f"{doc.text} : >> {threading.current_thread().name}  : {threading.get_ident()}"
+
+        # out = [{"sample":112, "complex":["a", "b"]}, {"sample":112, "complex":["a", "b"]}]
+        data = load_json_file('/tmp/fragments/results-complex.json')
+        return data
 
     @requests(on="/status")
     def status(self, parameters, **kwargs):

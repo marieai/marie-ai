@@ -16,7 +16,7 @@ from .utils.auth import Auth  # noqa F401
 from .utils.notebook import is_notebook  # noqa F401
 
 try:
-    __version__ = version("jina-hubble-sdk")
+    __version__ = version("marie-hubble-sdk")
 except Exception:
     __version__ = "v0.0.0"
 
