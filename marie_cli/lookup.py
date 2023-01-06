@@ -1,4 +1,4 @@
-from cli.export import api_to_dict
+from marie_cli.export import api_to_dict
 
 
 def _build_lookup_table():

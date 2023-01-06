@@ -209,7 +209,7 @@ def help(args: 'Namespace'):
 
     :param args: arguments coming from the CLI.
     """
-    from cli.lookup import lookup_and_print
+    from marie_cli.lookup import lookup_and_print
 
     lookup_and_print(args.query.lower())
 
