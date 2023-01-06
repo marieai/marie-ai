@@ -1,6 +1,6 @@
 from hubble.executor.hubio import HubIO
-from jina.orchestrate.pods.factory import PodFactory
-from jina.parsers import set_pod_parser
+from marie.orchestrate.pods.factory import PodFactory
+from marie.parsers import set_pod_parser
 
 
 def test_container_pod(mocker, monkeypatch):

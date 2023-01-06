@@ -11,7 +11,7 @@ from marie.utils.json import load_json_file, store_json_object
 from rich import print
 from torch.backends import cudnn
 
-from marie import Executor, requests
+from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
@@ -235,12 +235,12 @@ class TextExtractionExecutor(Executor):
 
         return {"regions": output, "extended": extended}
 
-    @requests(on="/text/status")
+    # @requests(on="/text/status")
     def status(self, parameters, **kwargs):
         self.logger.info(f"Self : {self}")
         return {"index": "complete"}
 
-    @requests(on="/text/extract")
+    # @requests(on="/text/extract")
     def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         """Load the image from `uri`, extract text and bounding boxes.
         :param parameters:
@@ -308,6 +308,34 @@ class TextExtractionExecutor(Executor):
 
 
 class ExtractExecutor(Executor):
+    @requests(on="/status")
+    def status(self, parameters, **kwargs):
+        return {"index": "complete"}
+
+    @requests(on="/text/extract")
+    @safely_encoded
+    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+        default_logger.info(f"Executing extract : {len(docs)}")
+        default_logger.info(kwargs)
+        default_logger.info(parameters)
+
+        import threading
+        import time
+
+        time.sleep(1.3)
+
+        for doc in docs:
+            doc.text = f"{doc.text} : >> {threading.get_ident()}"
+
+        np_arr = np.array([1, 2, 3])
+
+        out = [
+            {"sample": 112, "complex": ["a", "b"]},
+            {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
+        ]
+
+        return out
+
     def __init__(
         self,
         name: str = '',
@@ -324,27 +352,3 @@ class ExtractExecutor(Executor):
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         """
         super().__init__(**kwargs)
-
-    @requests(on="/text/extract")
-    def extract(
-        self, parameters, docs: Optional[DocumentArray] = None, **kwargs
-    ) -> Dict:
-        default_logger.info(f"Executing extract : {len(docs)}")
-        default_logger.info(kwargs)
-        default_logger.info(parameters)
-
-        import threading
-        import time
-
-        time.sleep(1.3)
-
-        for doc in docs:
-            doc.text = f"{doc.text} : >> {threading.current_thread().name}  : {threading.get_ident()}"
-
-        # out = [{"sample":112, "complex":["a", "b"]}, {"sample":112, "complex":["a", "b"]}]
-        data = load_json_file('/tmp/fragments/results-complex.json')
-        return data
-
-    @requests(on="/status")
-    def status(self, parameters, **kwargs):
-        return {"index": "complete"}
