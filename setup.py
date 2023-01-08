@@ -141,8 +141,8 @@ setup(
     author='Marie AI',
     author_email='hello@marieai.co',
     license='Apache 2.0',
-    url='https://github.com/gregbugaj/marie-ai/',
-    download_url='https://github.com/gregbugaj/marie-ai/tags',
+    url='https://github.com/marieai/marie-ai/',
+    download_url='https://github.com/marieai/marie-ai/tags',
     long_description=_long_description,
     long_description_content_type='text/markdown',
     zip_safe=False,
@@ -150,7 +150,7 @@ setup(
     extras_require=all_deps,
     entry_points={
         'console_scripts': [
-            'marie=cli:main',
+            'marie=marie_cli:main',
         ],
     },
     cmdclass={
@@ -183,8 +183,8 @@ setup(
     ],
     project_urls={
         'Documentation': 'https://docs.marieai.co',
-        'Source': 'https://github.com/gregbugaj/marie-ai/',
-        'Tracker': 'https://github.com/gregbugaj/marie-ai/issues',
+        'Source': 'https://github.com/marieai/marie-ai.git',
+        'Tracker': 'https://github.com/marieai/marie-ai/issues',
     },
     keywords=(
         'marie-ai ocr icr index elastic neural-network encoding '
