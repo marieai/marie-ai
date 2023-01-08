@@ -18,11 +18,12 @@ set -e
 
 
 # MOD
-# docker build -f Dockerfiles/protogen-3.21.Dockerfile -t marieai/protogen-3.21:local
-# current dir: jina root (the one with README.md)
+# docker build -f Dockerfiles/protogen.Dockerfile -t marieai/protogen .
+# docker build -f Dockerfiles/protogen-3.21.Dockerfile -t marieai/protogen-3.21:local .
+# current dir: marie root (the one with README.md)
 # run the following in bash:
-#docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen
-#docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen-3.21:local
+# docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen
+# docker run -v $(pwd)/marie/proto:/marie/proto marieai/protogen-3.21:local
 
 SRC_DIR=./
 MODULE=jina
