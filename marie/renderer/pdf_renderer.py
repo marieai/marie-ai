@@ -110,7 +110,7 @@ class PdfRenderer(ResultRenderer):
             img_h = image.shape[0]
             img_w = image.shape[1]
 
-            draw_image = False
+            draw_image = True
 
             # convert OpenCV to Pil
             img_bgr = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

@@ -19,6 +19,7 @@ from transformers import (
 from transformers.utils import check_min_version
 
 from marie import Executor
+from marie.boxes import PSMode
 from marie.constants import __marie_home__
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -33,15 +34,12 @@ from marie.executor.ner.utils import (
     visualize_icr,
     visualize_prediction,
 )
-from marie.executor.text import TextExtractionExecutor
-from marie.executor.text.coordinate_format import CoordinateFormat
 from marie.logging.logger import MarieLogger
+from marie.ocr import DefaultOcrEngine, OcrEngine, CoordinateFormat
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
-    array_from_docs,
+    frames_from_file,
     convert_frames,
-    docs_from_file,
-    docs_from_image,
     load_image,
 )
 from marie.utils.image_utils import hash_file
@@ -53,14 +51,12 @@ check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
 
 
-def obtain_ocr(src_image: str, text_executor: TextExtractionExecutor):
+def obtain_ocr(src_image: str, ocr_engine: OcrEngine):
     """
     Obtain OCR words
     """
-    docs = docs_from_file(src_image)
-    frames = array_from_docs(docs)
-    kwa = {"payload": {"output": "json", "mode": "sparse", "format": "xyxy"}}
-    results = text_executor.extract(docs, **kwa)
+    frames = frames_from_file(src_image)
+    results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
 
     return results, frames
 
@@ -103,8 +99,8 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        pretrained_model_name_or_path = str(
-            ModelRegistry.get_local_path(pretrained_model_name_or_path)
+        pretrained_model_name_or_path: str = ModelRegistry.get_local_path(
+            pretrained_model_name_or_path
         )
         if not os.path.isdir(pretrained_model_name_or_path):
             raise Exception(
@@ -132,7 +128,7 @@ class NerExtractionExecutor(Executor):
 
         self.model = self.__load_model(pretrained_model_name_or_path, self.device)
         self.processor = self.__create_processor()
-        self.text_executor: Optional[TextExtractionExecutor] = TextExtractionExecutor()
+        self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
 
     def __create_processor(self):
         """prepare for the model"""
@@ -613,21 +609,17 @@ class NerExtractionExecutor(Executor):
                     )
                 )
 
-        parameters = {
-            "payload": {
-                "output": "json",
-                "mode": "raw_line",
-                "format": "xywh",
-                "filter_snippets": True,
-                "regions": regions,
-            }
-        }
-
         # nothing to decorate
         if len(regions) == 0:
             return
 
-        region_results = self.text_executor.extract(docs_from_image(frames), parameters)
+        region_results = self.ocr_engine.extract(
+            frames,
+            PSMode.RAW_LINE,
+            CoordinateFormat.XYWH,
+            regions,
+            **{"filter_snippets": True},
+        )
         # possible failure in extracting data for region
         if "regions" not in region_results:
             logger.warning("No regions returned")
@@ -688,7 +680,7 @@ class NerExtractionExecutor(Executor):
                 os.remove(ocr_json_path)
 
         if not os.path.exists(ocr_json_path):
-            ocr_results, frames = obtain_ocr(src_image, self.text_executor)
+            ocr_results, frames = obtain_ocr(src_image, self.ocr_engine)
             # convert CV frames to PIL frame
             frames = convert_frames(frames, img_format="pil")
             store_json_object(ocr_results, ocr_json_path)

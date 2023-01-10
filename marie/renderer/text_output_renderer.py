@@ -4,9 +4,10 @@ from typing import Dict, Any, Union
 
 import numpy as np
 
-from marie.executor.text.output_format import OutputFormat
+from marie.ocr import OutputFormat
 from marie.logging.logger import MarieLogger
 from marie.renderer import TextRenderer
+
 from marie.utils import json
 from marie.utils.json import to_json
 from marie.utils.utils import ensure_exists

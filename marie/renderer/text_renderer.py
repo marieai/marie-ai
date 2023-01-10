@@ -32,17 +32,20 @@ class TextRenderer(ResultRenderer):
         """Render single result page into text"""
         # 8px X 22px = 2.75 pytorch
         # 8px X 19px = 2.375 vscode
+        # https://lists.w3.org/Archives/Public/w3c-wai-gl/2017AprJun/0951.html
+
         if image is None:
             raise Exception("Image or list of images expected")
 
         self.check_format_xywh(result, True)
 
         shape = image.shape
+
         h = shape[0]
         w = shape[1]
         char_ratio = 2.75
-        char_width = 4  # TODO : This needs to be supplied from the box processor
-        char_height = int(char_width * char_ratio)
+        char_width = 8.44  # TODO : This needs to be supplied from the box processor
+        char_height = 16  # int(char_width * char_ratio)
         cols = ceil(w // char_width)
         rows = ceil(h // char_height)
 
@@ -59,6 +62,8 @@ class TextRenderer(ResultRenderer):
             print(f"Char height : {char_height}")
             print(f"Columns     : {cols}")
             print(f"Rows        : {rows}")
+            print(f"bins        : {bins}")
+            print(f"x_hist      : {x_hist}")
 
         meta = result["meta"]
         words = result["words"]
@@ -67,7 +72,10 @@ class TextRenderer(ResultRenderer):
         buffer = ""
         start_cell_y = 1
         force_word_index_sort = False
-        min_spacing = 1000
+        min_spacing = 500
+        max_characters_per_line = ceil(w // char_width)
+
+        print(f"max_characters_per_line = {max_characters_per_line}")
 
         for i, line in enumerate(lines):
             bbox = line["bbox"]
@@ -102,7 +110,8 @@ class TextRenderer(ResultRenderer):
                 aligned_words = word_picks[sort_index]
 
             last_space = 0
-            line_buffer = " " * 180
+            line_buffer = " " * max_characters_per_line
+
             for idx, word in enumerate(aligned_words):
                 # estimate space gap
                 spaces = 0
@@ -111,10 +120,13 @@ class TextRenderer(ResultRenderer):
                 x2, y2, w2, h2 = curr_box
 
                 grid_space = x_hist[x2]
+
                 spaces = grid_space - last_space
                 last_space = grid_space
-                if spaces < min_spacing:
-                    min_spacing = spaces
+
+                # if spaces < min_spacing:
+                #     min_spacing = spaces
+
                 line_buffer = line_buffer[:grid_space] + text + line_buffer[grid_space:]
                 print(f"{grid_space} : {spaces}  > {text}")
 

@@ -160,8 +160,9 @@ class TrOcrIcrProcessor(IcrProcessor):
         work_dir: str = "/tmp/icr",
         models_dir: str = os.path.join(__model_path__, "trocr"),
         cuda: bool = True,
+        **kwargs,
     ) -> None:
-        super().__init__(work_dir, cuda)
+        super().__init__(work_dir, cuda, **kwargs)
 
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")

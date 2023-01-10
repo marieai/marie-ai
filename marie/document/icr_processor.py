@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import typing
-from abc import ABC
 
 import cv2
 import numpy as np
@@ -29,7 +28,7 @@ def encodeimg2b64(img: np.ndarray) -> str:
 
 
 class IcrProcessor(BaseHandler):
-    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True) -> None:
+    def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True, **kwargs) -> None:
         super().__init__()
         self.cuda = cuda
         self.work_dir = work_dir
