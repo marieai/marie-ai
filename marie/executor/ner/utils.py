@@ -1,4 +1,5 @@
 import os
+from typing import Union, List, Dict, Any
 
 import cv2
 import numpy as np
@@ -128,7 +129,15 @@ def get_font(size):
     return font
 
 
-def visualize_icr(frames, results, filename=None):
+def visualize_icr(
+    frames: Union[np.ndarray, List[Image.Image]], results: Dict[str, Any], filename=None
+):
+    """Visualize ICR results
+    :param frames:
+    :param results:
+    :param filename:
+    :return:
+    """
     assert len(frames) == len(results)
     ensure_exists("/tmp/tensors/")
 

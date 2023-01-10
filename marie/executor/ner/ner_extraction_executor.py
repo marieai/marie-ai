@@ -18,7 +18,7 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 
-from marie import Executor
+from marie import Executor, requests, safely_encoded
 from marie.boxes import PSMode
 from marie.constants import __marie_home__
 
@@ -41,8 +41,9 @@ from marie.utils.docs import (
     frames_from_file,
     convert_frames,
     load_image,
+    array_from_docs,
 )
-from marie.utils.image_utils import hash_file
+from marie.utils.image_utils import hash_file, hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
@@ -51,11 +52,20 @@ check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
 
 
-def obtain_ocr(src_image: str, ocr_engine: OcrEngine):
+def obtain_ocr_XXX(src_image: str, ocr_engine: OcrEngine):
     """
     Obtain OCR words
     """
     frames = frames_from_file(src_image)
+    results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
+
+    return results, frames
+
+
+def obtain_ocr(frames, ocr_engine: OcrEngine):
+    """
+    Obtain OCR words from
+    """
     results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
 
     return results, frames
@@ -68,16 +78,14 @@ class NerExtractionExecutor(Executor):
     aka bounding boxes.
     """
 
-    def __init__(
-        self, pretrained_model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs
-    ):
+    def __init__(self, model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs):
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
 
-        self.logger.info(f"NER Extraction Executor : {pretrained_model_name_or_path}")
+        self.logger.info(f"NER Extraction Executor : {model_name_or_path}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -99,17 +107,15 @@ class NerExtractionExecutor(Executor):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        pretrained_model_name_or_path: str = ModelRegistry.get_local_path(
-            pretrained_model_name_or_path
-        )
-        if not os.path.isdir(pretrained_model_name_or_path):
-            raise Exception(
-                f"Expected model directory but got : {pretrained_model_name_or_path}"
-            )
+        model_name_or_path: str = ModelRegistry.get_local_path(model_name_or_path)
+        if not os.path.isdir(model_name_or_path):
+            raise Exception(f"Expected model directory but got : {model_name_or_path}")
 
-        config_path = os.path.join(pretrained_model_name_or_path, "marie.json")
+        config_path = os.path.join(model_name_or_path, "marie.json")
         if not os.path.exists(config_path):
-            raise FileNotFoundError("Expected config 'marie.json' not found")
+            raise FileNotFoundError(
+                "Expected config 'marie.json' not found in model directory"
+            )
 
         self.init_configuration = load_json_file(config_path)
 
@@ -126,7 +132,7 @@ class NerExtractionExecutor(Executor):
         self.debug_scores = self.init_configuration["debug"]["scores"]
         self.debug_colors = self.init_configuration["debug"]["colors"]
 
-        self.model = self.__load_model(pretrained_model_name_or_path, self.device)
+        self.model = self.__load_model(model_name_or_path, self.device)
         self.processor = self.__create_processor()
         self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
 
@@ -275,6 +281,9 @@ class NerExtractionExecutor(Executor):
     def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
         assert len(annotations) == len(ocr_results) == len(frames)
+        for k, _image in enumerate(frames):
+            if not isinstance(_image, Image.Image):
+                raise "Frame should have been an PIL.Image instance"
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
         logger.info("Changing coordinate format from xyxy->xywh")
@@ -642,15 +651,18 @@ class NerExtractionExecutor(Executor):
                         "confidence": region["confidence"],
                     }
 
-    def preprocess(self, src_image: str):
-        """Pre-process src image for NER extraction"""
+    def preprocess(self, frames: [np.array]):
+        """Pre-process src frames for NER extraction
+        :param frames:
+        :return:
+        """
 
-        if not os.path.exists(src_image):
-            self.logger.info(f"File not found : {src_image}")
+        if frames is None:
+            self.logger.info(f"Frames are empty")
             return
 
         # Obtain OCR results
-        file_hash = hash_file(src_image)
+        file_hash = hash_frames_fast(frames)
         root_dir = __marie_home__
 
         ensure_exists(os.path.join(root_dir, "ocr"))
@@ -660,17 +672,17 @@ class NerExtractionExecutor(Executor):
         annotation_json_path = os.path.join(root_dir, "annotation", f"{file_hash}.json")
 
         self.logger.info(f"Root      : {root_dir}")
-        self.logger.info(f"SrcImg    : {src_image}")
         self.logger.info(f"Hash      : {file_hash}")
         self.logger.info(f"OCR file  : {ocr_json_path}")
         self.logger.info(f"NER file  : {annotation_json_path}")
 
-        if not os.path.exists(ocr_json_path) and self.text_executor is None:
-            raise Exception(f"OCR File not found : {ocr_json_path}")
+        if not os.path.exists(ocr_json_path) and self.ocr_engine is None:
+            raise Exception(f"OCR File not found and Engine is empty: {ocr_json_path}")
+        #
+        # loaded, frames = load_image(src_image, img_format="pil")
+        # if not loaded:
+        #     raise Exception(f"Unable to load image file: {src_image}")
 
-        loaded, frames = load_image(src_image, img_format="pil")
-        if not loaded:
-            raise Exception(f"Unable to load image file: {src_image}")
         ocr_results = {}
         if os.path.exists(ocr_json_path):
             ocr_results = load_json_file(ocr_json_path)
@@ -680,7 +692,8 @@ class NerExtractionExecutor(Executor):
                 os.remove(ocr_json_path)
 
         if not os.path.exists(ocr_json_path):
-            ocr_results, frames = obtain_ocr(src_image, self.ocr_engine)
+            # ocr_results, frames = obtain_ocr(src_image, self.ocr_engine)
+            ocr_results, frames = obtain_ocr(frames, self.ocr_engine)
             # convert CV frames to PIL frame
             frames = convert_frames(frames, img_format="pil")
             store_json_object(ocr_results, ocr_json_path)
@@ -695,6 +708,7 @@ class NerExtractionExecutor(Executor):
         boxes = []
         words = []
 
+        frames = convert_frames(frames, img_format="pil")
         for k, (result, image) in enumerate(zip(ocr_results, frames)):
             if not isinstance(image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
@@ -774,25 +788,24 @@ class NerExtractionExecutor(Executor):
 
         return annotations
 
-    # @requests()
+    @requests(on="/ner/extract")
+    @safely_encoded
     def extract(self, docs: Optional[DocumentArray] = None, **kwargs):
         """
         Args:
-            docs : Documents to process, they will be none for now
+            docs : Documents to process
         """
 
         queue_id: str = kwargs.get("queue_id", "0000-0000-0000-0000")
-        checksum: str = kwargs.get("checksum", "0000-0000-0000-0000")
         image_src: str = kwargs.get("img_path", None)
 
         for key, value in kwargs.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        loaded, frames, boxes, words, ocr_results, file_hash = self.preprocess(
-            image_src
+        loaded, pil_frames, boxes, words, ocr_results, file_hash = self.preprocess(
+            array_from_docs(docs)
         )
-
-        annotations = self.process(frames, boxes, words, file_hash)
-        ner_results = self.postprocess(frames, annotations, ocr_results, file_hash)
+        annotations = self.process(pil_frames, boxes, words, file_hash)
+        ner_results = self.postprocess(pil_frames, annotations, ocr_results, file_hash)
 
         return ner_results

@@ -39,6 +39,10 @@ class TextRenderer(ResultRenderer):
 
         self.check_format_xywh(result, True)
 
+        # Reshape document for better on screen rendering
+        # 1280×720
+        # 1280×1080
+
         shape = image.shape
 
         h = shape[0]
@@ -141,7 +145,7 @@ class TextRenderer(ResultRenderer):
 
     def render(
         self,
-        frames: [np.array],
+        frames: np.ndarray,
         results: [Dict[str, Any]],
         output_filename: Union[str, PathLike],
     ) -> None:

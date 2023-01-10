@@ -23,7 +23,7 @@ class ResultRenderer(ABC):
     @abstractmethod
     def render(
         self,
-        frames: [np.array],
+        frames: np.ndarray,
         results: [Dict[str, Any]],
         output_filename: Union[str, PathLike],
     ) -> None:
@@ -31,7 +31,7 @@ class ResultRenderer(ABC):
         Result renderer that renders results to output
 
         Args:
-            frames ([np.array]): A URI supported by this PathHandler
+            frames (np.ndarray): A URI supported by this PathHandler
             results ([[Dict[str, Any]]): A OCR results array
             output_filename (Union[str, PathLike]): a file path which exists on the local file system
         Returns:
