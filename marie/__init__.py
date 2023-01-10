@@ -31,7 +31,7 @@ if True or strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
 
     import warnings
 
-    warnings.warn = warn
+    # warnings.warn = warn
 
 
 def _warning_on_one_line(message, category, filename, lineno, *args, **kwargs):

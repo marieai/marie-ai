@@ -231,6 +231,16 @@ def docs_from_file(img_path: str) -> DocumentArray:
     return docs
 
 
+def frames_from_file(img_path: str):
+    """Create Numpy frame array from image"""
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"File not found : {img_path}")
+    loaded, frames = load_image(img_path)
+    if not loaded:
+        raise Exception(f"Unable to load image : {img_path}")
+    return frames
+
+
 def is_array_like(obj):
     if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
         return True

@@ -21,10 +21,6 @@ from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.utils import ensure_exists
 from marie.constants import __model_path__, __config_dir__
 
-# from detectron2.utils.visualizer import ColorMode, Visualizer
-
-strict_box_segmentation = False
-
 
 def setup_cfg(args, device):
     """
@@ -204,31 +200,32 @@ class BoxProcessorUlimDit(BoxProcessor):
         self,
         work_dir: str = "/tmp/boxes",
         models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
-        # models_dir: str = "../model_zoo/unilm/dit/text_detection",
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
-        print(f"models_dir = {models_dir}")
 
         args = get_parser().parse_args(
             [
                 "--config-file",
-                os.path.join(__config_dir__, "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml"),
+                os.path.join(
+                    __config_dir__,
+                    "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                ),
                 "--opts",
                 "MODEL.WEIGHTS",
                 os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
             ]
         )
-
+        self.strict_box_segmentation = False
         device = "cuda" if torch.cuda.is_available() else "cpu"
         cfg = setup_cfg(args, device)
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")
 
     def psm_word(self, image):
-        if strict_box_segmentation:
+        if self.strict_box_segmentation:
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
@@ -250,17 +247,17 @@ class BoxProcessorUlimDit(BoxProcessor):
         return bboxes, classes, scores, lines, classes
 
     def psm_line(self, image):
-        if strict_box_segmentation:
+        if self.strict_box_segmentation:
             raise Exception("Not implemented : PSM_LINE")
         return self.psm_sparse(image)
 
     def psm_raw_line(self, image):
-        if strict_box_segmentation:
+        if self.strict_box_segmentation:
             raise Exception("Not implemented : PSM_RAW_LINE")
         return self.psm_sparse(image)
 
     def psm_multiline(self, image):
-        if strict_box_segmentation:
+        if self.strict_box_segmentation:
             raise Exception("Not implemented : PSM_MULTILINE")
         return self.psm_sparse(image)
 
@@ -359,12 +356,13 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             if True:
                 debug_dir = "/tmp/fragments"
-                savepath = os.path.join(debug_dir, "txt_overlay.jpg")
+                savepath = os.path.join(debug_dir, f"{key}_txt_overlay.jpg")
                 pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
-                cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
+                cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
                 stacked = np.hstack((cv_img, img))
-                save_path = os.path.join(debug_dir, "stacked.png")
+
+                save_path = os.path.join(debug_dir, f"{key}_stacked.png")
                 imwrite(save_path, stacked)
 
             stop_time = time.time()
