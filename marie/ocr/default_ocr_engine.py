@@ -15,6 +15,7 @@ from marie.ocr import OcrEngine, CoordinateFormat
 from marie.utils.base64 import encodeToBase64
 from marie.utils.image_utils import hash_bytes
 from marie.utils.utils import ensure_exists
+from marie.utils.image_utils import hash_file, hash_frames_fast
 
 
 class DefaultOcrEngine(OcrEngine):
@@ -241,7 +242,6 @@ class DefaultOcrEngine(OcrEngine):
             queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
             regions = [] if regions is None else regions
             ro_frames = []
-            hash_src = []
             # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
             for _, frame in enumerate(frames):
                 if isinstance(frame, Image.Image):
@@ -251,14 +251,10 @@ class DefaultOcrEngine(OcrEngine):
                     f = copy.deepcopy(frame)
                 ro_frames.append(f)
 
-                hash_src = np.append(
-                    hash_src,
-                    np.ravel(frame[0 : 128 if len(frame) > 128 else 0 : len(frame)]),
-                )
             # calculate hash based on the image frame
-            checksum = hash_bytes(hash_src)
+            checksum = hash_frames_fast(ro_frames)
 
-            self.logger.info(
+            self.logger.debug(
                 "frames , regions , output_format, pms_mode, coordinate_format,"
                 f" checksum:  {len(ro_frames)}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}, {checksum}"

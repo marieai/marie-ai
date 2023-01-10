@@ -103,3 +103,20 @@ def hash_bytes(data):
     h.update(data)
     # return the hex representation of digest
     return h.hexdigest()
+
+
+def hash_frames_fast(frames: np.ndarray, max_frame_size=256):
+    """calculate hash based on the image frame"""
+    hash_src = []
+    for _, frame in enumerate(frames):
+        hash_src = np.append(
+            hash_src,
+            np.ravel(
+                frame[
+                    0 : max_frame_size
+                    if len(frame) > max_frame_size
+                    else 0 : len(frame)
+                ]
+            ),
+        )
+    return hash_bytes(hash_src)

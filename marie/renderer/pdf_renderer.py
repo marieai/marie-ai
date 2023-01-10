@@ -85,7 +85,7 @@ class PdfRenderer(ResultRenderer):
         return "PdfRenderer"
 
     def __render_page(
-        self, image: np.array, result: Dict[str, Any], page_index: int
+        self, image: np.ndarray, result: Dict[str, Any], page_index: int
     ) -> PageObject:
         """
         Render individual page as `PageObject`
@@ -110,7 +110,7 @@ class PdfRenderer(ResultRenderer):
             img_h = image.shape[0]
             img_w = image.shape[1]
 
-            draw_image = True
+            draw_image = False
 
             # convert OpenCV to Pil
             img_bgr = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -171,7 +171,7 @@ class PdfRenderer(ResultRenderer):
 
     def render(
         self,
-        frames: [np.array],
+        frames: np.ndarray,
         results: [Dict[str, Any]],
         output_filename: Union[str, PathLike],
     ) -> None:
