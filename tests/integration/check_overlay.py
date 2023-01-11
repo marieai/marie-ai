@@ -2,6 +2,7 @@ import glob
 import os
 
 import numpy as np
+import torch
 
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.image_utils import imwrite
@@ -20,13 +21,21 @@ if __name__ == "__main__":
     # this is the image working directory
     root_dir = "/home/greg/dataset/medprov/PID/150300431/"
     root_dir = "/home/gbugaj/tmp/marie-cleaner/to-clean-001"
-    root_dir = "/home/gbugaj/tmp/marie-cleaner/161970410"
+    # root_dir = "/home/gbugaj/tmp/marie-cleaner/161970410"
 
     burst_dir = ensure_exists(os.path.join(root_dir, "burst"))
     stack_dir = ensure_exists(os.path.join(root_dir, "stack"))
     clean_dir = ensure_exists(os.path.join(root_dir, "clean"))
 
-    overlay_processor = OverlayProcessor(work_dir=work_dir)
+    # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
+    # # os.environ["OMP_NUM_THREADS"] = str(1)
+
+    # # Improves inference by ~ 13%-18%(verified empirically)
+    # torch.autograd.set_detect_anomaly(False)
+    # torch.set_grad_enabled(False)
+    # torch.autograd.profiler.emit_nvtx(enabled=False)
+
+    overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
 
     # process each image from the bursts directory
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.tif"))):
