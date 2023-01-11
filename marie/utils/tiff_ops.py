@@ -70,9 +70,6 @@ def __process_burst(frame, bitonal, name, generated_name, dest_dir, index, tmp_d
         output_path = os.path.join(dest_dir, generated_name)
         print(f"Bursting page# {index} : {name} > {generated_name} > {output_path}")
         # check if root directory exists
-        print(os.path.dirname(output_path))
-        print(frame.shape)
-
         photometric = "rbg"
         if bitonal:
             photometric = "minisblack"
@@ -83,7 +80,6 @@ def __process_burst(frame, bitonal, name, generated_name, dest_dir, index, tmp_d
                     gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
                 )[1]
 
-        print(frame.shape)
         # TODO : Replace this with image magic methods so we can do this  in one step
         with TiffWriter(output_path_tmp) as tif_writer:
             tif_writer.write(
