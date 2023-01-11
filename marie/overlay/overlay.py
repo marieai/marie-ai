@@ -2,6 +2,7 @@ import os
 import sys
 import time
 from shutil import copyfile
+from typing import Tuple
 
 import cv2
 import numpy as np
@@ -153,7 +154,9 @@ class OverlayProcessor(BaseHandler):
         return blended_img
 
     @Timer(text="Segmented in {:.2f} seconds")
-    def segment(self, document_id: str, img_path: str):
+    def segment(
+        self, document_id: str, img_path: str
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Form overlay segmentation
         """
@@ -177,6 +180,7 @@ class OverlayProcessor(BaseHandler):
 
         copyfile(img_path, dst_file_name)
         real_img = cv2.imread(dst_file_name)
+
         # viewImage(img, 'Source Image')
 
         fake_mask = self.__extract_segmentation_mask(
@@ -188,7 +192,7 @@ class OverlayProcessor(BaseHandler):
             print(f"Unable to segment image :{img_path}")
             return None, None
 
-        # Causes by forward pass, incrementing size of the ouput layer
+        # Causes by forward pass, incrementing size of the output layer
         if real_img.shape != fake_mask.shape:
             print(
                 "WARNING(FIXME/ADJUSTING): Sizes of input arguments do not match(real,"
@@ -215,3 +219,10 @@ class OverlayProcessor(BaseHandler):
 
         # real, fake, blended
         return real_img, fake_mask, blended
+
+    @Timer(text="Segmented in {:.2f} seconds")
+    def segment_frames(
+        self, document_id: str, frames: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+        pass

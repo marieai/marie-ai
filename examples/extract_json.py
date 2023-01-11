@@ -3,13 +3,11 @@ import glob
 import os
 import time
 import uuid
-from typing import Dict
 
-import numpy as np
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
-from marie.helper import random_uuid
+from marie.executor.ner.utils import visualize_icr
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
@@ -36,6 +34,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
+    # upload_url = f"{api_base_url}/ner"
 
     print(api_base_url)
     if False and not online(api_base_url):
@@ -64,11 +63,13 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
 
         json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
         json_payload = {
+            "queue_id": str(uuid.uuid4()),
             "data": base64_str,
             "mode": mode,
             "output": "json",
             "doc_id": str(uuid.uuid4()),
             "doc_type": "example_ner",
+            # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
         }
 
         # print(json_payload)
@@ -87,65 +88,6 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
             print(f"Request time : {delta}")
 
         return json_result
-
-
-def visualize_icr(image, icr_data):
-
-    return
-    viz_img = image.copy()
-    size = 18
-    draw = ImageDraw.Draw(viz_img, "RGBA")
-    try:
-        font = ImageFont.truetype(os.path.join("./assets/fonts", "FreeMono.ttf"), size)
-    except Exception as ex:
-        print(ex)
-        font = ImageFont.load_default()
-
-    print(f"pages = {len(icr_data)}")
-
-    for j, item in enumerate(icr_data):
-        lines_bboxes = item["meta"]["line_bboxes"]
-        for k, box in enumerate(lines_bboxes):
-            print(box)
-            x, y, w, h = box
-            draw.rectangle(
-                [x, y, x + w, y + h],
-                outline="#993300",
-                fill=(
-                    int(np.random.random() * 256),
-                    int(np.random.random() * 256),
-                    int(np.random.random() * 256),
-                    125,
-                ),
-                width=1,
-            )
-            #
-            # draw.rectangle(
-            #     [box[0], box[1], box[0] + box[2], box[1] + box[3]],
-            #     outline="#993300",
-            #     fill=(0, 180, 0, 125),
-            #     width=1,
-            # )
-
-    for i, icr_page in enumerate(icr_data):
-        for j, item in enumerate(icr_page["words"]):
-            box = item["box"]
-            text = item["text"]
-            line = item["line"]
-            text = f"{i} : {line} - {text} "
-
-            draw.rectangle(
-                [box[0], box[1], box[0] + box[2], box[1] + box[3]],
-                outline="#993300",
-                fill=(0, 180, 0, 125),
-                width=1,
-            )
-            draw.text(
-                (box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0
-            )
-
-        viz_img.show()
-        viz_img.save("/tmp/snippet/extract.png")
 
 
 def process_dir(image_dir: str):
@@ -168,8 +110,6 @@ if __name__ == "__main__":
     # Specify the path to the file you would like to process
     src = "./set-001/test/fragment-003.png"
     # src = "./set-001/test/fragment-002.png"
-    # src = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    src = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611424_1.png"
 
     if False:
         # process_dir("/home/gbugaj/tmp/")
