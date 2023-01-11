@@ -5,6 +5,7 @@ import tempfile
 from concurrent.futures.thread import ThreadPoolExecutor
 
 import cv2
+import numpy as np
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
@@ -63,16 +64,31 @@ def convert_group4(src_path, dst_path):
         image.save(filename=dst_path)
 
 
-def __process_burst(frame, name, generated_name, dest_dir, index, tmpdirname):
+def __process_burst(frame, bitonal, name, generated_name, dest_dir, index, tmp_dir):
     try:
-        output_path_tmp = os.path.join(tmpdirname, generated_name)
+        output_path_tmp = os.path.join(tmp_dir, generated_name)
         output_path = os.path.join(dest_dir, generated_name)
         print(f"Bursting page# {index} : {name} > {generated_name} > {output_path}")
+        # check if root directory exists
+        print(os.path.dirname(output_path))
+        print(frame.shape)
+
+        photometric = "rbg"
+        if bitonal:
+            photometric = "minisblack"
+            # at this time we expect TIFF frame to be already bitonal
+            if len(frame.shape) == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = cv2.threshold(
+                    gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
+                )[1]
+
+        print(frame.shape)
         # TODO : Replace this with image magic methods so we can do this  in one step
         with TiffWriter(output_path_tmp) as tif_writer:
             tif_writer.write(
                 frame,
-                photometric="minisblack",
+                photometric=photometric,
                 description=generated_name,
                 metadata=None,
             )
@@ -81,27 +97,49 @@ def __process_burst(frame, name, generated_name, dest_dir, index, tmpdirname):
         raise ident
 
 
-def burst_tiff(src_img_path, dest_dir):
-    """Burst multipage tiff into individual frames and save them to output directory"""
+def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
+    """
+    Burst multipage tiff into individual frames and save them to output directory
+
+    :param src_img_path: Source image
+    :param dest_dir: Destination directory
+    :param bitonal: Should image be converted to bitonal image
+    :param sequential: Should the document be process sequentially or in multithreaded fashion
+    """
     ret, frames = cv2.imreadmulti(src_img_path, [], cv2.IMREAD_ANYCOLOR)
     name = src_img_path.split("/")[-1].split(".")[0]
 
-    # fireup new threads for processing
     with tempfile.TemporaryDirectory() as tmp_dir:
-        with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+        if sequential:
             print("created temporary directory", tmp_dir)
             for i, frame in enumerate(frames):
                 index = i + 1
                 generated_name = f"{name}_page_{index:04}.tif"
-                executor.submit(
-                    __process_burst,
+                __process_burst(
                     frame,
+                    bitonal,
                     name,
                     generated_name,
                     dest_dir,
                     index,
                     tmp_dir,
                 )
+        else:
+            with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
+                print("created temporary directory", tmp_dir)
+                for i, frame in enumerate(frames):
+                    index = i + 1
+                    generated_name = f"{name}_page_{index:04}.tif"
+                    executor.submit(
+                        __process_burst,
+                        frame,
+                        bitonal,
+                        name,
+                        generated_name,
+                        dest_dir,
+                        index,
+                        tmp_dir,
+                    )
 
 
 def merge_tiff(src_dir, dst_img_path, sort_key):

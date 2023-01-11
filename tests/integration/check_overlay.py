@@ -12,20 +12,17 @@ from marie.utils.utils import ensure_exists
 # Example script that shows how to clean document
 if __name__ == "__main__":
 
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/PID_1956_9362_0_161970410.tif"
-    burst_dir = "/home/gbugaj/tmp/marie-cleaner/161970410/burst"
-    # burst_tiff(img_path, burst_dir)
-
-    # os.exit()
     work_dir = ensure_exists("/tmp/form-segmentation")
-    # this is the image working directory
-    root_dir = "/home/greg/dataset/medprov/PID/150300431/"
-    root_dir = "/home/gbugaj/tmp/marie-cleaner/to-clean-001"
-    # root_dir = "/home/gbugaj/tmp/marie-cleaner/161970410"
 
+    root_dir = "~/tmp/marie-cleaner/to-clean-001"
+
+    root_dir = os.path.expanduser(root_dir)
     burst_dir = ensure_exists(os.path.join(root_dir, "burst"))
     stack_dir = ensure_exists(os.path.join(root_dir, "stack"))
     clean_dir = ensure_exists(os.path.join(root_dir, "clean"))
+
+    img_path = os.path.join(root_dir, "PID_576_7188_0_150300411_4.tif")
+    burst_tiff(img_path, burst_dir)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     # # os.environ["OMP_NUM_THREADS"] = str(1)
@@ -40,9 +37,9 @@ if __name__ == "__main__":
     # process each image from the bursts directory
     for _path in sorted(glob.glob(os.path.join(burst_dir, "*.tif"))):
         try:
+            print(f"Processing : {_path}")
             filename = _path.split("/")[-1]
             docId = filename.split("/")[-1].split(".")[0]
-            # docId = _path.split("/")[-1]
             print(f"DocumentId : {docId}")
 
             if os.path.exists(os.path.join(clean_dir, filename)):
