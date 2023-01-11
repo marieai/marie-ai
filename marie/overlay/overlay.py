@@ -13,7 +13,7 @@ from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
 from marie.timer import Timer
-from marie.utils.image_utils import imwrite, read_image, viewImage
+from marie.utils.image_utils import imwrite, read_image, viewImage, hash_frames_fast
 from marie.utils.utils import ensure_exists
 
 # Add parent to the search path, so we can reference the module here without throwing and exception
@@ -71,6 +71,7 @@ class OverlayProcessor(BaseHandler):
         opt.no_flip = True
         opt.no_dropout = True
         opt.display_id = -1
+        opt.output_nc = 3  # Need to build model for BITONAL images only so we could output 1 chanell only
 
         model = create_model(opt)
         model.setup(opt)
@@ -79,7 +80,7 @@ class OverlayProcessor(BaseHandler):
         print("Model setup complete")
         return opt, model
 
-    @Timer(text="__extract_segmentation_mask in {:.4f} seconds")
+    @Timer(text="__extract_segmentation_mask in {:.2f} seconds")
     def __extract_segmentation_mask(self, img, dataroot_dir, work_dir, debug_dir):
         """
         Extract overlay segmentation mask for the image
@@ -128,14 +129,19 @@ class OverlayProcessor(BaseHandler):
                 print(
                     f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
                 )
-                return image_numpy[: img.shape[0], : img.shape[1], :]
+                return image_numpy[
+                    : img.shape[0], : img.shape[1], :
+                ]  # IF we do RGB2BGR
 
             return image_numpy
 
     @staticmethod
     def blend_to_text(real_img, fake_img):
-        """
-        Blend real and fake(generated) images together to generate extracted text mask
+        """Blend real and fake(generated) images together to generate extracted text mask
+
+        :param real_img: original image
+        :param fake_img: generated image
+        :return: blended image
         """
         real = read_image(real_img)
         fake = read_image(fake_img)
@@ -158,9 +164,14 @@ class OverlayProcessor(BaseHandler):
         self, document_id: str, img_path: str
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Form overlay segmentation
+        Segment form
+
+        :param document_id: unique document id
+        :param img_path: image to process
+        :return: original, mask, segmented tuple of images
         """
-        print(f"Creating overlay for : {img_path}")
+
+        print(f"Creating overlay for : {document_id} > {img_path}")
         if not os.path.exists(img_path):
             raise Exception("File not found : {}".format(img_path))
 
@@ -180,8 +191,10 @@ class OverlayProcessor(BaseHandler):
 
         copyfile(img_path, dst_file_name)
         real_img = cv2.imread(dst_file_name)
+        # viewImage(real_img, "Source Image")
 
-        # viewImage(img, 'Source Image')
+        if len(real_img.shape) != 3:
+            raise Exception("Expected image shape is h,w,c")
 
         fake_mask = self.__extract_segmentation_mask(
             real_img, dataroot_dir, work_dir, debug_dir
@@ -190,7 +203,7 @@ class OverlayProcessor(BaseHandler):
         # Unable to segment return empty mask
         if np.array(fake_mask).size == 0:
             print(f"Unable to segment image :{img_path}")
-            return None, None
+            return real_img, None, None
 
         # Causes by forward pass, incrementing size of the output layer
         if real_img.shape != fake_mask.shape:
@@ -221,8 +234,17 @@ class OverlayProcessor(BaseHandler):
         return real_img, fake_mask, blended
 
     @Timer(text="Segmented in {:.2f} seconds")
-    def segment_frames(
-        self, document_id: str, frames: np.ndarray
+    def segment_frame(
+        self, document_id: str, frame: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Segment form from given frame
 
-        pass
+        :param document_id:
+        :param frame:
+        """
+        checksum = hash_frames_fast(frames=[frame])
+        img_path = os.path.join(self.work_dir, f"{document_id}_{checksum}.png")
+        cv2.imwrite(img_path, frame)
+
+        return self.segment(document_id, img_path)
