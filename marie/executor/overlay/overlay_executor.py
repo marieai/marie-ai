@@ -1,3 +1,4 @@
+import io
 import os
 from typing import Dict, Union, Optional, Any
 
@@ -9,7 +10,12 @@ from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
 from marie.timer import Timer
 from marie.utils.docs import array_from_docs
-from marie.utils.image_utils import imwrite
+from marie.utils.image_utils import (
+    imwrite,
+    hash_file,
+    hash_frames_fast,
+    convert_to_bytes,
+)
 from marie.utils.utils import ensure_exists
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 
@@ -25,6 +31,7 @@ class OverlayExecutor(Executor):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.storage_enabled = storage_enabled  # should we store the results
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -72,19 +79,19 @@ class OverlayExecutor(Executor):
         """
         self.logger.info("Starting segment request")
 
-        if parameters:
-            for key, value in parameters.items():
-                self.logger.info("The p-value of {} is {}".format(key, value))
-            filename = parameters.get("ref_id")
-        else:
-            filename = "GREG"
-
-        storage_meta = {"ref_id": filename, "ref_type": "filename"}
-        print(f"storage_meta = {storage_meta}")
-
         try:
             frames = array_from_docs(docs)
-            print(f"frames = {len(frames)}")
+            self.logger.info(f"Processing total frames : {len(frames)}")
+
+            if parameters:
+                for key, value in parameters.items():
+                    self.logger.info("The p-value of {} is {}".format(key, value))
+                ref_id = parameters.get("ref_id")
+                ref_type = parameters.get("ref_type")
+            else:
+                ref_id = hash_frames_fast(frames)
+                ref_type = "checksum_f"
+
             results = []
             for i, frame in enumerate(frames):
                 try:
@@ -93,20 +100,42 @@ class OverlayExecutor(Executor):
                         doc_id, frame
                     )
 
-                    save_path = os.path.join("/tmp/", f"frame_{i}.png")
-                    # imwrite(save_path, mask, dpi=300)
-                    imwrite(save_path, mask)
-                    blob = None
+                    def _tags(index: int, ftype: str, checksum: str):
+                        return {
+                            "index": index,
+                            "type": ftype,
+                            "ttl": 48 * 60,
+                            "checksum": checksum,
+                        }
 
-                    with open(save_path, "rb") as f:
-                        blob = f.read()
+                    if self.storage_enabled:
+                        frame_checksum = hash_frames_fast(frames=[frame])
+                        docs = DocumentArray(
+                            [
+                                Document(
+                                    blob=convert_to_bytes(real),
+                                    tags=_tags(i, "real", frame_checksum),
+                                ),
+                                Document(
+                                    blob=convert_to_bytes(mask),
+                                    tags=_tags(i, "mask", frame_checksum),
+                                ),
+                                Document(
+                                    blob=convert_to_bytes(blended),
+                                    tags=_tags(i, "blended", frame_checksum),
+                                ),
+                            ]
+                        )
 
-                    dd = DocumentArray([Document(blob=blob)])
-                    self.__store(
-                        ref_id=filename, ref_type="filename", store_mode="blob", docs=dd
-                    )
+                        self.__store(
+                            ref_id=ref_id,
+                            ref_type=ref_type,
+                            store_mode="blob",
+                            docs=docs,
+                        )
+
                 except Exception as e:
-                    self.logger.warning("Unable to segment document")
+                    self.logger.warning(f"Unable to segment document : {e}")
 
             return results
         except BaseException as error:

@@ -165,6 +165,7 @@ class PostgreSQLHandler:
                 ref_id VARCHAR(64) not null,
                 ref_type VARCHAR(32) not null,
                 store_mode VARCHAR(32) not null,
+                tags JSONB,
                 embedding BYTEA,
                 blob BYTEA,
                 content JSONB,
@@ -228,8 +229,8 @@ class PostgreSQLHandler:
             try:
                 psycopg2.extras.execute_batch(
                     cursor,
-                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, store_mode, embedding, blob, "
-                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s,"
+                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, store_mode,tags, embedding, blob, "
+                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s, %s,"
                     " %s, %s, %s, %s,%s, current_timestamp, current_timestamp)",
                     [
                         (
@@ -237,6 +238,9 @@ class PostgreSQLHandler:
                             ref_id,
                             ref_type,
                             store_mode,
+                            serialize_to_json(doc.tags)
+                            if doc.tags is not None
+                            else None,
                             doc.embedding.astype(self.dump_dtype).tobytes()
                             if store_mode == "embedding" and doc.embedding is not None
                             else None,
