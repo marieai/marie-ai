@@ -9,6 +9,7 @@ from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
 from marie.timer import Timer
 from marie.utils.docs import array_from_docs
+from marie.utils.image_utils import imwrite
 from marie.utils.utils import ensure_exists
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 
@@ -83,7 +84,7 @@ class OverlayExecutor(Executor):
 
         try:
             frames = array_from_docs(docs)
-            print(f'frames = {len(frames)}')
+            print(f"frames = {len(frames)}")
             results = []
             for i, frame in enumerate(frames):
                 try:
@@ -91,8 +92,19 @@ class OverlayExecutor(Executor):
                     real, mask, blended = self.overlay_processor.segment_frame(
                         doc_id, frame
                     )
-                    dd = DocumentArray([Document(tensor=mask)])
-                    self.__store(ref_id=filename, ref_type="filename", docs=dd)
+
+                    save_path = os.path.join("/tmp/", f"frame_{i}.png")
+                    # imwrite(save_path, mask, dpi=300)
+                    imwrite(save_path, mask)
+                    blob = None
+
+                    with open(save_path, "rb") as f:
+                        blob = f.read()
+
+                    dd = DocumentArray([Document(blob=blob)])
+                    self.__store(
+                        ref_id=filename, ref_type="filename", store_mode="blob", docs=dd
+                    )
                 except Exception as e:
                     self.logger.warning("Unable to segment document")
 
@@ -120,11 +132,15 @@ class OverlayExecutor(Executor):
                 self.logger.warning("Storage config not set", exc_info=1)
 
     @Timer(text="stored in {:.4f} seconds")
-    def __store(self, ref_id: int, ref_type: str, docs: DocumentArray) -> None:
+    def __store(
+        self, ref_id: str, ref_type: str, store_mode: str, docs: DocumentArray
+    ) -> None:
         """Store results"""
         try:
             if self.storage is not None:
-                self.storage.add(docs, {"ref_id": ref_id, "ref_type": ref_type})
+                self.storage.add(
+                    docs, store_mode, {"ref_id": ref_id, "ref_type": ref_type}
+                )
         except Exception as e:
             self.logger.error("Unable to store document")
             print(e)
