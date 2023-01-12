@@ -32,9 +32,8 @@ class OverlayProcessor(BaseHandler):
 
     @staticmethod
     def __setup(cuda):
-        """
-        Model setup
-        """
+        """Model setup"""
+
         gpu_id = "0" if cuda else "-1"
 
         args = [
@@ -161,13 +160,14 @@ class OverlayProcessor(BaseHandler):
 
     @Timer(text="Segmented in {:.2f} seconds")
     def segment(
-        self, document_id: str, img_path: str
+        self, document_id: str, img_path: str, checksum: str = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Segment form
 
         :param document_id: unique document id
         :param img_path: image to process
+        :param checksum: image checksum
         :return: original, mask, segmented tuple of images
         """
 
@@ -175,15 +175,13 @@ class OverlayProcessor(BaseHandler):
         if not os.path.exists(img_path):
             raise Exception("File not found : {}".format(img_path))
 
-        name = document_id
-        work_dir = os.path.join(self.work_dir, name, "work")
-        debug_dir = os.path.join(self.work_dir, name, "debug")
-        dataroot_dir = os.path.join(self.work_dir, name, "dataroot_overlay")
+        name = document_id if checksum is None else checksum
 
-        ensure_exists(self.work_dir)
-        ensure_exists(work_dir)
-        ensure_exists(debug_dir)
-        ensure_exists(dataroot_dir)
+        work_dir = ensure_exists(os.path.join(self.work_dir, name, "work"))
+        debug_dir = ensure_exists(os.path.join(self.work_dir, name, "debug"))
+        dataroot_dir = ensure_exists(
+            os.path.join(self.work_dir, name, "dataroot_overlay")
+        )
 
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
         if False and not os.path.exists(dst_file_name):
@@ -191,8 +189,6 @@ class OverlayProcessor(BaseHandler):
 
         copyfile(img_path, dst_file_name)
         real_img = cv2.imread(dst_file_name)
-        # viewImage(real_img, "Source Image")
-
         if len(real_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
 
@@ -229,8 +225,6 @@ class OverlayProcessor(BaseHandler):
         tm = time.time_ns()
         if debug_visualization_enabled:
             imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
-
-        # real, fake, blended
         return real_img, fake_mask, blended
 
     @Timer(text="Segmented in {:.2f} seconds")
@@ -238,13 +232,16 @@ class OverlayProcessor(BaseHandler):
         self, document_id: str, frame: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Segment form from given frame
+        Segment from given frame
 
         :param document_id:
         :param frame:
         """
-        checksum = hash_frames_fast(frames=[frame])
-        img_path = os.path.join(self.work_dir, f"{document_id}_{checksum}.png")
+        frame_checksum = hash_frames_fast(frames=[frame])
+        ensure_exists(os.path.join(self.work_dir, frame_checksum))
+        img_path = os.path.join(
+            self.work_dir, frame_checksum, f"{document_id}_{frame_checksum}.png"
+        )
         cv2.imwrite(img_path, frame)
 
-        return self.segment(document_id, img_path)
+        return self.segment(document_id, img_path, frame_checksum)

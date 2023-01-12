@@ -197,7 +197,13 @@ Cleanup containers
 ```sh
 # tests/integration/psql_storage
 docker-compose -f docker-compose.yml --project-directory . up  --build --remove-orphans --env-file .env.prod 
+
+## new docker compose 
+docker compose --env-file .env -f ./Dockerfiles/docker-compose.storage.yml up
 ```
+
+
+
 
 # Setup Redis
 https://hub.docker.com/_/redis

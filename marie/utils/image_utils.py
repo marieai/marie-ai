@@ -1,9 +1,12 @@
 import hashlib
+from math import ceil
 
 import cv2
 import numpy as np
 import PIL.Image
 from PIL import Image
+
+from marie.timer import Timer
 
 
 def read_image(image):
@@ -96,7 +99,7 @@ def hash_file(filename):
     return h.hexdigest()
 
 
-def hash_bytes(data):
+def hash_bytes(data) -> str:
     """ "This function returns the SHA-1 hash
     of the file passed into it"""
     h = hashlib.sha1()
@@ -105,9 +108,10 @@ def hash_bytes(data):
     return h.hexdigest()
 
 
-def hash_frames_fast(frames: np.ndarray, max_frame_size=256):
+def hash_frames_fast_Z(frames: np.ndarray, max_frame_size=1024) -> str:
     """calculate hash based on the image frame"""
     hash_src = []
+    md5 = hashlib.md5()
     for _, frame in enumerate(frames):
         hash_src = np.append(
             hash_src,
@@ -119,4 +123,24 @@ def hash_frames_fast(frames: np.ndarray, max_frame_size=256):
                 ]
             ),
         )
-    return hash_bytes(hash_src)
+
+    md5.update(hash_src)
+    return md5.hexdigest()
+    # return hash_bytes(hash_src)
+
+
+@Timer(text="hashed in {:.4f} seconds")
+def hash_frames_fast(frames: np.ndarray, blocksize=2**20) -> str:
+    """calculate hash based on the image data frame"""
+    md5 = hashlib.md5()
+    for _, frame in enumerate(frames):
+        buf = np.ravel(frame)
+        steps = ceil(len(buf) / blocksize)
+        for k in range(0, steps):
+            s = k * blocksize
+            e = (k + 1) * blocksize
+            if e > len(buf):
+                e = len(buf)
+            v = buf[s:e]
+            md5.update(v)
+    return md5.hexdigest()
