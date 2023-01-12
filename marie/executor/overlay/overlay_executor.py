@@ -1,23 +1,20 @@
-import io
 import os
-from typing import Dict, Union, Optional, Any
+from typing import Dict, Union, Optional
 
 import torch
 from docarray import DocumentArray, Document
 
 from marie import Executor, requests, safely_encoded
+from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
 from marie.timer import Timer
 from marie.utils.docs import array_from_docs
 from marie.utils.image_utils import (
-    imwrite,
-    hash_file,
     hash_frames_fast,
     convert_to_bytes,
 )
 from marie.utils.utils import ensure_exists
-from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 
 
 class OverlayExecutor(Executor):
@@ -31,6 +28,9 @@ class OverlayExecutor(Executor):
         **kwargs,
     ):
         super().__init__(**kwargs)
+
+        print(f"storage_enabled  = {storage_enabled}")
+        print(f"storage_conf  = {storage_conf}")
         self.storage_enabled = storage_enabled  # should we store the results
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(

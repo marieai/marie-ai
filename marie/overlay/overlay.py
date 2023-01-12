@@ -6,6 +6,7 @@ from typing import Tuple
 
 import cv2
 import numpy as np
+from marie.constants import __model_path__
 
 from marie.base_handler import BaseHandler
 from marie.models.pix2pix.data import create_dataset
@@ -23,15 +24,26 @@ debug_visualization_enabled = False
 
 
 class OverlayProcessor(BaseHandler):
-    def __init__(self, work_dir, cuda: bool = False):
-        print("OverlayProcessor [cuda={}]".format(cuda))
+    def __init__(
+        self,
+        work_dir: str,
+        models_dir: str = os.path.join(__model_path__),
+        cuda: bool = True,
+        **kwargs,
+    ) -> None:
+        print(f"OverlayProcessor [cuda={cuda}]")
+        print(f"OverlayProcessor [models_dir={models_dir}]")
+
+        # ./model_zoo/overlay
+        checkpoint_dir = os.path.join(models_dir, "overlay")
         self.cuda = cuda
+        self.models_dir = models_dir
         self.work_dir = work_dir
-        self.opt, self.model = self.__setup(cuda)
+        self.opt, self.model = self.__setup(cuda, checkpoint_dir)
         self.initialized = False
 
     @staticmethod
-    def __setup(cuda):
+    def __setup(cuda, checkpoints_dir):
         """Model setup"""
 
         gpu_id = "0" if cuda else "-1"
@@ -58,7 +70,8 @@ class OverlayProcessor(BaseHandler):
             "--preprocess",
             "none",
             "--checkpoints_dir",
-            "./model_zoo/overlay",
+            checkpoints_dir,
+            # "./model_zoo/overlay",
         ]
 
         opt = TestOptions().parse(args)
