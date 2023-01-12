@@ -171,5 +171,4 @@ class OverlayExecutor(Executor):
                     docs, store_mode, {"ref_id": ref_id, "ref_type": ref_type}
                 )
         except Exception as e:
-            self.logger.error("Unable to store document")
-            print(e)
+            self.logger.error(f"Unable to store document : {e}")

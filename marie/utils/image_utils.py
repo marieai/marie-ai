@@ -78,7 +78,6 @@ def imwrite(output_path, img, dpi=None):
             pil_img = PIL.Image.fromarray(img)
             pil_img.save(output_path, dpi=dpi)
     except Exception as ident:
-        print(ident)
         raise ident
 
 
