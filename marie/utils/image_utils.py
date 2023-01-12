@@ -77,6 +77,7 @@ def imwrite(output_path, img, dpi=None):
             pil_img.save(output_path, dpi=dpi)
     except Exception as ident:
         print(ident)
+        raise ident
 
 
 def hash_file(filename):

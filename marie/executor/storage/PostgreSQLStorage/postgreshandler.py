@@ -19,21 +19,22 @@ from marie.numpyencoder import NumpyEncoder
 
 def doc_without_embedding(d: Document):
     new_doc = Document(d, copy=True)
-    serialized = json.dumps(
-        new_doc.content,
-        sort_keys=True,
-        separators=(",", ": "),
-        ensure_ascii=False,
-        indent=2,
-        cls=NumpyEncoder,
-    )
-    return serialized
+    if True:
+        serialized = json.dumps(
+            new_doc.content,
+            sort_keys=True,
+            separators=(",", ": "),
+            ensure_ascii=False,
+            indent=2,
+            cls=NumpyEncoder,
+        )
+        return serialized
+    #
     # new_doc.ClearField('embedding')
     # return new_doc.SerializeToString()
 
 
 def serialize_to_json(content: Any):
-    print(content)
     serialized = json.dumps(
         content,
         sort_keys=True,
@@ -163,7 +164,9 @@ class PostgreSQLHandler:
                 doc_id VARCHAR PRIMARY KEY,
                 ref_id VARCHAR(64) not null,
                 ref_type VARCHAR(32) not null,
+                store_mode VARCHAR(32) not null,
                 embedding BYTEA,
+                blob BYTEA,
                 content JSONB,
                 doc BYTEA,
                 shard int,
@@ -207,9 +210,10 @@ class PostgreSQLHandler:
                 "Please migrate your data to the latest version."
             )
 
-    def add(self, docs: DocumentArray, *args, **kwargs):
+    def add(self, docs: DocumentArray, store_mode="content", *args, **kwargs):
         """Insert the documents into the database.
 
+        :param store_mode: how to store the document, valid options content|blob|embedding|doc
         :param docs: list of Documents
         :param args: other arguments
         :param kwargs: other keyword arguments
@@ -224,21 +228,26 @@ class PostgreSQLHandler:
             try:
                 psycopg2.extras.execute_batch(
                     cursor,
-                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, embedding,"
-                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s,"
-                    " %s, %s, %s, %s, current_timestamp, current_timestamp)",
+                    f"INSERT INTO {self.table} (doc_id, ref_id, ref_type, store_mode, embedding, blob, "
+                    " content, doc, shard, created_at, updated_at) VALUES (%s, %s, %s, %s,"
+                    " %s, %s, %s, %s,%s, current_timestamp, current_timestamp)",
                     [
                         (
                             doc.id,
                             ref_id,
                             ref_type,
+                            store_mode,
                             doc.embedding.astype(self.dump_dtype).tobytes()
-                            if doc.embedding is not None
+                            if store_mode == "embedding" and doc.embedding is not None
+                            else None,
+                            doc.blob
+                            if store_mode == "blob" and doc.blob is not None
                             else None,
                             serialize_to_json(doc.content)
-                            if doc.content is not None
+                            if store_mode == "content" and doc.content is not None
                             else None,
-                            doc_without_embedding(doc),
+                            None,  # TODO : Need to make serialization much faster than what JSON serializer can provider
+                            # doc_without_embedding(doc),
                             self._get_next_shard(doc.id),
                         )
                         for doc in docs

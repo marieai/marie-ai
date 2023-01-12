@@ -89,8 +89,9 @@ class PostgreSQLStorage(Executor):
         """
         return self.handler.get_snapshot_size()
 
-    def add(self, docs: DocumentArray, parameters: Dict, **kwargs):
+    def add(self, docs: DocumentArray, store_mode: str, parameters: Dict, **kwargs):
         """Add Documents to Postgres
+        :param store_mode: how to store the document, valid options content|blob|embedding|doc
         :param docs: list of Documents
         :param parameters: parameters to the request,
         """
@@ -102,6 +103,7 @@ class PostgreSQLStorage(Executor):
 
         self.handler.add(
             docs[traversal_paths],
+            store_mode,
             **{
                 "ref_id": parameters.get("ref_id"),
                 "ref_type": parameters.get("ref_type"),

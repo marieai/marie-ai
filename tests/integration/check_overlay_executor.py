@@ -12,6 +12,7 @@ from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
 from marie.utils.image_utils import hash_file
 from marie.utils.json import store_json_object
+from marie.utils.utils import ensure_exists
 
 
 def process_file(
@@ -36,20 +37,8 @@ def process_file(
 
         results = executor.segment(docs, parameters)
         print(results)
+        ensure_exists("/tmp/tensors/json/")
         store_json_object(results, f"/tmp/tensors/json/{filename}.json")
-
-        if storage_enabled:
-            storage = PostgreSQLStorage(
-                hostname=storage_conf["hostname"],
-                port=int(storage_conf["port"]),
-                username=storage_conf["username"],
-                password=storage_conf["password"],
-                database=storage_conf["database"],
-                table="check_overlay_executor",
-            )
-
-            dd2 = DocumentArray([Document(content=payload)])
-            storage.add(dd2, {"ref_id": filename, "ref_type": "filename"})
 
         return results
 
@@ -80,6 +69,9 @@ if __name__ == "__main__":
 
     storage_enabled = False
     img_path = f"/home/gbugaj/tmp/2022-08-09/PID_698_7367_0_159277012.tif"
+    img_path = (
+        f"/home/greg/tmp/marie-cleaner/to-clean-001/PID_1925_9289_0_157186264.tif"
+    )
 
     if not os.path.isdir(img_path):
         process_file(executor, img_path, storage_enabled, storage_conf)
