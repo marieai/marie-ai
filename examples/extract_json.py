@@ -33,6 +33,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
+    upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
     # upload_url = f"{api_base_url}/ner"
 

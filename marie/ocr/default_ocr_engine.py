@@ -1,21 +1,20 @@
 import copy
 import os
 from distutils.util import strtobool as strtobool
-from typing import Dict, Union, Optional, List
+from typing import Union, List
 
 import cv2
-from PIL import Image
 import numpy as np
-from marie.constants import __model_path__
+from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode, BoxProcessorCraft
+from marie.constants import __model_path__
 from marie.document import TrOcrIcrProcessor
 from marie.logging.logger import MarieLogger
 from marie.ocr import OcrEngine, CoordinateFormat
 from marie.utils.base64 import encodeToBase64
-from marie.utils.image_utils import hash_bytes
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.utils import ensure_exists
-from marie.utils.image_utils import hash_file, hash_frames_fast
 
 
 class DefaultOcrEngine(OcrEngine):

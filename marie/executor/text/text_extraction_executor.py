@@ -7,6 +7,7 @@ from docarray import DocumentArray
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
+from marie.executor.text.extract_pipeline import ExtractPipeline
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.ocr import DefaultOcrEngine, OutputFormat, CoordinateFormat
@@ -29,6 +30,7 @@ class TextExtractionExecutor(Executor):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+        self.exec_pipe = ExtractPipeline(cuda=use_cuda)
 
     @requests(on="/text/status")
     def info(self, **kwargs):

@@ -6,10 +6,10 @@ from timer import Timer
 
 
 @Timer(text="Creating zip in {:.2f} seconds")
-def merge_zip(src_dir, dst_path):
+def merge_zip(src_dir, dst_path, glob_filter="*.*"):
     """Add files from directory to the zipfile without absolute path"""
     from os.path import basename
 
     with ZipFile(dst_path, "w") as newzip:
-        for filename in sorted(glob.glob(os.path.join(src_dir, "*.*"))):
+        for filename in sorted(glob.glob(os.path.join(src_dir, glob_filter))):
             newzip.write(filename, basename(filename))
