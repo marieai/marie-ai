@@ -1,7 +1,9 @@
 import hashlib
 from math import ceil
+from typing import Union, Tuple
 
 import cv2
+import io
 import numpy as np
 import PIL.Image
 from PIL import Image
@@ -145,3 +147,28 @@ def hash_frames_fast(frames: np.ndarray, blocksize=2**20) -> str:
             v = buf[s:e]
             md5.update(v)
     return md5.hexdigest()
+
+
+def convert_to_bytes(
+    frame: Union[np.ndarray, PIL.Image.Image],
+    fmt: str = 'PNG',
+    dpi: Tuple[int, int] = None,
+) -> bytes:
+    """
+    Convert image frame to byte array
+    @param frame:
+    @param fmt:
+    @param dpi:
+    @return:
+    """
+
+    if isinstance(frame, np.ndarray):
+        pil_img = PIL.Image.fromarray(frame)
+    elif isinstance(frame, PIL.Image.Image):
+        pil_img = frame
+    else:
+        raise TypeError(f"Unsupported type : {type(frame)}")
+    img_byte_arr = io.BytesIO()
+    pil_img.save(img_byte_arr, format=fmt, dpi=dpi)
+    img_byte_arr = img_byte_arr.getvalue()
+    return img_byte_arr
