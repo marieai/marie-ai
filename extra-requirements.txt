@@ -27,8 +27,7 @@
 
 numpy:                      standard,core
 # Pinning to version 3.20.0 as this will cause issues with tensorboard
-protobuf=3.20.0:            standard,core
-#protobuf>=3.20.0:          standard,core
+protobuf==3.20.0:            standard,core
 grpcio>=1.46.0,<1.48.1:     standard,core
 grpcio-reflection>=1.46.0,<1.48.1:  standard,core
 grpcio-health-checking>=1.46.0,<1.48.1:  standard,core
@@ -49,6 +48,7 @@ opentelemetry-semantic-conventions>=0.33b0:    perf,standard,devel
 opentelemetry-instrumentation-aiohttp-client>=0.33b0:    perf,standard,devel
 opentelemetry-instrumentation-fastapi>=0.33b0: perf,standard,devel
 opentelemetry-exporter-otlp-proto-grpc>=1.13.0: perf,standard,devel
+
 fastapi>=0.76.0:            standard,devel
 uvicorn[standard]:          standard,devel
 docker:                     standard,devel
@@ -61,7 +61,7 @@ python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
 aiostream:                  standard,devel
-
+python-consul2:             standard,devel
 
 pytest:                     test
 pytest-timeout:             test
@@ -74,8 +74,4 @@ pytest-reraise:             test
 mock:                       test
 requests-mock:              test
 pytest-custom_exit_code:    test
-
-
 strawberry-graphql>=0.96.0: cicd,devel
-
-python-consul2:                     perf,standard,devel

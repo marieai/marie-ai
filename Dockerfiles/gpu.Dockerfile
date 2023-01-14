@@ -1,5 +1,6 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
-ARG CUDA_VERSION=11.3.1
+ARG CUDA_VERSION=11.6.1
+#ARG CUDA_VERSION=11.3.1
 
 #FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu20.04 as build-image
@@ -25,7 +26,7 @@ LABEL org.opencontainers.image.vendor="Marie AI" \
       org.opencontainers.image.title="MarieAI " \
       org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
       org.opencontainers.image.authors="hello@marieai.co" \
-      org.opencontainers.image.url="https://github.com/gregbugaj/marie-ai" \
+      org.opencontainers.image.url="https://github.com/marieai/marie-ai" \
       org.opencontainers.image.documentation="https://docs.marieai.co"
 
 
@@ -70,8 +71,9 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
-RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
+RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
