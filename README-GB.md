@@ -136,8 +136,8 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 
 ```sh
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t marie-icr:2.0 --network=host --no-cache
-
 DOCKER_BUILDKIT=1 docker build . -f Dockerfile -t gregbugaj/marie-icr:2.2-cuda --no-cache && docker push gregbugaj/marie-icr:2.2-cuda
+
 
 DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0-cuda
 ```
@@ -378,3 +378,8 @@ https://github.com/onepanelio/onepanel
 # Executors / Flow
 https://github.com/jina-ai/dalle-flow
 https://github.com/jina-ai/clip-as-service
+
+
+
+
+                   
