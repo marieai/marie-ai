@@ -6,29 +6,22 @@ from datetime import datetime
 
 import cv2
 import numpy as np
-from flask_restful import Api
 
-import marie.conf
-from marie.api.BoxAPI import BoxAPI, BoxListAPI
 from marie.api.MarkAPI import MarkAPI, MarkListAPI
 from marie.api.QueueAPI import QueueAPI, QueueListAPI
 from marie.api.SegmenterAPI import SegmenterAPI, SegmenterListAPI
-from marie.logging.logger import MarieLogger
-from marie.utils.base64 import base64StringToBytes, encodeToBase64
-from marie.utils.utils import FileSystem, current_milli_time, ensure_exists
+from marie.logging.predefined import default_logger
+from marie.utils.base64 import base64StringToBytes
+from marie.utils.utils import FileSystem, ensure_exists
 
-logger = MarieLogger("")
-
-api = Api(
-    prefix=marie.conf.API_PREFIX
-)  # AttributeError: module 'config' has no attribute 'API_PREFIX
+logger = default_logger
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
 
 
 def store_temp_file(message_bytes, queue_id, file_type, store_raw):
-    """Store temp file from decoded payloa
+    """Store temp file from decoded payload
     :param message_bytes:
     :param queue_id:
     :param file_type:

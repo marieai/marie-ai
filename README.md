@@ -22,6 +22,11 @@ Install from source with:
 pip install -e .
 ```
 
+Build docker container:
+
+```sh
+DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0-cuda 
+```
 
 ## Command-line interface
 
