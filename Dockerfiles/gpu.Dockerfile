@@ -73,10 +73,17 @@ ENV PATH="/opt/venv/bin:${PATH}"
 RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
+
 RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
+
+# Order is important, need to install detectron2 last expected version is 0.6
+RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore
+RUN python3 -m pip install git+https://github.com/pytorch/fairseq.git
+RUN python3 -m pip install git+https://github.com/ying09/TextFuseNet.git
+RUN python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
-
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu20.04
 
@@ -95,10 +102,12 @@ ENV TERM=xterm \
     LC_ALL='C.UTF-8' \
     TZ=${TZ}
 
+# the following label use ARG hence will invalid the cache
+LABEL org.opencontainers.image.created=${BUILD_DATE} \
+      org.opencontainers.image.source="https://github.com/marieai/marie-ai${VCS_REF}" \
+      org.opencontainers.image.version=${MARIE_VERSION} \
+      org.opencontainers.image.revision=${VCS_REF}
 
-ARG USER="app-svc"
-ARG MARIE_CONFIGURATION="production"
-ENV MARIE_CONFIGURATION=${MARIE_CONFIGURATION}
 
 # Install necessary apt packages
 RUN apt-get update && \
@@ -121,22 +130,7 @@ RUN apt-get update && \
     && apt-get autoremove \
     && apt-get clean
 
-# Add a non-root user
-ENV USER=${USER}
-ENV GROUP=${USER}
-ENV HOME /home/${USER}
 ENV WORKDIR /marie
-
-# Setup users
-RUN groupadd -r app-svc -g 433
-# RUN useradd -u 431 -r -g app-svc -d ${HOME} -s /sbin/nologin -c "app-svc user" app-svc
-
-RUN useradd -u 431 -r -g ${GROUP} -m -d ${HOME} -s /sbin/nologin -c "${USER} user" ${USER} && \
-    if [ -z ${socks_proxy} ]; then \
-        echo export "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30\"" >> ${HOME}/.bashrc; \
-    else \
-        echo export "GIT_SSH_COMMAND=\"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ProxyCommand='nc -X 5 -x ${socks_proxy} %h %p'\"" >> ${HOME}/.bashrc; \
-    fi
 
 # Copy python virtual environment from build-image
 COPY --from=build-image /opt/venv /opt/venv
@@ -144,37 +138,25 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # Install and initialize MARIE-AI, copy all necessary files
 # copy will almost always invalididate the cache
-COPY --chown=${USER} ./im-policy.xml /etc/ImageMagick-6/policy.xml
-
-# Copy app resources
-COPY --chown=${USER} ./marie/info.py ${HOME}/
-COPY --chown=${USER} ./ssh ${HOME}/.ssh
-
-### FIXME : this should be mouted so it can be edited
-#COPY --chown=${USER} ./version.txt /
+COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
 # This is where we will map all of our configs
 RUN mkdir -p /etc/marie
-COPY --chown=${USER} ./config/marie.yml /etc/marie/marie.yml
+COPY ./config/marie.yml /etc/marie/marie.yml
 
 # this is important otherwise we will get python error that module is not found
 #RUN export PYTHONPATH="/marie"
 
 # copy will almost always invalid the cache
-COPY --chown=${USER} . /marie/
+COPY . /marie/
 
 # install marie again but this time no deps
 RUN cd /marie && \
     pip install --no-deps --compile . && \
     rm -rf /tmp/* && rm -rf /marie
 
-# RUN all commands below as container user
-USER ${USER}
 WORKDIR ${WORKDIR}
-
-RUN mkdir ${HOME}/logs
-RUN chown ${USER} ${HOME}/logs
-
 ENTRYPOINT ["marie"]
+#ENTRYPOINT ["pip", "list"]
 
 #docker run --gpus all --rm -it marieai/marie:3.0-cuda

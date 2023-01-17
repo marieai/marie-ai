@@ -24,6 +24,11 @@
 # core < perf < standard < devel: these tags correspond to Docker image tag
 # test: required for **setting up test ENVIRONMENT**
 
+# Need to figure out how to make this available via setup extras_require
+#git+https://github.com/facebookresearch/fvcore:           standard,core
+#git+https://github.com/ying09/TextFuseNet.git:            standard,core
+#git+https://github.com/pytorch/fairseq.git:               standard,core
+
 
 numpy:                      standard,core
 # Pinning to version 3.20.0 as this will cause issues with tensorboard
@@ -33,7 +38,8 @@ grpcio-reflection>=1.46.0,<1.48.1:  standard,core
 grpcio-health-checking>=1.46.0,<1.48.1:  standard,core
 pyyaml>=5.3.1:              standard,core
 packaging>=20.0:            standard,core
-docarray>=0.16.4:           standard,core
+# docarray>=0.16.4:           standard,core
+docarray==0.19.1:           standard,core
 
 prometheus_client:          standard,perf
 psutil:                     test
@@ -61,7 +67,6 @@ python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
 aiostream:                  standard,devel
-python-consul2:             standard,devel
 
 pytest:                     test
 pytest-timeout:             test
@@ -75,3 +80,48 @@ mock:                       test
 requests-mock:              test
 pytest-custom_exit_code:    test
 strawberry-graphql>=0.96.0: cicd,devel
+
+
+watchfiles>=0.18.0:           devel
+
+transformers:                 standard,core
+anyconfig:                    standard,core
+
+python-consul2:               standard,devel
+fastwer==0.1.3:               standard,core
+matplotlib:                   standard,core
+albumentations:               standard,core
+dominate:                     standard,core
+lmdb:                         standard,core
+natsort:                      standard,core
+celery:                       standard,core
+
+opencv-python==4.5.4.60:      standard,core
+imagecodecs:                  standard,core
+imutils:                      standard,core
+PyPDF4:                       standard,core
+reportlab:                    standard,core
+pycocotools:                  standard,core
+nltk:                         standard,core
+timm==0.4.12:                 standard,core
+segmentation-models-pytorch:  standard,core
+Wand:                         standard,core
+
+Cython:                       standard,core
+pybind11[global]:             standard,core
+jsons:                        standard,core
+shapely:                      standard,core
+gradio:                       standard,core
+psycopg2-binary==2.8.6:       standard,core
+pytest:                       standard,core
+nlpaug:                       standard,core
+munch:                        standard,core
+
+# opentelemetry-api:            standard,core
+
+onnxruntime:                  standard,core
+onnxruntime-gpu==1.13.1:      standard,core
+onnx==1.12.0:                 standard,core
+onnxconverter_common==1.13.0: standard,core
+onnxmltools:                  standard,core
+

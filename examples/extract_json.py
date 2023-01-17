@@ -12,6 +12,7 @@ from marie.utils.utils import ensure_exists
 
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 api_base_url = "http://192.168.102.65:51000/api"
+api_base_url = "http://192.168.1.14:51000/api"
 # api_base_url = "http://asp-gpu002:6000/api"
 # api_base_url = "http://traefik.localhost:5000/api"
 
@@ -33,7 +34,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
-    upload_url = f"{api_base_url}/overlay"
+    # upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
     # upload_url = f"{api_base_url}/ner"
 
@@ -117,10 +118,9 @@ if __name__ == "__main__":
         process_dir("/home/greg/dataset/assets-private/corr-indexer/validation")
 
     if True:
-        src = "/home/gbugaj/tmp/PID_1925_9289_0_157186264.tif"
-        src = "/home/gbugaj/tmp/PID_1028_7826_0_157684456.tif"
-        src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6501_0_158095129.tif"
-        src = "/home/gbugaj/tmp/medrx-missing-corr/PID_161_6503_0_158095036.tif"
+        src = "~/tmp/image5839050414130576656-0.tif"
+        src = os.path.expanduser(src)
+        print(src)
 
         icr_data = process_extract(
             queue_id=default_queue_id, mode="multiline", file_location=src
