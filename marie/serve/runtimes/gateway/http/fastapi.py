@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Optional
 
 from marie.helper import get_internal_ip
 from marie.importer import ImportExtensions
-from marie.serve.discovery import DiscoveryServiceMixin
 from marie.serve.gateway import BaseGateway
 
 if TYPE_CHECKING:
@@ -99,6 +98,9 @@ class FastAPIBaseGateway(BaseGateway):
         # app property will generate a new fastapi app each time called
         app = self.app
         _install_health_check(app, self.logger)
+        print("SETUP XXXXX")
+        print(self.runtime_args)
+        print(self.runtime_args.discovery)
         self._setup_service_discovery(
             name=self.name,
             host=self.host

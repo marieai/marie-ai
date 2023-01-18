@@ -258,7 +258,6 @@ class DefaultOcrEngine(OcrEngine):
 
             # calculate hash based on the image frame
             # ro_frames = np.array(ro_frames)
-            # ro_frames = np.asarray(ro_frames)
             checksum = hash_frames_fast(ro_frames)
 
             self.logger.debug(
