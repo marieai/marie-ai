@@ -25,7 +25,7 @@ pip install -e .
 Build docker container:
 
 ```sh
-DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0-cuda 
+DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="standard" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0-cuda 
 ```
 
 ## Command-line interface
@@ -41,5 +41,6 @@ It contains code examples for:
 * Document cleanup
 * Optical character recognition
 * Textbox detection
+* Named Entity Recognition
 * Form detection
 * And more

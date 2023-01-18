@@ -8,7 +8,6 @@ from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
 
-# from marie.executor.text.extract_pipeline import ExtractPipeline
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.ocr import DefaultOcrEngine, OutputFormat, CoordinateFormat

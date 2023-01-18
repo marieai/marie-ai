@@ -135,17 +135,17 @@ def load_pdf_frames(pdf_file_path):
 
 
 def convert_frames(frames, img_format):
-    # each frame needs to be converted to RGB format
+    """each frame needs to be converted to RGB format"""
     converted = []
     for frame in frames:
+        # cv to pil
         if isinstance(frame, np.ndarray):
             if len(frame.shape) == 2:
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
 
-        # cv to pil
-        if img_format == "pil":
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = Image.fromarray(frame)
+            if img_format == "pil":
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = Image.fromarray(frame)
 
         converted.append(frame)
     return converted

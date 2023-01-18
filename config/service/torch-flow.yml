@@ -1,0 +1,84 @@
+jtype: Flow
+version: '1'
+with:
+  port:
+    - 51000
+    - 52000
+  protocol:
+    - http
+    - grpc
+  discovery: True
+  discovery_host: 127.0.0.1
+  discovery_port: 8500
+
+  expose_endpoints:
+    /extract:
+      methods: ["POST"]
+      summary: Extract data-POC
+      tags:
+        - extract
+    /status:
+      methods: ["POST"]
+      summary: Status
+      tags:
+        - extract
+
+    /text/status:
+      methods: ["POST"]
+      summary: Extract data
+      tags:
+        - extract
+
+    /ner/extract:
+      methods: ["POST"]
+      summary: Extract NER
+      tags:
+        - ner
+
+executors:
+#  - name: extract_t
+#    uses:
+#      jtype: TextExtractionExecutor
+##      jtype: ExtractExecutor
+#      metas:
+#        py_modules:
+##          - marie_server.executors.extract.mserve_torch
+#          - marie.executor.text
+#    timeout_ready: 3000000
+#    replicas: 1
+
+  - name: ner_t
+    uses:
+      jtype: NerExtractionExecutor
+      with:
+        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
+      metas:
+        py_modules:
+#          - marie_server.executors.ner.mserve_torch
+          - marie.executor.ner
+    timeout_ready: 3000000
+    replicas: 1
+
+
+#  - name: overlay_tls
+#    uses:
+#      jtype: OverlayExecutor
+#      with:
+#        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
+#        storage_enabled : True
+#        storage_conf :
+#          provider: postgresql
+#          hostname: 127.0.0.1
+#          port: 5432
+#          username: postgres
+#          password: 123456
+#          database: postgres
+#      metas:
+#        py_modules:
+##          - marie_server.executors.ner.mserve_torch
+#          - marie.executor.overlay
+#    timeout_ready: 3000000
+#    replicas: 1
+
+
+#    --discovery --discovery-host 127.0.0.1 --discovery-port 8500 --host 192.168.102.65 --port 5555

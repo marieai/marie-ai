@@ -35,6 +35,7 @@ class DefaultOcrEngine(OcrEngine):
         self.logger = MarieLogger(context=self.__class__.__name__)
         work_dir_boxes = ensure_exists("/tmp/boxes")
         work_dir_icr = ensure_exists("/tmp/icr")
+        ensure_exists("/tmp/fragments")
 
         # sometimes we have CUDA/GPU support but want to only use CPU
         has_cuda = cuda
@@ -242,7 +243,12 @@ class DefaultOcrEngine(OcrEngine):
             regions = [] if regions is None else regions
             ro_frames = []
             # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
+
+            print(f"extract frames = {type(frames)}")
+
             for _, frame in enumerate(frames):
+                print(f"extract frames=X = {type(frame)}")
+
                 if isinstance(frame, Image.Image):
                     converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
                     f = copy.deepcopy(converted)
@@ -251,6 +257,8 @@ class DefaultOcrEngine(OcrEngine):
                 ro_frames.append(f)
 
             # calculate hash based on the image frame
+            # ro_frames = np.array(ro_frames)
+            # ro_frames = np.asarray(ro_frames)
             checksum = hash_frames_fast(ro_frames)
 
             self.logger.debug(
@@ -259,7 +267,6 @@ class DefaultOcrEngine(OcrEngine):
                 f" {coordinate_format}, {checksum}"
             )
 
-            ro_frames = np.array(ro_frames)
             if len(regions) == 0:
                 results = self.__process_extract_fullpage(
                     ro_frames, queue_id, checksum, pms_mode, coordinate_format
