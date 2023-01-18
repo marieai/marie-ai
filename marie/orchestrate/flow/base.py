@@ -2320,8 +2320,7 @@ class Flow(
             )
         )
 
-        if self.protocol == GatewayProtocolType.HTTP:
-
+        if str(GatewayProtocolType.HTTP) in _protocols:
             http_ext_table = self._init_table()
 
             _address = [
