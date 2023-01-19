@@ -1709,7 +1709,7 @@ def send_telemetry_event(event: str, obj: Any, **kwargs) -> None:
         return
 
     def _telemetry():
-        url = 'https://telemetry.marieaci.co/'
+        url = 'https://telemetry.marieai.co/'
         try:
             from marie.helper import get_full_version
 

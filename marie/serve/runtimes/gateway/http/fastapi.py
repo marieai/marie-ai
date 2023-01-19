@@ -98,9 +98,6 @@ class FastAPIBaseGateway(BaseGateway):
         # app property will generate a new fastapi app each time called
         app = self.app
         _install_health_check(app, self.logger)
-        print("SETUP XXXXX")
-        print(self.runtime_args)
-        print(self.runtime_args.discovery)
         self._setup_service_discovery(
             name=self.name,
             host=self.host

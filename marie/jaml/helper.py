@@ -220,9 +220,6 @@ def complete_path(
     :return: Completed file path.
     """
     _p = _search_file_in_paths(path, extra_search_paths)
-    print(_p)
-    print(extra_search_paths)
-    print(raise_nonexist)
     if _p is None and os.path.exists(path):
         # this checks both abs and relative paths already
         _p = path
