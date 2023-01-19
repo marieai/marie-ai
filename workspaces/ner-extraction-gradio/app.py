@@ -2,7 +2,8 @@ import gradio as gr
 from PIL import Image
 
 from marie.executor.ner import NerExtractionExecutor
-from marie.utils.image_utils import hash_file
+from marie.utils.docs import docs_from_file, array_from_docs
+from marie.utils.image_utils import hash_file, hash_frames_fast
 
 executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 
@@ -14,9 +15,11 @@ def process_image(image):
     img_path = "/tmp/gradio.png"
     image.save(img_path)
 
-    checksum = hash_file(img_path)
-    docs = None
-    kwa = {"checksum": checksum, "img_path": img_path}
+    # checksum = hash_file()
+    docs = docs_from_file(img_path)
+    arr = array_from_docs(docs)
+    checksum = hash_frames_fast(arr)
+    kwa = {}
     results = executor.extract(docs, **kwa)
     print(results)
 
