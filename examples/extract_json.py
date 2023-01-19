@@ -13,12 +13,15 @@ from marie.utils.utils import ensure_exists
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 api_base_url = "http://192.168.102.65:51000/api"
 api_base_url = "http://192.168.1.14:51000/api"
+api_base_url = "http://192.168.102.65:51000/api"
+api_base_url = "http://184.105.3.112:51000/api"
 # api_base_url = "http://asp-gpu002:6000/api"
 # api_base_url = "http://traefik.localhost:5000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
 auth_headers = {"Authorization": f"Bearer {api_key}"}
+headers = ({"Content-Type": "application/json; charset=utf-8"},)
 
 
 def online(api_ulr) -> bool:
@@ -34,11 +37,12 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
-    # upload_url = f"{api_base_url}/overlay"
+    upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
-    # upload_url = f"{api_base_url}/ner"
+    upload_url = f"{api_base_url}/ner"
 
     print(api_base_url)
+    print(upload_url)
     if False and not online(api_base_url):
         raise Exception(f"API server is not online : {api_base_url}")
 
@@ -79,9 +83,18 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         print(f"Uploading to marie-ai for processing : {file}")
         print(upload_url)
 
+        auth_headers = [
+            {"Authorization": f"Bearer {api_key}"},
+            {"Content-Type": "application/json; charset=utf-8"},
+        ]
+
         for k in range(1):
             start = time.time()
-            result = requests.post(upload_url, headers=auth_headers, json=json_payload)
+            result = requests.post(
+                upload_url,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                json=json_payload,
+            )
             json_result = result.json()
             print(json_result)
             # txt = json_result.text
@@ -119,6 +132,8 @@ if __name__ == "__main__":
 
     if True:
         src = "~/tmp/image5839050414130576656-0.tif"
+        src = "~/tmp/PID_1925_9289_0_157186264.tif"
+        # src = "~/tmp/PID_1925_9289_0_157186264.png"
         src = os.path.expanduser(src)
         print(src)
 
