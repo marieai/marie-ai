@@ -82,8 +82,6 @@ def process_workflow(src_file: str) -> None:
     exists = PathManager.exists(src_file)
     resolved = PathManager.get_local_path(src_file)
 
-    print(exists)
-    print(resolved)
     img_path = resolved
 
     # img_path = "/home/greg/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
