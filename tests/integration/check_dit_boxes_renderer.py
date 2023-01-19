@@ -16,11 +16,10 @@ if __name__ == "__main__":
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/burst/PID_1956_9362_0_161970410_page_0004.tif"
-    img_path = "/tmp/image8752805466404887776.pdf"
-    img_path = "/tmp/image2261988781642846537.pdf"
-    img_path = "/tmp/image4070887523510994537.pdf"
+    img_path = "~/tmp/163611436.tif"
+    img_path = os.path.expanduser(img_path)
 
+    print(img_path)
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
 

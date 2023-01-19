@@ -12,6 +12,7 @@ from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.ocr import DefaultOcrEngine, OutputFormat, CoordinateFormat
 from marie.utils.docs import array_from_docs
+from marie.utils.network import get_ip_address
 
 
 class TextExtractionExecutor(Executor):
@@ -94,9 +95,37 @@ class TextExtractionExecutor(Executor):
 
 
 class ExtractExecutor(Executor):
-    @requests(on="/status")
+    def __init__(
+        self,
+        name: str = '',
+        device: Optional[str] = None,
+        num_worker_preprocess: int = 4,
+        dtype: Optional[Union[str, torch.dtype]] = None,
+        **kwargs,
+    ):
+        """
+        :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
+        :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
+        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
+            number if you encounter OOM errors.
+        :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
+        """
+        super().__init__(**kwargs)
+        self.show_error = True  # show prediction errors
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        use_cuda = torch.cuda.is_available()
+
+        print(f"{use_cuda=}")
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            use_cuda = False
+        self.logger = MarieLogger(context=self.__class__.__name__)
+        print(f"{use_cuda=}")
+
+    @requests(on="/text/status")
     def status(self, parameters, **kwargs):
-        return {"index": "complete"}
+        use_cuda = torch.cuda.is_available()
+        print(f"{use_cuda=}")
+        return {"index": "complete", "use_cuda": use_cuda}
 
     @requests(on="/text/extract")
     @safely_encoded
@@ -120,21 +149,5 @@ class ExtractExecutor(Executor):
             {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
         ]
 
+        meta = get_ip_address()
         return out
-
-    def __init__(
-        self,
-        name: str = '',
-        device: Optional[str] = None,
-        num_worker_preprocess: int = 4,
-        dtype: Optional[Union[str, torch.dtype]] = None,
-        **kwargs,
-    ):
-        """
-        :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
-        :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
-        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
-            number if you encounter OOM errors.
-        :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
-        """
-        super().__init__(**kwargs)
