@@ -243,12 +243,7 @@ class DefaultOcrEngine(OcrEngine):
             regions = [] if regions is None else regions
             ro_frames = []
             # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
-
-            print(f"extract frames = {type(frames)}")
-
             for _, frame in enumerate(frames):
-                print(f"extract frames=X = {type(frame)}")
-
                 if isinstance(frame, Image.Image):
                     converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
                     f = copy.deepcopy(converted)

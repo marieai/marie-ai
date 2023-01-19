@@ -14,7 +14,7 @@ api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 api_base_url = "http://192.168.102.65:51000/api"
 api_base_url = "http://192.168.1.14:51000/api"
 api_base_url = "http://192.168.102.65:51000/api"
-api_base_url = "http://184.105.3.112:51000/api"
+# api_base_url = "http://184.105.3.112:51000/api"
 # api_base_url = "http://asp-gpu002:6000/api"
 # api_base_url = "http://traefik.localhost:5000/api"
 
@@ -37,9 +37,9 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
-    upload_url = f"{api_base_url}/overlay"
+    # upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
-    upload_url = f"{api_base_url}/ner"
+    # upload_url = f"{api_base_url}/ner"
 
     print(api_base_url)
     print(upload_url)
