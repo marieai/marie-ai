@@ -379,5 +379,8 @@ https://github.com/onepanelio/onepanel
 https://github.com/jina-ai/dalle-flow
 https://github.com/jina-ai/clip-as-service
 
-
-                   
+## Update NVIDA Drivers
+sudo apt purge nvidia-driver-465
+sudo apt autoremove -y
+sudo apt autoclean
+sudo apt install nvidia-driver-525 -f
