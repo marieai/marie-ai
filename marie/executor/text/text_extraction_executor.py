@@ -33,6 +33,15 @@ class TextExtractionExecutor(Executor):
         self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
         # self.exec_pipe = ExtractPipeline(cuda=use_cuda)
 
+        self.runtimeinfo = {
+            "name": self.__class__.__name__,
+            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "model": "",
+            "host": get_ip_address(),
+            "workspace": self.workspace,
+            "use_cuda": use_cuda,
+        }
+
     @requests(on="/text/status")
     def info(self, **kwargs):
         self.logger.info(f"Self : {self}")
@@ -114,12 +123,22 @@ class ExtractExecutor(Executor):
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
-
         print(f"{use_cuda=}")
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
         print(f"{use_cuda=}")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.runtime_info = {
+            "name": self.__class__.__name__,
+            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "model": "",
+            "host": get_ip_address(),
+            "workspace": self.workspace,
+            "use_cuda": use_cuda,
+            "device": self.device.__str__() if self.device is not None else "",
+        }
+        print(self.runtime_info)
 
     @requests(on="/text/status")
     def status(self, parameters, **kwargs):
