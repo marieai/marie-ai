@@ -9,6 +9,7 @@ import torch.nn.functional as nn
 # Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
 from docarray import DocumentArray
 from PIL import Image, ImageDraw
+from marie.utils.network import get_ip_address
 from torch.backends import cudnn
 from transformers import (
     AutoModelForTokenClassification,
@@ -52,22 +53,11 @@ check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
 
 
-def obtain_ocr_XXX(src_image: str, ocr_engine: OcrEngine):
-    """
-    Obtain OCR words
-    """
-    frames = frames_from_file(src_image)
-    results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
-
-    return results, frames
-
-
 def obtain_ocr(frames, ocr_engine: OcrEngine):
     """
     Obtain OCR words from
     """
     results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
-
     return results, frames
 
 
@@ -92,7 +82,7 @@ class NerExtractionExecutor(Executor):
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
-            self.device = "cpu"
+            self.device = torch.device("cpu")
 
         if use_cuda:
             try:
@@ -135,6 +125,16 @@ class NerExtractionExecutor(Executor):
         self.model = self.__load_model(model_name_or_path, self.device)
         self.processor = self.__create_processor()
         self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+
+        self.runtime_info = {
+            "name": self.__class__.__name__,
+            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "model": model_name_or_path,
+            "host": get_ip_address(),
+            "workspace": self.workspace,
+            "use_cuda": use_cuda,
+            "device": self.device.__str__() if self.device is not None else "",
+        }
 
     def __create_processor(self):
         """prepare for the model"""
@@ -286,7 +286,7 @@ class NerExtractionExecutor(Executor):
                 raise "Frame should have been an PIL.Image instance"
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
-        logger.info("Changing coordinate format from xyxy->xywh")
+        logger.debug("Changing coordinate format from xyxy->xywh")
 
         for data in ocr_results:
             for word in data["words"]:
@@ -573,8 +573,12 @@ class NerExtractionExecutor(Executor):
                 items.extend([row for row in aggregated_ner if int(row["page"]) == k])
                 visualize_extract_kv(output_filename, frames[k], items)
 
-        results = {"meta": aggregated_meta, "kv": aggregated_kv, "ner": aggregated_ner}
-
+        results = {
+            "runtime_info": self.runtime_info,
+            "meta": aggregated_meta,
+            "kv": aggregated_kv,
+            "ner": aggregated_ner,
+        }
         self.logger.debug(f" results : {results}")
         return results
 
