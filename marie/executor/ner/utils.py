@@ -1,5 +1,6 @@
+import io
 import os
-from typing import Union, List, Dict, Any
+from typing import Union, List, Dict, Any, Tuple
 
 import cv2
 import numpy as np
@@ -62,7 +63,14 @@ def draw_box(draw, box, text, fill_color, font):
 
 
 def visualize_prediction(
-    output_filename, frame, true_predictions, true_boxes, true_scores, label2color
+    output_filename,
+    frame,
+    true_predictions,
+    true_boxes,
+    true_scores,
+    label2color,
+    fmt: str = 'PNG',
+    dpi: Tuple[int, int] = None,
 ):
     image = frame.copy()
     # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
@@ -89,6 +97,11 @@ def visualize_prediction(
     # image.show()
     image.save(output_filename)
     del draw
+
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format=fmt, dpi=dpi)
+    img_byte_arr = img_byte_arr.getvalue()
+    return img_byte_arr
 
 
 def visualize_extract_kv(output_filename, frame, kv_results):
