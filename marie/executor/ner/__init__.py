@@ -1,1 +1,2 @@
 from .ner_extraction_executor import NerExtractionExecutor
+from .chunked_ner_extraction_executor import ChunkedNerExtractionExecutor
