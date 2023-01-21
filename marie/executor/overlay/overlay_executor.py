@@ -5,10 +5,9 @@ import torch
 from docarray import DocumentArray, Document
 
 from marie import Executor, requests, safely_encoded
-from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
+from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
-from marie.timer import Timer
 from marie.utils.docs import array_from_docs
 from marie.utils.image_utils import (
     hash_frames_fast,
@@ -17,7 +16,7 @@ from marie.utils.image_utils import (
 from marie.utils.utils import ensure_exists
 
 
-class OverlayExecutor(Executor):
+class OverlayExecutor(Executor, StorageMixin):
     """Executor for creating text overlays."""
 
     def __init__(
@@ -28,10 +27,6 @@ class OverlayExecutor(Executor):
         **kwargs,
     ):
         super().__init__(**kwargs)
-
-        print(f"storage_enabled  = {storage_enabled}")
-        print(f"storage_conf  = {storage_conf}")
-        self.storage_enabled = storage_enabled  # should we store the results
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -42,7 +37,10 @@ class OverlayExecutor(Executor):
             use_cuda = False
         work_dir = ensure_exists("/tmp/form-segmentation")
         self.overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=use_cuda)
-        self.__setup_storage(storage_enabled, storage_conf)
+
+        print(f"storage_conf  = {storage_conf}")
+        self.logger.info(f"Storage enabled: {storage_enabled}")
+        self.setup_storage(storage_enabled, storage_conf)
 
     @requests(on="/overlay/segment")
     @safely_encoded
@@ -89,8 +87,11 @@ class OverlayExecutor(Executor):
                 ref_id = parameters.get("ref_id")
                 ref_type = parameters.get("ref_type")
             else:
+                self.logger.warning(
+                    f"REF_ID and REF_TYPE are not present in parameters"
+                )
                 ref_id = hash_frames_fast(frames)
-                ref_type = "checksum_f"
+                ref_type = "checksum_frames"
 
             results = []
             for i, frame in enumerate(frames):
@@ -127,7 +128,7 @@ class OverlayExecutor(Executor):
                             ]
                         )
 
-                        self.__store(
+                        self.store(
                             ref_id=ref_id,
                             ref_type=ref_type,
                             store_mode="blob",
@@ -144,31 +145,3 @@ class OverlayExecutor(Executor):
                 return {"error": str(error)}
             else:
                 return {"error": "inference exception"}
-
-    def __setup_storage(self, storage_enabled, storage_conf: Dict[str, str]):
-        self.storage = None
-        if storage_enabled:
-            try:
-                self.storage = PostgreSQLStorage(
-                    hostname=storage_conf["hostname"],
-                    port=int(storage_conf["port"]),
-                    username=storage_conf["username"],
-                    password=storage_conf["password"],
-                    database=storage_conf["database"],
-                    table="overlay_indexer",
-                )
-            except Exception as e:
-                self.logger.warning("Storage config not set", exc_info=1)
-
-    @Timer(text="stored in {:.4f} seconds")
-    def __store(
-        self, ref_id: str, ref_type: str, store_mode: str, docs: DocumentArray
-    ) -> None:
-        """Store results"""
-        try:
-            if self.storage is not None:
-                self.storage.add(
-                    docs, store_mode, {"ref_id": ref_id, "ref_type": ref_type}
-                )
-        except Exception as e:
-            self.logger.error(f"Unable to store document : {e}")

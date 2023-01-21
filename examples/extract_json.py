@@ -36,10 +36,10 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
-    upload_url = f"{api_base_url}/extract"
+    # upload_url = f"{api_base_url}/extract"
     # upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
-    # upload_url = f"{api_base_url}/ner"
+    upload_url = f"{api_base_url}/ner"
 
     print(api_base_url)
     print(upload_url)
@@ -73,7 +73,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
             "data": base64_str,
             "mode": mode,
             "output": "json",
-            "doc_id": str(uuid.uuid4()),
+            "doc_id": f"greg-{str(uuid.uuid4())}",
             "doc_type": "example_ner",
             # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
         }
