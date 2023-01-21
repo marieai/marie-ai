@@ -713,30 +713,40 @@ class ChunkedNerExtractionExecutor(Executor):
             visualize_icr(frames, ocr_results, file_hash)
 
         assert len(ocr_results) == len(frames)
+
+        # build a list of NerChunk
         chunks = []
+        chunk_size = 64
 
         frames = convert_frames(frames, img_format="pil")
         for k, (result, image) in enumerate(zip(ocr_results, frames)):
             if not isinstance(image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
+
+            # make an NerChunk for each image
             chunk = NerChunk(image)
             chunk.boxes.append([])
             chunk.words.append([])
-            count = 0
 
+            # compute the window size
             result_words = result["words"]
-            for i, word in enumerate(result["words"]):
-                chunk.words[count].append(word["text"])
-                chunk.boxes[count].append(normalize_bbox(word["box"], (image.size[0], image.size[1])))
-                # This is to prevent following error
-                # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
-                if len(chunk.boxes[count]) == 512:
-                    chunk.boxes.append([])
-                    chunk.words.append([])
-                    count += 1
+            result_words_size = len(result_words)
+            window_size = result_words_size - chunk_size + 1 if result_words_size > 512 else result_words_size
 
-            assert len(chunk.words[count]) == len(chunk.boxes[count])
+            # sliding window
+            for i in range(window_size):
+                sub_words = result_words[i:chunk_size + i]
+                chunk.boxes[i].extend([w["box"] for w in sub_words])
+                chunk.words[i].extend([w["text"] for w in sub_words])
+                chunk.boxes.append([])
+                chunk.words.append([])
+                
+                # if we have everything, end the loop.
+                if result_words_size <= 512 and window_size <= k + i:
+                    break
+
             chunks.append(chunk)
+
         # because our boxes and words sizes can potentially grow beyond frames, we need to change the assertion.
         # assert len(frames) == len(boxes) == len(words)
         # assert len(boxes) == len(words)
