@@ -7,7 +7,7 @@ import transformers
 from marie import Document, DocumentArray
 from marie.constants import __config_dir__, __model_path__
 from marie.conf.helper import load_yaml, storage_provider_config
-from marie.executor.ner import ChunkedNerExtractionExecutor
+from marie.executor.ner import SlidingWindowNerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
@@ -16,7 +16,7 @@ from marie.utils.json import store_json_object
 
 
 def process_file(
-    executor: ChunkedNerExtractionExecutor,
+    executor: SlidingWindowNerExtractionExecutor,
     img_path: str,
     storage_enabled: bool,
     storage_conf: Dict[str, str],
@@ -48,7 +48,7 @@ def process_file(
 
 
 def process_dir(
-    executor: ChunkedNerExtractionExecutor,
+    executor: SlidingWindowNerExtractionExecutor,
     image_dir: str,
     storage_enabled: bool,
     conf: Dict[str, str],
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     # Load config
     config_data = load_yaml(os.path.join(__config_dir__, "marie-debug.yml"))
     storage_conf = storage_provider_config("postgresql", config_data)
-    executor = ChunkedNerExtractionExecutor(_name_or_path)
+    executor = SlidingWindowNerExtractionExecutor(_name_or_path)
 
     storage_enabled = False
     img_path = f"/home/gbugaj/tmp/2022-08-09/PID_698_7367_0_159277012.tif"
