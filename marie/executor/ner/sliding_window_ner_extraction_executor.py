@@ -1,29 +1,21 @@
 import logging
 import os
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, Dict
 
 import numpy as np
 import torch
 import torch.nn.functional as nn
+from PIL import Image, ImageDraw
 
 # Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
-from docarray import DocumentArray
-from PIL import Image, ImageDraw
-from torch.backends import cudnn
-from transformers import (
-    AutoModelForTokenClassification,
-    LayoutLMv3FeatureExtractor,
-    LayoutLMv3Processor,
-    LayoutLMv3TokenizerFast,
-)
-from transformers.utils import check_min_version
-
+from docarray import DocumentArray, Document
 from marie import Executor, requests, safely_encoded
 from marie.boxes import PSMode
-from marie.constants import __marie_home__
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from marie.boxes.line_processor import find_line_number
+from marie.constants import __marie_home__
+from marie.executor.mixin import StorageMixin
 from marie.executor.ner.utils import (
     draw_box,
     get_font,
@@ -38,28 +30,25 @@ from marie.logging.logger import MarieLogger
 from marie.ocr import DefaultOcrEngine, OcrEngine, CoordinateFormat
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
-    frames_from_file,
     convert_frames,
-    load_image,
     array_from_docs,
 )
-from marie.utils.image_utils import hash_file, hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
+from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
+from torch.backends import cudnn
+from transformers import (
+    AutoModelForTokenClassification,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3Processor,
+    LayoutLMv3TokenizerFast,
+)
+from transformers.utils import check_min_version
 
 check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
-
-
-def obtain_ocr_XXX(src_image: str, ocr_engine: OcrEngine):
-    """
-    Obtain OCR words
-    """
-    frames = frames_from_file(src_image)
-    results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
-
-    return results, frames
 
 
 def obtain_ocr(frames, ocr_engine: OcrEngine):
@@ -67,7 +56,6 @@ def obtain_ocr(frames, ocr_engine: OcrEngine):
     Obtain OCR words from
     """
     results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
-
     return results, frames
 
 
@@ -77,16 +65,22 @@ class NerChunk:
         self.boxes = []
         self.words = []
 
-
-class ChunkedNerExtractionExecutor(Executor):
+class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
     """
     Executor for extracting text.
     Text extraction can either be executed out over the entire image or over selected regions of interests (ROIs)
     aka bounding boxes.
     """
 
-    def __init__(self, model_name_or_path: Optional[Union[str, os.PathLike]], **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        model_name_or_path: Optional[Union[str, os.PathLike]],
+        storage_enabled: bool = False,
+        storage_conf: Dict[str, str] = None,
+        **kwargs,
+    ):
+        # super().__init__(**kwargs)
+        super(SlidingWindowNerExtractionExecutor, self).__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -95,11 +89,15 @@ class ChunkedNerExtractionExecutor(Executor):
         self.logger.info(f"NER Extraction Executor : {model_name_or_path}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        print(storage_enabled)
+        print(storage_conf)
+        self.setup_storage(storage_enabled, storage_conf)
+
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
-            self.device = "cpu"
+            self.device = torch.device("cpu")
 
         if use_cuda:
             try:
@@ -142,6 +140,16 @@ class ChunkedNerExtractionExecutor(Executor):
         self.model = self.__load_model(model_name_or_path, self.device)
         self.processor = self.__create_processor()
         self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+
+        self.runtime_info = {
+            "name": self.__class__.__name__,
+            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "model": model_name_or_path,
+            "host": get_ip_address(),
+            "workspace": self.workspace,
+            "use_cuda": use_cuda,
+            "device": self.device.__str__() if self.device is not None else "",
+        }
 
     def __create_processor(self):
         """prepare for the model"""
@@ -294,7 +302,7 @@ class ChunkedNerExtractionExecutor(Executor):
                 raise "Frame should have been an PIL.Image instance"
 
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
-        logger.info("Changing coordinate format from xyxy->xywh")
+        logger.debug("Changing coordinate format from xyxy->xywh")
 
         for data in ocr_results:
             for word in data["words"]:
@@ -581,8 +589,12 @@ class ChunkedNerExtractionExecutor(Executor):
                 items.extend([row for row in aggregated_ner if int(row["page"]) == k])
                 visualize_extract_kv(output_filename, frames[k], items)
 
-        results = {"meta": aggregated_meta, "kv": aggregated_kv, "ner": aggregated_ner}
-
+        results = {
+            "runtime_info": self.runtime_info,
+            "meta": aggregated_meta,
+            "kv": aggregated_kv,
+            "ner": aggregated_ner,
+        }
         self.logger.debug(f" results : {results}")
         return results
 
@@ -659,14 +671,15 @@ class ChunkedNerExtractionExecutor(Executor):
                         "confidence": region["confidence"],
                     }
 
-    def preprocess(self, frames: [np.array]):
-        """Pre-process src frames for NER extraction
+    def preprocess(self, frames: np.ndarray):
+        """Pre-process src frames for Named entity extraction
+
         :param frames:
         :return:
         """
 
         if frames is None:
-            self.logger.info(f"Frames are empty")
+            self.logger.warning(f"Frames are empty")
             return
 
         # Obtain OCR results
@@ -722,7 +735,7 @@ class ChunkedNerExtractionExecutor(Executor):
         for k, (result, image) in enumerate(zip(ocr_results, frames)):
             if not isinstance(image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
-
+            
             # make an NerChunk for each image
             chunk = NerChunk(image)
             chunk.boxes.append([])
@@ -746,7 +759,7 @@ class ChunkedNerExtractionExecutor(Executor):
                     break
 
             chunks.append(chunk)
-
+            assert len(chunk.words[k]) == len(chunk.boxes[k])
         # because our boxes and words sizes can potentially grow beyond frames, we need to change the assertion.
         # assert len(frames) == len(boxes) == len(words)
         # assert len(boxes) == len(words)
@@ -816,22 +829,60 @@ class ChunkedNerExtractionExecutor(Executor):
 
     @requests(on="/ner/extract")
     @safely_encoded
-    def extract(self, docs: Optional[DocumentArray] = None, **kwargs):
-        """
-        Args:
-            docs : Documents to process
-        """
-
-        queue_id: str = kwargs.get("queue_id", "0000-0000-0000-0000")
-        image_src: str = kwargs.get("img_path", None)
-
-        for key, value in kwargs.items():
+    def extract(
+        self, docs: DocumentArray, parameters: Optional[Dict] = None, *args, **kwargs
+    ):
+        for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
-        loaded, chunks, ocr_results, file_hash = self.preprocess(
-            array_from_docs(docs)
+        frames = array_from_docs(docs)
+        if parameters:
+            for key, value in parameters.items():
+                self.logger.info("The p-value of {} is {}".format(key, value))
+            ref_id = parameters.get("ref_id")
+            ref_type = parameters.get("ref_type")
+        else:
+            self.logger.warning(f"REF_ID and REF_TYPE are not present in parameters")
+            ref_id = hash_frames_fast(frames)
+            ref_type = "checksum_frames"
+
+        loaded, chunks, ocr_results, frames_hash = self.preprocess(
+            frames
         )
-        annotations = self.process(chunks, file_hash)
-        ner_results = self.postprocess(chunks, annotations, ocr_results, file_hash)
+
+        annotations = self.process(chunks, frames_hash)
+        ner_results = self.postprocess(
+            chunks, annotations, ocr_results, frames_hash
+        )
+        self.persist(ref_id, ref_type, ner_results)
 
         return ner_results
+
+    def persist(self, ref_id: str, ref_type: str, ner_results: Any) -> None:
+        """Persist results"""
+
+        def _tags(index: int, ftype: str, checksum: str):
+            return {
+                "index": index,
+                "type": ftype,
+                "ttl": 48 * 60,
+                "checksum": checksum,
+            }
+
+        if self.storage_enabled:
+            # frame_checksum = hash_frames_fast(frames=[frame])
+            docs = DocumentArray(
+                [
+                    Document(
+                        content=ner_results,
+                        tags=_tags(-1, "ner_results", ref_id),
+                    )
+                ]
+            )
+
+            self.store(
+                ref_id=ref_id,
+                ref_type=ref_type,
+                store_mode="content",
+                docs=docs,
+            )
