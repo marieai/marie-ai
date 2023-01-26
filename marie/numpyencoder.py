@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 
 
-def encodeimg2b64(img: np.array) -> str:
+def encodeimg2b64(img: np.ndarray) -> str:
     """encode image to base64"""
     retval, buffer = cv2.imencode(".png", img)
     png_as_text = base64.b64encode(buffer).decode()

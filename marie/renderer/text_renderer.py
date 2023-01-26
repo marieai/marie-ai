@@ -27,7 +27,7 @@ class TextRenderer(ResultRenderer):
         return "TextRenderer"
 
     def __render_page(
-        self, image: np.array, result: Dict[str, Any], page_index: int
+        self, image: np.ndarray, result: Dict[str, Any], page_index: int
     ) -> str:
         """Render single result page into text"""
         # 8px X 22px = 2.75 pytorch

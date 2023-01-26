@@ -146,7 +146,7 @@ class DefaultOcrEngine(OcrEngine):
         # TODO : Introduce mini-batched by region to improve inference
         for region in regions:
             try:
-                self.logger.info(f"Extracting box : {region}")
+                self.logger.debug(f"Extracting box : {region}")
                 rid = region["id"]
                 page_index = region["pageIndex"]
                 x = region["x"]
@@ -190,7 +190,7 @@ class DefaultOcrEngine(OcrEngine):
                 # 1 - Simple
                 # 2 - Full
                 # 3 - HOCR
-                self.logger.info(result)
+                self.logger.debug(result)
                 rendering_mode = "simple"
                 region_result = {}
                 if rendering_mode == "simple":
