@@ -73,8 +73,8 @@ class NerExtractionExecutor(Executor, StorageMixin):
         storage_conf: Dict[str, str] = None,
         **kwargs,
     ):
-        # super().__init__(**kwargs)
-        super(NerExtractionExecutor, self).__init__(**kwargs)
+        super().__init__(**kwargs)
+        # super(NerExtractionExecutor, self).__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
