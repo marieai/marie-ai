@@ -384,3 +384,9 @@ sudo apt purge nvidia-driver-465
 sudo apt autoremove -y
 sudo apt autoclean
 sudo apt install nvidia-driver-525 -f
+
+
+m-17
+m-16
+m-15
+m-14
