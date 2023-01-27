@@ -26,6 +26,7 @@ class DataRequestProto:
         os.environ['JINA_GRPC_SEND_BYTES'] = str(
             len(r) + int(os.environ.get('JINA_GRPC_SEND_BYTES', 0))
         )
+
         return r
 
     @staticmethod

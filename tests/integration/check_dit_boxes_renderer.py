@@ -17,6 +17,7 @@ if __name__ == "__main__":
     ensure_exists("/tmp/fragments")
 
     img_path = "~/tmp/163611436.tif"
+    img_path = "~/tmp/wrong-ocr/169118830.tif"
     img_path = os.path.expanduser(img_path)
 
     print(img_path)

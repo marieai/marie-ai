@@ -68,7 +68,15 @@ class TextExtractionExecutor(Executor):
             else:
                 payload = parameters["payload"]
 
+            # https://github.com/marieai/marie-ai/issues/51
             regions = payload["regions"] if "regions" in payload else []
+            for region in regions:
+                region["id"] = int(region["id"])
+                region["x"] = int(region["x"])
+                region["y"] = int(region["y"])
+                region["w"] = int(region["w"])
+                region["h"] = int(region["h"])
+                region["pageIndex"] = int(region["pageIndex"])
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             coordinate_format = CoordinateFormat.from_value(
@@ -94,6 +102,8 @@ class TextExtractionExecutor(Executor):
                 frames, pms_mode, coordinate_format, regions, queue_id
             )
             # store_json_object(results, '/tmp/fragments/results-complex.json')
+
+            print(results)
             return results
         except BaseException as error:
             self.logger.error("Extract error", error)
@@ -156,6 +166,20 @@ class ExtractExecutor(Executor):
         import threading
         import time
 
+        if "payload" not in parameters or parameters["payload"] is None:
+            return {"error": "empty payload"}
+        else:
+            payload = parameters["payload"]
+
+        # https://github.com/marieai/marie-ai/issues/51
+
+        regions = payload["regions"] if "regions" in payload else []
+        for region in regions:
+            region["id"] = int(region["id"])
+            region["pageIndex"] = int(region["pageIndex"])
+
+        print('AFTER')
+        print(payload)
         time.sleep(1.3)
 
         for doc in docs:
