@@ -258,9 +258,9 @@ class TrOcrIcrProcessor(IcrProcessor):
                     results.append(row)
                     logger.debug(f"results : {row}")
 
-                logger.info("Batch time : %s" % (time.time() - batch_start))
+                logger.debug("Batch time : %s" % (time.time() - batch_start))
 
-            logger.info("ICR Time elapsed: %s" % (time.time() - start))
+            logger.debug("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex

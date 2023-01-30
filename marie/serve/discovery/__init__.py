@@ -55,6 +55,15 @@ class DiscoveryServiceMixin:
         discovery_watchdog_interval: Optional[int] = 60,
     ) -> None:
 
+        print("DISCOVERY SETUP")
+        print(f"{name=}")
+        print(f"{host=}")
+        print(f"{port=}")
+        print(f"{discovery=}")
+        print(f"{discovery_host=}")
+        print(f"{discovery_port=}")
+
+        print("DISCOVERY SETUP")
         if self.logger is None:
             raise Exception("Expected logger to be configured")
 

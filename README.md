@@ -44,3 +44,7 @@ It contains code examples for:
 * Named Entity Recognition
 * Form detection
 * And more
+
+
+## Telemetry
+https://telemetry.marieai.co/
