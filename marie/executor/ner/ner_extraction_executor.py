@@ -807,13 +807,11 @@ class NerExtractionExecutor(Executor, StorageMixin):
     def extract(
         self, docs: DocumentArray, parameters: Optional[Dict] = None, *args, **kwargs
     ):
-        for key, value in parameters.items():
-            self.logger.info("The value of {} is {}".format(key, value))
-
         frames = array_from_docs(docs)
+
         if parameters:
             for key, value in parameters.items():
-                self.logger.info("The p-value of {} is {}".format(key, value))
+                self.logger.debug("The p-value of {} is {}".format(key, value))
             ref_id = parameters.get("ref_id")
             ref_type = parameters.get("ref_type")
         else:

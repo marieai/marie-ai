@@ -98,18 +98,19 @@ class FastAPIBaseGateway(BaseGateway):
         # app property will generate a new fastapi app each time called
         app = self.app
         _install_health_check(app, self.logger)
-        self._setup_service_discovery(
-            name=self.name,
-            host=self.host
-            if self.runtime_args.host != '0.0.0.0'
-            else get_internal_ip(),
-            port=self.port,
-            scheme=self.scheme if self.scheme else 'http',
-            discovery=self.runtime_args.discovery,
-            discovery_host=self.runtime_args.discovery_host,
-            discovery_port=self.runtime_args.discovery_port,
-            discovery_watchdog_interval=self.runtime_args.discovery_watchdog_interval,
-        )
+        if False:
+            self._setup_service_discovery(
+                name=self.name,
+                host=self.host
+                if self.runtime_args.host != '0.0.0.0'
+                else get_internal_ip(),
+                port=self.port,
+                scheme=self.scheme if self.scheme else 'http',
+                discovery=self.runtime_args.discovery,
+                discovery_host=self.runtime_args.discovery_host,
+                discovery_port=self.runtime_args.discovery_port,
+                discovery_watchdog_interval=self.runtime_args.discovery_watchdog_interval,
+            )
 
         self.server = UviServer(
             config=Config(
@@ -128,7 +129,6 @@ class FastAPIBaseGateway(BaseGateway):
         Free resources allocated when setting up HTTP server
         """
         self.server.should_exit = True
-        self._teardown_service_discovery()
         await self.server.shutdown()
 
     async def run_server(self):

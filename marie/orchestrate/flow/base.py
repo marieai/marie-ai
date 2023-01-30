@@ -25,6 +25,7 @@ from typing import (
     overload,
 )
 
+from marie.serve.discovery import DiscoveryServiceMixin
 from rich import print
 from rich.panel import Panel
 from rich.progress import (
@@ -112,6 +113,7 @@ class Flow(
     PostMixin,
     ProfileMixin,
     HealthCheckMixin,
+    DiscoveryServiceMixin,
     JAMLCompatible,
     ExitStack,
     metaclass=FlowType,
@@ -1797,10 +1799,26 @@ class Flow(
 
         self._wait_until_all_ready()
 
+        print(self._entity_id)
+        # send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
+
+        runtime_args = self._deployment_nodes[GATEWAY_NAME].args
+        print(self.args)
+        print("NAME :")
+        print(self.args.name)
+
+        self._setup_service_discovery(
+            name='flow-gateway',
+            host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
+            port=port_gateway,
+            scheme='scheme' if runtime_args else 'http',
+            discovery=runtime_args.discovery,
+            discovery_host=runtime_args.discovery_host,
+            discovery_port=runtime_args.discovery_port,
+            discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
+        )
+
         self._build_level = FlowBuildLevel.RUNNING
-
-        send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
-
         return self
 
     def _wait_until_all_ready(self):
@@ -1932,7 +1950,7 @@ class Flow(
             print(
                 Rule(':tada: Flow is ready to serve!'), *all_panels
             )  # can't use logger here see : https://github.com/Textualize/rich/discussions/2024
-        self.logger.debug(
+        self.logger.info(
             f'{self.num_deployments} Deployments (i.e. {self.num_pods} Pods) are running in this Flow'
         )
 

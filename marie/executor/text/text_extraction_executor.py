@@ -42,8 +42,13 @@ class TextExtractionExecutor(Executor):
             "use_cuda": use_cuda,
         }
 
-    @requests(on="/text/status")
+    @requests(on="/text/info")
     def info(self, **kwargs):
+        self.logger.info(f"Self : {self}")
+        return {"index": "complete"}
+
+    @requests(on="/text/read")
+    def read(self, **kwargs):
         self.logger.info(f"Self : {self}")
         return {"index": "complete"}
 
@@ -149,6 +154,11 @@ class ExtractExecutor(Executor):
             "device": self.device.__str__() if self.device is not None else "",
         }
         print(self.runtime_info)
+        import time
+
+        print("TEXT-START")
+        time.sleep(5)
+        print("DONE")
 
     @requests(on="/text/status")
     def status(self, parameters, **kwargs):
