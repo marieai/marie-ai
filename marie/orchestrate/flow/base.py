@@ -1782,6 +1782,7 @@ class Flow(
 
         port_gateway = self._deployment_nodes[GATEWAY_NAME].args.port
         host_gateway = self._deployment_nodes[GATEWAY_NAME].args.host
+        protocol_gateway = self._deployment_nodes[GATEWAY_NAME].args.protocol
 
         if not (
             is_port_free(host_gateway, port_gateway)
@@ -1798,25 +1799,22 @@ class Flow(
                 self.enter_context(deployment)
 
         self._wait_until_all_ready()
-
-        print(self._entity_id)
-        # send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
-
+        send_telemetry_event(event='start', obj=self, entity_id=self._entity_id)
         runtime_args = self._deployment_nodes[GATEWAY_NAME].args
-        print(self.args)
-        print("NAME :")
-        print(self.args.name)
 
-        self._setup_service_discovery(
-            name='flow-gateway',
-            host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
-            port=port_gateway,
-            scheme='scheme' if runtime_args else 'http',
-            discovery=runtime_args.discovery,
-            discovery_host=runtime_args.discovery_host,
-            discovery_port=runtime_args.discovery_port,
-            discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
-        )
+        for gport, gprotocol in zip(port_gateway, protocol_gateway):
+            # TODO : Need to implement GRPC and WEBSOCKET
+            if gprotocol == GatewayProtocolType.HTTP:
+                self._setup_service_discovery(
+                    name=f"marie-{GATEWAY_NAME}",
+                    host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
+                    port=gport,
+                    scheme='scheme' if runtime_args else 'http',
+                    discovery=runtime_args.discovery,
+                    discovery_host=runtime_args.discovery_host,
+                    discovery_port=runtime_args.discovery_port,
+                    discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
+                )
 
         self._build_level = FlowBuildLevel.RUNNING
         return self
