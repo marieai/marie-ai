@@ -132,6 +132,9 @@ class DiscoveryServiceMixin:
         self.discovery_client, online = self._create_discovery_client(True)
 
         def __register(_service_host, _service_port, _service_scheme):
+            # Calling /dry_run on the flow will check if the Flow is initialized fully
+            # Expecting to get InternalNetworkError: failed to connect to all addresses
+            service_url = f"{_service_scheme}://{_service_host}:{_service_port}/dry_run"
             if self._is_discovery_online(client=self.discovery_client):
                 service_node = self._get_service_node(
                     self.service_name, self.service_id
@@ -240,7 +243,7 @@ class DiscoveryServiceMixin:
 
         service_name = "traefik-system-ingress"
         # service_url = f"http://{service_host}:{service_port}/health/status"
-        service_url = f"{service_scheme}://{service_host}:{service_port}"
+        service_url = f"{service_scheme}://{service_host}:{service_port}/dry_run"
 
         if not self._is_discovery_online(self.discovery_client):
             self.logger.debug("Consul service is offline")

@@ -108,7 +108,7 @@ def get_fastapi_app(
             'validate connectivity',
             response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
         )
-        async def _flow_health():
+        async def _flow_health(response: Response):
             """
             Get the health of the complete Flow service.
             .. # noqa: DAR201
@@ -129,6 +129,8 @@ def get_fastapi_app(
                 status_message.set_code(jina_pb2.StatusProto.SUCCESS)
                 return status_message.to_dict()
             except Exception as ex:
+                if isinstance(ex, InternalNetworkError):
+                    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
                 status_message = StatusMessage()
                 status_message.set_exception(ex)
                 return status_message.to_dict(use_integers_for_enums=True)
@@ -152,7 +154,7 @@ def get_fastapi_app(
                 version[k] = str(v)
             for k, v in env_info.items():
                 env_info[k] = str(v)
-            return {'jina': version, 'envs': env_info}
+            return {'marie': version, 'envs': env_info}
 
         @app.post(
             path='/post',
