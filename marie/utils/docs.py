@@ -232,6 +232,21 @@ def docs_from_file(img_path: str) -> DocumentArray:
 
     return docs
 
+def docs_from_file_specific(img_path: str, pages: list[int]) -> DocumentArray:
+    """Create DocumentArray from image containing only specific frames"""
+    loaded_docs = docs_from_file(img_path)
+    docs = DocumentArray()
+
+    if len(loaded_docs) > 0:
+        if len(pages) == 0:
+            return loaded_docs
+
+        for i, doc in enumerate(loaded_docs):
+            if i in pages:
+                docs.append(doc)
+
+    return docs
+
 
 def frames_from_file(img_path: str):
     """Create Numpy frame array from image"""
