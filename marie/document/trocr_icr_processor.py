@@ -225,7 +225,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
 
-        logger.info(
+        logger.debug(
             f"ICR processing : recognize_from_boxes [items, batch_size, batches] :{size}, {batch_size}, {total_batches} "
         )
 
