@@ -1809,7 +1809,7 @@ class Flow(
                     name=f"marie-{GATEWAY_NAME}",
                     host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
                     port=gport,
-                    scheme='scheme' if runtime_args else 'http',
+                    scheme=runtime_args.scheme if 'scheme' in runtime_args else 'http',
                     discovery=runtime_args.discovery,
                     discovery_host=runtime_args.discovery_host,
                     discovery_port=runtime_args.discovery_port,
