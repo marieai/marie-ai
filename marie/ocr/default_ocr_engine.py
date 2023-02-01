@@ -1,8 +1,7 @@
 import copy
 import os
 from distutils.util import strtobool as strtobool
-from typing import Union, List
-
+from typing import Any, Dict, List, Union
 import cv2
 import numpy as np
 from PIL import Image
@@ -13,7 +12,7 @@ from marie.document import TrOcrIcrProcessor
 from marie.logging.logger import MarieLogger
 from marie.ocr import OcrEngine, CoordinateFormat
 from marie.utils.base64 import encodeToBase64
-from marie.utils.image_utils import hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast, crop_to_content
 from marie.utils.utils import ensure_exists
 
 
@@ -71,19 +70,24 @@ class DefaultOcrEngine(OcrEngine):
         """Process full page extraction"""
         # Extract each page and augment it with a page in range 1..N+1
         results = []
+        # This should be requested as it might not always be desirable to perform this transform
+        is_crop_to_content_enabled = kwargs.get('crop_to_content', False)
 
         for i, img in enumerate(frames):
             try:
+                if is_crop_to_content_enabled:
+                    img = crop_to_content(img)
+
                 h = img.shape[0]
                 w = img.shape[1]
                 # allow for small padding around the component
-                padding = 0
+                padding = 4
                 overlay = (
                     np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 )
 
                 overlay[padding : h + padding, padding : w + padding] = img
-
+                cv2.imwrite(f"/tmp/marie/overlay_{i}.png", overlay)
                 (
                     boxes,
                     img_fragments,
@@ -99,7 +103,7 @@ class DefaultOcrEngine(OcrEngine):
                 )
                 # change from xywh -> xyxy
                 if CoordinateFormat.XYXY == coordinate_format:
-                    self.logger.info("Changing coordinate format from xywh -> xyxy")
+                    self.logger.debug("Changing coordinate format from xywh -> xyxy")
                     for word in result["words"]:
                         x, y, w, h = word["box"]
                         w_box = [x, y, x + w, y + h]
@@ -130,6 +134,12 @@ class DefaultOcrEngine(OcrEngine):
             if "filter_snippets" in kwargs
             else False
         )
+
+        # This should be requested as it might not always be desirable to perform this transform
+        crop_to_content_enabled = bool(strtobool(kwargs.get('crop_to_content', False)))
+        # crop_to_content_enabled = True
+
+        print(f"{crop_to_content_enabled=}")
         output = []
         extended = []
 
@@ -156,6 +166,13 @@ class DefaultOcrEngine(OcrEngine):
 
                 img = frames[page_index]
                 img = img[y : y + h, x : x + w].copy()
+
+                if crop_to_content_enabled:
+                    img = crop_to_content(img)
+                    h = img.shape[0]
+                    w = img.shape[1]
+                    padding = 4
+
                 overlay = img
 
                 if padding != 0:
@@ -165,7 +182,7 @@ class DefaultOcrEngine(OcrEngine):
                     )
                     overlay[padding : h + padding, padding : w + padding] = img
 
-                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
                 (
                     boxes,
                     img_fragments,
@@ -236,7 +253,7 @@ class DefaultOcrEngine(OcrEngine):
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
         regions: [] = None,
         queue_id: str = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         try:
             queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
@@ -263,11 +280,11 @@ class DefaultOcrEngine(OcrEngine):
 
             if len(regions) == 0:
                 results = self.__process_extract_fullpage(
-                    ro_frames, queue_id, checksum, pms_mode, coordinate_format
+                    ro_frames, queue_id, checksum, pms_mode, coordinate_format, **kwargs
                 )
             else:
                 results = self.__process_extract_regions(
-                    ro_frames, queue_id, checksum, pms_mode, regions
+                    ro_frames, queue_id, checksum, pms_mode, regions, **kwargs
                 )
 
             # store_json_object(results, '/tmp/fragments/results-complex.json')

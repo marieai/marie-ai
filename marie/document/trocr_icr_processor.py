@@ -178,7 +178,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 2
+        beam = 5
         (
             self.model,
             self.cfg,
