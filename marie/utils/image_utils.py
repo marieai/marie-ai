@@ -131,7 +131,7 @@ def hash_frames_fast_Z(frames: np.ndarray, max_frame_size=1024) -> str:
     # return hash_bytes(hash_src)
 
 
-@Timer(text="hashed in {:.4f} seconds")
+# @Timer(text="hashed in {:.4f} seconds")
 def hash_frames_fast(frames: np.ndarray, blocksize=2**20) -> str:
     """calculate hash based on the image data frame"""
     md5 = hashlib.md5()
@@ -171,3 +171,32 @@ def convert_to_bytes(
     pil_img.save(img_byte_arr, format=fmt, dpi=dpi)
     img_byte_arr = img_byte_arr.getvalue()
     return img_byte_arr
+
+
+def crop_to_content(frame: np.ndarray) -> np.ndarray:
+    """Crop given image to content
+    No content is defined as first non background(white) pixel.
+    """
+    # conversion required, or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
+    # frame = np.random.choice([0, 255], size=(32, 32), p=[0.01, 0.99]).astype("uint8")
+    cv2.imwrite("/tmp/fragments/frame-src.png", frame)
+
+    # Transform source image to gray if it is not already
+    if len(frame.shape) == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        op_frame = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    else:
+        op_frame = cv2.threshold(frame, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+
+    cv2.imwrite("/tmp/fragments/op_frame.png", op_frame)
+    indices = np.array(np.where(op_frame == [0]))
+    # indicers are in y,X format
+    x = indices[1].min()
+    y = indices[0].min()
+    h = indices[0].max() - y
+    w = indices[1].max() - x
+
+    print(x, y, w, h)
+    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
+    cv2.imwrite("/tmp/fragments/cropped.png", cropped)
+    return cropped
