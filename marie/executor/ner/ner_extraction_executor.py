@@ -51,14 +51,6 @@ check_min_version("4.5.0")
 logger = logging.getLogger(__name__)
 
 
-def obtain_ocr(frames, ocr_engine: OcrEngine):
-    """
-    Obtain OCR words from
-    """
-    results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYXY)
-    return results, frames
-
-
 class NerExtractionExecutor(Executor, StorageMixin):
     """
     Executor for extracting text.
@@ -706,8 +698,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 os.remove(ocr_json_path)
 
         if not os.path.exists(ocr_json_path):
-            # ocr_results, frames = obtain_ocr(src_image, self.ocr_engine)
-            ocr_results, frames = obtain_ocr(frames, self.ocr_engine)
+            ocr_results = self.ocr_engine.extract(
+                frames, PSMode.SPARSE, CoordinateFormat.XYXY
+            )
             # convert CV frames to PIL frame
             frames = convert_frames(frames, img_format="pil")
             store_json_object(ocr_results, ocr_json_path)
@@ -831,7 +824,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         return ner_results
 
-    def persist(self, ref_id: str, ref_type: str, ner_results: Any) -> None:
+    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
         """Persist results"""
 
         def _tags(index: int, ftype: str, checksum: str):
@@ -847,7 +840,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
             docs = DocumentArray(
                 [
                     Document(
-                        content=ner_results,
+                        content=results,
                         tags=_tags(-1, "ner_results", ref_id),
                     )
                 ]

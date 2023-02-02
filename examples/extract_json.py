@@ -14,7 +14,7 @@ api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 api_base_url = "http://192.168.102.65:51000/api"
 api_base_url = "http://192.168.1.14:51000/api"
 api_base_url = "http://192.168.102.65:51000/api"
-api_base_url = "http://184.105.3.112:51000/api"
+# api_base_url = "http://184.105.3.112:51000/api"
 # api_base_url = "http://asp-gpu002:6000/api"
 # api_base_url = "http://traefik.localhost:5000/api"
 
@@ -37,8 +37,8 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         raise Exception(f"File not found : {file_location}")
     upload_url = f"{api_base_url}/extract/{queue_id}"
     upload_url = f"{api_base_url}/extract"
-    # upload_url = f"{api_base_url}/overlay"
-    upload_url = f"{api_base_url}/ner/{queue_id}"
+    upload_url = f"{api_base_url}/overlay"
+    # upload_url = f"{api_base_url}/ner/{queue_id}"
     # upload_url = f"{api_base_url}/ner"
 
     print(api_base_url)
@@ -67,14 +67,15 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         # mode['word]=> extraction mode
         # output['json']=> json,text,pdf
 
+        uid = str(uuid.uuid4())
         json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
         json_payload = {
-            "queue_id": str(uuid.uuid4()),
+            "queue_id": uid,
             "data": base64_str,
             "mode": mode,
             "output": "json",
-            "doc_id": f"greg-{str(uuid.uuid4())}",
-            "doc_type": "example_ner",
+            "doc_id": f"greg-{uid}",
+            "doc_type": "overlay",
             # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
         }
 
