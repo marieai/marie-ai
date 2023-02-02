@@ -72,16 +72,17 @@ class DefaultOcrEngine(OcrEngine):
         results = []
         # This should be requested as it might not always be desirable to perform this transform
         is_crop_to_content_enabled = kwargs.get('crop_to_content', False)
+        padding = 0
 
         for i, img in enumerate(frames):
             try:
                 if is_crop_to_content_enabled:
                     img = crop_to_content(img)
+                    padding = 4
 
                 h = img.shape[0]
                 w = img.shape[1]
-                # allow for small padding around the component
-                padding = 4
+
                 overlay = (
                     np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 )
@@ -150,9 +151,6 @@ class DefaultOcrEngine(OcrEngine):
             ):
                 raise Exception(f"Required key missing in region : {region}")
 
-        # allow for small padding around the component
-        padding = 0
-
         # TODO : Introduce mini-batched by region to improve inference
         for region in regions:
             try:
@@ -166,14 +164,13 @@ class DefaultOcrEngine(OcrEngine):
 
                 img = frames[page_index]
                 img = img[y : y + h, x : x + w].copy()
-
+                # allow for small padding around the component
+                padding = 0
                 if crop_to_content_enabled:
                     img = crop_to_content(img)
                     h = img.shape[0]
                     w = img.shape[1]
                     padding = 4
-
-                overlay = img
 
                 if padding != 0:
                     overlay = (
@@ -181,6 +178,8 @@ class DefaultOcrEngine(OcrEngine):
                         * 255
                     )
                     overlay[padding : h + padding, padding : w + padding] = img
+                else:
+                    overlay = img
 
                 cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
                 (

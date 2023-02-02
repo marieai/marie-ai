@@ -246,5 +246,4 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
     cv2.imwrite("/tmp/fragments/cropped.png", cropped)
 
     dt = time.time() - start
-    print(dt)
     return cropped
