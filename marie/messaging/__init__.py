@@ -34,8 +34,10 @@ async def mark_request_as_complete(
     }
 
     print(msg)
+
     task = asyncio.ensure_future(MessagePublisher.publish(msg))
     sync = False
+
     if sync:
-        response = await asyncio.wait([task])
-        return response
+        results = await asyncio.gather(task)
+        return results[0]

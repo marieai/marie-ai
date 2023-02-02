@@ -21,12 +21,11 @@ if __name__ == "__main__":
     img_path = "~/tmp/wrong-ocr/169118830.tif"
     img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
     img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042272.png"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042269.png"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
+    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042269.png"
+    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
+    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
+    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
     img_path = os.path.expanduser(img_path)
-    print(img_path)
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
 
