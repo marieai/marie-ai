@@ -1,14 +1,8 @@
 import os
-import sys
-import time
 
-import cv2
-import numpy as np
-
-from marie.utils.docs import load_image, frames_from_file
+from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import crop_to_content
 from marie.utils.utils import ensure_exists
-
 
 if __name__ == '__main__':
 
@@ -17,7 +11,9 @@ if __name__ == '__main__':
     img_path = './assets/psm/word/0001.png'
 
     img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
-    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610_clipped.png"
+    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042269.png"
+    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610_clipped.png"
+    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042272.png"
     img_path = os.path.expanduser(img_path)
     print(img_path)
     if not os.path.exists(img_path):
@@ -27,4 +23,4 @@ if __name__ == '__main__':
     frames = frames_from_file(img_path)
     img = frames[0]
     print(len(frames))
-    crop_to_content(img)
+    crop_to_content(img, True)
