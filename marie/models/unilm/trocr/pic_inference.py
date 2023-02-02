@@ -3,7 +3,7 @@ import os
 
 import task
 import deit
-import deit_models
+import trocr_models
 import torch
 import fairseq
 from fairseq import utils

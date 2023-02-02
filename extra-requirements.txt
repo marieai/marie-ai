@@ -126,3 +126,5 @@ onnxconverter_common==1.13.0: standard,core
 onnxmltools:                  standard,core
 
 pika:                         standard,core
+sentencepiece:                standard,core
+Levenshtein:                  standard,core

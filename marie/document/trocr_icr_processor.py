@@ -2,14 +2,13 @@ import math
 import os
 import time
 import typing
-from timeit import timeit
 from typing import Any, Dict, List, Tuple
 
 import fairseq
-import numpy as np
 import torch
 import torch.utils.data
 import torchvision.transforms as transforms
+from PIL import Image
 from fairseq import utils
 from fairseq_cli import generate
 from torchvision.transforms import Compose, InterpolationMode
@@ -19,8 +18,6 @@ from marie.document.icr_processor import IcrProcessor
 from marie.lang import Object
 from marie.logging.predefined import default_logger
 from marie.models.icr.memory_dataset import MemoryDataset
-from marie.models.unilm.trocr.task import SROIETextRecognitionTask
-from marie.timer import Timer
 from marie.utils.utils import batchify
 
 logger = default_logger
@@ -28,6 +25,8 @@ logger = default_logger
 
 # @Timer(text="init in {:.4f} seconds")
 def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compose, str]:
+    # Need this or we will get error indicating that Task is not registred
+
     # Currently, there is no support for mix precision(fp16) evaluation on CPU
     # https://github.com/pytorch/pytorch/issues/23377
     fp16 = True
@@ -45,7 +44,6 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     else:
         decoder_pretrained = f"file://{decoder_pretrained}"
 
-    decoder_pretrained = None
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={
@@ -91,7 +89,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
 
 def preprocess_image(image, img_transform, device):
-    im = image.convert("RGB").resize((384, 384))
+    im = image.convert("RGB").resize((384, 384), Image.Resampling.LANCZOS)
     # this causes an error when batching due to the shape in deit.py
     # def forward(self, x):
     #     B, C, H, W = x.shape
