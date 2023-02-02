@@ -45,6 +45,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     else:
         decoder_pretrained = f"file://{decoder_pretrained}"
 
+    decoder_pretrained = None
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={
@@ -68,7 +69,8 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
     img_transform = transforms.Compose(
         [
-            transforms.Resize((384, 384), interpolation=InterpolationMode.BICUBIC),
+            # transforms.Resize((384, 384), interpolation=InterpolationMode.BICUBIC),
+            transforms.Resize((384, 384), interpolation=InterpolationMode.LANCZOS),
             transforms.ToTensor(),
             transforms.Normalize(0.5, 0.5),
         ]
@@ -191,7 +193,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         logger.info("Model load elapsed: %s" % (time.time() - start))
 
         opt = Object()
-        opt.rgb = False
+        opt.rgb = True
         self.opt = opt
 
     def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
@@ -238,9 +240,8 @@ class TrOcrIcrProcessor(IcrProcessor):
                 logger.debug(
                     f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}"
                 )
-                images = batch
 
-                eval_data = MemoryDataset(images=images, opt=opt)
+                eval_data = MemoryDataset(images=batch, opt=opt)
                 batch_start = time.time()
 
                 images = [img for img, img_name in eval_data]

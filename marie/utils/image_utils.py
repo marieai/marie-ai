@@ -1,4 +1,6 @@
 import hashlib
+import sys
+import time
 from math import ceil
 from typing import Union, Tuple
 
@@ -7,6 +9,7 @@ import io
 import numpy as np
 import PIL.Image
 from PIL import Image
+from rich import print
 
 from marie.timer import Timer
 
@@ -173,30 +176,75 @@ def convert_to_bytes(
     return img_byte_arr
 
 
-def crop_to_content(frame: np.ndarray) -> np.ndarray:
-    """Crop given image to content
-    No content is defined as first non background(white) pixel.
+def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
+    """Return a sharpened version of the image, using an unsharp mask."""
+    blurred = cv2.GaussianBlur(image, kernel_size, sigma)
+    sharpened = float(amount + 1) * image - float(amount) * blurred
+    sharpened = np.maximum(sharpened, np.zeros(sharpened.shape))
+    sharpened = np.minimum(sharpened, 255 * np.ones(sharpened.shape))
+    sharpened = sharpened.round().astype(np.uint8)
+    if threshold > 0:
+        low_contrast_mask = np.absolute(image - blurred) < threshold
+        np.copyto(sharpened, image, where=low_contrast_mask)
+    return sharpened
+
+
+def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
     """
+    Crop given image to content
+    No content is defined as first non background(white) pixel.
+
+    @param frame: the image frame to process
+    @param content_aware: if enabled we will apply more aggressive crop method
+    @return: new cropped frame
+    """
+
+    start = time.time()
     # conversion required, or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
     # frame = np.random.choice([0, 255], size=(32, 32), p=[0.01, 0.99]).astype("uint8")
     cv2.imwrite("/tmp/fragments/frame-src.png", frame)
 
     # Transform source image to gray if it is not already
-    if len(frame.shape) == 3:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        op_frame = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    if content_aware:
+        # apply division normalization to preprocess the image
+        blur = cv2.GaussianBlur(gray, (5, 5), sigmaX=0, sigmaY=0)
+        # divide
+        divide = cv2.divide(gray, blur, scale=255)
+        thresh = cv2.threshold(divide, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        #
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 3))
+        op_frame = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     else:
-        op_frame = cv2.threshold(frame, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+        op_frame = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
     cv2.imwrite("/tmp/fragments/op_frame.png", op_frame)
     indices = np.array(np.where(op_frame == [0]))
-    # indicers are in y,X format
-    x = indices[1].min()
-    y = indices[0].min()
-    h = indices[0].max() - y
-    w = indices[1].max() - x
+    img_w = op_frame.shape[1]
+    img_h = op_frame.shape[0]
+    min_x_pad = 16  # img_w // 16
+    min_y_pad = img_h // 4
+
+    print(min_x_pad)
+    print(min_y_pad)
+
+    # indices are in y,X format
+    if content_aware:
+        x = max(0, indices[1].min() - min_x_pad)
+        y = 0  # indices[0].min()
+        h = img_h  # indices[0].max() - y
+        w = min(img_w, indices[1].max() - x + min_x_pad)
+    else:
+        x = indices[1].min()
+        y = indices[0].min()
+        h = indices[0].max() - y
+        w = indices[1].max() - x
 
     print(x, y, w, h)
     cropped = frame[y : y + h + 1, x : x + w + 1].copy()
     cv2.imwrite("/tmp/fragments/cropped.png", cropped)
+
+    dt = time.time() - start
+    print(dt)
     return cropped
