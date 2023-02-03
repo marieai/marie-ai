@@ -67,6 +67,6 @@ class HTTPGateway(FastAPIBaseGateway):
                 logger=self.logger,
                 tracing=self.tracing,
                 tracer_provider=self.tracer_provider,
-                ip_whitelist=self.ip_whitelist
+                ip_whitelist=self.ip_whitelist,
             )
         )

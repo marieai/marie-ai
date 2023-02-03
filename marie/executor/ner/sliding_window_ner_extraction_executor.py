@@ -65,6 +65,7 @@ class NerChunk:
         self.boxes = []
         self.words = []
 
+
 class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
     """
     Executor for extracting text.
@@ -735,7 +736,7 @@ class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
         for k, (result, image) in enumerate(zip(ocr_results, frames)):
             if not isinstance(image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
-            
+
             # make an NerChunk for each image
             chunk = NerChunk(image)
             chunk.boxes.append([])
@@ -744,16 +745,20 @@ class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
             # compute the window size
             result_words = result["words"]
             result_words_size = len(result_words)
-            window_size = result_words_size - chunk_size + 1 if result_words_size > 512 else result_words_size
+            window_size = (
+                result_words_size - chunk_size + 1
+                if result_words_size > 512
+                else result_words_size
+            )
 
             # sliding window
             for i in range(window_size):
-                sub_words = result_words[i:chunk_size + i]
+                sub_words = result_words[i : chunk_size + i]
                 chunk.boxes[i].extend([w["box"] for w in sub_words])
                 chunk.words[i].extend([w["text"] for w in sub_words])
                 chunk.boxes.append([])
                 chunk.words.append([])
-                
+
                 # if we have everything, end the loop.
                 if result_words_size <= 512 and window_size <= k + i:
                     break
@@ -846,14 +851,10 @@ class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
             ref_id = hash_frames_fast(frames)
             ref_type = "checksum_frames"
 
-        loaded, chunks, ocr_results, frames_hash = self.preprocess(
-            frames
-        )
+        loaded, chunks, ocr_results, frames_hash = self.preprocess(frames)
 
         annotations = self.process(chunks, frames_hash)
-        ner_results = self.postprocess(
-            chunks, annotations, ocr_results, frames_hash
-        )
+        ner_results = self.postprocess(chunks, annotations, ocr_results, frames_hash)
         self.persist(ref_id, ref_type, ner_results)
 
         return ner_results
