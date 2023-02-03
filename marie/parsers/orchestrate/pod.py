@@ -255,9 +255,7 @@ def mixin_gateway_discovery_parser(parser):
     """Add the arguments for the Gateway
 
     :param parser: the parser configured
-    :param pod_type: the pod_type configured by the parser. Can be either 'worker' for WorkerRuntime or 'gateway' for GatewayRuntime
     """
-    # gp = add_arg_group(parser, title='Service Discovery')
     parser.add_argument(
         '--discovery',
         action='store_true',
