@@ -6,6 +6,7 @@ from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
+from marie.serve.runtimes.gateway.http import WhitelistMiddleware
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
@@ -25,6 +26,7 @@ def get_fastapi_app(
     logger: 'MarieLogger',
     tracing: Optional[bool] = None,
     tracer_provider: Optional['trace.TracerProvider'] = None,
+    ip_whitelist: Optional[list[str]] = None
 ):
     """
     Get the app from FastAPI as the REST interface.
@@ -77,6 +79,9 @@ def get_fastapi_app(
             allow_headers=['*'],
         )
         logger.warning('CORS is enabled. This service is accessible from any website!')
+
+    if ip_whitelist:
+        app.add_middleware(WhitelistMiddleware, logger=logger, ip_whitelist=ip_whitelist)
 
     @app.on_event('shutdown')
     async def _shutdown():
