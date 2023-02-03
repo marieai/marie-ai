@@ -20,6 +20,11 @@ from marie.logging.predefined import default_logger
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.utils.utils import batchify
 
+
+# required to register text_recognition
+from marie.models.unilm.trocr.task import TextRecognitionTask
+
+faux_t = TextRecognitionTask
 logger = default_logger
 
 
@@ -43,6 +48,8 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
         decoder_pretrained = None
     else:
         decoder_pretrained = f"file://{decoder_pretrained}"
+
+    # decoder_pretrained = None
 
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
