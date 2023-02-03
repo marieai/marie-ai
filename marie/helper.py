@@ -41,54 +41,34 @@ from rich.console import Console
 from marie.constants import __windows__
 
 __all__ = [
-    'batch_iterator',
-    'parse_arg',
-    'random_port',
-    'random_identity',
-    'random_uuid',
-    'expand_env_var',
-    'colored',
-    'ArgNamespace',
-    'is_valid_local_config_source',
-    'cached_property',
-    'typename',
-    'get_public_ip',
-    'get_internal_ip',
-    'convert_tuple_to_list',
-    'run_async',
-    'deprecated_alias',
-    'retry',
-    'countdown',
-    'CatchAllCleanupContextManager',
-    'download_mermaid_url',
-    'get_readable_size',
-    'get_or_reuse_loop',
-    'T',
-    'get_rich_console',
+    "batch_iterator",
+    "parse_arg",
+    "random_port",
+    "random_identity",
+    "random_uuid",
+    "expand_env_var",
+    "colored",
+    "ArgNamespace",
+    "is_valid_local_config_source",
+    "cached_property",
+    "typename",
+    "get_public_ip",
+    "get_internal_ip",
+    "convert_tuple_to_list",
+    "run_async",
+    "deprecated_alias",
+    "retry",
+    "countdown",
+    "CatchAllCleanupContextManager",
+    "download_mermaid_url",
+    "get_readable_size",
+    "get_or_reuse_loop",
+    "T",
+    "get_rich_console",
 ]
 
-T = TypeVar('T')
-GATEWAY_NAME = 'gateway'
-
-def get_ip_whitelist_from_path(path: Optional[str] = None):
-    ip_whitelist = []
-
-    if not path:
-        return ip_whitelist
-
-    try:
-        lines = []
-        with open(path) as file:
-            lines.extend([line.rstrip() for line in file])
-
-        for line in lines:
-            ip_whitelist.extend([str(ip) for ip in ipaddress.IPv4Network(line)])
-
-        ip_whitelist = [*set(ip_whitelist)]
-    except:
-        pass
-
-    return ip_whitelist
+T = TypeVar("T")
+GATEWAY_NAME = "gateway"
 
 
 def deprecated_alias(**aliases):
@@ -126,25 +106,25 @@ def deprecated_alias(**aliases):
         for alias, new_arg in aliases.items():
             if not isinstance(new_arg, tuple):
                 raise ValueError(
-                    f'{new_arg} must be a tuple, with first element as the new name, '
-                    f'second element as the deprecated level: 0 as warning, 1 as exception'
+                    f"{new_arg} must be a tuple, with first element as the new name, "
+                    f"second element as the deprecated level: 0 as warning, 1 as exception"
                 )
             if alias in kwargs:
                 new_name, dep_level = new_arg
                 if new_name in kwargs:
                     raise NotSupportedError(
-                        f'{func_name} received both {alias} and {new_name}'
+                        f"{func_name} received both {alias} and {new_name}"
                     )
 
                 if dep_level == 0:
                     warnings.warn(
-                        f'`{alias}` is renamed to `{new_name}` in `{func_name}()`, the usage of `{alias}` is '
-                        f'deprecated and will be removed in the next version.',
+                        f"`{alias}` is renamed to `{new_name}` in `{func_name}()`, the usage of `{alias}` is "
+                        f"deprecated and will be removed in the next version.",
                         DeprecationWarning,
                     )
                     kwargs[new_name] = kwargs.pop(alias)
                 elif dep_level == 1:
-                    raise NotSupportedError(f'{alias} has been renamed to `{new_name}`')
+                    raise NotSupportedError(f"{alias} has been renamed to `{new_name}`")
 
     def deco(f):
         """
@@ -175,8 +155,8 @@ def deprecated_method(new_function_name):
     def deco(func):
         def wrapper(*args, **kwargs):
             warnings.warn(
-                f'`{func.__name__}` is renamed to `{new_function_name}`, the usage of `{func.__name__}` is '
-                f'deprecated and will be removed.',
+                f"`{func.__name__}` is renamed to `{new_function_name}`, the usage of `{func.__name__}` is "
+                f"deprecated and will be removed.",
                 DeprecationWarning,
             )
             return func(*args, **kwargs)
@@ -188,7 +168,7 @@ def deprecated_method(new_function_name):
 
 def retry(
     num_retry: int = 3,
-    message: str = 'Calling {func_name} failed, retry attempt {attempt}/{num_retry}. Error: {error!r}',
+    message: str = "Calling {func_name} failed, retry attempt {attempt}/{num_retry}. Error: {error!r}",
 ):
     """
     Retry calling a function again in case of an error.
@@ -231,13 +211,13 @@ def get_readable_size(num_bytes: Union[int, float]) -> str:
     """
     num_bytes = int(num_bytes)
     if num_bytes < 1024:
-        return f'{num_bytes} Bytes'
+        return f"{num_bytes} Bytes"
     elif num_bytes < 1024**2:
-        return f'{num_bytes / 1024:.1f} KB'
+        return f"{num_bytes / 1024:.1f} KB"
     elif num_bytes < 1024**3:
-        return f'{num_bytes / (1024 ** 2):.1f} MB'
+        return f"{num_bytes / (1024 ** 2):.1f} MB"
     else:
-        return f'{num_bytes / (1024 ** 3):.1f} GB'
+        return f"{num_bytes / (1024 ** 3):.1f} GB"
 
 
 def batch_iterator(
@@ -292,7 +272,7 @@ def batch_iterator(
                 return
             yield chunk
     else:
-        raise TypeError(f'unsupported type: {type(data)}')
+        raise TypeError(f"unsupported type: {type(data)}")
 
 
 def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
@@ -306,11 +286,11 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
     if m:
         return m.group(1)
 
-    if v.startswith('[') and v.endswith(']'):
+    if v.startswith("[") and v.endswith("]"):
         # function args must be immutable tuples not list
-        tmp = v.replace('[', '').replace(']', '').strip()
+        tmp = v.replace("[", "").replace("]", "").strip()
         if len(tmp) > 0:
-            return [parse_arg(vv.strip()) for vv in tmp.split(',')]
+            return [parse_arg(vv.strip()) for vv in tmp.split(",")]
         else:
             return []
     try:
@@ -322,14 +302,14 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
             if len(v) == 0:
                 # ignore it when the parameter is empty
                 v = None
-            elif v.lower() == 'true':  # parse boolean parameter
+            elif v.lower() == "true":  # parse boolean parameter
                 v = True
-            elif v.lower() == 'false':
+            elif v.lower() == "false":
                 v = False
     return v
 
 
-def countdown(t: int, reason: str = 'I am blocking this thread') -> None:
+def countdown(t: int, reason: str = "I am blocking this thread") -> None:
     """
     Display the countdown in console.
 
@@ -344,124 +324,124 @@ def countdown(t: int, reason: str = 'I am blocking this thread') -> None:
     :param reason: A string message of reason for this Countdown.
     """
     try:
-        sys.stdout.write('\n')
+        sys.stdout.write("\n")
         sys.stdout.flush()
         while t > 0:
             t -= 1
             msg = f'⏳ {colored("%3d" % t, "yellow")}s left: {reason}'
-            sys.stdout.write(f'\r{msg}')
+            sys.stdout.write(f"\r{msg}")
             sys.stdout.flush()
             time.sleep(1)
-        sys.stdout.write('\n')
+        sys.stdout.write("\n")
         sys.stdout.flush()
     except KeyboardInterrupt:
-        sys.stdout.write('no more patience? good bye!')
+        sys.stdout.write("no more patience? good bye!")
 
 
 _random_names = (
     (
-        'first',
-        'great',
-        'local',
-        'small',
-        'right',
-        'large',
-        'young',
-        'early',
-        'major',
-        'clear',
-        'black',
-        'whole',
-        'third',
-        'white',
-        'short',
-        'human',
-        'royal',
-        'wrong',
-        'legal',
-        'final',
-        'close',
-        'total',
-        'prime',
-        'happy',
-        'sorry',
-        'basic',
-        'aware',
-        'ready',
-        'green',
-        'heavy',
-        'extra',
-        'civil',
-        'chief',
-        'usual',
-        'front',
-        'fresh',
-        'joint',
-        'alone',
-        'rural',
-        'light',
-        'equal',
-        'quiet',
-        'quick',
-        'daily',
-        'urban',
-        'upper',
-        'moral',
-        'vital',
-        'empty',
-        'brief',
+        "first",
+        "great",
+        "local",
+        "small",
+        "right",
+        "large",
+        "young",
+        "early",
+        "major",
+        "clear",
+        "black",
+        "whole",
+        "third",
+        "white",
+        "short",
+        "human",
+        "royal",
+        "wrong",
+        "legal",
+        "final",
+        "close",
+        "total",
+        "prime",
+        "happy",
+        "sorry",
+        "basic",
+        "aware",
+        "ready",
+        "green",
+        "heavy",
+        "extra",
+        "civil",
+        "chief",
+        "usual",
+        "front",
+        "fresh",
+        "joint",
+        "alone",
+        "rural",
+        "light",
+        "equal",
+        "quiet",
+        "quick",
+        "daily",
+        "urban",
+        "upper",
+        "moral",
+        "vital",
+        "empty",
+        "brief",
     ),
     (
-        'world',
-        'house',
-        'place',
-        'group',
-        'party',
-        'money',
-        'point',
-        'state',
-        'night',
-        'water',
-        'thing',
-        'order',
-        'power',
-        'court',
-        'level',
-        'child',
-        'south',
-        'staff',
-        'woman',
-        'north',
-        'sense',
-        'death',
-        'range',
-        'table',
-        'trade',
-        'study',
-        'other',
-        'price',
-        'class',
-        'union',
-        'value',
-        'paper',
-        'right',
-        'voice',
-        'stage',
-        'light',
-        'march',
-        'board',
-        'month',
-        'music',
-        'field',
-        'award',
-        'issue',
-        'basis',
-        'front',
-        'heart',
-        'force',
-        'model',
-        'space',
-        'peter',
+        "world",
+        "house",
+        "place",
+        "group",
+        "party",
+        "money",
+        "point",
+        "state",
+        "night",
+        "water",
+        "thing",
+        "order",
+        "power",
+        "court",
+        "level",
+        "child",
+        "south",
+        "staff",
+        "woman",
+        "north",
+        "sense",
+        "death",
+        "range",
+        "table",
+        "trade",
+        "study",
+        "other",
+        "price",
+        "class",
+        "union",
+        "value",
+        "paper",
+        "right",
+        "voice",
+        "stage",
+        "light",
+        "march",
+        "board",
+        "month",
+        "music",
+        "field",
+        "award",
+        "issue",
+        "basis",
+        "front",
+        "heart",
+        "force",
+        "model",
+        "space",
+        "peter",
     ),
 )
 
@@ -472,7 +452,7 @@ def random_name() -> str:
 
     :return: A Random name.
     """
-    return '_'.join(random.choice(_random_names[j]) for j in range(2))
+    return "_".join(random.choice(_random_names[j]) for j in range(2))
 
 
 assigned_ports = set()
@@ -485,12 +465,12 @@ def reset_ports():
     def _get_unassigned_ports():
         # if we are running out of ports, lower default minimum port
         if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
-            min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '16384'))
+            min_port = int(os.environ.get("JINA_RANDOM_PORT_MIN", "16384"))
         else:
             min_port = int(
-                os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT))
+                os.environ.get("JINA_RANDOM_PORT_MIN", str(DEFAULT_MIN_PORT))
             )
-        max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', str(MAX_PORT)))
+        max_port = int(os.environ.get("JINA_RANDOM_PORT_MAX", str(MAX_PORT)))
         return set(range(min_port, max_port + 1)) - set(assigned_ports)
 
     unassigned_ports.clear()
@@ -512,7 +492,7 @@ def random_port() -> Optional[int]:
         def _check_bind(port):
             with socket.socket() as s:
                 try:
-                    s.bind(('', port))
+                    s.bind(("", port))
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     return port
                 except OSError:
@@ -526,7 +506,7 @@ def random_port() -> Optional[int]:
                 break
         else:
             raise OSError(
-                f'can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports'
+                f"can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports"
             )
         int_port = int(_port)
         unassigned_ports.pop(idx)
@@ -598,7 +578,7 @@ def expand_dict(
     :return: Expanded variables.
     """
     expand_map = SimpleNamespace()
-    pat = re.compile(r'{.+}|\$[a-zA-Z0-9_]*\b')
+    pat = re.compile(r"{.+}|\$[a-zA-Z0-9_]*\b")
 
     def _scan(sub_d: Union[Dict, List], p):
         if isinstance(sub_d, dict):
@@ -652,40 +632,40 @@ def expand_dict(
 
 
 _ATTRIBUTES = {
-    'bold': 1,
-    'dark': 2,
-    'underline': 4,
-    'blink': 5,
-    'reverse': 7,
-    'concealed': 8,
+    "bold": 1,
+    "dark": 2,
+    "underline": 4,
+    "blink": 5,
+    "reverse": 7,
+    "concealed": 8,
 }
 
 _HIGHLIGHTS = {
-    'on_grey': 40,
-    'on_red': 41,
-    'on_green': 42,
-    'on_yellow': 43,
-    'on_blue': 44,
-    'on_magenta': 45,
-    'on_cyan': 46,
-    'on_white': 47,
+    "on_grey": 40,
+    "on_red": 41,
+    "on_green": 42,
+    "on_yellow": 43,
+    "on_blue": 44,
+    "on_magenta": 45,
+    "on_cyan": 46,
+    "on_white": 47,
 }
 
 _COLORS = {
-    'black': 30,
-    'red': 31,
-    'green': 32,
-    'yellow': 33,
-    'blue': 34,
-    'magenta': 35,
-    'cyan': 36,
-    'white': 37,
+    "black": 30,
+    "red": 31,
+    "green": 32,
+    "yellow": 33,
+    "blue": 34,
+    "magenta": 35,
+    "cyan": 36,
+    "white": 37,
 }
 
-_RESET = '\033[0m'
+_RESET = "\033[0m"
 
 if __windows__:
-    os.system('color')
+    os.system("color")
 
 
 def colored(
@@ -731,8 +711,8 @@ def colored(
         }
     :return: Colored text.
     """
-    if 'JINA_LOG_NO_COLOR' not in os.environ:
-        fmt_str = '\033[%dm%s'
+    if "JINA_LOG_NO_COLOR" not in os.environ:
+        fmt_str = "\033[%dm%s"
         if color:
             text = fmt_str % (_COLORS[color], text)
         if on_color:
@@ -765,7 +745,7 @@ def colored_rich(
 
     :return: Colored text.
     """
-    if 'JINA_LOG_NO_COLOR' not in os.environ:
+    if "JINA_LOG_NO_COLOR" not in os.environ:
         if color:
             text = _wrap_text_in_rich_bracket(text, color)
         if on_color:
@@ -781,7 +761,7 @@ def colored_rich(
 
 
 def _wrap_text_in_rich_bracket(text: str, wrapper: str):
-    return f'[{wrapper}]{text}[/{wrapper}]'
+    return f"[{wrapper}]{text}[/{wrapper}]"
 
 
 def warn_unknown_args(unknown_args: List[str]):
@@ -797,20 +777,20 @@ def warn_unknown_args(unknown_args: List[str]):
     real_unknown_args = []
     warn_strs = []
     for arg in unknown_args:
-        if arg.replace('--', '') not in all_args:
+        if arg.replace("--", "") not in all_args:
             from marie.parsers.deprecated import get_deprecated_replacement
 
             new_arg = get_deprecated_replacement(arg)
             if new_arg:
                 if not has_migration_tip:
-                    warn_strs.append('Migration tips:')
+                    warn_strs.append("Migration tips:")
                     has_migration_tip = True
-                warn_strs.append(f'\t`{arg}` has been renamed to `{new_arg}`')
+                warn_strs.append(f"\t`{arg}` has been renamed to `{new_arg}`")
             real_unknown_args.append(arg)
 
     if real_unknown_args:
-        warn_strs = [f'ignored unknown argument: {real_unknown_args}.'] + warn_strs
-        warnings.warn(''.join(warn_strs))
+        warn_strs = [f"ignored unknown argument: {real_unknown_args}."] + warn_strs
+        warnings.warn("".join(warn_strs))
 
 
 class ArgNamespace:
@@ -829,21 +809,21 @@ class ArgNamespace:
         from marie.serve.gateway import BaseGateway
 
         for k, v in kwargs.items():
-            k = k.replace('_', '-')
+            k = k.replace("_", "-")
             if v is not None:
                 if isinstance(v, bool):
                     if v:
-                        args.append(f'--{k}')
+                        args.append(f"--{k}")
                 elif isinstance(v, list):  # for nargs
-                    args.extend([f'--{k}', *(str(vv) for vv in v)])
+                    args.extend([f"--{k}", *(str(vv) for vv in v)])
                 elif isinstance(v, dict):
-                    args.extend([f'--{k}', json.dumps(v)])
+                    args.extend([f"--{k}", json.dumps(v)])
                 elif isinstance(v, type) and issubclass(v, BaseExecutor):
-                    args.extend([f'--{k}', v.__name__])
+                    args.extend([f"--{k}", v.__name__])
                 elif isinstance(v, type) and issubclass(v, BaseGateway):
-                    args.extend([f'--{k}', v.__name__])
+                    args.extend([f"--{k}", v.__name__])
                 else:
-                    args.extend([f'--{k}', str(v)])
+                    args.extend([f"--{k}", str(v)])
         return args
 
     @staticmethod
@@ -868,9 +848,9 @@ class ArgNamespace:
         if positional_args:
             args += positional_args
         p_args, unknown_args = parser.parse_known_args(args)
-        unknown_args = list(filter(lambda x: x.startswith('--'), unknown_args))
-        if '--jcloud' in unknown_args:
-            unknown_args.remove('--jcloud')
+        unknown_args = list(filter(lambda x: x.startswith("--"), unknown_args))
+        if "--jcloud" in unknown_args:
+            unknown_args.remove("--jcloud")
         if warn_unknown and unknown_args:
             _leftovers = set(unknown_args)
             if fallback_parsers:
@@ -907,7 +887,7 @@ class ArgNamespace:
 
     @staticmethod
     def flatten_to_dict(
-        args: Union[Dict[str, 'Namespace'], 'Namespace']
+        args: Union[Dict[str, "Namespace"], "Namespace"]
     ) -> Dict[str, Any]:
         """Convert argparse.Namespace to dict to be uploaded via REST.
 
@@ -964,11 +944,11 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     try:
         from hubble import __version__ as __hubble_version__
     except:
-        __hubble_version__ = 'not-available'
+        __hubble_version__ = "not-available"
     try:
         from jcloud import __version__ as __jcloud_version__
     except:
-        __jcloud_version__ = 'not-available'
+        __jcloud_version__ = "not-available"
 
     from marie.constants import __marie_env__, __unset_msg__, __uptime__
 
@@ -982,27 +962,27 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     try:
 
         info = {
-            'marie': __version__,
-            'docarray': __docarray_version__,
-            'jcloud': __jcloud_version__,
-            'jina-hubble-sdk': __hubble_version__,
-            'marie-proto': __proto_version__,
-            'protobuf': google.protobuf.__version__,
-            'proto-backend': api_implementation.Type(),
-            'grpcio': getattr(grpc, '__version__', _grpcio_metadata.__version__),
-            'pyyaml': yaml.__version__,
-            'python': platform.python_version(),
-            'platform': platform.system(),
-            'platform-release': platform.release(),
-            'platform-version': platform.version(),
-            'architecture': platform.machine(),
-            'processor': platform.processor(),
-            'uid': getnode(),
-            'session-id': str(random_uuid(use_uuid1=True)),
-            'uptime': __uptime__,
-            'ci-vendor': get_ci_vendor() or __unset_msg__,
-            'internal': 'marieai'
-            in os.getenv('GITHUB_ACTION_REPOSITORY', __unset_msg__),
+            "marie": __version__,
+            "docarray": __docarray_version__,
+            "jcloud": __jcloud_version__,
+            "jina-hubble-sdk": __hubble_version__,
+            "marie-proto": __proto_version__,
+            "protobuf": google.protobuf.__version__,
+            "proto-backend": api_implementation.Type(),
+            "grpcio": getattr(grpc, "__version__", _grpcio_metadata.__version__),
+            "pyyaml": yaml.__version__,
+            "python": platform.python_version(),
+            "platform": platform.system(),
+            "platform-release": platform.release(),
+            "platform-version": platform.version(),
+            "architecture": platform.machine(),
+            "processor": platform.processor(),
+            "uid": getnode(),
+            "session-id": str(random_uuid(use_uuid1=True)),
+            "uptime": __uptime__,
+            "ci-vendor": get_ci_vendor() or __unset_msg__,
+            "internal": "marieai"
+            in os.getenv("GITHUB_ACTION_REPOSITORY", __unset_msg__),
         }
 
         env_info = {k: os.getenv(k, __unset_msg__) for k in __marie_env__}
@@ -1022,16 +1002,16 @@ def format_full_version_info(info: Dict, env_info: Dict) -> str:
     :param env_info: The Jina environment variables.
     :return: Formatted version information.
     """
-    version_info = '\n'.join(f'- {k:30s}{v}' for k, v in info.items())
-    env_info = '\n'.join(f'* {k:30s}{v}' for k, v in env_info.items())
-    return version_info + '\n' + env_info
+    version_info = "\n".join(f"- {k:30s}{v}" for k, v in info.items())
+    env_info = "\n".join(f"* {k:30s}{v}" for k, v in env_info.items())
+    return version_info + "\n" + env_info
 
 
 def _update_policy():
     if __windows__:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    elif 'JINA_DISABLE_UVLOOP' in os.environ:
+    elif "JINA_DISABLE_UVLOOP" in os.environ:
         return
     else:
         try:
@@ -1074,7 +1054,7 @@ def typename(obj):
     if not isinstance(obj, type):
         obj = obj.__class__
     try:
-        return f'{obj.__module__}.{obj.__name__}'
+        return f"{obj.__module__}.{obj.__name__}"
     except AttributeError:
         return str(obj)
 
@@ -1111,19 +1091,19 @@ class cached_property:
         self.func = func
 
     def __get__(self, obj, cls):
-        cached_value = obj.__dict__.get(f'CACHED_{self.func.__name__}', None)
+        cached_value = obj.__dict__.get(f"CACHED_{self.func.__name__}", None)
         if cached_value is not None:
             return cached_value
 
-        value = obj.__dict__[f'CACHED_{self.func.__name__}'] = self.func(obj)
+        value = obj.__dict__[f"CACHED_{self.func.__name__}"] = self.func(obj)
         return value
 
     def __delete__(self, obj):
-        cached_value = obj.__dict__.get(f'CACHED_{self.func.__name__}', None)
+        cached_value = obj.__dict__.get(f"CACHED_{self.func.__name__}", None)
         if cached_value is not None:
-            if hasattr(cached_value, 'close'):
+            if hasattr(cached_value, "close"):
                 cached_value.close()
-            del obj.__dict__[f'CACHED_{self.func.__name__}']
+            del obj.__dict__[f"CACHED_{self.func.__name__}"]
 
 
 class _cache_invalidate:
@@ -1142,7 +1122,7 @@ class _cache_invalidate:
 
     def __call__(self, *args, **kwargs):
         obj = args[0]
-        cached_key = f'CACHED_{self.attribute}'
+        cached_key = f"CACHED_{self.attribute}"
         if cached_key in obj.__dict__:
             del obj.__dict__[cached_key]  # invalidate
         self.func(*args, **kwargs)
@@ -1194,7 +1174,7 @@ def get_readable_time(*args, **kwargs):
     import datetime
 
     secs = float(datetime.timedelta(*args, **kwargs).total_seconds())
-    units = [('day', 86400), ('hour', 3600), ('minute', 60), ('second', 1)]
+    units = [("day", 86400), ("hour", 3600), ("minute", 60), ("second", 1)]
     parts = []
     for unit, mul in units:
         if secs / mul >= 1 or mul == 1:
@@ -1203,8 +1183,8 @@ def get_readable_time(*args, **kwargs):
                 secs -= n * mul
             else:
                 n = int(secs)
-            parts.append(f'{n} {unit}' + ('' if n == 1 else 's'))
-    return ' and '.join(parts)
+            parts.append(f"{n} {unit}" + ("" if n == 1 else "s"))
+    return " and ".join(parts)
 
 
 def get_internal_ip():
@@ -1215,11 +1195,11 @@ def get_internal_ip():
     """
     import socket
 
-    ip = '127.0.0.1'
+    ip = "127.0.0.1"
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             # doesn't even have to be reachable
-            s.connect(('10.255.255.255', 1))
+            s.connect(("10.255.255.255", 1))
             ip = s.getsockname()[0]
     except Exception:
         pass
@@ -1244,7 +1224,7 @@ def get_public_ip(timeout: float = 0.3):
 
     def _get_ip(url):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=timeout) as fp:
                 _ip = fp.read().decode().strip()
                 results.append(_ip)
@@ -1253,9 +1233,9 @@ def get_public_ip(timeout: float = 0.3):
             pass  # intentionally ignored, public ip is not showed
 
     ip_server_list = [
-        'https://api.ipify.org',
-        'https://ident.me',
-        'https://checkip.amazonaws.com/',
+        "https://api.ipify.org",
+        "https://ident.me",
+        "https://checkip.amazonaws.com/",
     ]
 
     threads = []
@@ -1297,11 +1277,11 @@ def is_jupyter() -> bool:  # pragma: no cover
     except NameError:
         return False
     shell = get_ipython().__class__.__name__  # noqa: F821
-    if shell == 'ZMQInteractiveShell':
+    if shell == "ZMQInteractiveShell":
         return True  # Jupyter notebook or qtconsole
-    elif shell == 'Shell':
+    elif shell == "Shell":
         return True  # Google colab
-    elif shell == 'TerminalInteractiveShell':
+    elif shell == "TerminalInteractiveShell":
         return False  # Terminal running IPython
     else:
         return False  # Other type (?)
@@ -1352,15 +1332,15 @@ def run_async(func, *args, **kwargs):
                 from marie.excepts import BadClient
 
                 raise BadClient(
-                    'something wrong when running the eventloop, result can not be retrieved'
+                    "something wrong when running the eventloop, result can not be retrieved"
                 )
         else:
 
             raise RuntimeError(
-                'you have an eventloop running but not using Jupyter/ipython, '
-                'this may mean you are using Jina with other integration? if so, then you '
-                'may want to use Client/Flow(asyncio=True). If not, then '
-                'please report this issue here: https://github.com/jina-ai/jina'
+                "you have an eventloop running but not using Jupyter/ipython, "
+                "this may mean you are using Jina with other integration? if so, then you "
+                "may want to use Client/Flow(asyncio=True). If not, then "
+                "please report this issue here: https://github.com/jina-ai/jina"
             )
     else:
         return asyncio.run(func(*args, **kwargs))
@@ -1373,8 +1353,8 @@ def slugify(value):
     :param value: Original string.
     :return: Processed string.
     """
-    s = str(value).strip().replace(' ', '_')
-    return re.sub(r'(?u)[^-\w.]', '', s)
+    s = str(value).strip().replace(" ", "_")
+    return re.sub(r"(?u)[^-\w.]", "", s)
 
 
 def is_yaml_filepath(val) -> bool:
@@ -1385,9 +1365,9 @@ def is_yaml_filepath(val) -> bool:
     :return: True if the file is YAML else False.
     """
     if __windows__:
-        r = r'.*.ya?ml$'  # TODO: might not be exhaustive
+        r = r".*.ya?ml$"  # TODO: might not be exhaustive
     else:
-        r = r'^[/\w\-\_\.]+.ya?ml$'
+        r = r"^[/\w\-\_\.]+.ya?ml$"
     return re.match(r, val.strip()) is not None
 
 
@@ -1401,14 +1381,14 @@ def download_mermaid_url(mermaid_url, output) -> None:
     from urllib.request import Request, urlopen
 
     try:
-        req = Request(mermaid_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with open(output, 'wb') as fp:
+        req = Request(mermaid_url, headers={"User-Agent": "Mozilla/5.0"})
+        with open(output, "wb") as fp:
             fp.write(urlopen(req).read())
     except:
         from marie.logging.predefined import default_logger
 
         default_logger.error(
-            'can not download image, please check your graph and the network connections'
+            "can not download image, please check your graph and the network connections"
         )
 
 
@@ -1428,22 +1408,22 @@ def find_request_binding(target):
     def visit_function_def(node):
 
         for e in node.decorator_list:
-            req_name = ''
-            if isinstance(e, ast.Call) and e.func.id == 'requests':
+            req_name = ""
+            if isinstance(e, ast.Call) and e.func.id == "requests":
                 req_name = e.keywords[0].value.s
-            elif isinstance(e, ast.Name) and e.id == 'requests':
+            elif isinstance(e, ast.Name) and e.id == "requests":
                 req_name = __default_endpoint__
             if req_name:
                 if req_name in res:
                     raise ValueError(
-                        f'you already bind `{res[req_name]}` with `{req_name}` request'
+                        f"you already bind `{res[req_name]}` with `{req_name}` request"
                     )
                 else:
                     res[req_name] = node.name
 
     V = ast.NodeVisitor()
     V.visit_FunctionDef = visit_function_def
-    V.visit(compile(inspect.getsource(target), '?', 'exec', ast.PyCF_ONLY_AST))
+    V.visit(compile(inspect.getsource(target), "?", "exec", ast.PyCF_ONLY_AST))
     return res
 
 
@@ -1462,9 +1442,9 @@ def dunder_get(_dict: Any, key: str) -> Any:
     """
 
     try:
-        part1, part2 = key.split('__', 1)
+        part1, part2 = key.split("__", 1)
     except ValueError:
-        part1, part2 = key, ''
+        part1, part2 = key, ""
 
     try:
         part1 = int(part1)  # parse int parameter
@@ -1492,7 +1472,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
 
 
-def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
+def extend_rest_interface(app: "FastAPI") -> "FastAPI":
     """Extend Jina built-in FastAPI instance with customized APIs, routing, etc.
 
     :param app: the built-in FastAPI instance given by Jina
@@ -1514,19 +1494,19 @@ def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
 def get_ci_vendor() -> Optional[str]:
     from marie.constants import __resources_path__
 
-    with open(os.path.join(__resources_path__, 'ci-vendors.json')) as fp:
+    with open(os.path.join(__resources_path__, "ci-vendors.json")) as fp:
         all_cis = json.load(fp)
         for c in all_cis:
-            if isinstance(c['env'], str) and c['env'] in os.environ:
-                return c['constant']
-            elif isinstance(c['env'], dict):
-                for k, v in c['env'].items():
+            if isinstance(c["env"], str) and c["env"] in os.environ:
+                return c["constant"]
+            elif isinstance(c["env"], dict):
+                for k, v in c["env"].items():
                     if os.environ.get(k, None) == v:
-                        return c['constant']
-            elif isinstance(c['env'], list):
-                for k in c['env']:
+                        return c["constant"]
+            elif isinstance(c["env"], list):
+                for k in c["env"]:
                     if k in os.environ:
-                        return c['constant']
+                        return c["constant"]
 
 
 def deprecate_by(new_fn):
@@ -1535,8 +1515,8 @@ def deprecate_by(new_fn):
 
         old_fn_name = inspect.stack()[1][4][0].strip().split("=")[0].strip()
         warnings.warn(
-            f'`{old_fn_name}` is renamed to `{new_fn.__name__}` with the same usage, please use the latter instead. '
-            f'The old function will be removed soon.',
+            f"`{old_fn_name}` is renamed to `{new_fn.__name__}` with the same usage, please use the latter instead. "
+            f"The old function will be removed soon.",
             DeprecationWarning,
         )
         return new_fn(*args, **kwargs)
@@ -1552,7 +1532,7 @@ def get_request_header() -> Dict:
     metas, envs = get_full_version()
 
     header = {
-        **{f'jinameta-{k}': str(v) for k, v in metas.items()},
+        **{f"jinameta-{k}": str(v) for k, v in metas.items()},
         **envs,
     }
     return header
@@ -1564,8 +1544,8 @@ def get_rich_console():
     :return: rich console
     """
     return Console(
-        force_terminal=True if 'PYCHARM_HOSTED' in os.environ else None,
-        color_system=None if 'JINA_LOG_NO_COLOR' in os.environ else 'auto',
+        force_terminal=True if "PYCHARM_HOSTED" in os.environ else None,
+        color_system=None if "JINA_LOG_NO_COLOR" in os.environ else "auto",
     )
 
 
@@ -1597,14 +1577,14 @@ def parse_client(kwargs) -> Namespace:
 
 
 def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    if 'host' in kwargs.keys():
+    if "host" in kwargs.keys():
         return_scheme = dict()
         (
-            kwargs['host'],
-            return_scheme['port'],
-            return_scheme['protocol'],
-            return_scheme['tls'],
-        ) = parse_host_scheme(kwargs['host'])
+            kwargs["host"],
+            return_scheme["port"],
+            return_scheme["protocol"],
+            return_scheme["tls"],
+        ) = parse_host_scheme(kwargs["host"])
 
         for key, value in return_scheme.items():
             if value:
@@ -1622,9 +1602,9 @@ def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _delete_host_slash(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    if 'host' in kwargs:
-        if kwargs['host'][-1] == '/':
-            kwargs['host'] = kwargs['host'][:-1]
+    if "host" in kwargs:
+        if kwargs["host"][-1] == "/":
+            kwargs["host"] = kwargs["host"][:-1]
     return kwargs
 
 
@@ -1632,24 +1612,24 @@ def parse_host_scheme(host: str) -> Tuple[str, str, str, bool]:
     scheme, _hostname, port = _parse_url(host)
 
     tls = None
-    if scheme in ('grpcs', 'https', 'wss'):
+    if scheme in ("grpcs", "https", "wss"):
         scheme = scheme[:-1]
         tls = True
 
-    if scheme == 'ws':
-        scheme = 'websocket'
+    if scheme == "ws":
+        scheme = "websocket"
 
     return _hostname, port, scheme, tls
 
 
 def _parse_url(host):
-    if '://' in host:
-        scheme, host = host.split('://')
+    if "://" in host:
+        scheme, host = host.split("://")
     else:
         scheme = None
 
-    if ':' in host:
-        host, port = host.split(':')
+    if ":" in host:
+        host, port = host.split(":")
     else:
         port = None
 
@@ -1691,8 +1671,8 @@ def _parse_ports(port: str) -> Union[int, List]:
     try:
         port = int(port)
     except ValueError as e:
-        if ',' in port:
-            port = [int(port_) for port_ in port.split(',')]
+        if "," in port:
+            port = [int(port_) for port_ in port.split(",")]
         elif not isinstance(port, list):
             raise e
     return port
@@ -1715,7 +1695,7 @@ def _parse_hosts(host: str) -> Union[str, List[str]]:
     :param host: the string to parse
     :return: the host or the iterable of hosts
     """
-    hosts = host.split(',')
+    hosts = host.split(",")
     return hosts[0] if len(hosts) == 1 else hosts
 
 
@@ -1726,23 +1706,23 @@ def send_telemetry_event(event: str, obj: Any, **kwargs) -> None:
     :param kwargs: Extra kwargs to be passed to the data sent
     """
 
-    if 'JINA_OPTOUT_TELEMETRY' in os.environ:
+    if "JINA_OPTOUT_TELEMETRY" in os.environ:
         return
 
     def _telemetry():
-        url = 'https://telemetry.marieai.co/'
+        url = "https://telemetry.marieai.co/"
         try:
             from marie.helper import get_full_version
 
             metas, _ = get_full_version()
             data = base64.urlsafe_b64encode(
                 json.dumps(
-                    {**metas, 'event': f'{obj.__class__.__name__}.{event}', **kwargs}
-                ).encode('utf-8')
+                    {**metas, "event": f"{obj.__class__.__name__}.{event}", **kwargs}
+                ).encode("utf-8")
             )
 
             req = urllib.request.Request(
-                url, data=data, headers={'User-Agent': 'Mozilla/5.0'}
+                url, data=data, headers={"User-Agent": "Mozilla/5.0"}
             )
             urllib.request.urlopen(req)
 
@@ -1783,3 +1763,24 @@ def make_iterable(o: object) -> Iterable:
         return o
     else:
         return [o]
+
+
+def get_ip_whitelist_from_path(path: Optional[str] = None):
+    ip_whitelist = []
+
+    if not path:
+        return ip_whitelist
+
+    try:
+        lines = []
+        with open(path) as file:
+            lines.extend([line.rstrip() for line in file])
+
+        for line in lines:
+            ip_whitelist.extend([str(ip) for ip in ipaddress.IPv4Network(line)])
+
+        ip_whitelist = [*set(ip_whitelist)]
+    except:
+        pass
+
+    return ip_whitelist

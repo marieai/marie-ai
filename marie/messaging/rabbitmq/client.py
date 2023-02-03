@@ -32,7 +32,7 @@ class BlockingPikaClient:
         if provider == "amazon-rabbitmq":
             # SSL Context for TLS configuration of Amazon MQ for RabbitMQ
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-            ssl_context.set_ciphers('ECDHE+AESGCM:!ECDSA')
+            ssl_context.set_ciphers("ECDHE+AESGCM:!ECDSA")
             parameters.ssl_options = pika.SSLOptions(context=ssl_context)
 
         self.connection = pika.BlockingConnection(parameters)
@@ -66,10 +66,9 @@ class BlockingPikaClient:
         channel = self.connection.channel()
         hdrs = {"key": "val"}
         properties = pika.BasicProperties(
-            app_id='marie-service', content_type='application/json', headers=hdrs
+            app_id="marie-service", content_type="application/json", headers=hdrs
         )
         body = json.dumps(message, ensure_ascii=False)
-        # channel.basic_publish(exchange=exchange, routing_key=routing_key, body=body)
         channel.basic_publish(exchange, routing_key, body, properties)
 
         print(

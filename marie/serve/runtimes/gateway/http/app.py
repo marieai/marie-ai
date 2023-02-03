@@ -26,7 +26,7 @@ def get_fastapi_app(
     logger: 'MarieLogger',
     tracing: Optional[bool] = None,
     tracer_provider: Optional['trace.TracerProvider'] = None,
-    ip_whitelist: Optional[list[str]] = None
+    ip_whitelist: Optional[list[str]] = None,
 ):
     """
     Get the app from FastAPI as the REST interface.
@@ -81,7 +81,9 @@ def get_fastapi_app(
         logger.warning('CORS is enabled. This service is accessible from any website!')
 
     if ip_whitelist:
-        app.add_middleware(WhitelistMiddleware, logger=logger, ip_whitelist=ip_whitelist)
+        app.add_middleware(
+            WhitelistMiddleware, logger=logger, ip_whitelist=ip_whitelist
+        )
 
     @app.on_event('shutdown')
     async def _shutdown():
