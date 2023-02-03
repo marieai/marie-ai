@@ -2,6 +2,7 @@ import asyncio
 import base64
 import functools
 import inspect
+import ipaddress
 import json
 import math
 import os
@@ -68,6 +69,26 @@ __all__ = [
 
 T = TypeVar('T')
 GATEWAY_NAME = 'gateway'
+
+def get_ip_whitelist_from_path(path: Optional[str] = None):
+    ip_whitelist = []
+
+    if not path:
+        return ip_whitelist
+
+    try:
+        lines = []
+        with open(path) as file:
+            lines.extend([line.rstrip() for line in file])
+
+        for line in lines:
+            ip_whitelist.extend([str(ip) for ip in ipaddress.IPv4Network(line)])
+
+        ip_whitelist = [*set(ip_whitelist)]
+    except:
+        pass
+
+    return ip_whitelist
 
 
 def deprecated_alias(**aliases):

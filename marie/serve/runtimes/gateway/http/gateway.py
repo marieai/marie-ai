@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import Optional
-
+from marie.helper import get_ip_whitelist_from_path
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.gateway.http.app import get_fastapi_app
 from marie.serve.runtimes.gateway.http.fastapi import FastAPIBaseGateway
@@ -19,6 +19,7 @@ class HTTPGateway(FastAPIBaseGateway):
         expose_endpoints: Optional[str] = None,
         expose_graphql_endpoint: Optional[bool] = False,
         cors: Optional[bool] = False,
+        ip_whitelist_path: Optional[str] = None,
         **kwargs,
     ):
         """Initialize the gateway
@@ -42,6 +43,7 @@ class HTTPGateway(FastAPIBaseGateway):
         self.expose_endpoints = expose_endpoints
         self.expose_graphql_endpoint = expose_graphql_endpoint
         self.cors = cors
+        self.ip_whitelist = get_ip_whitelist_from_path(ip_whitelist_path)
 
     @property
     def app(self):
@@ -65,5 +67,6 @@ class HTTPGateway(FastAPIBaseGateway):
                 logger=self.logger,
                 tracing=self.tracing,
                 tracer_provider=self.tracer_provider,
+                ip_whitelist=self.ip_whitelist
             )
         )
