@@ -98,7 +98,7 @@ class Toast:
         pass
 
     @staticmethod
-    def notify(event: str, notification: Any, **kwargs: Any) -> None:
+    async def notify(event: str, notification: Any, **kwargs: Any) -> None:
         for handler in Toast.__get_event_handlers(event):
             handler.notify(notification, **kwargs)
 
