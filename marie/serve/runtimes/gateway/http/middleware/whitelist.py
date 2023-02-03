@@ -4,7 +4,7 @@ from marie.logging.logger import MarieLogger
 
 
 class WhitelistMiddleware:
-    def __init__(self, logger: "MarieLogger", ip_whitelist: Optional[list[str]] = None):
+    def __init__(self, logger: "MarieLogger", ip_whitelist: Optional[list] = None):
         self.logger = logger
         self.ip_whitelist = ip_whitelist
 

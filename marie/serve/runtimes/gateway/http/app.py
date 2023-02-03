@@ -26,7 +26,7 @@ def get_fastapi_app(
     logger: "MarieLogger",
     tracing: Optional[bool] = None,
     tracer_provider: Optional["trace.TracerProvider"] = None,
-    ip_whitelist: Optional[list[str]] = None,
+    ip_whitelist: Optional[list] = None,
 ):
     """
     Get the app from FastAPI as the REST interface.
