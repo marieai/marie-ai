@@ -3,7 +3,7 @@ from fastapi import Request, HTTPException, status
 from marie.logging.logger import MarieLogger
 
 class WhitelistMiddleware:
-    def __init__(self, logger: 'MarieLogger', ip_whitelist: Optional[list[str]]):
+    def __init__(self, logger: 'MarieLogger', ip_whitelist: Optional[list[str]] = None):
         self.logger = logger
         self.ip_whitelist = ip_whitelist
 
