@@ -232,7 +232,8 @@ def docs_from_file(img_path: str) -> DocumentArray:
 
     return docs
 
-def docs_from_file_specific(img_path: str, pages: list[int]) -> DocumentArray:
+
+def docs_from_file_specific(img_path: str, pages: list) -> DocumentArray:
     """Create DocumentArray from image containing only specific frames"""
     loaded_docs = docs_from_file(img_path)
     docs = DocumentArray()
