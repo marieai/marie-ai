@@ -80,8 +80,25 @@ There are number of different ways that this project can be setup.
 
 If you wish to run and develop `Marie-AI` directly, install it from source:
 
+First install required build dependencies, if they are not present.
+
 ```shell
-git clone https://github.com/gregbugaj/marie-ai.git
+sudo apt-get install libpq-dev python-dev-is-python3
+```
+
+Install ONNX Runtime from source [https://onnxruntime.ai/docs/build/inferencing.html] :
+
+Create the wheel file and install it :
+```shell
+ ./build.sh --config Release --build_shared_lib --parallel --build_wheel
+
+ ./build.sh --config Release --build_wheel --enable_pybind --parallel --skip_tests --build_shared_lib
+```
+
+Next install from source :
+
+```shell
+git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
 git checkout develop
 
@@ -96,9 +113,6 @@ pip install -v -e .
 
 ### Additional dependencies
 
-```shell
-sudo apt-get install libpq-dev python-dev-is-python3
-```
 
 ```shell
 python3 -m pip install -U 'git+https://github.com/facebookresearch/fvcore'
