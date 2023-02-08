@@ -30,7 +30,8 @@
 #git+https://github.com/pytorch/fairseq.git:               standard,core
 
 
-numpy:                      standard,core
+pybind11:                    standard,core
+numpy:                       standard,core
 # Pinning to version 3.20.0 as this will cause issues with tensorboard
 protobuf==3.20.0:            standard,core
 grpcio>=1.46.0,<1.48.1:     standard,core
@@ -96,7 +97,9 @@ lmdb:                         standard,core
 natsort:                      standard,core
 celery:                       standard,core
 
-opencv-python==4.5.4.60:      standard,core
+# opencv-python==4.5.4.60:      standard,core
+opencv-python==4.7.0.68:      standard,core
+
 imagecodecs:                  standard,core
 imutils:                      standard,core
 PyPDF4:                       standard,core
@@ -108,7 +111,7 @@ segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
 Cython:                       standard,core
-pybind11[global]:             standard,core
+pybind11:                     standard,core
 jsons:                        standard,core
 shapely:                      standard,core
 gradio:                       standard,core
@@ -119,11 +122,11 @@ munch:                        standard,core
 
 # opentelemetry-api:            standard,core
 
-onnxruntime:                  standard,core
-onnxruntime-gpu==1.13.1:      standard,core
-onnx==1.12.0:                 standard,core
-onnxconverter_common==1.13.0: standard,core
-onnxmltools:                  standard,core
+#onnx==1.13.0:                  standard,core
+#onnxruntime==1.13.1:                  standard,core
+#onnxruntime-gpu:      standard,core
+#onnxconverter_common==1.13.0: standard,core
+#onnxmltools:                  standard,core
 
 pika:                         standard,core
 sentencepiece:                standard,core

@@ -1,3 +1,4 @@
+from logging import handlers
 import torch
 
 print(torch.__version__)
@@ -5,6 +6,9 @@ print(torch.__version__)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print('Using device:', device)
 print()
+
+
+torch.set_float32_matmul_precision('high')
 
 # Additional Info when using cuda
 if device.type == 'cuda':
@@ -17,3 +21,18 @@ if device.type == 'cuda':
 # test torch installation
 x = torch.rand(5, 3)
 print(x)
+
+
+import torch
+import torchvision.models as models
+
+model = models.resnet18().cuda()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+compiled_model = torch.compile(model)
+
+x = torch.randn(16, 3, 224, 224).cuda()
+optimizer.zero_grad()
+out = compiled_model(x)
+out.sum().backward()
+optimizer.step()
+

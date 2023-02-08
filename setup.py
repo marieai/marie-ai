@@ -11,8 +11,8 @@ try:
 except ImportError:
     from distutils.core import setup
 
-if sys.version_info < (3, 8, 0):
-    raise OSError(f"Marie requires Python >=3.8, but yours is {sys.version}")
+if sys.version_info < (3, 10, 0):
+    raise OSError(f"Marie requires Python >=3.10, but yours is {sys.version}")
 
 try:
     # marie was already taken by PIP
