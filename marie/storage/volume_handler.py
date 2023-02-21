@@ -2,7 +2,8 @@ import logging
 import os
 from typing import Any, Dict
 
-from marie.common.file_io import PathHandler, PathManager
+from marie.storage.handler import PathHandler
+from marie.storage.manager import StorageManager
 
 
 class VolumeHandler(PathHandler):
@@ -24,7 +25,7 @@ class VolumeHandler(PathHandler):
         volume_path = path[len(self.PREFIX) :]
         resolved_path = os.path.abspath(os.path.join(self.volume_base_dir, volume_path))
         logger.info("Catalog entry {} points to {}".format(path, resolved_path))
-        return PathManager.get_local_path(resolved_path)
+        return StorageManager.get_local_path(resolved_path)
 
     def _exists(self, path: str, **kwargs: Any) -> bool:
         self._check_kwargs(kwargs)

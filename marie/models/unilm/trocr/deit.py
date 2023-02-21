@@ -7,9 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
 
+from timm.models import register_model
 from timm.models.vision_transformer import VisionTransformer, _cfg
 from timm.models.vision_transformer import Attention, Block
-from timm.models.registry import register_model
+# from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_
 
 logger = logging.getLogger(__name__)
@@ -61,8 +62,16 @@ class AdaptedVisionTransformer(VisionTransformer):
         self.mask_ratio = kwargs.pop('mask_ratio', 0.0)        
         self.patch_size = kwargs.get('patch_size')    
         self.fp16fixed = kwargs.pop('fp16fixed', False)   
-        weight_init = kwargs.get('weight_init', '')     
-        super().__init__(*args, **kwargs)    
+        weight_init = kwargs.get('weight_init', '')
+
+        # after update timm, pretrained_cfg and pretrained_cfg_overlay is not used anymore
+        kwargs.pop("pretrained_cfg")
+        kwargs.pop("pretrained_cfg_overlay")
+
+        super().__init__(*args, **kwargs)
+
+        # After timm update, the following code is needed to init dist token
+        self.dist_token = None
         
         if self.ape:
             self.pos_embed = nn.Parameter(torch.zeros(1, self.ape + self.num_tokens, self.embed_dim))
@@ -104,10 +113,12 @@ class AdaptedVisionTransformer(VisionTransformer):
             x[masked_indices] = 0
 
         cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        if self.dist_token is None:
-            x = torch.cat((cls_token, x), dim=1)
-        else:
-            x = torch.cat((cls_token, self.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
+
+        if True:
+            if self.dist_token is None:
+                x = torch.cat((cls_token, x), dim=1)
+            else:
+                x = torch.cat((cls_token, self.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
 
         if self.ape:            
             pos_embed_patch_num = int(self.pos_embed.size(1) ** 0.5)

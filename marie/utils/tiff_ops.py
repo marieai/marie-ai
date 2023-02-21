@@ -2,13 +2,19 @@ import glob
 import multiprocessing as mp
 import os
 import tempfile
+import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
+from datetime import datetime
+from typing import Callable, Optional, List
 
 import cv2
 import numpy as np
 
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
+
+from marie.utils.docs import frames_from_file
+
 
 # https://github.com/joeatwork/python-lzw
 # exiftool PID_576_7188_0_150300431.tif
@@ -64,11 +70,11 @@ def convert_group4(src_path, dst_path):
         image.save(filename=dst_path)
 
 
-def __process_burst(frame, bitonal, name, generated_name, dest_dir, index, tmp_dir):
+def __process_burst(frame, bitonal, generated_name, dest_dir, index, tmp_dir):
     try:
         output_path_tmp = os.path.join(tmp_dir, generated_name)
         output_path = os.path.join(dest_dir, generated_name)
-        print(f"Bursting page# {index} : {name} > {generated_name} > {output_path}")
+        print(f"Bursting page# {index} : {generated_name} > {output_path}")
         # check if root directory exists
         photometric = "rbg"
         if bitonal:
@@ -93,28 +99,34 @@ def __process_burst(frame, bitonal, name, generated_name, dest_dir, index, tmp_d
         raise ident
 
 
-def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
+def burst_tiff_frames(
+    frames: List[np.ndarray],
+    dest_dir,
+    bitonal=True,
+    sequential=True,
+    filename_generator: Optional[Callable] = None,
+) -> None:
     """
     Burst multipage tiff into individual frames and save them to output directory
 
-    :param src_img_path: Source image
+    :param frames: Source image
     :param dest_dir: Destination directory
     :param bitonal: Should image be converted to bitonal image
     :param sequential: Should the document be process sequentially or in multithreaded fashion
+    :param filename_generator: Function that generates filename for each frame
     """
-    ret, frames = cv2.imreadmulti(src_img_path, [], cv2.IMREAD_ANYCOLOR)
-    name = src_img_path.split("/")[-1].split(".")[0]
+
+    filename_generator = filename_generator or (lambda x: f"{x:05}.tif")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if sequential:
             print("created temporary directory", tmp_dir)
             for i, frame in enumerate(frames):
                 index = i + 1
-                generated_name = f"{name}_page_{index:04}.tif"
+                generated_name = filename_generator(pagenumber=index)
                 __process_burst(
                     frame,
                     bitonal,
-                    name,
                     generated_name,
                     dest_dir,
                     index,
@@ -125,12 +137,11 @@ def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
                 print("created temporary directory", tmp_dir)
                 for i, frame in enumerate(frames):
                     index = i + 1
-                    generated_name = f"{name}_page_{index:04}.tif"
+                    generated_name = filename_generator(pagenumber=index)
                     executor.submit(
                         __process_burst,
                         frame,
                         bitonal,
-                        name,
                         generated_name,
                         dest_dir,
                         index,
@@ -138,16 +149,30 @@ def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
                     )
 
 
+def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
+    """
+    Burst multipage tiff into individual frames and save them to output directory
+
+    :param src_img_path: Source image
+    :param dest_dir: Destination directory
+    :param bitonal: Should image be converted to bitonal image
+    :param sequential: Should the document be process sequentially or in multithreaded fashion
+    """
+
+    frames = frames_from_file(src_img_path)
+    burst_tiff_frames(frames, dest_dir, bitonal, sequential)
+
+
 def merge_tiff(src_dir, dst_img_path, sort_key):
     """Merge individual tiff frames into a multipage tiff"""
     from wand.image import Image
 
-    print(f"Creating multipage tiff : {dst_img_path}")
     with Image() as composite:
-        for _path in sorted(glob.glob(os.path.join(src_dir, "*.tif*")), key=sort_key):
+        for _path in sorted(glob.glob(os.path.join(src_dir, "*.*")), key=sort_key):
             try:
-                print(f"Merging document : {_path}")
-                filename = _path.split("/")[-1].split(".")[0]
+                if False:
+                    curren_time = datetime.now().strftime("%H:%M:%S.%f")
+                    print(f"Merging document :{curren_time} {_path}")
                 with Image(filename=_path) as src_img:
                     frame = src_img.image_get()
                     composite.image_add(frame)
@@ -179,3 +204,39 @@ def merge_tiff_frames(
         composite.compression = "group4"
         composite.resolution = (300, 300)
         composite.save(filename=dst_img_path)
+
+
+def save_frame_as_tiff_g4(frame, output_filename):
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            generated_name = f"{uuid.uuid4()}.tif"
+            output_path_tmp = os.path.join(tmp_dir, generated_name)
+
+            print(
+                f"save_frame_as_tiff_g4  page# > {output_filename} > : {output_path_tmp}"
+            )
+            # check if root directory exists
+            bitonal = True
+
+            photometric = "rbg"
+            if bitonal:
+                photometric = "minisblack"
+                # at this time we expect TIFF frame to be already bitonal
+                if len(frame.shape) == 3:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    frame = cv2.threshold(
+                        gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
+                    )[1]
+
+            # TODO : Replace this with image magic methods so we can do this  in one step
+            with TiffWriter(output_path_tmp) as tif_writer:
+                tif_writer.write(
+                    frame,
+                    photometric=photometric,
+                    description=generated_name,
+                    metadata=None,
+                )
+
+            convert_group4(output_path_tmp, output_filename)
+    except Exception as ident:
+        raise ident

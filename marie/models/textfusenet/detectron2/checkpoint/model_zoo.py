@@ -128,5 +128,5 @@ class Detectron2Handler(PathHandler):
         return PathManager.open(self._get_local_path(path), mode, **kwargs)
 
 
-PathManager.register_handler(ModelCatalogHandler())
-PathManager.register_handler(Detectron2Handler())
+PathManager.register(ModelCatalogHandler())
+PathManager.register(Detectron2Handler())

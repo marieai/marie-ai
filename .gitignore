@@ -1,6 +1,8 @@
 
 model_zoo/
 .cache/
+torch_compile_debug/
+torch_extensions/
 # Environments
 .env
 .venv

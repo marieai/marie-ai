@@ -25,6 +25,8 @@ if __name__ == "__main__":
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
+    img_path = "~/tmp/PID_576_7188_0_150300411_4.tif"
+
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -36,7 +38,7 @@ if __name__ == "__main__":
     if True:
         use_cuda = torch.cuda.is_available()
         ocr_engine = DefaultOcrEngine(cuda=use_cuda)
-        results = ocr_engine.extract(frames, PSMode.RAW_LINE, CoordinateFormat.XYWH)
+        results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
 
         print(results)
         print("Testing text render")

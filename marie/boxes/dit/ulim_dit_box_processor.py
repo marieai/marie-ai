@@ -355,7 +355,6 @@ class BoxProcessorUlimDit(BoxProcessor):
                     paste_fragment(pil_image, snippet, (x0, y0))
 
             if True:
-                debug_dir = "/tmp/fragments"
                 savepath = os.path.join(debug_dir, f"{key}_txt_overlay.jpg")
                 pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
 

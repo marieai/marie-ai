@@ -13,7 +13,6 @@ import torch.backends.cudnn as cudnn
 from boxes import BoxProcessorCraft
 from boxes.box_processor import PSMode
 from common.file_io import PathManager
-from document.craft_icr_processor import CraftIcrProcessor
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from numpyencoder import NumpyEncoder
 from overlay.overlay import OverlayProcessor
@@ -21,11 +20,11 @@ from renderer.adlib_renderer import AdlibRenderer
 from renderer.blob_renderer import BlobRenderer
 from renderer.pdf_renderer import PdfRenderer
 
-from marie.common.volume_handler import VolumeHandler
+from marie.storage.volume_handler import VolumeHandler
 from utils.image_utils import imwrite
 from utils.pdf_ops import merge_pdf
 from utils.tiff_ops import burst_tiff, merge_tiff
-from utils.utils import FileSystem, ensure_exists
+from utils.utils import ensure_exists
 from utils.zip_ops import merge_zip
 
 
@@ -248,7 +247,7 @@ def process_workflow(src_file: str) -> None:
 if __name__ == "__main__":
     # Register VFS handlers
     # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
-    PathManager.register_handler(
+    PathManager.register(
         VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/")
     )
 

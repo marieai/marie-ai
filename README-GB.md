@@ -303,6 +303,11 @@ ImageMagic 6 policy
 /etc/ImageMagick-6/policy.xml
 ```
 
+manualy convert burst tiff to single tiff
+```
+convert *.tif -set filename:f "%[t]_%[fx:t+1]" +adjoin "%[filename:f].tif"
+```
+
 ## Download assets locally
 Load gpt2 dictionary from https://layoutlm.blob.core.windows.net/trocr/dictionaries/gpt2_with_mask.dict.txt
 

@@ -1,6 +1,6 @@
 import os.path
 from os import PathLike
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Optional, Callable
 from xml.sax.saxutils import escape
 
 import numpy as np
@@ -14,9 +14,6 @@ logger = default_logger
 class BlobRenderer(ResultRenderer):
     def __init__(self, config=None):
         super().__init__(config)
-        if config is None:
-            config = {}
-        print(f"BlobRenderer base : {config}")
 
     @property
     def name(self):
@@ -66,6 +63,7 @@ class BlobRenderer(ResultRenderer):
         frames: np.ndarray,
         results: [Dict[str, Any]],
         output_path: Union[str, PathLike],
+        filename_generator: Optional[Callable[[int], str]] = None,
     ) -> None:
         """Renders results into BLOBS
         Results parameter "format" is expected to be in "XYWH" conversion will be performed to accommodate this
@@ -75,12 +73,16 @@ class BlobRenderer(ResultRenderer):
             raise ValueError("output_path should be a directory")
 
         self.logger.info(f"Render BLOBS to : {output_path}")
+
+        filename_generator = filename_generator or (lambda x: f"{x}.BLOBS.XML")
+
         # The underlying ByteIO buffer will be closed when we write the file out
         for page_index, (image, result) in enumerate(zip(frames, results)):
             try:
                 tree = self.__render_page(image, result, page_index)
-
-                output_filename = os.path.join(output_path, f"{page_index}.BLOBS.XML")
+                output_filename = os.path.join(
+                    output_path, filename_generator(page_index + 1)
+                )
                 with open(output_filename, "wb") as fs:
                     tree.write(fs)
 

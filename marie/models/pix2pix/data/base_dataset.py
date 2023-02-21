@@ -78,7 +78,6 @@ def get_params(opt, size):
 
     return {'crop_pos': (x, y), 'flip': flip}
 
-
 def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, src=False):
     transform_list = []
 
@@ -118,6 +117,60 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
         else:
             transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
 
+    print(f"transform_list = {transform_list}")
+    return transforms.Compose(transform_list)
+
+def get_transformTV(opt, params=None, grayscale=False, method=Image.Resampling.LANCZOS, convert=True, src=False):
+    transform_list = []
+
+    print(f"opt.preprocess = {opt.preprocess}")
+    # raise Exception
+    if grayscale:
+        transform_list.append(transforms.Grayscale(1))
+    if 'resize' in opt.preprocess:
+        osize = [opt.load_size, opt.load_size]
+        transform_list.append(transforms.Resize(osize, method))
+    elif 'scale_width' in opt.preprocess:
+        transform_list.append(transforms.Lambda(lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)))
+
+    if 'crop' in opt.preprocess:
+        if params is None:
+            transform_list.append(transforms.RandomCrop(opt.crop_size))
+        else:
+            transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.crop_size)))
+        
+    if src:
+        transform_list.append(transforms.Lambda(lambda img: __augment(img)))
+
+    if opt.preprocess == 'noneXXXXX':
+        transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method)))
+
+    if not opt.no_flip:
+        if params is None:
+            transform_list.append(transforms.RandomHorizontalFlip())
+        elif params['flip']:
+            transform_list.append(transforms.Lambda(lambda img: __flip(img, params['flip'])))    
+
+    # transform_list.append(transforms.Lambda(lambda img: __convert_3_channels(img)))
+
+    if convert:
+        # transform_list += [transforms.ToTensor()]
+        if grayscale:
+            transform_list += [transforms.Normalize((0.5,), (0.5,))]
+        else:
+            transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+            # transform_list += [transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
+
+    import torch            
+
+    # if using torchvision GPU transforms
+    if False:        
+        conv = transforms.Compose(transform_list)
+        conv  = torch.nn.Sequential(*conv.transforms)
+        scripted_transforms = torch.jit.script(conv)
+
+        return scripted_transforms
+
     return transforms.Compose(transform_list)
 
 def __convert_3_channels(img):
@@ -125,18 +178,22 @@ def __convert_3_channels(img):
     # x3d = np.repeat(np.expand_dims(img, axis=3), 3, axis=3)
     return img.convert('RGB')
 
-def __make_power_2(img, base, method=Image.BICUBIC):
+def __make_power_2(img, base, method=Image.Resampling.LANCZOS):
     ow, oh = img.size
     h = int(round(oh / base) * base)
-    w = int(round(ow / base) * base)    
+    w = int(round(ow / base) * base)
+
+    print(f"__make_power_2: ow={ow}, oh={oh}, w={w}, h={h}")
+
     if h == oh and w == ow:
         return img
+
+    print("WARNING: resizing from %dx%d to %dx%d. This may distort images")
 
     __print_size_warning(ow, oh, w, h)
     return img.resize((w, h), method)
 
-
-def __scale_width(img, target_size, crop_size, method=Image.BICUBIC):
+def __scale_width(img, target_size, crop_size, method=Image.Resampling.LANCZOS):
     ow, oh = img.size
     if ow == target_size and oh >= crop_size:
         return img

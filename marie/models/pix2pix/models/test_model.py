@@ -49,6 +49,8 @@ class TestModel(BaseModel):
         # please see <BaseModel.load_networks>
         setattr(self, 'netG' + opt.model_suffix, self.netG)  # store netG in self.
 
+
+
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
@@ -59,6 +61,7 @@ class TestModel(BaseModel):
         """
         self.real = input['A'].to(self.device)
         self.image_paths = input['A_paths']
+
 
     def forward(self):
         """Run forward pass."""

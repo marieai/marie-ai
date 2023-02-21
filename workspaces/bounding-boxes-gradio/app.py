@@ -5,7 +5,7 @@ from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 
 box = BoxProcessorUlimDit(
-    models_dir="./model_zoo/unilm/dit/text_detection",
+    models_dir="../../model_zoo/unilm/dit/text_detection",
     cuda=True,
 )
 
@@ -51,4 +51,10 @@ def interface():
 
 
 if __name__ == "__main__":
+    import torch
+
+    torch.set_float32_matmul_precision('high')
+    torch.backends.cudnn.benchmark = False
+    # torch._dynamo.config.suppress_errors = False
+
     interface()

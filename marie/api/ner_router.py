@@ -10,11 +10,9 @@ from marie.conf.helper import executor_config, storage_provider_config
 from marie.executor.ner import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
 from marie.utils.docs import docs_from_file
 from marie.utils.image_utils import hash_file
-
-logger = default_logger
 
 
 class NERRouter:

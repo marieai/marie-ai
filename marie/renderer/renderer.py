@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from os import PathLike
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Optional, Callable
 
 import numpy as np
 
@@ -8,9 +8,11 @@ from marie.logging.logger import MarieLogger
 
 
 class ResultRenderer(ABC):
-    def __init__(self, config={}):
+    def __init__(self, config=None):
+        if config is None:
+            config = {}
+        self.config = config
         self.logger = MarieLogger(ResultRenderer.__name__)
-        pass
 
     @property
     @abstractmethod
@@ -25,18 +27,20 @@ class ResultRenderer(ABC):
         self,
         frames: np.ndarray,
         results: [Dict[str, Any]],
-        output_filename: Union[str, PathLike],
+        output_file_or_dir: Union[str, PathLike],
+        filename_generator: Optional[Callable[[int], str]] = None,
+        **kwargs: Any
     ) -> None:
         """
         Result renderer that renders results to output
-
-        Args:
-            frames (np.ndarray): A URI supported by this PathHandler
-            results ([[Dict[str, Any]]): A OCR results array
-            output_filename (Union[str, PathLike]): a file path which exists on the local file system
-        Returns:
-            None
+        :param frames: A list of frames to render
+        :param results: A OCR results array
+        :param output_file_or_dir: The output file or directory to render to
+        :param filename_generator: a function that generates a filename for each page
+        :param kwargs: additional arguments
+        :return:
         """
+
         pass
 
     def check_format_xywh(self, result, convert=True):
