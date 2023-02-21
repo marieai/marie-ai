@@ -141,7 +141,6 @@ class DefaultOcrEngine(OcrEngine):
         # crop_to_content_enabled = bool(strtobool(kwargs.get('crop_to_content', False)))
         crop_to_content_enabled = False
 
-        print(f"{crop_to_content_enabled=}")
         output = []
         extended = []
 

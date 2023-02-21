@@ -4,6 +4,7 @@ import os
 import sys
 import typing
 
+import PIL
 import cv2
 import numpy as np
 
@@ -12,7 +13,7 @@ from marie.logging.predefined import default_logger
 from marie.numpyencoder import NumpyEncoder
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
-from marie.utils.draw_truetype import drawTrueTypeTextOnImage
+from marie.utils.draw_truetype import drawTrueTypeTextOnImage, determine_font_size
 from marie.utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -73,7 +74,7 @@ class IcrProcessor(BaseHandler):
         """
         raise Exception("Not Implemented")
 
-    def recognize(self, _id, key, img, boxes, fragments, lines):
+    def recognize(self, _id, key, img: np.ndarray, boxes, fragments, lines):
         """Recognize text from multiple images.
         Args:
             _id: Unique Image ID
@@ -85,6 +86,16 @@ class IcrProcessor(BaseHandler):
         """
 
         logger.debug(f"ICR recognize : {_id}, {key}")
+        if img is None:
+            raise Exception("Input image can't be empty")
+
+        if type(img) == PIL.Image.Image:  # convert pil to OpenCV
+            img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            logger.warning("PIL image received converting to ndarray")
+
+        if not isinstance(img, np.ndarray):
+            raise Exception("Expected image in numpy format")
+
         assert len(boxes) == len(
             fragments
         ), "You must provide the same number of box groups as images."
@@ -131,7 +142,7 @@ class IcrProcessor(BaseHandler):
 
                 txt_label = extraction["text"]
                 confidence = extraction["confidence"]
-                conf_label = round(confidence, 4)
+                conf_label = round(confidence, 3)
 
                 payload = {
                     "id": i,
@@ -145,19 +156,20 @@ class IcrProcessor(BaseHandler):
 
                 words.append(payload)
 
-                if False:
+                if True:
+                    font_size = determine_font_size(box[3])
                     overlay_image = drawTrueTypeTextOnImage(
                         overlay_image,
                         txt_label,
-                        (box[0], box[1] + box[3] // 2),
-                        18,
+                        (box[0], box[1] + box[3] // 4),
+                        int(font_size * 1.25),
                         (139, 0, 0),
                     )
                     overlay_image = drawTrueTypeTextOnImage(
                         overlay_image,
                         conf_label,
                         (box[0], box[1] + box[3]),
-                        10,
+                        font_size,
                         (0, 0, 255),
                     )
 
