@@ -47,11 +47,6 @@ def interface():
 if __name__ == "__main__":
     import torch
 
-    img = Image.open(
-        "/tmp/generators/1e93b981833c33a5268e664453229d55/burst/PID_179_8268_0_169750819_00022.tif"
-    )
-    img = img.convert("RGB")
-
     torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
 
