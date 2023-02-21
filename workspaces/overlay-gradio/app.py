@@ -26,7 +26,9 @@ def interface():
     with gr.Blocks() as iface:
         gr.Markdown(article)
         with gr.Row():
-            src = gr.Image(type="pil", source="upload")
+            src = gr.components.Image(
+                type="pil", source="upload", image_mode="L", label="source"
+            )
 
         with gr.Row():
             btn_reset = gr.Button("Clear")
@@ -43,4 +45,15 @@ def interface():
 
 
 if __name__ == "__main__":
+    import torch
+
+    img = Image.open(
+        "/tmp/generators/1e93b981833c33a5268e664453229d55/burst/PID_179_8268_0_169750819_00022.tif"
+    )
+    img = img.convert("RGB")
+
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cudnn.benchmark = False
+
+    # print(torch._dynamo.list_backends())e
     interface()

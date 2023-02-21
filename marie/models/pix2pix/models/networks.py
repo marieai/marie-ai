@@ -8,8 +8,8 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 import torch.nn.functional as F
-import segmentation_models_pytorch as smp
 import torch.nn.utils.spectral_norm as spectral_norm
+
 
 ###############################################################################
 # Helper Functions
@@ -33,9 +33,11 @@ def get_norm_layer(norm_type='instance'):
     elif norm_type == 'instance':
         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
     elif norm_type == 'none':
-        def norm_layer(x): return Identity()
+        def norm_layer(x):
+            return Identity()
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
+
     return norm_layer
 
 
@@ -56,6 +58,7 @@ def get_scheduler(optimizer, opt):
         def lambda_rule(epoch):
             lr_l = 1.0 - max(0, epoch + opt.epoch_count - opt.n_epochs) / float(opt.n_epochs_decay + 1)
             return lr_l
+
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
     elif opt.lr_policy == 'step':
         scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_iters, gamma=0.1)
@@ -79,6 +82,7 @@ def init_weights(net, init_type='normal', init_gain=0.02):
     We use 'normal' in the original pix2pix and CycleGAN paper. But xavier and kaiming might
     work better for some applications. Feel free to try yourself.
     """
+
     def init_func(m):  # define the initialization function
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
@@ -94,7 +98,8 @@ def init_weights(net, init_type='normal', init_gain=0.02):
                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
             if hasattr(m, 'bias') and m.bias is not None:
                 init.constant_(m.bias.data, 0.0)
-        elif classname.find('BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
+        elif classname.find(
+                'BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
             init.normal_(m.weight.data, 1.0, init_gain)
             init.constant_(m.bias.data, 0.0)
 
@@ -112,15 +117,18 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 
     Return an initialized network.
     """
+
+    print(net)
     if len(gpu_ids) > 0:
-        assert(torch.cuda.is_available())
+        assert (torch.cuda.is_available())
         net.to(gpu_ids[0])
         net = torch.nn.DataParallel(net, gpu_ids)  # multi-GPUs
     init_weights(net, init_type, init_gain=init_gain)
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02,
+             gpu_ids=[]):
     """Create a generator
 
     Parameters:
@@ -159,18 +167,31 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     elif netG == 'unet_256':
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'unet_128_spectral':
-        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)      
+        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'unet_256_spectral':
-        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)      
+        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'unet_512_spectral':
+        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 9, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'unet_1024_spectral':
+        net = UnetGeneratorWithSpectralNorm(input_nc, output_nc, 10, ngf, norm_layer=norm_layer,
+                                            use_dropout=use_dropout)
     elif netG == 'unet_512':
-        net = UnetGenerator(input_nc, output_nc, 9, ngf, norm_layer=norm_layer, use_dropout=use_dropout)# 512
+        net = UnetGenerator(input_nc, output_nc, 9, ngf, norm_layer=norm_layer, use_dropout=use_dropout)  # 512
     elif netG == 'unet_1024':
-        net = UnetGenerator(input_nc, output_nc, 10, ngf, norm_layer=norm_layer, use_dropout=use_dropout)#1024  
+        net = UnetGenerator(input_nc, output_nc, 10, ngf, norm_layer=norm_layer, use_dropout=use_dropout)  # 1024
     elif netG == 'global':
-        net = GlobalGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer)#
-        # net = LocalEnhancer(input_nc, output_nc, ngf, norm_layer=norm_layer)#
+        net = GlobalGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer)
+    elif netG == 'local':
+        n_downsample_global = 3
+        n_blocks_global = 9
+        n_local_enhancers = 1
+        n_blocks_local = 3
+
+        net = LocalEnhancer(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global,
+                            n_local_enhancers, n_blocks_local, norm_layer)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
+
     return init_net(net, init_type, init_gain, gpu_ids)
 
 
@@ -212,17 +233,17 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
     elif netD == 'n_layers':  # more options
         net = NLayerDiscriminator(input_nc, ndf, n_layers_D, norm_layer=norm_layer)
     elif netD == 'n_layers_spectral':
-        net = NLayerDiscriminatorWithSpectralNorm(input_nc, ndf, n_layers_D)        
-    elif netD == 'pixel':     # classify if each pixel is real or fake
-        net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)    
-    elif netD == 'n_layers_multi':     
+        net = NLayerDiscriminatorWithSpectralNorm(input_nc, ndf, n_layers_D)
+    elif netD == 'pixel':  # classify if each pixel is real or fake
+        net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)
+    elif netD == 'n_layers_multi':
         net = MultiscaleDiscriminator(input_nc, ndf, norm_layer=norm_layer)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
 
     return init_net(net, init_type, init_gain, gpu_ids)
 
-       
+
 ##############################################################################
 # Classes
 ##############################################################################
@@ -260,7 +281,8 @@ class GANLoss(nn.Module):
             self.loss = None
         elif gan_mode == 'hinge':
             # self.loss = LeakyHingeLoss()
-            self.loss = HingeLoss()
+            # self.loss = HingeLoss()
+            self.loss = nn.ReLU()
         else:
             raise NotImplementedError('gan mode %s not implemented' % gan_mode)
 
@@ -335,13 +357,14 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', const
     Returns the gradient penalty loss
     """
     if lambda_gp > 0.0:
-        if type == 'real':   # either use real images, fake images, or a linear interpolation of two.
+        if type == 'real':  # either use real images, fake images, or a linear interpolation of two.
             interpolatesv = real_data
         elif type == 'fake':
             interpolatesv = fake_data
         elif type == 'mixed':
             alpha = torch.rand(real_data.shape[0], 1, device=device)
-            alpha = alpha.expand(real_data.shape[0], real_data.nelement() // real_data.shape[0]).contiguous().view(*real_data.shape)
+            alpha = alpha.expand(real_data.shape[0], real_data.nelement() // real_data.shape[0]).contiguous().view(
+                *real_data.shape)
             interpolatesv = alpha * real_data + ((1 - alpha) * fake_data)
         else:
             raise NotImplementedError('{} not implemented'.format(type))
@@ -351,7 +374,7 @@ def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', const
                                         grad_outputs=torch.ones(disc_interpolates.size()).to(device),
                                         create_graph=True, retain_graph=True, only_inputs=True)
         gradients = gradients[0].view(real_data.size(0), -1)  # flat the data
-        gradient_penalty = (((gradients + 1e-16).norm(2, dim=1) - constant) ** 2).mean() * lambda_gp        # added eps
+        gradient_penalty = (((gradients + 1e-16).norm(2, dim=1) - constant) ** 2).mean() * lambda_gp  # added eps
         return gradient_penalty, gradients
     else:
         return 0.0, None
@@ -363,7 +386,8 @@ class ResnetGenerator(nn.Module):
     We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
     """
 
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect'):
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6,
+                 padding_type='reflect'):
         """Construct a Resnet-based generator
 
         Parameters:
@@ -375,7 +399,7 @@ class ResnetGenerator(nn.Module):
             n_blocks (int)      -- the number of ResNet blocks
             padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
         """
-        assert(n_blocks >= 0)
+        assert (n_blocks >= 0)
         super(ResnetGenerator, self).__init__()
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
@@ -395,28 +419,29 @@ class ResnetGenerator(nn.Module):
                       nn.ReLU(True)]
 
         mult = 2 ** n_downsampling
-        for i in range(n_blocks):       # add ResNet blocks
+        for i in range(n_blocks):  # add ResNet blocks
 
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
+                                  use_bias=use_bias)]
 
         for i in range(n_downsampling):  # add upsampling layers
             mult = 2 ** (n_downsampling - i)
 
             # GB : Trying to remove checkerboard artifacts
             if False:
-                 model += [
-                     nn.Upsample(scale_factor = 2, mode='bilinear'),
-                     nn.ReflectionPad2d(1),
-                     nn.Conv2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=1, padding=0),
-                     norm_layer(int(ngf * mult / 2)),
-                     nn.ReLU(True)]
+                model += [
+                    nn.Upsample(scale_factor=2, mode='bilinear'),
+                    nn.ReflectionPad2d(1),
+                    nn.Conv2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=1, padding=0),
+                    norm_layer(int(ngf * mult / 2)),
+                    nn.ReLU(True)]
             else:
                 model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
-                                         kernel_size=3, stride=2,
-                                         padding=1, output_padding=1,
-                                         bias=use_bias),
-                      norm_layer(int(ngf * mult / 2)),
-                      nn.ReLU(True)]
+                                             kernel_size=3, stride=2,
+                                             padding=1, output_padding=1,
+                                             bias=use_bias),
+                          norm_layer(int(ngf * mult / 2)),
+                          nn.ReLU(True)]
         model += [nn.ReflectionPad2d(3)]
         model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
         model += [nn.Tanh()]
@@ -506,14 +531,19 @@ class UnetGenerator(nn.Module):
         """
         super(UnetGenerator, self).__init__()
         # construct unet structure
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
-        for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer,
+                                             innermost=True)  # add the innermost layer
+        for i in range(num_downs - 5):  # add intermediate layers with ngf * 8 filters
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
+                                                 norm_layer=norm_layer, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
+                                             norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
+                                             norm_layer=norm_layer)
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True,
+                                             norm_layer=norm_layer)  # add the outermost layer
 
     def forward(self, input):
         """Standard forward"""
@@ -560,7 +590,7 @@ class UnetSkipConnectionBlock(nn.Module):
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
                                         kernel_size=4, stride=2,
                                         padding=1)
-            # upconv = nn.PixelShuffle(2)                                                
+            # upconv = nn.PixelShuffle(2)
             down = [downconv]
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
@@ -590,7 +620,7 @@ class UnetSkipConnectionBlock(nn.Module):
     def forward(self, x):
         if self.outermost:
             return self.model(x)
-        else:   # add skip connections
+        else:  # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
 
@@ -634,7 +664,8 @@ class NLayerDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, True)
         ]
 
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
+        sequence += [
+            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
         self.model = nn.Sequential(*sequence)
 
     def forward(self, input):
@@ -674,6 +705,73 @@ class PixelDiscriminator(nn.Module):
         return self.net(input)
 
 
+class Attention_block(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        super(Attention_block, self).__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+
+        return x * psi
+
+
+class AttentionBlock(nn.Module):
+    def __init__(self, f_g, f_l, f_int):
+        super().__init__()
+
+        self.w_g = nn.Sequential(
+            nn.Conv2d(f_g, f_int,
+                      kernel_size=1, stride=1,
+                      padding=0, bias=True),
+            nn.BatchNorm2d(f_int)
+        )
+
+        self.w_x = nn.Sequential(
+            nn.Conv2d(f_l, f_int,
+                      kernel_size=1, stride=1,
+                      padding=0, bias=True),
+            nn.BatchNorm2d(f_int)
+        )
+
+        self.psi = nn.Sequential(
+            nn.Conv2d(f_int, 1,
+                      kernel_size=1, stride=1,
+                      padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.w_g(g)
+        x1 = self.w_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+
+        return psi * x
+
+
 class UnetGeneratorWithSpectralNorm(nn.Module):
     """Create a Unet-based generator with Spectral Normalization"""
 
@@ -691,18 +789,35 @@ class UnetGeneratorWithSpectralNorm(nn.Module):
         """
         super(UnetGeneratorWithSpectralNorm, self).__init__()
         # construct unet structure
-        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
-        for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
+        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 8, ngf * 8, input_nc=None, submodule=None,
+                                                             norm_layer=norm_layer,
+                                                             innermost=True)  # add the innermost layer
+        for i in range(num_downs - 5):  # add intermediate layers with ngf * 8 filters
+            unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
+                                                                 norm_layer=norm_layer, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        self.model = UnetSkipConnectionBlockWithSpectralNorm(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
+        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
+                                                             norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
+                                                             norm_layer=norm_layer)
+        unet_block = UnetSkipConnectionBlockWithSpectralNorm(ngf, ngf * 2, input_nc=None, submodule=unet_block,
+                                                             norm_layer=norm_layer)
+        self.model = UnetSkipConnectionBlockWithSpectralNorm(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
+                                                             outermost=True,
+                                                             norm_layer=norm_layer)  # add the outermost layer
 
     def forward(self, input):
         """Standard forward"""
         return self.model(input)
+
+
+class PixelNorm(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input):
+        return input / torch.sqrt(torch.mean(input ** 2, dim=1, keepdim=True) + 1e-8)
+
 
 class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
     """Defines the Unet submodule with skip connection and spectral normalization.
@@ -740,22 +855,25 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
 
         if outermost:
             upconv = nn.utils.spectral_norm(nn.ConvTranspose2d(inner_nc * 2, outer_nc,
-                                                            kernel_size=4, stride=2,
-                                                            padding=1))
+                                                               kernel_size=4, stride=2,
+                                                               padding=1))
+
+            # att = AttentionBlock(f_g=outer_nc, f_l=outer_nc, f_int=outer_nc//2)
+
             down = [downconv]
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
         elif innermost:
             upconv = nn.utils.spectral_norm(nn.ConvTranspose2d(inner_nc, outer_nc,
-                                                            kernel_size=4, stride=2,
-                                                            padding=1, bias=use_bias))
+                                                               kernel_size=4, stride=2,
+                                                               padding=1, bias=use_bias))
             down = [downrelu, downconv]
             up = [uprelu, upconv, upnorm]
             model = down + up
         else:
             upconv = nn.utils.spectral_norm(nn.ConvTranspose2d(inner_nc * 2, outer_nc,
-                                                            kernel_size=4, stride=2,
-                                                            padding=1, bias=use_bias))
+                                                               kernel_size=4, stride=2,
+                                                               padding=1, bias=use_bias))
             down = [downrelu, downconv, downnorm]
             up = [uprelu, upconv, upnorm]
 
@@ -769,8 +887,9 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
     def forward(self, x):
         if self.outermost:
             return self.model(x)
-        else:   # add skip connections
-            return torch.cat([x, self.model(x)], 1)        
+        else:  # add skip connections
+            return torch.cat([x, self.model(x)], 1)
+
 
 class NLayerDiscriminatorWithSpectralNorm(nn.Module):
     """Defines a PatchGAN discriminator"""
@@ -787,25 +906,31 @@ class NLayerDiscriminatorWithSpectralNorm(nn.Module):
         use_bias = True
         kw = 4
         padw = 1
-        sequence = [nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)), nn.LeakyReLU(0.2, True)]
+        sequence = [
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+            nn.LeakyReLU(0.2, True)]
         nf_mult = 1
         nf_mult_prev = 1
         for n in range(1, n_layers):  # gradually increase the number of filters
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [
-                nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+                nn.utils.spectral_norm(
+                    nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
+                              bias=use_bias)),
                 nn.LeakyReLU(0.2, True)
             ]
 
         nf_mult_prev = nf_mult
         nf_mult = min(2 ** n_layers, 8)
         sequence += [
-            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            nn.utils.spectral_norm(
+                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
             nn.LeakyReLU(0.2, True)
         ]
 
-        sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw, bias=use_bias))]  # output 1 channel prediction map
+        sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw,
+                                                      bias=use_bias))]  # output 1 channel prediction map
         self.model = nn.Sequential(*sequence)
 
     def forward(self, input):

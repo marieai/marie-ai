@@ -5,22 +5,38 @@ from shutil import copyfile
 from typing import Tuple
 
 import cv2
+import torch
 import numpy as np
 from marie.constants import __model_path__
 
 from marie.base_handler import BaseHandler
 from marie.models.pix2pix.data import create_dataset
+from marie.models.pix2pix.data.base_dataset import __make_power_2
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
 from marie.timer import Timer
 from marie.utils.image_utils import imwrite, read_image, viewImage, hash_frames_fast
 from marie.utils.utils import ensure_exists
+from PIL import Image
 
 # Add parent to the search path, so we can reference the module here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
 debug_visualization_enabled = False
+
+
+# Returns the result of running `fn()` and the time it took for `fn()` to run,
+# in seconds. We use CUDA events and synchronization for the most accurate
+# measurements.
+def timed_cuda(fn):
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    result = fn()
+    end.record()
+    torch.cuda.synchronize()
+    return result, start.elapsed_time(end) / 1000
 
 
 class OverlayProcessor(BaseHandler):
@@ -52,11 +68,14 @@ class OverlayProcessor(BaseHandler):
             "--dataroot",
             "./data",
             "--name",
-            "template_mask_global",
+            # "template_mask_global",
+            "claim_mask",
             "--model",
             "test",
             "--netG",
-            "global",
+            "local",
+            # "global",
+            # "unet_256_spectral",
             "--direction",
             "AtoB",
             "--model",
@@ -71,6 +90,10 @@ class OverlayProcessor(BaseHandler):
             "none",
             "--checkpoints_dir",
             checkpoints_dir,
+            "--ngf",
+            "64",  # Default 64
+            "--ndf",
+            "64",  # Default 64
             # "./model_zoo/overlay",
         ]
 
@@ -81,7 +104,7 @@ class OverlayProcessor(BaseHandler):
         opt.batch_size = 1  # test code only supports batch_size = 1
         opt.serial_batches = True
         opt.no_flip = True
-        opt.no_dropout = True
+        opt.no_dropout = False
         opt.display_id = -1
         opt.output_nc = 3  # Need to build model for BITONAL images only so we could output 1 chanell only
 
@@ -107,43 +130,59 @@ class OverlayProcessor(BaseHandler):
         dataset = create_dataset(opt)
         for i, data in enumerate(dataset):
             model.set_input(data)  # unpack data from data loader
-            model.test()  # run inference
-            visuals = model.get_current_visuals()  # get image results
-            # Debug
-            if False:
-                for label, im_data in visuals.items():
-                    image_numpy = tensor2im(im_data)
-                    print(f"Tensor debug[{label}]: {image_numpy.shape}")
-                    # Tensor is in RGB format OpenCV requires BGR
-                    image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
-                    image_name = "%s_%s.png" % (name, label)
-                    save_path = os.path.join(debug_dir, image_name)
+
+            # run inference
+            # _, gpu_eval_time = timed_cuda(lambda: model.test())
+            # print(f"gpu_eval_time {i}: {gpu_eval_time}")
+
+            model.test()
+
+            if True:
+                visuals = model.get_current_visuals()  # get image results
+                # Debug
+                if False:
+                    for label, im_data in visuals.items():
+                        image_numpy = tensor2im(im_data)
+                        print(f"Tensor debug[{label}]: {image_numpy.shape}")
+                        # Tensor is in RGB format OpenCV requires BGR
+                        image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
+                        image_name = "%s_%s.png" % (name, label)
+                        save_path = os.path.join(debug_dir, image_name)
+                        imwrite(save_path, image_numpy)
+                        viewImage(image_numpy, "Tensor Image")
+
+                label = "fake"
+                fake_im_data = visuals["fake"]
+                image_numpy = tensor2im(fake_im_data)
+
+                # clear cuda memory afer inference
+                del fake_im_data
+                del visuals
+                torch.cuda.empty_cache()
+                import gc
+
+                gc.collect()
+
+                # Tensor is in RGB format OpenCV requires BGR
+                image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
+                save_path = os.path.join(image_dir, "%s_%s.png" % (name, label))
+
+                # testing only
+                if debug_visualization_enabled:
                     imwrite(save_path, image_numpy)
-                    viewImage(image_numpy, "Tensor Image")
+                # viewImage(image_numpy, 'Prediction image')
 
-            label = "fake"
-            fake_im_data = visuals["fake"]
-            image_numpy = tensor2im(fake_im_data)
-            # Tensor is in RGB format OpenCV requires BGR
-            image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
-            save_path = os.path.join(image_dir, "%s_%s.png" % (name, label))
+                # TODO : Figure out why after the forward pass it is possible
+                # to have different sizes(transforms have not been applied).
+                # This is a work around for now
 
-            # testing only
-            if debug_visualization_enabled:
-                imwrite(save_path, image_numpy)
-            # viewImage(image_numpy, 'Prediction image')
-
-            # TODO : Figure out why after the forward pass it is possible
-            # to have different sizes(transforms have not been applied).
-            # This is a work around for now
-
-            if img.shape != image_numpy.shape:
-                print(
-                    f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
-                )
-                return image_numpy[
-                    : img.shape[0], : img.shape[1], :
-                ]  # IF we do RGB2BGR
+                if img.shape != image_numpy.shape:
+                    print(
+                        f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
+                    )
+                    return image_numpy[
+                        : img.shape[0], : img.shape[1], :
+                    ]  # IF we do RGB2BGR
 
             return image_numpy
 
@@ -197,6 +236,9 @@ class OverlayProcessor(BaseHandler):
         )
 
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
+
+        print(f"dst_file_name : {dst_file_name}")
+
         if False and not os.path.exists(dst_file_name):
             copyfile(img_path, dst_file_name)
 
@@ -240,7 +282,7 @@ class OverlayProcessor(BaseHandler):
             imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
         return real_img, fake_mask, blended
 
-    @Timer(text="Segmented in {:.2f} seconds")
+    @Timer(text="SegmentedFrame in {:.2f} seconds")
     def segment_frame(
         self, document_id: str, frame: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

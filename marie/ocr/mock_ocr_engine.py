@@ -1,27 +1,21 @@
-import copy
 import os
-from distutils.util import strtobool as strtobool
-from typing import Dict, Union, Optional, List
+from typing import Union, List
 
-import cv2
-from PIL import Image
 import numpy as np
-from marie.constants import __model_path__
+from PIL import Image
 
-from marie.boxes import BoxProcessorUlimDit, PSMode, BoxProcessorCraft
-from marie.document import TrOcrIcrProcessor
+from marie.boxes import PSMode
+from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.ocr import OcrEngine, CoordinateFormat
-from marie.utils.base64 import encodeToBase64
-from marie.utils.image_utils import hash_bytes
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists
-from marie.utils.image_utils import hash_file, hash_frames_fast
 
 
 class MockOcrEngine(OcrEngine):
     """
-    Mock OCR engine that can be used for testing
+    Mock OCR engine that can be used for testing purposes.
     """
 
     def __init__(
@@ -44,12 +38,13 @@ class MockOcrEngine(OcrEngine):
         queue_id: str = None,
         **kwargs,
     ):
-        try:
-            results = load_json_file(
-                "/home/gbugaj/tmp/marie-cleaner/169150505/results.json"
-            )
 
-            return results
+        # create local asset directory
+        frame_checksum = hash_frames_fast(frames=frames)
+        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        json_path = os.path.join(root_asset_dir, "results", "results.json")
+        try:
+            return load_json_file(json_path)
         except BaseException as error:
             self.logger.error("Extract error", error)
             raise error

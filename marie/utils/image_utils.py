@@ -2,7 +2,7 @@ import hashlib
 import sys
 import time
 from math import ceil
-from typing import Union, Tuple
+from typing import Union, Tuple, List
 
 import cv2
 import io
@@ -135,7 +135,7 @@ def hash_frames_fast_Z(frames: np.ndarray, max_frame_size=1024) -> str:
 
 
 # @Timer(text="hashed in {:.4f} seconds")
-def hash_frames_fast(frames: np.ndarray, blocksize=2**20) -> str:
+def hash_frames_fast(frames: List[np.ndarray], blocksize=2**20) -> str:
     """calculate hash based on the image data frame"""
     md5 = hashlib.md5()
     for _, frame in enumerate(frames):
@@ -153,7 +153,7 @@ def hash_frames_fast(frames: np.ndarray, blocksize=2**20) -> str:
 
 def convert_to_bytes(
     frame: Union[np.ndarray, PIL.Image.Image],
-    fmt: str = 'PNG',
+    fmt: str = "PNG",
     dpi: Tuple[int, int] = None,
 ) -> bytes:
     """

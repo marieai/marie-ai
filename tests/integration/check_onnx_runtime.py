@@ -19,16 +19,17 @@ print("onnxruntime:", onnxruntime.__version__)
 print("onnx:", onnx.__version__)
 print("transformers:", transformers.__version__)
 
+shape = 2048
 
 def save_temp_models(device):
     model = models.resnet50(pretrained=True)
     model.eval()
     model.to(device)
-
+     
     # PyTorch model
     torch.save(model, "resnet.pth")
     # random input
-    data = torch.rand(1, 3, 512, 512)
+    data = torch.rand(1, 3, shape, shape)
     data = data.cuda()
     # ONNX needs data example
     torch.onnx.export(model, data, "resnet.onnx")
@@ -51,18 +52,28 @@ if __name__ == "__main__":
     torch_model = torch.load("resnet.pth")
     torch_model.eval()
 
+    providers = [
+        ('CUDAExecutionProvider', {
+            'device_id': 0,
+            'gpu_mem_limit': 6 * 1024 * 1024 * 1024,
+        }),
+        'CPUExecutionProvider',
+    ]
+
+
     # ONNX model
     onnx_model = onnxruntime.InferenceSession(
         "resnet.onnx",
         sess_options,
-        providers=[
-            # 'TensorrtExecutionProvider',
-            'CUDAExecutionProvider',
-            # 'CPUExecutionProvider',
-        ],
+        providers
+        # providers=[
+        #     # 'TensorrtExecutionProvider',
+        #     'CUDAExecutionProvider',
+        #     # 'CPUExecutionProvider',
+        # ],
     )
 
-    data = np.random.rand(1, 3, 512, 512).astype(np.float32)
+    data = np.random.rand(1, 3, shape, shape).astype(np.float32)
 
     torch_data = torch.from_numpy(data)
     torch_data = torch_data.cuda()
@@ -73,7 +84,7 @@ if __name__ == "__main__":
     def onnx_inf():
         ort_outputs = onnx_model.run(None, {onnx_model.get_inputs()[0].name: data})
 
-    n = 100
+    n = 250
     torch_t = timeit(lambda: torch_inf(), number=n) / 100
     onnx_t = timeit(lambda: onnx_inf(), number=n) / 100
     rat = 1 - (onnx_t / torch_t)

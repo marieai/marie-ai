@@ -4,14 +4,16 @@ from typing import Dict, Union, Optional
 import numpy as np
 import torch
 from docarray import DocumentArray
+
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
-
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
-from marie.ocr import DefaultOcrEngine, OutputFormat, CoordinateFormat
+from marie.ocr import CoordinateFormat
+from marie.ocr.extract_pipeline import ExtractPipeline
 from marie.utils.docs import array_from_docs
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 
 
@@ -30,8 +32,7 @@ class TextExtractionExecutor(Executor):
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
-        # self.exec_pipe = ExtractPipeline(cuda=use_cuda)
+        self.pipeline = ExtractPipeline(cuda=use_cuda)
 
         self.runtimeinfo = {
             "name": self.__class__.__name__,
@@ -90,16 +91,29 @@ class TextExtractionExecutor(Executor):
             pms_mode = PSMode.from_value(
                 value_from_payload_or_args(payload, "mode", default="")
             )
-            output_format = OutputFormat.from_value(
-                value_from_payload_or_args(payload, "output", default="json")
-            )
+
+            # output_format = OutputFormat.from_value(
+            #     value_from_payload_or_args(payload, "output", default="json")
+            # )
 
             frames = array_from_docs(docs)
             frame_len = len(frames)
 
+            if parameters:
+                for key, value in parameters.items():
+                    self.logger.debug("The p-value of {} is {}".format(key, value))
+                ref_id = parameters.get("ref_id")
+                ref_type = parameters.get("ref_type")
+            else:
+                self.logger.warning(
+                    f"REF_ID and REF_TYPE are not present in parameters"
+                )
+                ref_id = hash_frames_fast(frames)
+                ref_type = "extract"
+
             self.logger.info(
-                "frames , regions , output_format, pms_mode, coordinate_format,"
-                f" checksum:  {frame_len}, {len(regions)}, {output_format}, {pms_mode},"
+                "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
+                f" checksum: {ref_id}, {ref_type},  {frame_len}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}"
             )
 
@@ -107,12 +121,17 @@ class TextExtractionExecutor(Executor):
             if "args" in payload:
                 payload_kwargs = payload["args"]
 
-            results = self.ocr_engine.extract(
-                frames, pms_mode, coordinate_format, regions, queue_id, **payload_kwargs
+            self.pipeline.execute(
+                ref_id=ref_id,
+                ref_type=ref_type,
+                frames=frames,
+                pms_mode=pms_mode,
+                coordinate_format=coordinate_format,
+                regions=regions,
+                queue_id=queue_id,
+                **payload_kwargs,
             )
-            # store_json_object(results, '/tmp/fragments/results-complex.json')
 
-            return results
         except BaseException as error:
             self.logger.error("Extract error", error)
             if self.show_error:
@@ -124,7 +143,7 @@ class TextExtractionExecutor(Executor):
 class ExtractExecutor(Executor):
     def __init__(
         self,
-        name: str = '',
+        name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         dtype: Optional[Union[str, torch.dtype]] = None,
@@ -188,7 +207,7 @@ class ExtractExecutor(Executor):
             region["id"] = int(region["id"])
             region["pageIndex"] = int(region["pageIndex"])
 
-        print('AFTER')
+        print("AFTER")
         print(payload)
         time.sleep(1.3)
 

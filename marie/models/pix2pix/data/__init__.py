@@ -85,7 +85,8 @@ class CustomDatasetDataLoader():
             batch_size=opt.batch_size,
             shuffle=not opt.serial_batches,
             num_workers=int(opt.num_threads),
-            pin_memory=False
+            pin_memory=True,
+            pin_memory_device='cuda'
         )
 
     def load_data(self):

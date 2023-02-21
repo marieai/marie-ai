@@ -130,15 +130,16 @@ class DefaultOcrEngine(OcrEngine):
         self, frames, queue_id, checksum, pms_mode, regions, **kwargs
     ):
         """Process region based extract"""
-        filter_snippets = (
-            bool(strtobool(kwargs["filter_snippets"]))
-            if "filter_snippets" in kwargs
-            else False
-        )
+        filter_snippets = True
+        # filter_snippets = (
+        #     bool(strtobool(kwargs["filter_snippets"]))
+        #     if "filter_snippets" in kwargs
+        #     else False
+        # )
 
         # This should be requested as it might not always be desirable to perform this transform
-        crop_to_content_enabled = bool(strtobool(kwargs.get('crop_to_content', False)))
-        # crop_to_content_enabled = True
+        # crop_to_content_enabled = bool(strtobool(kwargs.get('crop_to_content', False)))
+        crop_to_content_enabled = False
 
         print(f"{crop_to_content_enabled=}")
         output = []

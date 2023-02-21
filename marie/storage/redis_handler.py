@@ -1,13 +1,12 @@
-import logging
 import os
 from typing import Any, Dict
 
-from marie.common.file_io import PathHandler, PathManager
+from marie.storage import PathHandler
 
 
 class RedisHandler(PathHandler):
     """
-    Resolve URL like volume://.
+    Resolve URL like redis://.
     """
 
     PREFIX = "redis://"
@@ -20,11 +19,7 @@ class RedisHandler(PathHandler):
         return [self.PREFIX]
 
     def _get_local_path(self, path: str, **kwargs: Any) -> str:
-        logger = logging.getLogger(__name__)
-        volume_path = path[len(self.PREFIX) :]
-        resolved_path = os.path.abspath(os.path.join(self.volume_base_dir, volume_path))
-        logger.info("Catalog entry {} points to {}".format(path, resolved_path))
-        return PathManager.get_local_path(resolved_path)
+        raise Exception("Operation not implemented")
 
     def _exists(self, path: str, **kwargs: Any) -> bool:
         self._check_kwargs(kwargs)

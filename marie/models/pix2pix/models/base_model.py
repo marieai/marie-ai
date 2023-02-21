@@ -3,6 +3,7 @@ import torch
 from collections import OrderedDict
 from abc import ABC, abstractmethod
 from . import networks
+import torch
 
 
 class BaseModel(ABC):
@@ -101,8 +102,11 @@ class BaseModel(ABC):
         This function wraps <forward> function in no_grad() so we don't save intermediate steps for backprop
         It also calls <compute_visuals> to produce additional visualization results
         """
+        ## USING AUTOCAST FOR FP16 causes GPU memory leak
         with torch.no_grad():
-            with torch.cuda.amp.autocast():  # autocast initialized
+            # with torch.cuda.amp.autocast():  # autocast initialized
+            # with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            with torch.autocast(device_type='cuda', dtype=torch.float16, cache_enabled=False):
                 self.forward()
                 self.compute_visuals()
 
@@ -198,6 +202,32 @@ class BaseModel(ABC):
                 for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
                     self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
                 net.load_state_dict(state_dict)
+  
+                # Optimize model for Inference time
+                for param in net.parameters():
+                    param.grad = None
+
+                if False:
+                    # Optimize model for Inference time
+                    for param in net.parameters():
+                        param.grad = None
+
+                    print("**** COMPILING ***")
+                    import torch._dynamo as dynamo
+                    torch._dynamo.config.verbose = True
+                    torch.backends.cudnn.benchmark = False
+
+                    # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never relased
+                    # Switching to use cudagraphs
+                    # torch._dynamo.config.set("inductor", "cache_memory", 0)
+
+                    # mode options: default, reduce-overhead, max-autotune
+                    # default, reduce-overhead, max-autotune
+                    #['aot_ts_nvfuser', 'cudagraphs', 'inductor', 'ipex', 'nvprims_nvfuser', 'onnxrt', 'tensorrt', 'tvm']
+
+                    model = torch.compile(net, mode="max-autotune", fullgraph=True, backend="cudagraphs")
+                    setattr(self, 'net' + name, model)
+                
 
     def print_networks(self, verbose):
         """Print the total number of parameters in the network and (if verbose) network architecture

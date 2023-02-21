@@ -48,7 +48,8 @@ from transformers import (
 from transformers.utils import check_min_version
 
 check_min_version("4.5.0")
-logger = logging.getLogger(__name__)
+
+from marie.logging.predefined import default_logger as logger
 
 
 class NerExtractionExecutor(Executor, StorageMixin):
@@ -74,9 +75,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         self.logger.info(f"NER Extraction Executor : {model_name_or_path}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        print(storage_enabled)
-        print(storage_conf)
         self.setup_storage(storage_enabled, storage_conf)
 
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -84,16 +82,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
             self.device = torch.device("cpu")
-
-        if use_cuda:
-            try:
-                from torch._C import _cudnn
-
-                # It seems good practice to turn off cudnn.benchmark when turning on cudnn.deterministic
-                cudnn.benchmark = False
-                cudnn.deterministic = True
-            except ImportError:
-                pass
 
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
@@ -129,7 +117,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         self.runtime_info = {
             "name": self.__class__.__name__,
-            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            # "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
             "model": model_name_or_path,
             "host": get_ip_address(),
             "workspace": self.workspace,
@@ -163,6 +151,30 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         model.eval()
         model.to(device)
+
+        if False:
+            try:
+                # Optimize model for Inference time
+                for param in model.parameters():
+                    param.grad = None
+                print("**** COMPILING NER Model***")
+                import torch._dynamo as dynamo
+
+                # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never relased
+                # Switching to use cudagraphs
+                # torch._dynamo.config.set("inductor", "cache_memory", 0)
+
+                # mode options: default, reduce-overhead, max-autotune
+                # default, reduce-overhead, max-autotune
+                # ['aot_ts_nvfuser', 'cudagraphs', 'inductor', 'ipex', 'nvprims_nvfuser', 'onnxrt', 'tensorrt', 'tvm']
+
+                model = torch.compile(
+                    model, mode="max-autotune", fullgraph=True, backend="cudagraphs"
+                )
+                print("**** COMPILED ***")
+            except Exception as e:
+                self.logger.error(f"Failed to compile model : {e}")
+
         return model
 
     def get_label_info(self):
@@ -829,6 +841,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         def _tags(index: int, ftype: str, checksum: str):
             return {
+                "action": "ner",
                 "index": index,
                 "type": ftype,
                 "ttl": 48 * 60,

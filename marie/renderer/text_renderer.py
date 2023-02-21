@@ -11,15 +11,13 @@ from marie.utils.types import strtobool
 class TextRenderer(ResultRenderer):
     def __init__(self, config=None):
         super().__init__(config)
-        if config is None:
-            config = {}
 
-        self.logger.info(f"TextRenderer base : {config}")
+        self.logger.info(f"TextRenderer base : {self.config}")
         self.preserve_interword_spaces = False
 
-        if "preserve_interword_spaces" in config:
+        if "preserve_interword_spaces" in self.config:
             self.preserve_interword_spaces = strtobool(
-                config["preserve_interword_spaces"]
+                self.config["preserve_interword_spaces"]
             )
 
     @property

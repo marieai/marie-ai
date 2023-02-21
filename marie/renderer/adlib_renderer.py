@@ -1,6 +1,7 @@
 import os
+from datetime import datetime
 from os import PathLike
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Optional, Callable
 
 import numpy as np
 
@@ -11,17 +12,24 @@ logger = default_logger
 
 
 class AdlibRenderer(ResultRenderer):
-    def __init__(self, config=None):
+    def __init__(
+        self,
+        summary_filename="summary.xml",
+        config=None,
+    ):
         super().__init__(config)
         if config is None:
             config = {}
         print(f"AdlibRenderer base : {config}")
+        self.summary_filename = summary_filename
 
     @property
     def name(self):
         return "AdlibRenderer"
 
-    def write_adlib_summary(self, frames, adlib_dir):
+    def write_adlib_summary_tree(
+        self, frames, filename_generator: Callable[[int], str]
+    ):
         import xml.etree.ElementTree as gfg
 
         def _meta(field, val):
@@ -32,12 +40,19 @@ class AdlibRenderer(ResultRenderer):
 
         root = gfg.Element("OCR")
         metas = gfg.Element("METADATAELEMENTS")
+
+        metas.append(_meta("OCR", "MARIE-AI"))
+        metas.append(
+            _meta("CreationDate", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        # metas.append(_meta("Title", file_id))
+
         root.append(metas)
         pages_node = gfg.Element("PAGES")
 
         for page_index, _path in enumerate(frames):
             pagenumber = page_index + 1
-            filename = f"page_{pagenumber}.xml"
+            filename = filename_generator(pagenumber)
             node = gfg.Element("PAGE")
             node.set("Filename", filename)
             node.set("NUMBER", str(pagenumber))
@@ -60,8 +75,8 @@ class AdlibRenderer(ResultRenderer):
             dpi_y = 300.0
             pagenumber = page_index + 1  # TODO : Verify 0 based index
 
-            im_h = meta['imageSize']['height'] / dpi_y
-            im_w = meta['imageSize']['width'] / dpi_x
+            im_h = meta["imageSize"]["height"] / dpi_y
+            im_w = meta["imageSize"]["width"] / dpi_x
 
             root = gfg.Element("PAGE")
             root.set("HEIGHT", str(im_h))
@@ -97,10 +112,10 @@ class AdlibRenderer(ResultRenderer):
                 m1.set("NoLocation", "FALSE")
                 m1.set("PageNumber", str(pagenumber))
 
-                m1.set("LEFT", str(left))
-                m1.set("RIGHT", str(right))
-                m1.set("TOP", str(top))
-                m1.set("BOTTOM", str(bottom))
+                m1.set("LEFT", f"{left:.4f}")
+                m1.set("RIGHT", f"{right:.4f}")
+                m1.set("TOP", f"{top:.4f}")
+                m1.set("BOTTOM", f"{bottom:.4f}")
                 m1.set("WORD", str(txt))
 
                 root.append(m1)
@@ -115,27 +130,32 @@ class AdlibRenderer(ResultRenderer):
         self,
         frames: np.ndarray,
         results: [Dict[str, Any]],
-        output_path: Union[str, PathLike],
+        output_file_or_dir: Union[str, PathLike],
+        filename_generator: Optional[Callable[[int], str]] = None,
+        **kwargs: Any,
     ) -> None:
         """Renders results into Adlib compatible assets
         Results parameter "format" is expected to be in "XYWH" conversion will be performed to accommodate this
         """
 
-        if not os.path.isdir(output_path):
-            raise ValueError("output_path should be a directory")
-        self.logger.info(f"Render Adlib to : {output_path}")
+        if not os.path.isdir(output_file_or_dir):
+            raise ValueError("output_file_or_dir should be a directory")
+        self.logger.info(f"Render Adlib to : {output_file_or_dir}")
+
+        filename_generator = filename_generator or (lambda x: f"{x}.tif.xml")
 
         for page_index, (image, result) in enumerate(zip(frames, results)):
             try:
                 tree = self.__render_page(image, result, page_index)
-                output_filename = os.path.join(output_path, f"page_{page_index+1}.xml")
+                output_filename = os.path.join(
+                    output_file_or_dir, filename_generator(page_index + 1)
+                )
                 with open(output_filename, "wb") as fs:
                     tree.write(fs)
-
             except Exception as e:
                 logger.error(e, stack_info=True, exc_info=True)
 
-        tree = self.write_adlib_summary(frames, output_path)
-        adlib_summary_filename = os.path.join(output_path, "summary.xml")
+        tree = self.write_adlib_summary_tree(frames, filename_generator)
+        adlib_summary_filename = os.path.join(output_file_or_dir, self.summary_filename)
         with open(adlib_summary_filename, "wb") as ws:
             tree.write(ws)

@@ -40,7 +40,6 @@ class OverlayExecutor(Executor, StorageMixin):
         work_dir = ensure_exists("/tmp/form-segmentation")
         self.overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=use_cuda)
 
-        print(f"storage_conf  = {storage_conf}")
         self.logger.info(f"Storage enabled: {storage_enabled}")
         self.setup_storage(storage_enabled, storage_conf)
 
@@ -138,6 +137,7 @@ class OverlayExecutor(Executor, StorageMixin):
     ) -> None:
         def _tags(tag_index: int, ftype: str, checksum: str):
             return {
+                "action": "overlay",
                 "index": tag_index,
                 "type": ftype,
                 "ttl": 48 * 60,

@@ -30,8 +30,7 @@ logger = default_logger
 
 # @Timer(text="init in {:.4f} seconds")
 def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compose, str]:
-    # Need this or we will get error indicating that Task is not registred
-
+    # Need this or we will get error indicating that Task is not registered
     # Currently, there is no support for mix precision(fp16) evaluation on CPU
     # https://github.com/pytorch/pytorch/issues/23377
     fp16 = True
@@ -49,7 +48,8 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     else:
         decoder_pretrained = f"file://{decoder_pretrained}"
 
-    # decoder_pretrained = None
+    # FileNotFoundError: [Errno 2] No such file or directory when using decoder_pretrained
+    decoder_pretrained = None
 
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
@@ -202,19 +202,29 @@ class TrOcrIcrProcessor(IcrProcessor):
         self.opt = opt
 
     def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
-        if self.device == "cuda":
-            logger.debug("Device : %s", torch.cuda.get_device_name(0))
-            logger.debug(
-                "GPU Memory Allocated: %d GB",
-                round(torch.cuda.memory_allocated(0) / 1024**3, 1),
-            )
-            logger.debug(
-                "GPU Memory Cached: %d GB",
-                round(torch.cuda.memory_reserved(0) / 1024**3, 1),
-            )
+        start = time.time()
 
-        return self.__recognize_from_fragments(src_images, 128, **kwargs)
+        # get CUDA total available memory and calculate batch size
+        # https://discuss.pytorch.org/t/how-to-check-available-memory-in-pytorch/257/2
+        def get_free_memory():
+            if torch.cuda.is_available():
+                return torch.cuda.get_device_properties(0).total_memory
+            else:
+                return 0
 
+        free_memory = get_free_memory()
+        batch_size = 32
+        if free_memory > 0:
+            # batch_size = int(free_memory / 3e9 * 64)
+            batch_size = int(free_memory / 8e9 * 32)  # ~100 @ 24GB
+
+        logger.info(f"Free memory : {free_memory}, batch_size : {batch_size}")
+
+        result = self.__recognize_from_fragments(src_images, batch_size, **kwargs)
+        logger.info("Fragments time : %s" % (time.time() - start))
+        return result
+
+    @torch.no_grad()
     def __recognize_from_fragments(
         self, src_images, batch_size=32, **kwargs
     ) -> List[Dict[str, any]]:

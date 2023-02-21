@@ -6,9 +6,10 @@ sidebar_position: 1
 
 ## Prerequisites
 * Linux
-* Python 3.8
-* Pytorch 1.11.0+cu113  
-* CUDA 11.3.1
+* Python 3.10
+* [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/)
+* [CUDA 11.8](https://developer.nvidia.com/cuda-11-8-0-download-archive?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_local)
+* [cuDNN 8.7.0](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html)
 
 
 ## Environment Setup
@@ -19,6 +20,10 @@ If you are experienced with PyTorch and have already installed it, just skip thi
 
 :::
 
+
+```shell
+ pip3 install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+```
 
 ##  Using a Python virtual environment
 
@@ -67,6 +72,7 @@ conda activate pytorch
 ```
 
 ### Verify Pytorch Install
+
 
 ```python
 python -c "import torch; print(torch.__version__)"

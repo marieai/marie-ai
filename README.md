@@ -48,3 +48,60 @@ It contains code examples for:
 
 ## Telemetry
 https://telemetry.marieai.co/
+
+TODO :MOVE TO DOCS
+
+# S3 Cloud Storage
+```shell
+docker compose -f  docker-compose.s3.yml --project-directory . up  --build --remove-orphans
+```
+
+CrossFTP
+
+
+## Configure AWS CLI Credentials.
+
+```shell
+vi ~/.aws/credentials
+[marie] # this should be in the file
+aws_access_key_id=your_access_key_id
+aws_secret_access_key=your_secret_access_key
+```
+
+
+## Pull the Docker image.
+
+```shell
+docker pull zenko/cloudserver
+```
+
+## Create and start the container.
+
+
+```sh
+docker run --rm -it --name marie-s3-server -p 8000:8000 \
+-e SCALITY_ACCESS_KEY_ID=MARIEACCESSKEY \
+-e SCALITY_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY \
+-e S3DATA=multiple \
+-e S3BACKEND=mem zenko/cloudserver
+```
+
+```
+SCALITY_ACCESS_KEY_ID : Your AWS ACCESS KEY 
+SCALITY_SECRET_ACCESS_KEY: Your AWS SECRET ACCESS KEY 
+S3BACKEND: Currently using memory storage
+```
+
+## Verify Installation.
+
+```shell
+aws s3 mb s3://mybucket  --profile marie --endpoint-url http://localhost:8000 --region us-west-2
+```
+
+```shell
+aws s3 ls --profile marie --endpoint-url http://localhost:8000
+```
+
+```shell
+aws s3 cp some_file.txt s3://mybucket  --profile marie --endpoint-url http://localhost:8000
+```

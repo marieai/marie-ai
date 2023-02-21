@@ -249,7 +249,7 @@ def docs_from_file_specific(img_path: str, pages: list) -> DocumentArray:
     return docs
 
 
-def frames_from_file(img_path: str):
+def frames_from_file(img_path: str) -> np.ndarray:
     """Create Numpy frame array from image"""
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")

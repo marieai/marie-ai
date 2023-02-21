@@ -212,15 +212,6 @@ class IcrProcessor(BaseHandler):
                     "confidence": round(np.average(_conf), 4),
                 }
 
-                if False:
-                    print("-------")
-                    print(line_results[i])
-            #
-            # print("aligned_words")
-            # print(aligned_words)
-            # for i, word in enumerate(aligned_words):
-            #     print(f"  -> {word}")
-
             result = {
                 "meta": meta,
                 "words": aligned_words,
