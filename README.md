@@ -68,6 +68,7 @@ aws_access_key_id=your_access_key_id
 aws_secret_access_key=your_secret_access_key
 ```
 
+ 
 
 ## Pull the Docker image.
 
@@ -105,3 +106,19 @@ aws s3 ls --profile marie --endpoint-url http://localhost:8000
 ```shell
 aws s3 cp some_file.txt s3://mybucket  --profile marie --endpoint-url http://localhost:8000
 ```
+
+
+```shell
+aws s3 --profile marie --endpoint-url=http://127.0.0.1:8000 ls --recursive s3://
+```
+
+# Production setup
+
+
+Configuration for the S3 server will be stored in the following files:
+
+Reference: https://github.com/scality/cloudserver/blob/development/8.6/locationConfig.json
+**authdata.json**, for authentication.
+**locationConfig.json**, to configure where data is saved.
+**config.json**, for general configuration options.
+

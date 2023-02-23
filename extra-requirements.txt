@@ -131,3 +131,4 @@ onnxmltools:                  standard,core
 pika:                         standard,core
 sentencepiece:                standard,core
 Levenshtein:                  standard,core
+boto3:                  standard,core

@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  s3server:
+    image: zenko/cloudserver:latest
+    container_name: s3server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SCALITY_ACCESS_KEY_ID=MARIEACCESSKEY
+      - SCALITY_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY
+      - S3DATA=multiple
+      - S3BACKEND=mem # mem, file, or sproxyd
+
+    networks:
+      - public
+
+
+# ############### Networks ###############
+
+# Container networking setup
+# docker network create --driver=bridge public
+# sysctl net.ipv4.conf.all.forwarding=1
+
+
+# ############### Networks ###############
+networks:
+  public:
+    external: true

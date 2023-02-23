@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 
 import io
 
+from marie.excepts import BadConfigSource
 from marie.storage import PathHandler
 
 try:
@@ -85,6 +86,31 @@ class S3StorageHandler(PathHandler):
         StorageManager.register_handler(handler)
         StorageManager.ensure_connection("s3://")
 
+    Example configuration from yaml:
+
+    .. code-block:: yaml
+
+         storage:
+          # S3 configuration. Will be used only if value of backend is "s3"
+          s3:
+            enabled: True
+            metadata_only: False # If True, only metadata will be stored in the storage backend
+            endpoint: ${{ ENV.S3_ENDPOINT_URL }}
+            access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+            secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+            bucket: ${{ ENV.S3_STORAGE_BUCKET_NAME }}
+            region: ${{ ENV.S3_REGION }}
+            insecure: True
+            addressing_style: path
+
+
+    .. code-block:: python
+
+        handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
+        StorageManager.register_handler(handler=handler)
+        StorageManager.ensure_connection("s3://")
+
+
 
     The following environment variables are used to configure the S3 client:
 
@@ -126,7 +152,17 @@ class S3StorageHandler(PathHandler):
 
     PREFIX = "s3://"
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: Dict[str, Any], prefix: Optional[str] = None) -> None:
+        """
+        Initialize the S3 storage handler.
+
+        @param config:  The configuration to use.
+        @param prefix: The prefix to use for all keys in config. If None, no prefix is used.
+        """
+
+        # Convert all keys to uppercase and add the prefix if needed.
+        prefix = prefix or ""
+        config = {f"{prefix + k}".upper(): v for k, v in config.items()}
 
         default_auth_settings = {
             "S3_REGION": "us-east-1",
@@ -158,6 +194,15 @@ class S3StorageHandler(PathHandler):
         }
 
         self.config = {**default_auth_settings, **default_s3_settings, **config}
+
+        # if key of config starts with "$S3_" throw an error
+        for key in self.config:
+            if key.startswith("$S3_"):
+                raise BadConfigSource(
+                    f"Invalid S3 config key: {key}. "
+                    "Keys must not start with $S3_. Make sure that all environment variables are populated."
+                )
+
         self.s3 = self.create_s3_resource(self.config)
         self.suppress_errors = True
 
@@ -241,7 +286,6 @@ class S3StorageHandler(PathHandler):
         handler: Optional["PathHandler"] = None,
         **kwargs: Any,
     ) -> bool:
-
         if os.path.isdir(src_path):
             raise Exception(f"Cannot upload directory {src_path} to s3")
 
@@ -271,7 +315,6 @@ class S3StorageHandler(PathHandler):
         suppress_errors: bool = False,
         **kwargs: Any,
     ) -> bytes:
-
         s = S3Url(path)
         try:
             bytes_buffer = io.BytesIO()
@@ -288,7 +331,6 @@ class S3StorageHandler(PathHandler):
         path: str,
         **kwargs: Any,
     ) -> str:
-
         byte_value = self._read(path, **kwargs)
         str_value = byte_value.decode()  # python3, default decoding is utf-8
 
