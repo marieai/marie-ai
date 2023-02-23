@@ -1,0 +1,12 @@
+{
+    "port": 8000,
+    "listenOn": [],
+    "metricsPort": 8002,
+    "metricsListenOn": [],
+    "restEndpoints": {
+        "localhost": "us-east-1",
+        "127.0.0.1": "us-east-1",
+        "s3.docker.test": "us-east-1"
+    },
+    "websiteEndpoints": ["s3.localhost"]
+}

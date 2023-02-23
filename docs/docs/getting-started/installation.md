@@ -7,12 +7,38 @@ sidebar_position: 1
 ## Prerequisites
 * Linux
 * Python 3.10
-* [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/)
+* [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/) 
 * [CUDA 11.8](https://developer.nvidia.com/cuda-11-8-0-download-archive?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_local)
 * [cuDNN 8.7.0](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html)
 
 
 ## Environment Setup
+Setup development environment for Marie-AI. We recommend using Python 3.10. 
+There are known issues with upstream packages as they are not yet compatible with Python 3.11.
+
+### Setup Python 3.10 
+
+```shell
+sudo apt-get install python3.10
+```
+From inside this directory, create a virtual environment using the Python venv module:
+
+Here we will add third-party repository for Python 3.10 on Ubuntu 20.04
+```shell
+sudo apt install software-properties-common -y
+sudo add-apt-repository ppa:deadsnakes/ppa
+```
+
+On Ubuntu 22.04 you can use the following command to install Python 3.10
+
+```shell
+sudo apt-get update
+sudo apt install python3.10
+sudo apt install python3.10-dev
+sudo apt install python3-virtualenv
+sudo apt install python3.10-venv
+python3.10 -m venv .env
+```
 
 :::note
 
@@ -20,9 +46,12 @@ If you are experienced with PyTorch and have already installed it, just skip thi
 
 :::
 
+###  Install Pytorch 2.0
+The following command will install PyTorch 2.0 with CUDA 11.8 support. 
+If you want to install PyTorch without CUDA support, you can remove the `cu118` part from the command.
 
 ```shell
- pip3 install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+pip3 install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
 ```
 
 ##  Using a Python virtual environment
@@ -33,23 +62,15 @@ cd ~/marie-ai
 ```
 
 
-From inside this directory, create a virtual environment using the Python venv module:
-
-```shell
-sudo apt install python3.10-venv
-
-python -m venv .env
-```
-
 Alternatively you can have shared virtual environment
 
 ```bash
 python3 -m venv ~/environment/marie
 ```
-This will require you to create a link a sympolic link `.env ` taht point to the real environment `~/environment/marie`
+This will require you to create a link a sympolic link `.env ` that point to the real environment `~/environment/marie`
 
 
-You can jump in and out of your virtual environment with the activate and deactivate scripts:
+You can jump in and out of your virtual environment with the `activate` and `deactivate` scripts:
 
 ```shell
 # Activate the virtual environment
@@ -112,6 +133,9 @@ git checkout develop
 # "-e" means installing the project in editable mode,
 # That is, any local modifications on the code will take effect immediately
 
+pip install  Cython
+pip install pybind11
+
 pip install -r requirements.txt
 pip install -v -e .
 
@@ -119,11 +143,12 @@ pip install -v -e .
 
 ### Additional dependencies
 
-
+FVCore install
 ```shell
 python3 -m pip install -U 'git+https://github.com/facebookresearch/fvcore'
 ```
 
+Fairseq install
 
 ```shell
 git clone https://github.com/pytorch/fairseq.git
@@ -132,7 +157,6 @@ python setup.py build install
 ```
 
 Detectron2 install 
-
 ```shell
 python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 # Or, to install it from a local clone:

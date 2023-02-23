@@ -130,7 +130,7 @@ class GlobalGenerator(nn.Module):
                           norm_layer(int(ngf * mult / 2)), activation]
 
         model += [nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)),
-                  nn.Tanh()]
+                  nn.ReLU(True)]
         self.model = nn.Sequential(*model)
 
     def forward(self, input):
