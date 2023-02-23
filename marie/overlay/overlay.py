@@ -95,6 +95,7 @@ class OverlayProcessor(BaseHandler):
             "--ndf",
             "64",  # Default 64
             # "./model_zoo/overlay",
+            "--no_dropout",
         ]
 
         opt = TestOptions().parse(args)

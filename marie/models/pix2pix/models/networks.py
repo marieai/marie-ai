@@ -10,6 +10,9 @@ from torch.optim import lr_scheduler
 import torch.nn.functional as F
 import torch.nn.utils.spectral_norm as spectral_norm
 
+from .gausian import GaussianNoise
+from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
+
 
 ###############################################################################
 # Helper Functions
@@ -117,8 +120,6 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 
     Return an initialized network.
     """
-
-    print(net)
     if len(gpu_ids) > 0:
         assert (torch.cuda.is_available())
         net.to(gpu_ids[0])
@@ -320,8 +321,23 @@ class GANLoss(nn.Module):
             the calculated loss.
         """
         if self.gan_mode in ['lsgan', 'vanilla']:
-            target_tensor = self.get_target_tensor(prediction, target_is_real)
-            loss = self.loss(prediction, target_tensor)
+
+            if False:
+                target_tensor = self.get_target_tensor(prediction, target_is_real)
+                loss = self.loss(prediction, target_tensor)
+
+            if isinstance(prediction[0], list):
+                loss = 0
+                for input_i in prediction:
+                    pred = input_i[0]
+                    target_tensor = self.get_target_tensor(pred, target_is_real)
+                    loss += self.loss(pred, target_tensor)
+                # loss /= len(prediction)
+            else:
+                target_tensor = self.get_target_tensor(prediction, target_is_real)
+                loss = self.loss(prediction, target_tensor)
+
+
         elif self.gan_mode == 'hinge':
             if for_discriminator:
                 if target_is_real:
@@ -335,10 +351,23 @@ class GANLoss(nn.Module):
                 loss = -torch.mean(prediction)
             return loss
         elif self.gan_mode == 'wgangp':
-            if target_is_real:
-                loss = -prediction.mean()
+
+            if isinstance(prediction[0], list):
+                loss = 0
+                for input_i in prediction:
+                    pred = input_i[0]
+                    if target_is_real:
+                        loss += -pred.mean()
+                    else:
+                        loss += pred.mean()
+                # loss /= len(prediction)
             else:
-                loss = prediction.mean()
+
+                if target_is_real:
+                    loss = -prediction.mean()
+                else:
+                    loss = prediction.mean()
+
         return loss
 
 
@@ -690,7 +719,11 @@ class PixelDiscriminator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
 
+        self.std = 0.1
+        self.std_decay_rate = 0
+
         self.net = [
+            GaussianNoise(self.std, self.std_decay_rate),
             nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
             nn.LeakyReLU(0.2, True),
             nn.Conv2d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
@@ -890,50 +923,4 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
         else:  # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
-
-class NLayerDiscriminatorWithSpectralNorm(nn.Module):
-    """Defines a PatchGAN discriminator"""
-
-    def __init__(self, input_nc, ndf=64, n_layers=3):
-        """Construct a PatchGAN discriminator
-        Parameters:
-            input_nc (int)  -- the number of channels in input images
-            ndf (int)       -- the number of filters in the last conv layer
-            n_layers (int)  -- the number of conv layers in the discriminator
-            norm_layer      -- normalization layer
-        """
-        super(NLayerDiscriminatorWithSpectralNorm, self).__init__()
-        use_bias = True
-        kw = 4
-        padw = 1
-        sequence = [
-            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
-            nn.LeakyReLU(0.2, True)]
-        nf_mult = 1
-        nf_mult_prev = 1
-        for n in range(1, n_layers):  # gradually increase the number of filters
-            nf_mult_prev = nf_mult
-            nf_mult = min(2 ** n, 8)
-            sequence += [
-                nn.utils.spectral_norm(
-                    nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
-                              bias=use_bias)),
-                nn.LeakyReLU(0.2, True)
-            ]
-
-        nf_mult_prev = nf_mult
-        nf_mult = min(2 ** n_layers, 8)
-        sequence += [
-            nn.utils.spectral_norm(
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
-            nn.LeakyReLU(0.2, True)
-        ]
-
-        sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw,
-                                                      bias=use_bias))]  # output 1 channel prediction map
-        self.model = nn.Sequential(*sequence)
-
-    def forward(self, input):
-        """Standard forward."""
-        return self.model(input)            
 
