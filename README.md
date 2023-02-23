@@ -116,9 +116,5 @@ aws s3 --profile marie --endpoint-url=http://127.0.0.1:8000 ls --recursive s3://
 
 
 Configuration for the S3 server will be stored in the following files:
-
-Reference: https://github.com/scality/cloudserver/blob/development/8.6/locationConfig.json
-**authdata.json**, for authentication.
-**locationConfig.json**, to configure where data is saved.
-**config.json**, for general configuration options.
+https://towardsdatascience.com/10-lessons-i-learned-training-generative-adversarial-networks-gans-for-a-year-c9071159628
 
