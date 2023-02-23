@@ -1,4 +1,3 @@
-import contextlib
 import io
 from os import PathLike
 from typing import Any, Dict, Union, Optional, Callable
@@ -11,26 +10,14 @@ from PyPDF4.pdf import PageObject
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger
 from marie.renderer.renderer import ResultRenderer
-from marie.utils.docs import is_array_like
+from marie.utils.draw_truetype import determine_font_size
 
 logger = default_logger
 
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java
-
-
-def determine_font_size(line_height: int) -> int:
-    """
-    Try to determine font size
-    https://i.stack.imgur.com/3r3Ja.png
-    https://medium.com/@zkareemz/golden-ratio-62b3b6d4282a
-    """
-    #  line-height = font-size * 1.42857
-    font_size = int(line_height / 1.618)
-    return font_size
 
 
 class PdfRenderer(ResultRenderer):

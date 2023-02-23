@@ -65,9 +65,11 @@ class AdaptedVisionTransformer(VisionTransformer):
         weight_init = kwargs.get('weight_init', '')
 
         # after update timm, pretrained_cfg and pretrained_cfg_overlay is not used anymore
-        kwargs.pop("pretrained_cfg")
-        kwargs.pop("pretrained_cfg_overlay")
+        # pop pretrained_cfg and pretrained_cfg_overlay to avoid error in timm 0.4.12 if the key is in kwargs
+        if "pretrained_cfg" in kwargs :
+            kwargs.pop("pretrained_cfg")
 
+            kwargs.pop("pretrained_cfg_overlay")
         super().__init__(*args, **kwargs)
 
         # After timm update, the following code is needed to init dist token

@@ -33,7 +33,7 @@
 pybind11:                    standard,core
 numpy:                       standard,core
 # Pinning to version 3.20.0 as this will cause issues with tensorboard
-protobuf==3.20.0:            standard,core
+protobuf==3.20.2:            standard,core
 grpcio>=1.46.0,<1.48.1:     standard,core
 grpcio-reflection>=1.46.0,<1.48.1:  standard,core
 grpcio-health-checking>=1.46.0,<1.48.1:  standard,core
@@ -131,3 +131,4 @@ onnxmltools:                  standard,core
 pika:                         standard,core
 sentencepiece:                standard,core
 Levenshtein:                  standard,core
+boto3:                  standard,core

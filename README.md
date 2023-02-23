@@ -68,6 +68,7 @@ aws_access_key_id=your_access_key_id
 aws_secret_access_key=your_secret_access_key
 ```
 
+ 
 
 ## Pull the Docker image.
 
@@ -105,3 +106,15 @@ aws s3 ls --profile marie --endpoint-url http://localhost:8000
 ```shell
 aws s3 cp some_file.txt s3://mybucket  --profile marie --endpoint-url http://localhost:8000
 ```
+
+
+```shell
+aws s3 --profile marie --endpoint-url=http://127.0.0.1:8000 ls --recursive s3://
+```
+
+# Production setup
+
+
+Configuration for the S3 server will be stored in the following files:
+https://towardsdatascience.com/10-lessons-i-learned-training-generative-adversarial-networks-gans-for-a-year-c9071159628
+
