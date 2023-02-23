@@ -123,25 +123,27 @@ def test_read_ops(tmpdir, docker_compose):
 @pytest.mark.parametrize("docker_compose", [compose_yml], indirect=["docker_compose"])
 def test_write_ops(tmpdir, docker_compose):
     setup_storage()
-    StorageManager.ensure_connection()
 
     StorageManager.mkdir("s3://marie")
 
     # Local file to remote and back
     temp_file = tmpdir.join(f"file.txt")
     temp_file.write("hello world")
-    StorageManager.write(temp_file, f"s3://marie/file.txt")
+    StorageManager.write(
+        temp_file,
+        f"s3://marie/file.txt",
+    )
 
     # Read remote file to a byte array
     temp_file_out = tmpdir.join(f"file-out.txt")
-    data = StorageManager.read(f"s3://marie/file.txt")
+    data = StorageManager.read(f"s3://marie/file.txt", overwrite=True)
     temp_file_out.write(data)
 
     assert temp_file_out.read() == temp_file.read()
 
     # Read remote file to a byte array
     temp_file_out = tmpdir.join(f"file-out.txt")
-    StorageManager.read_to_file(f"s3://marie/file.txt", temp_file_out)
+    StorageManager.read_to_file(f"s3://marie/file.txt", temp_file_out, overwrite=True)
 
     assert temp_file_out.read() == temp_file.read()
 

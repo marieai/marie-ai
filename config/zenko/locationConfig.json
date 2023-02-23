@@ -1,0 +1,8 @@
+{
+    "us-east-1": {
+        "type": "file",
+        "objectId": "us-east-1",
+        "legacyAwsBehavior": true,
+        "details": {}
+    }
+}
