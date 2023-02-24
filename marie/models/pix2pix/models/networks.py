@@ -10,6 +10,9 @@ from torch.optim import lr_scheduler
 import torch.nn.functional as F
 import torch.nn.utils.spectral_norm as spectral_norm
 
+from .gausian import GaussianNoise
+from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
+
 
 ###############################################################################
 # Helper Functions
@@ -117,8 +120,6 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 
     Return an initialized network.
     """
-
-    print(net)
     if len(gpu_ids) > 0:
         assert (torch.cuda.is_available())
         net.to(gpu_ids[0])
@@ -320,8 +321,23 @@ class GANLoss(nn.Module):
             the calculated loss.
         """
         if self.gan_mode in ['lsgan', 'vanilla']:
-            target_tensor = self.get_target_tensor(prediction, target_is_real)
-            loss = self.loss(prediction, target_tensor)
+
+            if False:
+                target_tensor = self.get_target_tensor(prediction, target_is_real)
+                loss = self.loss(prediction, target_tensor)
+
+            if isinstance(prediction[0], list):
+                loss = 0
+                for input_i in prediction:
+                    pred = input_i[0]
+                    target_tensor = self.get_target_tensor(pred, target_is_real)
+                    loss += self.loss(pred, target_tensor)
+                # loss /= len(prediction)
+            else:
+                target_tensor = self.get_target_tensor(prediction, target_is_real)
+                loss = self.loss(prediction, target_tensor)
+
+
         elif self.gan_mode == 'hinge':
             if for_discriminator:
                 if target_is_real:
@@ -335,10 +351,23 @@ class GANLoss(nn.Module):
                 loss = -torch.mean(prediction)
             return loss
         elif self.gan_mode == 'wgangp':
-            if target_is_real:
-                loss = -prediction.mean()
+
+            if isinstance(prediction[0], list):
+                loss = 0
+                for input_i in prediction:
+                    pred = input_i[0]
+                    if target_is_real:
+                        loss += -pred.mean()
+                    else:
+                        loss += pred.mean()
+                # loss /= len(prediction)
             else:
-                loss = prediction.mean()
+
+                if target_is_real:
+                    loss = -prediction.mean()
+                else:
+                    loss = prediction.mean()
+
         return loss
 
 
@@ -690,6 +719,9 @@ class PixelDiscriminator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
 
+        self.std = 0.1
+        self.std_decay_rate = 0
+
         self.net = [
             nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
             nn.LeakyReLU(0.2, True),
@@ -705,71 +737,38 @@ class PixelDiscriminator(nn.Module):
         return self.net(input)
 
 
-class Attention_block(nn.Module):
-    def __init__(self, F_g, F_l, F_int):
-        super(Attention_block, self).__init__()
-        self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
+# 512
+
+class PixelDiscriminatorVVV(nn.Module):
+    def __init__(self, input_nc, ndf=64, norm_layer=nn.BatchNorm2d, num_classes=1):
+        super(PixelDiscriminator, self).__init__()
+
+        self.std = 0.1
+        self.std_decay_rate = 0
+
+        self.D = nn.Sequential(
+            GaussianNoise(self.std, self.std_decay_rate),
+            nn.Conv2d(input_nc, ndf, kernel_size=3, stride=1, padding=1),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Conv2d(ndf, ndf // 2, kernel_size=3, stride=1, padding=1),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True)
         )
+        self.cls1 = nn.Conv2d(ndf // 2, num_classes, kernel_size=3, stride=1, padding=1)
+        self.cls2 = nn.Conv2d(ndf // 2, num_classes, kernel_size=3, stride=1, padding=1)
 
-        self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
-        )
+    def forward(self, x, size=None):
+        if isinstance(x, list) or isinstance(x, tuple):
+            x = x[-1]
 
-        self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid()
-        )
-
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, g, x):
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
-        psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
-
-        return x * psi
-
-
-class AttentionBlock(nn.Module):
-    def __init__(self, f_g, f_l, f_int):
-        super().__init__()
-
-        self.w_g = nn.Sequential(
-            nn.Conv2d(f_g, f_int,
-                      kernel_size=1, stride=1,
-                      padding=0, bias=True),
-            nn.BatchNorm2d(f_int)
-        )
-
-        self.w_x = nn.Sequential(
-            nn.Conv2d(f_l, f_int,
-                      kernel_size=1, stride=1,
-                      padding=0, bias=True),
-            nn.BatchNorm2d(f_int)
-        )
-
-        self.psi = nn.Sequential(
-            nn.Conv2d(f_int, 1,
-                      kernel_size=1, stride=1,
-                      padding=0, bias=True),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid(),
-        )
-
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, g, x):
-        g1 = self.w_g(g)
-        x1 = self.w_x(x)
-        psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
-
-        return psi * x
+        out = self.D(x)
+        src_out = self.cls1(out)
+        tgt_out = self.cls2(out)
+        out = torch.cat((src_out, tgt_out), dim=1)
+        # print(out.shape)
+        if size is not None:
+            out = F.interpolate(out, size=size, mode='bilinear', align_corners=True)
+        # print(out.shape)
+        return out
 
 
 class UnetGeneratorWithSpectralNorm(nn.Module):
@@ -846,6 +845,11 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
             use_bias = norm_layer == nn.InstanceNorm2d
         if input_nc is None:
             input_nc = outer_nc
+
+        self.std = 0.1
+        self.std_decay_rate = 0
+        noise = GaussianNoise(self.std, self.std_decay_rate)
+
         downconv = nn.utils.spectral_norm(nn.Conv2d(input_nc, inner_nc, kernel_size=4,
                                                     stride=2, padding=1, bias=use_bias))
         downrelu = nn.LeakyReLU(0.2, True)
@@ -860,21 +864,21 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
 
             # att = AttentionBlock(f_g=outer_nc, f_l=outer_nc, f_int=outer_nc//2)
 
-            down = [downconv]
+            down = [noise, downconv]
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
         elif innermost:
             upconv = nn.utils.spectral_norm(nn.ConvTranspose2d(inner_nc, outer_nc,
                                                                kernel_size=4, stride=2,
                                                                padding=1, bias=use_bias))
-            down = [downrelu, downconv]
+            down = [noise, downrelu, downconv]
             up = [uprelu, upconv, upnorm]
             model = down + up
         else:
             upconv = nn.utils.spectral_norm(nn.ConvTranspose2d(inner_nc * 2, outer_nc,
                                                                kernel_size=4, stride=2,
                                                                padding=1, bias=use_bias))
-            down = [downrelu, downconv, downnorm]
+            down = [noise, downrelu, downconv, downnorm]
             up = [uprelu, upconv, upnorm]
 
             if use_dropout:
@@ -890,50 +894,4 @@ class UnetSkipConnectionBlockWithSpectralNorm(nn.Module):
         else:  # add skip connections
             return torch.cat([x, self.model(x)], 1)
 
-
-class NLayerDiscriminatorWithSpectralNorm(nn.Module):
-    """Defines a PatchGAN discriminator"""
-
-    def __init__(self, input_nc, ndf=64, n_layers=3):
-        """Construct a PatchGAN discriminator
-        Parameters:
-            input_nc (int)  -- the number of channels in input images
-            ndf (int)       -- the number of filters in the last conv layer
-            n_layers (int)  -- the number of conv layers in the discriminator
-            norm_layer      -- normalization layer
-        """
-        super(NLayerDiscriminatorWithSpectralNorm, self).__init__()
-        use_bias = True
-        kw = 4
-        padw = 1
-        sequence = [
-            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
-            nn.LeakyReLU(0.2, True)]
-        nf_mult = 1
-        nf_mult_prev = 1
-        for n in range(1, n_layers):  # gradually increase the number of filters
-            nf_mult_prev = nf_mult
-            nf_mult = min(2 ** n, 8)
-            sequence += [
-                nn.utils.spectral_norm(
-                    nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
-                              bias=use_bias)),
-                nn.LeakyReLU(0.2, True)
-            ]
-
-        nf_mult_prev = nf_mult
-        nf_mult = min(2 ** n_layers, 8)
-        sequence += [
-            nn.utils.spectral_norm(
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
-            nn.LeakyReLU(0.2, True)
-        ]
-
-        sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw,
-                                                      bias=use_bias))]  # output 1 channel prediction map
-        self.model = nn.Sequential(*sequence)
-
-    def forward(self, input):
-        """Standard forward."""
-        return self.model(input)            
 

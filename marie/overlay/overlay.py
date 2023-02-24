@@ -11,7 +11,6 @@ from marie.constants import __model_path__
 
 from marie.base_handler import BaseHandler
 from marie.models.pix2pix.data import create_dataset
-from marie.models.pix2pix.data.base_dataset import __make_power_2
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
