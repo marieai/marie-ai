@@ -101,20 +101,21 @@ class GlobalGenerator(nn.Module):
                  padding_type='reflect'):
         assert (n_blocks >= 0)
         super(GlobalGenerator, self).__init__()
-        activation = nn.ReLU(True)
+        # activation = nn.ReLU(True)
+        activation = nn.LeakyReLU(0.2, True)
 
         self.std = 0.1
         self.std_decay_rate = 0
 
         model = [
-            GaussianNoise(self.std, self.std_decay_rate),
+            # GaussianNoise(self.std, self.std_decay_rate),
             nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0)),
             norm_layer(ngf), activation]
         ### downsample
         for i in range(n_downsampling):
             mult = 2 ** i
             model += [
-                GaussianNoise(self.std, self.std_decay_rate),
+                #   GaussianNoise(self.std, self.std_decay_rate),
                 nn.utils.spectral_norm(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)),
                 norm_layer(ngf * mult * 2), activation]
 
@@ -173,7 +174,7 @@ class ResnetBlock(nn.Module):
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
 
         # nn.utils.spectral_norm
-        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
+        conv_block += [nn.utils.spectral_norm(nn.Conv2d(dim, dim, kernel_size=3, padding=p)),
                        norm_layer(dim),
                        activation]
         if use_dropout:
@@ -190,7 +191,7 @@ class ResnetBlock(nn.Module):
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
 
         # nn.utils.spectral_norm
-        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
+        conv_block += [nn.utils.spectral_norm(nn.Conv2d(dim, dim, kernel_size=3, padding=p)),
                        norm_layer(dim)]
 
         return nn.Sequential(*conv_block)

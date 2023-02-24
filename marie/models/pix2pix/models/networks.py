@@ -13,6 +13,8 @@ import torch.nn.utils.spectral_norm as spectral_norm
 from .gausian import GaussianNoise
 from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
 
+import pytorch_ssim
+
 
 ###############################################################################
 # Helper Functions
@@ -282,8 +284,10 @@ class GANLoss(nn.Module):
             self.loss = None
         elif gan_mode == 'hinge':
             # self.loss = LeakyHingeLoss()
-            # self.loss = HingeLoss()
-            self.loss = nn.ReLU()
+            self.loss = HingeLoss()
+            # self.loss = nn.ReLU()
+        elif gan_mode == 'ssim':
+            self.loss = pytorch_ssim.SSIM(data_range=1., channel=1, K=(0.02, 0.6), nonnegative_ssim=True)  #
         else:
             raise NotImplementedError('gan mode %s not implemented' % gan_mode)
 
@@ -320,7 +324,7 @@ class GANLoss(nn.Module):
         Returns:
             the calculated loss.
         """
-        if self.gan_mode in ['lsgan', 'vanilla']:
+        if self.gan_mode in ['lsgan', 'vanilla', 'ssim']:
 
             if False:
                 target_tensor = self.get_target_tensor(prediction, target_is_real)
@@ -337,6 +341,7 @@ class GANLoss(nn.Module):
                 target_tensor = self.get_target_tensor(prediction, target_is_real)
                 loss = self.loss(prediction, target_tensor)
 
+                # print(f"target_is_real = {target_is_real} > {loss}  {prediction.shape} {target_tensor.shape}") # 2, 1, 256, 256]
 
         elif self.gan_mode == 'hinge':
             if for_discriminator:
@@ -353,6 +358,7 @@ class GANLoss(nn.Module):
         elif self.gan_mode == 'wgangp':
 
             if isinstance(prediction[0], list):
+                raise ("SHOULD NOT BE HERE")
                 loss = 0
                 for input_i in prediction:
                     pred = input_i[0]
@@ -362,7 +368,6 @@ class GANLoss(nn.Module):
                         loss += pred.mean()
                 # loss /= len(prediction)
             else:
-
                 if target_is_real:
                     loss = -prediction.mean()
                 else:
