@@ -1,6 +1,8 @@
 from typing import Dict, Optional
 
 from docarray import DocumentArray
+
+from marie.excepts import BadConfigSource
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.timer import Timer
 
@@ -12,12 +14,14 @@ class StorageMixin:
         self,
         storage_enabled: Optional[bool] = False,
         storage_conf: Dict[str, str] = None,
+        silence_exceptions: bool = False,
     ) -> None:
         """
         Setup document storage
 
         :param storage_enabled:
         :param storage_conf:
+        @param silence_exceptions:
         """
         self.storage_enabled = storage_enabled
         if storage_enabled:
@@ -31,7 +35,14 @@ class StorageMixin:
                     table=storage_conf["default_table"],
                 )
             except Exception as e:
-                self.logger.warning("Storage enabled but config not set", exc_info=1)
+                if silence_exceptions:
+                    self.logger.warning(
+                        "Storage enabled but config not setup correctly", exc_info=1
+                    )
+                else:
+                    raise BadConfigSource(
+                        "Storage enabled but config not setup correctly"
+                    ) from e
 
     @Timer(text="stored in {:.4f} seconds")
     def store(

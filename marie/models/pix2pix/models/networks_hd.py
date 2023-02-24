@@ -4,6 +4,9 @@ import functools
 from torch.autograd import Variable
 import numpy as np
 
+from .gausian import GaussianNoise
+from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
+
 
 ##############################################################################
 # Generator
@@ -42,17 +45,28 @@ class LocalEnhancer(nn.Module):
             if False:
                 model_upsample += [nn.Upsample(scale_factor=2, mode="nearest"),
                                    nn.utils.spectral_norm(
-                                       nn.Conv2d(in_channels=ngf_global * 2, out_channels=ngf_global, kernel_size=3,
+                                       nn.Conv2d(in_channels=ngf_global, out_channels=ngf_global * 2, kernel_size=3,
                                                  stride=2, padding=1)),
                                    norm_layer(ngf_global),
                                    nn.ReLU(True)]
 
+            print(ngf_global)
+            # https://www.programcreek.com/python/?code=alterzero%2FSTARnet%2FSTARnet-master%2Fbase_networks.py
             if True:
-                model_upsample += [nn.ConvTranspose2d(ngf_global * 2, ngf_global, kernel_size=3, stride=2, padding=1,
-                                                      output_padding=1),
-                                   norm_layer(ngf_global), nn.ReLU(True)]
+                model_upsample += [
+                    nn.utils.spectral_norm(
+                        nn.ConvTranspose2d(ngf_global * 2, ngf_global, kernel_size=3, stride=2, padding=1,
+                                           output_padding=1)),
+                    norm_layer(ngf_global), nn.ReLU(True)]
 
-                ### final convolution
+                # Pix2PixHD: use instance norm for the last conv layer
+
+            # upsample using PixelShuffle
+            # model_upsample += [
+            #         nn.utils.spectral_norm(nn.Conv2d(in_channels=ngf_global * 2, out_channels=ngf_global, kernel_size=3, stride=2, padding=1)),
+            #     ]
+
+            ### final convolution
             if n == n_local_enhancers:
                 model_upsample += [nn.ReflectionPad2d(3),
                                    nn.utils.spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)),
@@ -61,7 +75,9 @@ class LocalEnhancer(nn.Module):
             setattr(self, 'model' + str(n) + '_1', nn.Sequential(*model_downsample))
             setattr(self, 'model' + str(n) + '_2', nn.Sequential(*model_upsample))
 
-        self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+            # Replacing AvgPool2d with Conv2d aka Strided Convolution
+        # self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+        self.downsample = nn.Conv2d(input_nc, output_nc, kernel_size=3, stride=2, padding=1)
 
     def forward(self, input):
         ### create input pyramid
@@ -87,13 +103,20 @@ class GlobalGenerator(nn.Module):
         super(GlobalGenerator, self).__init__()
         activation = nn.ReLU(True)
 
-        model = [nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0)),
-                 norm_layer(ngf), activation]
+        self.std = 0.1
+        self.std_decay_rate = 0
+
+        model = [
+            GaussianNoise(self.std, self.std_decay_rate),
+            nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0)),
+            norm_layer(ngf), activation]
         ### downsample
         for i in range(n_downsampling):
             mult = 2 ** i
-            model += [nn.utils.spectral_norm(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)),
-                      norm_layer(ngf * mult * 2), activation]
+            model += [
+                GaussianNoise(self.std, self.std_decay_rate),
+                nn.utils.spectral_norm(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)),
+                norm_layer(ngf * mult * 2), activation]
 
         ### resnet blocks
         mult = 2 ** n_downsampling
@@ -104,10 +127,12 @@ class GlobalGenerator(nn.Module):
         for i in range(n_downsampling):
             mult = 2 ** (n_downsampling - i)
 
-            model += [nn.Upsample(scale_factor=2, mode="nearest"), nn.utils.spectral_norm(
-                nn.Conv2d(in_channels=ngf * mult, out_channels=int(ngf * mult / 2), kernel_size=3, stride=1,
-                          padding=1)),
-                      activation]
+            model += [
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+                nn.utils.spectral_norm(
+                    nn.Conv2d(in_channels=ngf * mult, out_channels=int(ngf * mult / 2), kernel_size=3, stride=1,
+                              padding=1)),
+                activation]
 
             if False:
                 model += [nn.utils.spectral_norm(
@@ -115,8 +140,9 @@ class GlobalGenerator(nn.Module):
                                        output_padding=1)),
                           norm_layer(int(ngf * mult / 2)), activation]
 
-        model += [nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)),
-                  nn.ReLU(True)]
+        model += [
+            nn.ReflectionPad2d(3), nn.utils.spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)),
+            nn.Tanh()]
         self.model = nn.Sequential(*model)
 
     def forward(self, input):
@@ -131,6 +157,10 @@ class ResnetBlock(nn.Module):
         self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, activation, use_dropout)
 
     def build_conv_block(self, dim, padding_type, norm_layer, activation, use_dropout):
+
+        self.std = 0.1
+        self.std_decay_rate = 0
+
         conv_block = []
         p = 0
         if padding_type == 'reflect':
@@ -142,7 +172,8 @@ class ResnetBlock(nn.Module):
         else:
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
 
-        conv_block += [nn.utils.spectral_norm(nn.Conv2d(dim, dim, kernel_size=3, padding=p)),
+        # nn.utils.spectral_norm
+        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
                        norm_layer(dim),
                        activation]
         if use_dropout:
@@ -157,7 +188,9 @@ class ResnetBlock(nn.Module):
             p = 1
         else:
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
-        conv_block += [nn.utils.spectral_norm(nn.Conv2d(dim, dim, kernel_size=3, padding=p)),
+
+        # nn.utils.spectral_norm
+        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
                        norm_layer(dim)]
 
         return nn.Sequential(*conv_block)
@@ -177,6 +210,8 @@ class MultiscaleDiscriminator(nn.Module):
 
         for i in range(num_D):
             netD = NLayerDiscriminator(input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
+            # netD = NLayerDiscriminatorWithSpectralNorm(input_nc, ndf, n_layers, norm_layer, use_sigmoid, getIntermFeat)
+
             if getIntermFeat:
                 for j in range(n_layers + 2):
                     setattr(self, 'scale' + str(i) + '_layer' + str(j), getattr(netD, 'model' + str(j)))
@@ -184,6 +219,7 @@ class MultiscaleDiscriminator(nn.Module):
                 setattr(self, 'layer' + str(i), netD.model)
 
         self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+        # self.downsample = nn.Conv2d(ndf, ndf, kernel_size=3, stride=2, padding=1)
 
     def singleD_forward(self, model, input):
         if self.getIntermFeat:
@@ -198,6 +234,7 @@ class MultiscaleDiscriminator(nn.Module):
         num_D = self.num_D
         result = []
         input_downsampled = input
+
         for i in range(num_D):
             if self.getIntermFeat:
                 model = [getattr(self, 'scale' + str(num_D - 1 - i) + '_layer' + str(j)) for j in
@@ -206,7 +243,9 @@ class MultiscaleDiscriminator(nn.Module):
                 model = getattr(self, 'layer' + str(num_D - 1 - i))
             result.append(self.singleD_forward(model, input_downsampled))
             if i != (num_D - 1):
+                # print(f"downsampling... B: {input_downsampled.shape}")
                 input_downsampled = self.downsample(input_downsampled)
+                # print(f"downsampling... A: {input_downsampled.shape}")
         return result
 
 
@@ -217,28 +256,44 @@ class NLayerDiscriminator(nn.Module):
         self.getIntermFeat = getIntermFeat
         self.n_layers = n_layers
 
+        print('NLayerDiscriminator')
+        self.std = 0.1
+        self.std_decay_rate = 0
+
         kw = 4
         padw = int(np.ceil((kw - 1.0) / 2))
-        sequence = [[nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), nn.LeakyReLU(0.2, True)]]
+        # sequence = [[
+        #     nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), nn.LeakyReLU(0.2, True)
+        #     ]]
+
+        sequence = [[
+            # GaussianNoise(self.std, self.std_decay_rate),
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
+            nn.LeakyReLU(0.2, True)
+        ]]
 
         nf = ndf
         for n in range(1, n_layers):
             nf_prev = nf
             nf = min(nf * 2, 512)
             sequence += [[
-                nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw),
+                # GaussianNoise(self.std, self.std_decay_rate),
+                nn.utils.spectral_norm(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw)),
                 norm_layer(nf), nn.LeakyReLU(0.2, True)
             ]]
 
         nf_prev = nf
         nf = min(nf * 2, 512)
         sequence += [[
-            nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw),
+            # GaussianNoise(self.std, self.std_decay_rate),
+            nn.utils.spectral_norm(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw)),
             norm_layer(nf),
             nn.LeakyReLU(0.2, True)
         ]]
 
-        sequence += [[nn.Conv2d(nf, 1, kernel_size=kw, stride=1, padding=padw)]]
+        sequence += [[
+            nn.utils.spectral_norm(nn.Conv2d(nf, 1, kernel_size=kw, stride=1, padding=padw))
+        ]]
 
         if use_sigmoid:
             sequence += [[nn.Sigmoid()]]

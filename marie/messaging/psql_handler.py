@@ -23,7 +23,7 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
             self.logger.warning("Storage config not set - storage disabled")
             return
         self.storage_enabled = config.get("enabled", False)
-        self.setup_storage(self.storage_enabled, config.get("storage_config", {}))
+        self.setup_storage(self.storage_enabled, config)
 
     def get_supported_events(self) -> List[str]:
         return ["*"]
