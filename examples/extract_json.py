@@ -136,7 +136,7 @@ if __name__ == "__main__":
     if True:
         src = "~/tmp/image5839050414130576656-0.tif"
         src = "~/tmp/PID_1925_9289_0_157186264.tif"
-        src = "~/datasets/dataset/medprov/PID/171131488/PID_1971_9380_0_171131488.tif"
+        # src = "~/datasets/dataset/medprov/PID/171131488/PID_1971_9380_0_171131488.tif"
         src = os.path.expanduser(src)
         print(src)
 

@@ -112,7 +112,7 @@ class ExtractPipeline:
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
 
-        mock_ocr = True
+        mock_ocr = False
         if mock_ocr:
             self.ocr_engine = MockOcrEngine(cuda=use_cuda)
         else:

@@ -59,7 +59,7 @@ def interface():
 
         btn_submit.click(process_image, inputs=[src], outputs=[boxes, lines])
 
-    iface.launch(debug=True, share=False, server_name="0.0.0.0")
+    iface.launch(debug=True, share=True, server_name="0.0.0.0")
 
 
 if __name__ == "__main__":
