@@ -22,7 +22,7 @@ class AmazonMQToastHandler(ToastHandler):
             return False
 
         try:
-            msg_config = self.config["message_config"]
+            msg_config = self.config
             exchange = "marie.events"
             queue = "events"
             routing_key = notification["event"] if "event" in notification else "*"
