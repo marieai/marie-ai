@@ -10,6 +10,7 @@ import numpy as np
 from marie.logging.predefined import default_logger
 from marie.utils.base64 import base64StringToBytes
 from marie.utils.utils import FileSystem, ensure_exists
+from marie.storage import StorageManager
 
 logger = default_logger
 
@@ -53,41 +54,65 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
     return tmp_file, checksum
 
 
-def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
-    """Extract data from payload"""
-    # determine how to extract payload based on the type of the key supplied
+def extract_payload(payload, queue_id) -> tuple[str, str, str]:
+    """
+    Extract payload from the message. Determine how to extract payload based on the type of the key supplied.
+
+    :param payload:  message payload
+    :param queue_id:  queue id to use for storing temp files
+    :return:  tuple of bytes and file type
+    """
+
+    #
     # Possible keys
-    # data, srcData, srcFile, srcUrl
+    # data, srcData, srcFile, srcUrl, srcBase64, uri
 
     # This indicates that the contents are a file contents and need to stored as they appear
-
     store_raw = False
-    if "data" in payload:
+    if "data" in payload or "srcData" in payload:
         raw_data = payload["data"]
-        data = base64StringToBytes(raw_data)
-    elif "srcData" in payload:
-        raw_data = payload["srcData"]
         data = base64StringToBytes(raw_data)
     elif "srcBase64" in payload:
         raw_data = payload["srcBase64"]
         data = base64StringToBytes(raw_data)
         store_raw = True
-    elif "srcFile" in payload:
+    elif "srcFile" in payload:  # this is a deprecated key and will be removed in future
         img_path = payload["srcFile"]
         # FIXME: relative path resolution is not working as expected
         # FIXME : Use PathManager
         base_dir = FileSystem.get_share_directory()
         path = os.path.abspath(os.path.join(base_dir, img_path))
-        logger.info(f"base_dir = {base_dir}")
-        logger.info(f"raw_data = {img_path}")
         logger.info(f"resolved path = {path}")
         if not os.path.exists(path):
             raise Exception(f"File not found : {img_path}")
         with open(path, "rb") as file:
             data = file.read()
         store_raw = True
+    elif "uri" in payload:
+        uri = payload["uri"]
+        import tempfile
+
+        if not StorageManager.can_handle(uri):
+            raise Exception(
+                f"Unable to read file from {uri} no suitable storage manager configured"
+            )
+
+        # Read remote file to a byte array
+        with tempfile.NamedTemporaryFile() as temp_file_out:
+            print(f"Reading file from {uri} to {temp_file_out.name}")
+            if not StorageManager.exists(uri):
+                raise Exception(f"Remote file does not exist : {uri}")
+
+            StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
+            # Read the file to a byte array
+            temp_file_out.seek(0)
+            data = temp_file_out.read()
+        store_raw = True
     else:
         raise Exception("Unable to determine datasource in payload")
+
+    if not data:
+        raise Exception("No data read from payload")
 
     with io.BytesIO(data) as memfile:
         file_type = imghdr.what(memfile)
@@ -100,7 +125,7 @@ def extract_payload(payload, queue_id):  # -> tuple[bytes, str]:
         store_raw = True
 
     tmp_file, checksum = store_temp_file(data, queue_id, file_type, store_raw)
-    logger.info(f"File info: {file_type}, {tmp_file}")
+    logger.info(f"File info: {checksum} {file_type}, {tmp_file}")
 
     return tmp_file, checksum, file_type
 

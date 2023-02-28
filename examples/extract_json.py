@@ -53,59 +53,62 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         encoded_bytes = base64.b64encode(file.read())
         base64_str = encoded_bytes.decode("utf-8")
 
-        # Treat the image as a single word.
-        # WORD = "word"
-        # Sparse text. Find as much text as possible in no particular order.
-        # SPARSE = "sparse"
-        # Treat the image as a single text line.
-        # LINE = "line"
-        # Raw line. Treat the image as a single text line, NO bounding box detection performed.
-        # RAW_LINE = "raw_line"
-        # Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
-        # MULTI_LINE = "multiline"
+    # Treat the image as a single word.
+    # WORD = "word"
+    # Sparse text. Find as much text as possible in no particular order.
+    # SPARSE = "sparse"
+    # Treat the image as a single text line.
+    # LINE = "line"
+    # Raw line. Treat the image as a single text line, NO bounding box detection performed.
+    # RAW_LINE = "raw_line"
+    # Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
+    # MULTI_LINE = "multiline"
 
-        # Attributes
-        # data[null]=> base 64 encoded image
-        # mode['word]=> extraction mode
-        # output['json']=> json,text,pdf
+    # Attributes
+    # data[null]=> base 64 encoded image
+    # mode['word]=> extraction mode
+    # output['json']=> json,text,pdf
 
-        uid = str(uuid.uuid4())
-        json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-        json_payload = {
-            "queue_id": uid,
-            "data": base64_str,
-            "mode": mode,
-            "output": "json",
-            "doc_id": f"greg-{uid}",
-            "doc_type": "overlay",
-            # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
-        }
+    uid = str(uuid.uuid4())
+    json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
+    # json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
 
-        # print(json_payload)
-        # Upload file to api
-        print(f"Uploading to marie-ai for processing : {file}")
-        print(upload_url)
+    json_payload = {
+        "queue_id": uid,
+        # "data": base64_str,
+        "uri": "s3://marie/incoming/ocr-0001.tif",
+        "mode": mode,
+        "output": "json",
+        "doc_id": f"greg-{uid}",
+        "doc_type": "overlay",
+        # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
+    }
 
-        auth_headers = [
-            {"Authorization": f"Bearer {api_key}"},
-            {"Content-Type": "application/json; charset=utf-8"},
-        ]
+    # print(json_payload)
+    # Upload file to api
+    print(f"Uploading to marie-ai for processing : {file}")
+    print(upload_url)
 
-        for k in range(1):
-            start = time.time()
-            result = requests.post(
-                upload_url,
-                headers={"Content-Type": "application/json; charset=utf-8"},
-                json=json_payload,
-            )
-            json_result = result.json()
-            print(json_result)
-            # txt = json_result.text
-            # print(txt)
-            delta = time.time() - start
-            print(f"Request time : {delta}")
+    auth_headers = [
+        {"Authorization": f"Bearer {api_key}"},
+        {"Content-Type": "application/json; charset=utf-8"},
+    ]
 
-        return json_result
+    for k in range(1):
+        start = time.time()
+        result = requests.post(
+            upload_url,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            json=json_payload,
+        )
+        json_result = result.json()
+        print(json_result)
+        # txt = json_result.text
+        # print(txt)
+        delta = time.time() - start
+        print(f"Request time : {delta}")
+
+    return json_result
 
 
 def process_dir(image_dir: str):

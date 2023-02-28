@@ -44,12 +44,13 @@ class Toast:
 
     @staticmethod
     async def notify(event: str, notification: Any, **kwargs: Any):
+        # lets fire and forget
         tasks = [
             asyncio.ensure_future(handler.notify(notification, **kwargs))
             for handler in Toast.__get_event_handlers(event)
         ]
 
-        await asyncio.gather(*tasks)
+        # await asyncio.gather(*tasks)
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:

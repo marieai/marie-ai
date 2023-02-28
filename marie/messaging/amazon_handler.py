@@ -1,8 +1,10 @@
+import asyncio
 from typing import Any, List
 
 from marie.messaging.rabbitmq import BlockingPikaClient
 from marie.messaging.toast_handler import ToastHandler
 from pika.exchange_type import ExchangeType
+from marie.excepts import BadConfigSource
 
 
 class AmazonMQToastHandler(ToastHandler):
@@ -17,12 +19,12 @@ class AmazonMQToastHandler(ToastHandler):
     def get_supported_events(self) -> List[str]:
         return ["*"]
 
-    async def notify(self, notification: Any, **kwargs: Any) -> bool:
-        if not self.config or not self.config["enabled"]:
-            return False
-
+    async def __notify_task(
+        self, notification: Any, silence_exceptions: bool = False, **kwargs: Any
+    ) -> None:
         try:
             msg_config = self.config
+            print(msg_config)
             exchange = "marie.events"
             queue = "events"
             routing_key = notification["event"] if "event" in notification else "*"
@@ -41,6 +43,21 @@ class AmazonMQToastHandler(ToastHandler):
             )
 
             client.close()
-            return True
         except Exception as e:
-            raise e
+            if silence_exceptions:
+                self.logger.warning(
+                    "Toast enabled but config not setup correctly", exc_info=1
+                )
+            else:
+                raise BadConfigSource(
+                    "Toast enabled but config not setup correctly"
+                ) from e
+
+    async def notify(self, notification: Any, **kwargs: Any) -> bool:
+        if not self.config or not self.config["enabled"]:
+            return False
+
+        await self.__notify_task(notification, True, **kwargs)
+        # task = asyncio.ensure_future(self.__notify_task(notification, True, **kwargs))
+
+        return True

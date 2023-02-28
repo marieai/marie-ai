@@ -7,10 +7,13 @@ from typing import Optional
 import pika
 from pika.exchange_type import ExchangeType
 
+from marie.logging.predefined import default_logger as logger
+
 
 class BlockingPikaClient:
     def __init__(self, conf: Dict[str, str]):
         # "amazon-rabbitmq"  "rabbitmq"
+
         provider = conf.get("provider", "rabbitmq")
         hostname = conf.get("hostname", "localhost")
         port = int(conf.get("port", 5672))
@@ -33,13 +36,13 @@ class BlockingPikaClient:
 
         # Turn on delivery confirmations
         self.channel.confirm_delivery()
+        self.logger = logger
 
     def close(self):
         self.channel.close()
         self.connection.close()
 
     def declare_queue(self, queue_name: str, durable: Optional[bool] = True) -> Any:
-        print(f"Trying to declare queue({queue_name})...")
         return self.channel.queue_declare(queue=queue_name, durable=durable)
 
     def exchange_declare(
@@ -50,7 +53,6 @@ class BlockingPikaClient:
         durable=False,
     ) -> Any:
 
-        print(f"Trying to declare exchange({exchange})...")
         return self.channel.exchange_declare(
             exchange=exchange,
             exchange_type=exchange_type,
@@ -73,22 +75,11 @@ class BlockingPikaClient:
 
         # Send a message
         try:
-            # channel.basic_publish(
-            #     exchange=exchange,
-            #     routing_key="test",
-            #     body="Hello World!",
-            #     properties=pika.BasicProperties(
-            #         content_type="text/plain", delivery_mode=pika.DeliveryMode.Transient
-            #     ),
-            #     mandatory=True,
-            # )
-
             channel.basic_publish(
                 exchange, routing_key, body, properties, mandatory=True
             )
-            print(
+            self.logger.info(
                 f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}, Body: {body}"
             )
         except pika.exceptions.UnroutableError as e:
-            print(e)
-            print("Message was returned")
+            self.logger.error(e)
