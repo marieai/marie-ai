@@ -45,7 +45,7 @@ async def mark_as_started(
     :return:
     """
 
-    default_logger.info(f"Executing mark_request_as_started : {job_id} : {timestamp}")
+    default_logger.debug(f"Executing mark_request_as_started : {job_id} : {timestamp}")
     await Toast.notify(
         f"{event_name}.started",
         event_builder(
@@ -74,7 +74,7 @@ async def mark_as_failed(
     :return:
     """
 
-    default_logger.info(f"Executing mark_request_as_failed : {job_id} : {timestamp}")
+    default_logger.debug(f"Executing mark_request_as_failed : {job_id} : {timestamp}")
     await Toast.notify(
         f"{event_name}.failed",
         event_builder(job_id, event_name, job_tag, status, timestamp, payload),
@@ -100,7 +100,7 @@ async def mark_as_complete(
     :param payload:
     :return:
     """
-    default_logger.info(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
+    default_logger.debug(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
     await Toast.notify(
         f"{event_name}.complete",
         event_builder(

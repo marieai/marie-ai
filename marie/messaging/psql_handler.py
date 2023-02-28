@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, List
 
 from docarray import DocumentArray, Document
@@ -6,11 +7,14 @@ from marie.logging.logger import MarieLogger
 from marie.messaging.toast_handler import ToastHandler
 from marie.executor.mixin import StorageMixin
 
+from marie.excepts import BadConfigSource
+
 
 class PsqlToastHandler(ToastHandler, StorageMixin):
     """
     PSQL Toast Handler that writes events using JSONB format to a postgres database
     utilizing the marie Document Storage API
+
     """
 
     def __init__(self, config: Any, **kwargs: Any):
@@ -28,19 +32,37 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
     def get_supported_events(self) -> List[str]:
         return ["*"]
 
+    async def __notify_task(
+        self, notification: Any, silence_exceptions: bool = False, **kwargs: Any
+    ) -> None:
+        try:
+            if not self.storage_enabled:
+                return
+
+            await self.persist(
+                ref_id=notification.get("jobid", None),
+                ref_type=notification.get("event", "NA"),
+                results=notification,
+            )
+        except Exception as e:
+            if silence_exceptions:
+                self.logger.warning(
+                    "Toast enabled but config not setup correctly", exc_info=1
+                )
+            else:
+                raise BadConfigSource(
+                    "Toast enabled but config not setup correctly"
+                ) from e
+
     async def notify(self, notification: Any, **kwargs: Any) -> bool:
-        print("PSQL")
-        print(notification)
         if not self.storage_enabled:
             return False
 
-        self.persist(
-            ref_id=notification.get("jobid", None),
-            ref_type=notification.get("event", "NA"),
-            results=notification,
-        )
+        await self.__notify_task(notification, True, **kwargs)
+        # asyncio.ensure_future(self.__notify_task(notification, True, **kwargs))
+        return True
 
-    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
+    async def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
         """
         Persist results to storage backend
         :param ref_id:

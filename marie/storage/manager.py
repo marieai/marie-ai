@@ -548,3 +548,20 @@ class StorageManager:
                     continue
                 else:
                     raise ex
+
+    @classmethod
+    def can_handle(
+        cls,
+        path: str,
+        allow_native: bool = False,
+    ) -> bool:
+        """
+        Returns True if there is a PathHandler that can handle the given URI
+        :param path:  A URI to check
+        :param allow_native:  If True, the native path handler will be considered as a valid handler
+        :return:  True if there is a PathHandler that can handle the given URI
+        """
+        handler = StorageManager.__get_path_handler(path)
+        if handler == StorageManager._NATIVE_PATH_HANDLER and not allow_native:
+            return False
+        return handler is not None

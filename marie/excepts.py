@@ -1,5 +1,5 @@
 """This modules defines all kinds of exceptions raised in Jina."""
-from typing import Set, Union
+from typing import Set, Union, Any, Optional
 
 import grpc.aio
 
@@ -99,9 +99,9 @@ class InternalNetworkError(grpc.aio.AioRpcError, BaseMarieException):
     def __init__(
         self,
         og_exception: grpc.aio.AioRpcError,
-        request_id: str = '',
-        dest_addr: Union[str, Set[str]] = {''},
-        details: str = '',
+        request_id: str = "",
+        dest_addr: Union[str, Set[str]] = {""},
+        details: str = "",
     ):
         """
         :param og_exception: the original exception that caused the network error
@@ -140,8 +140,22 @@ class InternalNetworkError(grpc.aio.AioRpcError, BaseMarieException):
         if self._details:
             trailing_metadata = extract_trailing_metadata(self.og_exception)
             if trailing_metadata:
-                return f'{self._details}\n{trailing_metadata}'
+                return f"{self._details}\n{trailing_metadata}"
             else:
                 return self._details
 
         return self.og_exception.details()
+
+
+def raise_exception(
+    e,
+    suppress_errors: bool,
+    logger: "MarieLogger",  # noqa: F821
+    msg: str,
+    exc_info: Optional[bool] = False,
+) -> Optional[bool]:
+    if suppress_errors:
+        logger.warning(msg, exc_info=exc_info)
+        return False
+    else:
+        raise BadConfigSource(msg) from e

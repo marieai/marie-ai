@@ -3,11 +3,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 import io
 
-from marie.excepts import BadConfigSource
+from marie.excepts import BadConfigSource, raise_exception
 from marie.storage import PathHandler
 
 try:
@@ -18,6 +18,7 @@ except ImportError:
 StrOrBytesPath = Union[str, Path, os.PathLike]
 
 from marie.logging.predefined import default_logger as logger
+from marie.logging.logger import MarieLogger
 
 
 class S3Url(object):
@@ -262,7 +263,14 @@ class S3StorageHandler(PathHandler):
             if e.response["Error"]["Code"] == "404":
                 return False
             else:
-                raise e
+                return raise_exception(
+                    e, self.suppress_errors, logger, "Missing S3 bucket/key"
+                )
+        except EndpointConnectionError as e:
+            return raise_exception(
+                e, self.suppress_errors, logger, "S3 endpoint connection error"
+            )
+
         return True
 
     def _isfile(self, path: str, **kwargs: Any) -> bool:
