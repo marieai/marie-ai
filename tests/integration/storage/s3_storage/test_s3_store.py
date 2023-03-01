@@ -38,6 +38,11 @@ def docker_compose(request):
     :return:
     """
 
+    if True:
+        yield
+        return
+
+
     if is_running("s3server"):
         yield
     else:
@@ -58,8 +63,9 @@ def setup_storage():
             "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
             "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
             "S3_STORAGE_BUCKET_NAME": "marie",
-            "S3_ENDPOINT_URL": "http://localhost:8000",
-            "S3_ADDRESSING_STYLE": "path",
+            "S3_ENDPOINT_URL" : "http://localhost:8000",
+            # "S3_ENDPOINT_URL": "http://64.62.141.143:8000",
+            "S3_ADDRESSING_STYLE": "path"
         }
     )
 
@@ -147,6 +153,39 @@ def test_write_ops(tmpdir, docker_compose):
 
     assert temp_file_out.read() == temp_file.read()
 
+
+
+@pytest.mark.parametrize("docker_compose", [compose_yml], indirect=["docker_compose"])
+def test_write_ops_to_file(tmpdir, docker_compose):
+    setup_storage()
+
+    StorageManager.mkdir("s3://marie")
+
+    # Local file to remote and back
+    temp_file = tmpdir.join(f"file.txt")
+    temp_file.write("hello world")
+    StorageManager.write(
+        temp_file,
+        f"s3://marie/file.txt",
+    )
+
+    # Read remote file to a byte array
+    location = f"s3://marie/file.txt"
+    temp_file_out = tmpdir.join(f"file-out.txt")
+    data = StorageManager.read(location, overwrite=True)
+    temp_file_out.write(data)
+
+    # Read remote file to a byte array
+    # with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
+
+    with open("/tmp/sample.txt", "wb+") as temp_file:
+        print(f"Reading file from {location} to {temp_file}")
+        print(type(temp_file))
+        StorageManager.read_to_file(location, temp_file, overwrite=True)
+        temp_file.seek(0)
+        data = temp_file.read()
+
+    assert temp_file_out.read() == data.decode()
 
 @pytest.mark.parametrize("docker_compose", [compose_yml], indirect=["docker_compose"])
 def test_write_dir(tmpdir, docker_compose):
