@@ -9,6 +9,8 @@ import os
 from marie.excepts import BadConfigSource
 from marie.logging.predefined import default_logger as logger
 
+import io
+
 StrOrBytesPath = Union[str, Path, PathLike]
 
 
@@ -175,7 +177,11 @@ class PathHandler:
         raise NotImplementedError()
 
     def _read_to_file(
-        self, path: str, dst_path: str, overwrite=False, **kwargs: Any
+        self,
+        path: str,
+        dst_path: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
     ) -> None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
@@ -415,7 +421,12 @@ class StorageManager:
         )  # type: ignore
 
     @staticmethod
-    def read_to_file(path: str, dst_path: str, overwrite=False, **kwargs: Any) -> None:
+    def read_to_file(
+        path: str,
+        dst_path: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
+    ) -> None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
         :param path:    A URI supported by this PathHandler

@@ -21,6 +21,36 @@ from marie.logging.predefined import default_logger as logger
 from marie.logging.logger import MarieLogger
 
 
+def is_file_like(obj) -> bool:
+    """
+    Check if the object is a file-like object.
+    For objects to be considered file-like, they must
+    be an iterator AND have either a `read` and/or `write`
+    method as an attribute.
+    Note: file-like objects must be iterable, but
+    iterable objects need not be file-like.
+    Parameters
+    ----------
+    obj : The object to check
+    Returns
+    -------
+    is_file_like : bool
+        Whether `obj` has file-like properties.
+    Examples
+    --------
+    >>> import io
+    >>> buffer = io.StringIO("data")
+    >>> is_file_like(buffer)
+    True
+    >>> is_file_like([1, 2, 3])
+    False
+    """
+    if not (hasattr(obj, "read") or hasattr(obj, "write")):
+        return False
+
+    return bool(hasattr(obj, "__iter__"))
+
+
 class S3Url(object):
     """
     >>> s = S3Url("s3://bucket/hello/world")
@@ -345,22 +375,37 @@ class S3StorageHandler(PathHandler):
         return str_value
 
     # download  file from s3 to local path
-    def _read_to_file(self, path: str, local_path: str, overwrite=False, **kwargs: Any):
+    def _read_to_file(
+        self,
+        path: str,
+        local_src: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
+    ):
         s = S3Url(path)
+        bucket = self.s3.Bucket(s.bucket)
+
+        file_like = False
+        if is_file_like(local_src):
+            file_like = True
+
         try:
-            if overwrite:
-                if os.path.exists(local_path) and os.path.isfile(local_path):
-                    os.remove(local_path)
+            if not file_like:
+                if overwrite:
+                    if os.path.exists(local_src) and os.path.isfile(local_src):
+                        os.remove(local_src)
+                else:
+                    if os.path.exists(local_src):
+                        raise Exception(f"File {local_src} already exists")
+                # make sure the directory exists
+                os.makedirs(os.path.dirname(local_src), exist_ok=True)
+
+            if file_like:
+                bucket.download_fileobj(s.key, local_src)
             else:
-                if os.path.exists(local_path):
-                    raise Exception(f"File {local_path} already exists")
+                with open(local_src, "wb") as data:
+                    bucket.download_fileobj(s.key, data)
 
-            # make sure the directory exists
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            bucket = self.s3.Bucket(s.bucket)
-
-            with open(local_path, "wb") as data:
-                bucket.download_fileobj(s.key, data)
         except Exception as e:
             logger.error(f"Unable to write file from bucket '{s.bucket}' : {e}")
             if not self.suppress_errors:
