@@ -423,19 +423,40 @@ class StorageManager:
     @staticmethod
     def read_to_file(
         path: str,
-        dst_path: str | os.PathLike | io.BytesIO,
+        dst_path_or_buffer: str | os.PathLike | io.BytesIO,
         overwrite=False,
         **kwargs: Any,
     ) -> None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
+
+        EXAMPLE USAGE
+
+            .. code-block:: python
+
+                # Read from S3 and write to local file
+                StorageManager.read_to_file("s3://bucket/key", "/tmp/file")
+
+                # Read from S3 and write to BytesIO
+                buffer = io.BytesIO()
+                StorageManager.read_to_file("s3://bucket/key", buffer)
+
+                # Read from S3 and write to BytesIO using a context manager
+                with open("/tmp/sample.txt", "wb+") as temp_file:
+                    StorageManager.read_to_file(location, temp_file, overwrite=True)
+
+                # Read from S3 and write to BytesIO using a temporary file
+                with tempfile.NamedTemporaryFile() as temp_file:
+                    StorageManager.read_to_file(location, temp_file, overwrite=True)
+
+
         :param path:    A URI supported by this PathHandler
-        :param dst_path:    A file path to write to
+        :param dst_path_or_buffer:    A file path to write to
         :param overwrite: If True, overwrite the destination file if it exists.
         :param kwargs:
         :return:    None
         """
-        return StorageManager.__get_path_handler(path)._read_to_file(path, dst_path, overwrite, **kwargs)  # type: ignore
+        return StorageManager.__get_path_handler(path)._read_to_file(path, dst_path_or_buffer, overwrite, **kwargs)  # type: ignore
 
     @classmethod
     def copy_dir(

@@ -1,4 +1,5 @@
 import os
+import tempfile
 import time
 
 import pytest
@@ -176,9 +177,8 @@ def test_write_ops_to_file(tmpdir, docker_compose):
     temp_file_out.write(data)
 
     # Read remote file to a byte array
-    # with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
-
-    with open("/tmp/sample.txt", "wb+") as temp_file:
+    with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file:
+    # with open("/tmp/sample.txt", "wb+") as temp_file:
         print(f"Reading file from {location} to {temp_file}")
         print(type(temp_file))
         StorageManager.read_to_file(location, temp_file, overwrite=True)
