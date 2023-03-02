@@ -98,9 +98,11 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
             )
 
         # Read remote file to a byte array
-        # with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
-        with open("/tmp/sample.tiff", "w") as temp_file_out:
-            print(f"Reading file from {uri} to {temp_file_out.name}")
+        with tempfile.NamedTemporaryFile(
+            dir="/tmp/marie", delete=False
+        ) as temp_file_out:
+            # with open("/tmp/sample.tiff", "w") as temp_file_out:
+            # print(f"Reading file from {uri} to {temp_file_out.name}")
             print(type(temp_file_out))
             if not StorageManager.exists(uri):
                 raise Exception(f"Remote file does not exist : {uri}")

@@ -132,6 +132,7 @@ class TextExtractionExecutor(Executor):
                 **payload_kwargs,
             )
 
+            return {"status": "complete"}
         except BaseException as error:
             self.logger.error("Extract error", error)
             if self.show_error:

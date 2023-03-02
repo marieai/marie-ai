@@ -75,8 +75,8 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
 
     json_payload = {
         "queue_id": uid,
-        # "data": base64_str,
-        "uri": "s3://marie/incoming/ocr-0001.tif",
+        "data": base64_str,
+        # "uri": "s3://marie/incoming/ocr-0001.tif",
         "mode": mode,
         "output": "json",
         "doc_id": f"greg-{uid}",

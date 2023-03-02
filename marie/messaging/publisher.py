@@ -90,7 +90,7 @@ async def mark_as_complete(
     payload: Any,
 ):
     """
-    Mark request as complete
+    Mark request as completed
 
     :param job_id:  The unique identifier that is assigned to the job.
     :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
@@ -102,8 +102,8 @@ async def mark_as_complete(
     """
     default_logger.debug(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
     await Toast.notify(
-        f"{event_name}.complete",
+        f"{event_name}.completed",
         event_builder(
-            job_id, f"{event_name}.complete", job_tag, status, timestamp, payload
+            job_id, f"{event_name}.completed", job_tag, status, timestamp, payload
         ),
     )
