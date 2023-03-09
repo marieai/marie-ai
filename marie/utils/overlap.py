@@ -1,5 +1,9 @@
 import numpy as np
 
+import copy
+
+# https://gist.github.com/YaYaB/39f9df9d481d784b786ad88eea8533e8
+
 
 def find_overlap(box, data, overlap_ratio=0.75):
     """Find overlap between a box and a data set"""
@@ -96,7 +100,7 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
     return overlaps, indexes, scores
 
 
-def find_overlap_horizontal(box, data):
+def find_overlap_horizontal(box, bboxes):
     """Find overlap between a box and a data set
     expected box format in [x, y, w, h]
     """
@@ -105,14 +109,14 @@ def find_overlap_horizontal(box, data):
     indexes = []
     scores = []
 
-    if len(data) == 0:
+    if len(bboxes) == 0:
         return [], [], []
 
     x, y, w, h = box
     x1min = x
     x1max = x + w
 
-    for i, bb in enumerate(data):
+    for i, bb in enumerate(bboxes):
         _x, _y, _w, _h = bb
         x2min = _x
         x2max = _x + _w
@@ -132,7 +136,7 @@ def find_overlap_horizontal(box, data):
             # compute the area of both AABBs
             # bb1_area = (bb1['x2'] - bb1['x1']) * (bb1['y2'] - bb1['y1'])
             # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
-            # We are giving our box areas same width as we areonly interested in W IOU
+            # We are giving our box areas same width as we are only interested in W IOU
             faux_h = 1
             bb1_area = faux_h * w
             bb2_area = faux_h * _w
@@ -164,3 +168,181 @@ def merge_bboxes_as_block(bboxes):
     block = [round(k, 6) for k in block]
 
     return block
+
+
+def compute_iou(box1, box2):
+    """
+    Compute the intersection over union of two set of boxes, each box is [x1, y1, x2, y2]
+    @param box1:
+    @param box2:
+    @return:
+    """
+
+    x1, y1, x2, y2 = box1
+    x3, y3, x4, y4 = box2
+
+    # get the center of the box
+    x_overlap = max(0, min(x2, x4) - max(x1, x3))
+    y_overlap = max(0, min(y2, y4) - max(y1, y3))
+
+    # print(
+    #     f"y_overlap: {y_overlap} y_overlap2: {y_overlap2}  : box1: {box1} box2: {box2}"
+    # )
+
+    intersection = x_overlap * y_overlap
+    area1 = (x2 - x1) * ((y2 - y1) // 4)  # box1 area
+    area2 = (x4 - x3) * ((y4 - y3) // 4)  # box2 area
+    union = area1 + area2 - intersection
+    iou = intersection / union
+    return iou
+
+
+def merge_boxes(bboxes, delta_x=0.0, delta_y=0.0):
+    """
+    Arguments:
+        bboxes {list} -- list of bounding boxes with each bounding box is a list [xmin, ymin, xmax, ymax]
+        delta_x {float} -- margin taken in width to merge
+        detlta_y {float} -- margin taken in height to merge
+    Returns:
+        {list} -- list of bounding boxes merged
+
+    https://gist.github.com/YaYaB/39f9df9d481d784b786ad88eea8533e8
+    """
+
+    def is_in_bbox(point, bbox):
+        """
+        Arguments:
+            point {list} -- list of float values (x,y)
+            bbox {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
+        Returns:
+            {boolean} -- true if the point is inside the bbox
+        """
+        return (
+            point[0] >= bbox[0]
+            and point[0] <= bbox[2]
+            and point[1] >= bbox[1]
+            and point[1] <= bbox[3]
+        )
+
+    def intersect(bbox, bbox_):
+        """
+        Arguments:
+            bbox {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
+            bbox_ {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
+        Returns:
+            {boolean} -- true if the bboxes intersect
+        """
+        for i in range(int(len(bbox) / 2)):
+            for j in range(int(len(bbox) / 2)):
+                # Check if one of the corner of bbox inside bbox_
+                if is_in_bbox([bbox[2 * i], bbox[2 * j + 1]], bbox_):
+                    return True
+        return False
+
+    def intersectXX(bbox, bbox_):
+        return (
+            bbox[0] < bbox_[2]
+            and bbox[2] > bbox_[0]
+            and bbox[1] < bbox_[3]
+            and bbox[3] > bbox_[1]
+        )
+
+    # Sort bboxes by ymin
+    bboxes = sorted(bboxes, key=lambda x: x[1])
+
+    tmp_bbox = None
+    while True:
+        nb_merge = 0
+        used = []
+        new_bboxes = []
+        # Loop over bboxes
+        for i, b in enumerate(bboxes):
+            for j, b_ in enumerate(bboxes):
+                # If the bbox has already been used just continue
+                if i in used or j <= i:
+                    continue
+                # Compute the bboxes with a margin
+                bmargin = [
+                    b[0] - (b[2] - b[0]) * delta_x,
+                    b[1] - (b[3] - b[1]) * delta_y,
+                    b[2] + (b[2] - b[0]) * delta_x,
+                    b[3] + (b[3] - b[1]) * delta_y,
+                ]
+                b_margin = [
+                    b_[0] - (b_[2] - b_[0]) * delta_x,
+                    b_[1] - (b[3] - b[1]) * delta_y,
+                    b_[2] + (b_[2] - b_[0]) * delta_x,
+                    b_[3] + (b_[3] - b_[1]) * delta_y,
+                ]
+                # Merge bboxes if bboxes with margin have an intersection
+                # Check if one of the corner is in the other bbox
+                # We must verify the other side away in case one bounding box is inside the other
+                if intersect(bmargin, b_margin) or intersect(b_margin, bmargin):
+                    tmp_bbox = [
+                        min(b[0], b_[0]),
+                        min(b[1], b_[1]),
+                        max(b_[2], b[2]),
+                        max(b[3], b_[3]),
+                    ]
+                    used.append(j)
+                    # print(bmargin, b_margin, 'done')
+                    nb_merge += 1
+                if tmp_bbox:
+                    b = tmp_bbox
+            if tmp_bbox:
+                new_bboxes.append(tmp_bbox)
+            elif i not in used:
+                new_bboxes.append(b)
+            used.append(i)
+            tmp_bbox = None
+        # If no merge were done, that means all bboxes were already merged
+        if nb_merge == 0:
+            break
+        bboxes = copy.deepcopy(new_bboxes)
+
+    return new_bboxes
+
+
+def merge_boxesZZZ(bboxes, iou_threshold: float = 0.5):
+    """
+    Merge boxes with iou > iou_threshold each box is [x1, y1, x2, y2]
+
+    @param bboxes:
+    @param iou_threshold:
+    @return:
+    """
+
+    iou_threshold = 0.05
+    merged_bboxes = []
+
+    for box in bboxes:
+        if len(merged_bboxes) == 0:
+            merged_bboxes.append(box)
+        else:
+            merged = False
+            for merged_box in merged_bboxes:
+
+                # get center of box
+                x1, y1, x2, y2 = box
+                x3, y3, x4, y4 = merged_box
+
+                y_center_1 = y1 + ((y2 - y1) // 2)
+
+                # # check if the center of the box is within the merged box 20 pixels
+                # if not (y_center_1 > y3 and y_center_1 < y4):
+                #     continue
+
+                iou = compute_iou(box, merged_box)
+                if iou > 0.0:
+                    print(f"iou: {iou}  : box: {box}  : merged_box: {merged_box}")
+
+                if iou > 0:
+                    merged_box[0] = min(box[0], merged_box[0])
+                    merged_box[1] = min(box[1], merged_box[1])
+                    merged_box[2] = max(box[2], merged_box[2])
+                    merged_box[3] = max(box[3], merged_box[3])
+                    merged = True
+                    break
+            if not merged:
+                merged_bboxes.append(box)
+    return merged_bboxes

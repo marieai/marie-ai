@@ -18,6 +18,8 @@ from marie.boxes.line_processor import find_line_number, line_merge
 from marie.logger import setup_logger
 from marie.logging.logger import MarieLogger
 from marie.utils.image_utils import imwrite, paste_fragment
+from marie.utils.nms import nms
+from marie.utils.overlap import merge_boxes
 from marie.utils.utils import ensure_exists
 from marie.constants import __model_path__, __config_dir__
 
@@ -239,6 +241,12 @@ class BoxProcessorUlimDit(BoxProcessor):
         classes = predictions.pred_classes if predictions.has("pred_classes") else None
 
         bboxes = _convert_boxes(boxes)
+        print(f"bboxes B : =============> {len(bboxes)}")
+        # merge boxes with iou > 0.1 as they are likely to be the same box
+        bboxes = merge_boxes(bboxes, 0.08)
+        print(f"bboxes A : =============> {len(bboxes)}")
+        bboxes = np.array(bboxes)
+
         # sort by xy-coordinated
         ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
         bboxes = bboxes[ind]
