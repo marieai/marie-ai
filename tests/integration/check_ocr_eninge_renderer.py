@@ -1,31 +1,16 @@
 import os
 
-from marie.boxes import BoxProcessorUlimDit, PSMode
-from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
+import torch
+
+from marie.boxes.box_processor import PSMode
+from marie.ocr import CoordinateFormat, DefaultOcrEngine
+from marie.renderer import PdfRenderer
+from marie.renderer.text_renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import crop_to_content
+from marie.utils.json import store_json_object, load_json_file
 from marie.utils.utils import ensure_exists
 
-
-def process_image(image):
-    box = BoxProcessorUlimDit(
-        models_dir="../../model_zoo/unilm/dit/text_detection",
-        cuda=True,
-    )
-
-    (
-        boxes,
-        fragments,
-        lines,
-        _,
-        lines_bboxes,
-    ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
-
-    bboxes_img = visualize_bboxes(image, boxes, format="xywh")
-    lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
-
-    bboxes_img.save("/tmp/bboxes_img.png")
-    lines_img.save("/tmp/lines.png")
 
 if __name__ == "__main__":
     work_dir_boxes = ensure_exists("/tmp/boxes")
@@ -36,8 +21,6 @@ if __name__ == "__main__":
     img_path = "~/tmp/wrong-ocr/169118830.tif"
     img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
     img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042272.png"
-    img_path = "../../assets/psm/block/block-003.png"
-    img_path = "/home/gbugaj/burst/150459314_3_cleaned.tiff"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042269.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
@@ -51,4 +34,27 @@ if __name__ == "__main__":
     frames = frames_from_file(img_path)
     frames = [crop_to_content(frame, True) for frame in frames]
 
-    process_image(frames[0])
+    if True:
+        use_cuda = torch.cuda.is_available()
+        ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+        results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
+
+        print(results)
+        print("Testing text render")
+        store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
+
+    results = load_json_file(os.path.join("/tmp/fragments", "results.json"))
+
+    renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+    renderer.render(
+        frames,
+        results,
+        output_filename=os.path.join(work_dir_icr, "results.pdf"),
+    )
+
+    renderer = TextRenderer(config={"preserve_interword_spaces": True})
+    renderer.render(
+        frames,
+        results,
+        output_filename=os.path.join(work_dir_icr, "results.txt"),
+    )
