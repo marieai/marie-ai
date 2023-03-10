@@ -100,7 +100,7 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
     return overlaps, indexes, scores
 
 
-def find_overlap_horizontal(box, bboxes):
+def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
     """Find overlap between a box and a data set
     expected box format in [x, y, w, h]
     """
@@ -116,6 +116,13 @@ def find_overlap_horizontal(box, bboxes):
     x1min = x
     x1max = x + w
 
+    center_start = 0
+    center_end = 0
+
+    if center_y_overlap is not None:
+        center_start = (y + h // 2) - (h * center_y_overlap)
+        center_end = (y + h // 2) + (h * center_y_overlap)
+
     for i, bb in enumerate(bboxes):
         _x, _y, _w, _h = bb
         x2min = _x
@@ -127,6 +134,11 @@ def find_overlap_horizontal(box, bboxes):
 
         x_right = min(x1max, x2max)
         x_left = max(x1min, x2min)
+
+        # this is to make sure that the center of the box is within the center_y_overlap
+        if center_y_overlap is not None:
+            if _y + _h // 2 < center_start or _y + _h // 2 > center_end:
+                continue
 
         if x1min < x2max and x2min < x1max:
             # intersection_area = min(y1max, y2max) - max(y1min, y2min)
@@ -197,113 +209,7 @@ def compute_iou(box1, box2):
     return iou
 
 
-def merge_boxes(bboxes, delta_x=0.0, delta_y=0.0):
-    """
-    Arguments:
-        bboxes {list} -- list of bounding boxes with each bounding box is a list [xmin, ymin, xmax, ymax]
-        delta_x {float} -- margin taken in width to merge
-        detlta_y {float} -- margin taken in height to merge
-    Returns:
-        {list} -- list of bounding boxes merged
-
-    https://gist.github.com/YaYaB/39f9df9d481d784b786ad88eea8533e8
-    """
-
-    def is_in_bbox(point, bbox):
-        """
-        Arguments:
-            point {list} -- list of float values (x,y)
-            bbox {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
-        Returns:
-            {boolean} -- true if the point is inside the bbox
-        """
-        return (
-            point[0] >= bbox[0]
-            and point[0] <= bbox[2]
-            and point[1] >= bbox[1]
-            and point[1] <= bbox[3]
-        )
-
-    def intersect(bbox, bbox_):
-        """
-        Arguments:
-            bbox {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
-            bbox_ {list} -- bounding box of float_values [xmin, ymin, xmax, ymax]
-        Returns:
-            {boolean} -- true if the bboxes intersect
-        """
-        for i in range(int(len(bbox) / 2)):
-            for j in range(int(len(bbox) / 2)):
-                # Check if one of the corner of bbox inside bbox_
-                if is_in_bbox([bbox[2 * i], bbox[2 * j + 1]], bbox_):
-                    return True
-        return False
-
-    def intersectXX(bbox, bbox_):
-        return (
-            bbox[0] < bbox_[2]
-            and bbox[2] > bbox_[0]
-            and bbox[1] < bbox_[3]
-            and bbox[3] > bbox_[1]
-        )
-
-    # Sort bboxes by ymin
-    bboxes = sorted(bboxes, key=lambda x: x[1])
-
-    tmp_bbox = None
-    while True:
-        nb_merge = 0
-        used = []
-        new_bboxes = []
-        # Loop over bboxes
-        for i, b in enumerate(bboxes):
-            for j, b_ in enumerate(bboxes):
-                # If the bbox has already been used just continue
-                if i in used or j <= i:
-                    continue
-                # Compute the bboxes with a margin
-                bmargin = [
-                    b[0] - (b[2] - b[0]) * delta_x,
-                    b[1] - (b[3] - b[1]) * delta_y,
-                    b[2] + (b[2] - b[0]) * delta_x,
-                    b[3] + (b[3] - b[1]) * delta_y,
-                ]
-                b_margin = [
-                    b_[0] - (b_[2] - b_[0]) * delta_x,
-                    b_[1] - (b[3] - b[1]) * delta_y,
-                    b_[2] + (b_[2] - b_[0]) * delta_x,
-                    b_[3] + (b_[3] - b_[1]) * delta_y,
-                ]
-                # Merge bboxes if bboxes with margin have an intersection
-                # Check if one of the corner is in the other bbox
-                # We must verify the other side away in case one bounding box is inside the other
-                if intersect(bmargin, b_margin) or intersect(b_margin, bmargin):
-                    tmp_bbox = [
-                        min(b[0], b_[0]),
-                        min(b[1], b_[1]),
-                        max(b_[2], b[2]),
-                        max(b[3], b_[3]),
-                    ]
-                    used.append(j)
-                    # print(bmargin, b_margin, 'done')
-                    nb_merge += 1
-                if tmp_bbox:
-                    b = tmp_bbox
-            if tmp_bbox:
-                new_bboxes.append(tmp_bbox)
-            elif i not in used:
-                new_bboxes.append(b)
-            used.append(i)
-            tmp_bbox = None
-        # If no merge were done, that means all bboxes were already merged
-        if nb_merge == 0:
-            break
-        bboxes = copy.deepcopy(new_bboxes)
-
-    return new_bboxes
-
-
-def merge_boxesZZZ(bboxes, iou_threshold: float = 0.5):
+def merge_boxes_by_iou(bboxes, iou_threshold: float = 0.5):
     """
     Merge boxes with iou > iou_threshold each box is [x1, y1, x2, y2]
 
@@ -321,22 +227,11 @@ def merge_boxesZZZ(bboxes, iou_threshold: float = 0.5):
         else:
             merged = False
             for merged_box in merged_bboxes:
-
-                # get center of box
-                x1, y1, x2, y2 = box
-                x3, y3, x4, y4 = merged_box
-
-                y_center_1 = y1 + ((y2 - y1) // 2)
-
-                # # check if the center of the box is within the merged box 20 pixels
-                # if not (y_center_1 > y3 and y_center_1 < y4):
-                #     continue
-
                 iou = compute_iou(box, merged_box)
                 if iou > 0.0:
                     print(f"iou: {iou}  : box: {box}  : merged_box: {merged_box}")
 
-                if iou > 0:
+                if iou > iou_threshold:
                     merged_box[0] = min(box[0], merged_box[0])
                     merged_box[1] = min(box[1], merged_box[1])
                     merged_box[2] = max(box[2], merged_box[2])
@@ -346,3 +241,65 @@ def merge_boxesZZZ(bboxes, iou_threshold: float = 0.5):
             if not merged:
                 merged_bboxes.append(box)
     return merged_bboxes
+
+
+def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
+    """
+    Merge boxes that are close to each other and have center y overlap
+    @param bboxes_xyxy:
+    @param delta_x:
+    @param delta_y:
+    @return:
+    """
+
+    return bboxes_xyxy
+    # return bboxes_xyxy
+    # convert to [x, y, w, h]
+    bboxes = []
+    for bbox in bboxes_xyxy:
+        bb = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
+        bboxes.append(bb)
+
+    bboxes = sorted(bboxes, key=lambda x: x[1])
+    last_box_size = len(bboxes)
+    max_consecutive_merges = 3
+
+    while max_consecutive_merges > 0:
+        visited = [False for _ in range(0, len(bboxes))]
+        bboxes_to_merge = {}
+        for idx in range(0, len(bboxes)):
+            if visited[idx]:
+                continue
+            visited[idx] = True
+            box = bboxes[idx]
+            overlaps, indexes, scores = find_overlap_horizontal(
+                box, bboxes, center_y_overlap=0.5
+            )
+
+            bboxes_to_merge[idx] = [idx]
+            for _, overlap_idx, score in zip(overlaps, indexes, scores):
+                # print("overlap_idx", overlap_idx, "scores", scores)
+                visited[overlap_idx] = True
+                bboxes_to_merge[idx].append(overlap_idx)
+
+        new_blocks = []
+        for _k, idxs in bboxes_to_merge.items():
+            items = np.array(bboxes)
+            picks = items[idxs]
+            block = merge_bboxes_as_block(picks)
+            new_blocks.append(block)
+        bboxes = new_blocks
+
+        if last_box_size == len(bboxes):
+            print("No more boxes to merge")
+            break
+
+        max_consecutive_merges -= 1
+        last_box_size = len(bboxes)
+
+    # convert to [x1, y1, x2, y2] format for output
+    bboxes_merged_xyxy = []
+    for bbox in bboxes:
+        block_xyxy = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+        bboxes_merged_xyxy.append(block_xyxy)
+    return bboxes_merged_xyxy
