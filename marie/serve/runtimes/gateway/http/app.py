@@ -206,6 +206,8 @@ def get_fastapi_app(
             except InternalNetworkError as err:
                 import grpc
 
+                print("Error while getting responses from deploymentsXXXXX:")
+                print(err)
                 if err.code() == grpc.StatusCode.UNAVAILABLE:
                     response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
                 elif err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:

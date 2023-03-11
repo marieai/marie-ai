@@ -185,10 +185,10 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     elif netG == 'global':
         net = GlobalGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer)
     elif netG == 'local':
-        n_downsample_global = 3
-        n_blocks_global = 9
-        n_local_enhancers = 1
-        n_blocks_local = 3
+        n_downsample_global = 3 # 4
+        n_blocks_global=9 # 9
+        n_local_enhancers=1
+        n_blocks_local=3
 
         net = LocalEnhancer(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global,
                             n_local_enhancers, n_blocks_local, norm_layer)
