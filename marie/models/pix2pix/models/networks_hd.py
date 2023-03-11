@@ -8,6 +8,16 @@ from .gausian import GaussianNoise
 from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
 
 
+class Swish(nn.Module):
+    """
+    ### Swish actiavation function
+    $$x \cdot \sigma(x)$$
+    """
+
+    def forward(self, x):
+        return x * torch.sigmoid(x)
+
+
 ##############################################################################
 # Generator
 ##############################################################################
@@ -31,10 +41,10 @@ class LocalEnhancer(nn.Module):
             ngf_global = ngf * (2 ** (n_local_enhancers - n))
             model_downsample = [nn.ReflectionPad2d(3),
                                 nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf_global, kernel_size=7, padding=0)),
-                                norm_layer(ngf_global), nn.ReLU(True),
+                                norm_layer(ngf_global), Swish(),
                                 nn.utils.spectral_norm(
                                     nn.Conv2d(ngf_global, ngf_global * 2, kernel_size=3, stride=2, padding=1)),
-                                norm_layer(ngf_global * 2), nn.ReLU(True)]
+                                norm_layer(ngf_global * 2), Swish()]
             ### residual blocks
             model_upsample = []
             for i in range(n_blocks_local):
@@ -48,7 +58,7 @@ class LocalEnhancer(nn.Module):
                                        nn.Conv2d(in_channels=ngf_global, out_channels=ngf_global * 2, kernel_size=3,
                                                  stride=2, padding=1)),
                                    norm_layer(ngf_global),
-                                   nn.ReLU(True)]
+                                   Swish()]
 
             print(ngf_global)
             # https://www.programcreek.com/python/?code=alterzero%2FSTARnet%2FSTARnet-master%2Fbase_networks.py
@@ -57,7 +67,7 @@ class LocalEnhancer(nn.Module):
                     nn.utils.spectral_norm(
                         nn.ConvTranspose2d(ngf_global * 2, ngf_global, kernel_size=3, stride=2, padding=1,
                                            output_padding=1)),
-                    norm_layer(ngf_global), nn.ReLU(True)]
+                    norm_layer(ngf_global), Swish()]
 
                 # Pix2PixHD: use instance norm for the last conv layer
 
@@ -101,8 +111,8 @@ class GlobalGenerator(nn.Module):
                  padding_type='reflect'):
         assert (n_blocks >= 0)
         super(GlobalGenerator, self).__init__()
-        # activation = nn.ReLU(True)
-        activation = nn.LeakyReLU(0.2, True)
+        activation = Swish()
+        # activation = nn.LeakyReLU(0.2, True)
 
         self.std = 0.1
         self.std_decay_rate = 0
@@ -153,7 +163,7 @@ class GlobalGenerator(nn.Module):
 
 
 class ResnetBlock(nn.Module):
-    def __init__(self, dim, padding_type, norm_layer, activation=nn.ReLU(True), use_dropout=False):
+    def __init__(self, dim, padding_type, norm_layer, activation=Swish(), use_dropout=False):
         super(ResnetBlock, self).__init__()
         self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, activation, use_dropout)
 
