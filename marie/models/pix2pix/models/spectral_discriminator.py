@@ -6,6 +6,9 @@ import torch.nn.functional as F
 from .gausian import GaussianNoise
 
 
+from .swish import Swish
+
+
 class NLayerDiscriminatorWithSpectralNorm(nn.Module):
     """Defines a PatchGAN discriminator"""
 
@@ -28,7 +31,7 @@ class NLayerDiscriminatorWithSpectralNorm(nn.Module):
         padw = 1
         sequence = [
             #  GaussianNoise(self.std, self.std_decay_rate),
-            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)), nn.LeakyReLU(0.2, True)]
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=use_bias)), Swish()]
         nf_mult = 1
         nf_mult_prev = 1
         for n in range(1, n_layers):  # gradually increase the number of filters
@@ -37,7 +40,8 @@ class NLayerDiscriminatorWithSpectralNorm(nn.Module):
             sequence += [
                 # GaussianNoise(self.std, self.std_decay_rate),
                 nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
-                nn.LeakyReLU(0.2, True)
+                # Swish()
+                Swish()
             ]
 
         nf_mult_prev = nf_mult
@@ -45,7 +49,8 @@ class NLayerDiscriminatorWithSpectralNorm(nn.Module):
         sequence += [
             # GaussianNoise(self.std, self.std_decay_rate),
             nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
-            nn.LeakyReLU(0.2, True)
+            # Swish()
+            Swish()
         ]
 
         sequence += [

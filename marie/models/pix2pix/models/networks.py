@@ -15,6 +15,8 @@ from .spectral_discriminator import NLayerDiscriminatorWithSpectralNorm
 
 import pytorch_ssim
 
+from .swish import Swish
+
 
 ###############################################################################
 # Helper Functions
@@ -185,10 +187,10 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
     elif netG == 'global':
         net = GlobalGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer)
     elif netG == 'local':
-        n_downsample_global = 3 # 4
-        n_blocks_global=9 # 9
-        n_local_enhancers=1
-        n_blocks_local=3
+        n_downsample_global = 3
+        n_blocks_global = 9
+        n_local_enhancers = 1
+        n_blocks_local = 3
 
         net = LocalEnhancer(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global,
                             n_local_enhancers, n_blocks_local, norm_layer)
@@ -287,7 +289,7 @@ class GANLoss(nn.Module):
             self.loss = HingeLoss()
             # self.loss = nn.ReLU()
         elif gan_mode == 'ssim':
-            self.loss = pytorch_ssim.SSIM(data_range=1., channel=1, K=(0.02, 0.6), nonnegative_ssim=True)  #
+            self.loss = pytorch_ssim.SSIM(data_range=1., channel=1, K=(0.1, 0.8), nonnegative_ssim=True)  #
         else:
             raise NotImplementedError('gan mode %s not implemented' % gan_mode)
 
@@ -339,7 +341,7 @@ class GANLoss(nn.Module):
                 # loss /= len(prediction)
             else:
                 target_tensor = self.get_target_tensor(prediction, target_is_real)
-                loss = self.loss(prediction, target_tensor)
+                loss = self.loss(prediction, target_tensor) * 100
 
                 # print(f"target_is_real = {target_is_real} > {loss}  {prediction.shape} {target_tensor.shape}") # 2, 1, 256, 256]
 
@@ -729,10 +731,12 @@ class PixelDiscriminator(nn.Module):
 
         self.net = [
             nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
-            nn.LeakyReLU(0.2, True),
+            Swish(),
+            #  nn.LeakyReLU(0.2, True),
             nn.Conv2d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
             norm_layer(ndf * 2),
-            nn.LeakyReLU(0.2, True),
+            # nn.LeakyReLU(0.2, True),
+            Swish(),
             nn.Conv2d(ndf * 2, 1, kernel_size=1, stride=1, padding=0, bias=use_bias)]
 
         self.net = nn.Sequential(*self.net)
