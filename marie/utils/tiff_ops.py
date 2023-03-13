@@ -116,7 +116,9 @@ def burst_tiff_frames(
     :param filename_generator: Function that generates filename for each frame
     """
 
-    filename_generator = filename_generator or (lambda x: f"{x:05}.tif")
+    filename_generator = filename_generator or (
+        lambda pagenumber: f"{pagenumber:05}.tif"
+    )
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if sequential:
@@ -149,7 +151,13 @@ def burst_tiff_frames(
                     )
 
 
-def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
+def burst_tiff(
+    src_img_path,
+    dest_dir,
+    bitonal=True,
+    sequential=True,
+    filename_generator: Optional[Callable] = None,
+):
     """
     Burst multipage tiff into individual frames and save them to output directory
 
@@ -157,10 +165,11 @@ def burst_tiff(src_img_path, dest_dir, bitonal=True, sequential=True):
     :param dest_dir: Destination directory
     :param bitonal: Should image be converted to bitonal image
     :param sequential: Should the document be process sequentially or in multithreaded fashion
+    :param filename_generator: Function that generates filename for each frame
     """
 
     frames = frames_from_file(src_img_path)
-    burst_tiff_frames(frames, dest_dir, bitonal, sequential)
+    burst_tiff_frames(frames, dest_dir, bitonal, sequential, filename_generator)
 
 
 def merge_tiff(src_dir, dst_img_path, sort_key):

@@ -117,7 +117,6 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
         else:
             transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
 
-    print(f"transform_list = {transform_list}")
     return transforms.Compose(transform_list)
 
 def get_transformTV(opt, params=None, grayscale=False, method=Image.Resampling.LANCZOS, convert=True, src=False):

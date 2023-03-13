@@ -279,8 +279,7 @@ class NLayerDiscriminator(nn.Module):
 
         sequence = [[
             # GaussianNoise(self.std, self.std_decay_rate),
-            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
-            nn.LeakyReLU(0.2, True)
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)), Swish()
         ]]
 
         nf = ndf
@@ -290,7 +289,7 @@ class NLayerDiscriminator(nn.Module):
             sequence += [[
                 # GaussianNoise(self.std, self.std_decay_rate),
                 nn.utils.spectral_norm(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw)),
-                norm_layer(nf), nn.LeakyReLU(0.2, True)
+                norm_layer(nf), Swish()
             ]]
 
         nf_prev = nf
@@ -299,7 +298,7 @@ class NLayerDiscriminator(nn.Module):
             # GaussianNoise(self.std, self.std_decay_rate),
             nn.utils.spectral_norm(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw)),
             norm_layer(nf),
-            nn.LeakyReLU(0.2, True)
+            Swish()
         ]]
 
         sequence += [[

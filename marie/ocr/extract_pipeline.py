@@ -267,9 +267,10 @@ class ExtractPipeline:
         self.logger.info(f"Executing pipeline for document : {ref_id}, {ref_type}")
 
         # check if we have already processed this document and restore assets
-        self.restore_assets(
-            ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
-        )
+        if False:
+            self.restore_assets(
+                ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
+            )
 
         self.logger.info(f"Root asset dir : {root_asset_dir}")
         # burst frames into individual images
@@ -355,6 +356,11 @@ class ExtractPipeline:
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
+
+        # remove directory if exists
+        if os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
+            shutil.rmtree(os.path.join("/tmp/generators", frame_checksum))
+
         root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
 
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")

@@ -13,7 +13,7 @@ from marie.utils.utils import ensure_exists
 if __name__ == "__main__":
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     work_dir = ensure_exists("/tmp/form-segmentation")
     root_dir = "~/tmp/marie-cleaner/to-clean-001"
