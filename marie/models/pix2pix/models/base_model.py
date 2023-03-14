@@ -104,9 +104,8 @@ class BaseModel(ABC):
         """
         ## USING AUTOCAST FOR FP16 causes GPU memory leak
         with torch.no_grad():
-            # with torch.cuda.amp.autocast():  # autocast initialized
             # with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
-            with torch.autocast(device_type='cuda', dtype=torch.float16, cache_enabled=False):
+            with torch.autocast(device_type='cuda', dtype=torch.float16, cache_enabled=True):
                 self.forward()
                 self.compute_visuals()
 
@@ -207,6 +206,8 @@ class BaseModel(ABC):
                 for param in net.parameters():
                     param.grad = None
 
+                # compile model
+                # TODO: fix this, it causes OOM and inference is very bad (distorts images)
                 if False:
                     # Optimize model for Inference time
                     for param in net.parameters():
@@ -228,7 +229,6 @@ class BaseModel(ABC):
                     model = torch.compile(net, mode="max-autotune", fullgraph=True, backend="cudagraphs")
                     setattr(self, 'net' + name, model)
                 
-
     def print_networks(self, verbose):
         """Print the total number of parameters in the network and (if verbose) network architecture
 

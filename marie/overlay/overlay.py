@@ -128,6 +128,7 @@ class OverlayProcessor(BaseHandler):
 
         # create a dataset given opt.dataset_mode and other options
         dataset = create_dataset(opt)
+
         for i, data in enumerate(dataset):
             model.set_input(data)  # unpack data from data loader
 
@@ -155,7 +156,7 @@ class OverlayProcessor(BaseHandler):
                 fake_im_data = visuals["fake"]
                 image_numpy = tensor2im(fake_im_data)
 
-                # clear cuda memory afer inference
+                # clear cuda memory after inference
                 del fake_im_data
                 del visuals
                 torch.cuda.empty_cache()
