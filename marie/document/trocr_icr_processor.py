@@ -18,6 +18,7 @@ from marie.document.icr_processor import IcrProcessor
 from marie.lang import Object
 from marie.logging.predefined import default_logger
 from marie.models.icr.memory_dataset import MemoryDataset
+from marie.timer import Timer
 from marie.utils.utils import batchify
 
 
@@ -64,18 +65,40 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
         },
     )
 
-    model[0].eval()
+    for m in model:
+        m.eval()
+        # https://github.com/pytorch/pytorch/issues/23377
+        if fp16:
+            m.half().to(device)
+        else:
+            m.to(device)
 
-    # https://github.com/pytorch/pytorch/issues/23377
-    if fp16:
-        model[0].half().to(device)
-    else:
-        model[0].to(device)
+        # try to compile the model with torch.compile
+        if False:
+            try:
+                # Optimize model for Inference time
+                print("**** COMPILING TROCR Model***")
+                import torch._dynamo as dynamo
+
+                frozen_mod = torch.jit.optimize_for_inference(
+                    torch.jit.script(m.eval())
+                )
+                print(frozen_mod)
+
+                model = torch.compile(
+                    model,
+                    mode="max-autotune",
+                    fullgraph=False,
+                )
+                print("**** COMPILED TROCR ***")
+            except Exception as e:
+                raise e
+                logger.error(f"Failed to compile model : {e}")
 
     img_transform = transforms.Compose(
         [
-            # transforms.Resize((384, 384), interpolation=InterpolationMode.BICUBIC),
-            transforms.Resize((384, 384), interpolation=InterpolationMode.LANCZOS),
+            transforms.Resize((384, 384), interpolation=InterpolationMode.BICUBIC),
+            # transforms.Resize((384, 384), interpolation=InterpolationMode.LANCZOS),
             transforms.ToTensor(),
             transforms.Normalize(0.5, 0.5),
         ]
@@ -96,7 +119,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
 
 def preprocess_image(image, img_transform, device):
-    im = image.convert("RGB").resize((384, 384), Image.Resampling.LANCZOS)
+    im = image.convert("RGB").resize((384, 384), Image.BICUBIC)
     # this causes an error when batching due to the shape in deit.py
     # def forward(self, x):
     #     B, C, H, W = x.shape
@@ -107,7 +130,9 @@ def preprocess_image(image, img_transform, device):
     return im
 
 
+@Timer(text="Aug in {:.4f} seconds")
 def preprocess_samples(src_images, img_transform, device):
+    print("src_images : ", len(src_images), type(src_images))
     images = []
     for image in src_images:
         im = preprocess_image(image, img_transform, device)
@@ -185,7 +210,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 5
+        beam = 2
         (
             self.model,
             self.cfg,
@@ -252,7 +277,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
-                logger.debug(
+                logger.info(
                     f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}"
                 )
 
@@ -274,9 +299,9 @@ class TrOcrIcrProcessor(IcrProcessor):
                     results.append(row)
                     logger.debug(f"results : {row}")
 
-                logger.debug("Batch time : %s" % (time.time() - batch_start))
+                logger.info("Batch time : %s" % (time.time() - batch_start))
 
-            logger.debug("ICR Time elapsed: %s" % (time.time() - start))
+            logger.info("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:
             raise ex

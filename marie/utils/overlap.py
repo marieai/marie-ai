@@ -251,6 +251,7 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
     @param delta_y:
     @return:
     """
+
     # convert to [x, y, w, h]
     bboxes = []
     for bbox in bboxes_xyxy:

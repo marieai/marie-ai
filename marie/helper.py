@@ -65,6 +65,7 @@ __all__ = [
     "get_or_reuse_loop",
     "T",
     "get_rich_console",
+    "extend_rest_interface",
 ]
 
 T = TypeVar("T")
@@ -1532,7 +1533,7 @@ def get_request_header() -> Dict:
     metas, envs = get_full_version()
 
     header = {
-        **{f"jinameta-{k}": str(v) for k, v in metas.items()},
+        **{f"mariemeta-{k}": str(v) for k, v in metas.items()},
         **envs,
     }
     return header

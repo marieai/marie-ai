@@ -119,7 +119,7 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
 
     return transforms.Compose(transform_list)
 
-def get_transformTV(opt, params=None, grayscale=False, method=Image.Resampling.LANCZOS, convert=True, src=False):
+def get_transformTV(opt, params=None, grayscale=False, method=Image.LANCZOS, convert=True, src=False):
     transform_list = []
 
     print(f"opt.preprocess = {opt.preprocess}")
@@ -177,7 +177,7 @@ def __convert_3_channels(img):
     # x3d = np.repeat(np.expand_dims(img, axis=3), 3, axis=3)
     return img.convert('RGB')
 
-def __make_power_2(img, base, method=Image.Resampling.LANCZOS):
+def __make_power_2(img, base, method=Image.LANCZOS):
     ow, oh = img.size
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
@@ -192,7 +192,7 @@ def __make_power_2(img, base, method=Image.Resampling.LANCZOS):
     __print_size_warning(ow, oh, w, h)
     return img.resize((w, h), method)
 
-def __scale_width(img, target_size, crop_size, method=Image.Resampling.LANCZOS):
+def __scale_width(img, target_size, crop_size, method=Image.LANCZOS):
     ow, oh = img.size
     if ow == target_size and oh >= crop_size:
         return img

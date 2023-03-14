@@ -340,6 +340,9 @@ def get_fastapi_app(
                         request_generator(**req_generator_input)
                     )
                 except InternalNetworkError as err:
+                    print("Error while getting responses from deploymentsYYYYY:")
+                    print(err)
+
                     logger.error(
                         f"Error while getting responses from deployments: {err.details()}"
                     )
