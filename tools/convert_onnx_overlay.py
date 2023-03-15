@@ -1,21 +1,33 @@
+from __future__ import print_function
+
 import os
 
 import numpy as np
-import onnxruntime
-import onnx
+import onnx as onnx
+import onnxruntime as onnxruntime
 from onnxruntime import ExecutionMode, SessionIOBinding
-from onnxruntime.quantization import quantize_dynamic, QuantType
+from onnxruntime.quantization import quantize_dynamic, QuantType, quantize_static
 import psutil
 import torch
 from PIL import Image
 import timeit
-import random
 
-from marie.models.pix2pix.data.base_dataset import __make_power_2
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
-from marie.models.pix2pix.util.util import tensor2im
 
+
+# TODO: Try a better workaround to lazy import tensorrt package.
+tensorrt_imported = False
+if not tensorrt_imported:
+    try:
+        import tensorrt  # Unused but required by TensorrtExecutionProvider
+
+        tensorrt_imported = True
+    except:
+        # We silently omit the import failure here to avoid overwhelming warning messages in case of multi-gpu.
+        tensorrt_imported = False
+
+print(tensorrt_imported)
 
 # Optimizations :
 #  export LD_PRELOAD=/usr/local/lib/libjemalloc.so:$LD_PRELOAD &&  python ./check_onnx_runtime.py
@@ -34,31 +46,46 @@ def run_onnx_inference(model_path, input_data):
     sess_options.add_session_config_entry("session.load_model_format", "ONNX")
     sess_options.execution_mode = ExecutionMode.ORT_PARALLEL
     sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
+    sess_options.log_verbosity_level = 1
+    print("Available providers: ", onnxruntime.get_available_providers())
 
     # Set graph optimization level
     sess_options.graph_optimization_level = (
         onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
     )
 
-    # To enable model serialization after graph optimization set this
-    sess_options.optimized_model_filepath = (
-        "/tmp/optimized_model.onnx"  # ~ 5% faster while using this option
-    )
+    # enable model serialization  and using TensorRT for inference will results in an error
+    # FAIL : Unable to serialize model as it contains compiled nodes. Please disable any execution providers which generate compiled nodes
+    if False:
+        # To enable model serialization after graph optimization set this
+        sess_options.optimized_model_filepath = (
+            "/tmp/optimized_model.onnx"  # ~ 5% faster while using this option
+        )
 
-    # CPUExecutionProvider
-    # TensorrtExecutionProvider
-    # CUDAExecutionProvider
-    # DnnlExecutionProvider
     # https://onnxruntime.ai/docs/performance/tune-performance.html#tips-for-tuning-performance
+    onnx_path = model_path
+    dirname = os.path.dirname(os.path.abspath(onnx_path))
+    cache_path = os.path.join(dirname, "model_trt")
+
     providers = [
+        (
+            "TensorrtExecutionProvider",
+            {
+                "device_id": 0,
+                "trt_max_workspace_size": 2147483648,
+                "trt_fp16_enable": True,
+                "trt_engine_cache_path": cache_path,
+                "trt_engine_cache_enable": True,
+            },
+        ),
         (
             "CUDAExecutionProvider",
             {
                 "device_id": 0,
-                "cudnn_conv_algo_search": "EXHAUSTIVE",  # Reduces inference time by ~25%
+                "cudnn_conv_algo_search": "EXHAUSTIVE",  # EXHAUSTIVE
                 "cudnn_conv_use_max_workspace": True,  # Reduces inference time by ~25%
                 "do_copy_in_default_stream": True,
-                "arena_extend_strategy": "kSameAsRequested", #"kNextPowerOfTwo",
+                "arena_extend_strategy": "kNextPowerOfTwo",
                 "cudnn_conv1d_pad_to_nc1d": True,
                 # "gpu_mem_limit": 6 * 1024 * 1024 * 1024,
             },
@@ -68,7 +95,8 @@ def run_onnx_inference(model_path, input_data):
     # model_path = "/tmp/optimized_model.onnx"
     # ONNX model
     session = onnxruntime.InferenceSession(model_path, sess_options, providers)
-    bind = SessionIOBinding(session._sess)
+    # bind = SessionIOBinding(session._sess)
+    print("session providers: ", session.get_providers())
 
     print("Running inference")
     # print all the inputs and outputs in the model
@@ -78,14 +106,17 @@ def run_onnx_inference(model_path, input_data):
 
     # Input > N x C x W x H
     # read image and add batch dimension
-    img = Image.open("/tmp/segment.png").convert("RGB")
+    img = Image.open("/home/gbugaj/sample.png").convert("RGB")
+    img = Image.open(
+        "/home/gbugaj/datasets/private/overlay_ssim/EOB/159000444_1.png"
+    ).convert("RGB")
     # img = Image.open("/tmp/segment-1024x-2048.png").convert("RGB")
     # make sure image is divisible by 32
     print("Image size: ", img.size)
     # img = __make_power_2(img, base=4, method=Image.LANCZOS)
 
     ow, oh = img.size
-    base = 8  # image size must be divisible by 32
+    base = 32  # image size must be divisible by 32
     if ow % base != 0 or oh % base != 0:
         h = oh // base * base + base
         w = ow // base * base + base
@@ -114,8 +145,8 @@ def run_onnx_inference(model_path, input_data):
         )  # post-processing: tranpose and scaling
 
         # convert to pillow image
-        # img = Image.fromarray(image_numpy.astype("uint8")).convert("RGB")
-        # img.save(f"/tmp/onnx_test_{i}.png")
+        img = Image.fromarray(image_numpy.astype("uint8")).convert("RGB")
+        img.save(f"/tmp/onnx_test_{i}.png")
 
         print("Eval time is :", timeit.default_timer() - starttime)
 
@@ -207,7 +238,8 @@ def export():
         output_names=["output"],  # the model's output names
         do_constant_folding=True,  # whether to execute constant folding for optimization
         export_params=True,
-        opset_version=13,
+        enable_onnx_checker=True,
+        opset_version=14,
         dynamic_axes={
             "input": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
             "output": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
@@ -216,10 +248,16 @@ def export():
 
     model_quant = "/tmp/latest_net_G.quant.onnx"
     quantized_model = quantize_dynamic(
-        model_fp32, model_quant, weight_type=QuantType.QUInt8
+        model_fp32,
+        model_quant,
+        weight_type=QuantType.QUInt8,
+        per_channel=True,
+        reduce_range=True,
     )  # chnage QInt8 to QUInt8)
+
+    # https://github.com/microsoft/onnxruntime-inference-examples/blob/main/quantization/image_classification/cpu/run.py
+    print("Calibrated and quantized model saved.")
     print("Done exporting model")
-    print(quantized_model)
 
 
 def load_torch_model(load_path: str, device: torch.device):
@@ -243,22 +281,49 @@ def optimize(src_onnx, opt_onnx):
 
     # load model
     model = onnx.load(src_onnx)
-
     # optimize
-    model = onnxopt.optimize(model, ["fuse_bn_into_conv"])
+    # model = onnxopt.optimize(model, ["fuse_bn_into_conv"])
+    model = onnxopt.optimize(model)
 
     # save optimized model
     with open(opt_onnx, "wb") as f:
         f.write(model.SerializeToString())
 
 
+def test_trn_backend(model_path):
+    import onnx
+    import onnx_tensorrt.backend as backend
+    import numpy as np
+
+    model = onnx.load(model_path)
+    engine = backend.prepare(model, device='CUDA:0')
+    input_data = np.random.random(size=(32, 3, 224, 224)).astype(np.float32)
+    output_data = engine.run(input_data)[0]
+    # print(output_data)
+    print(output_data.shape)
+
+
 if __name__ == "__main__":
-    os.environ["OMP_NUM_THREADS"] = str(16)
+    os.environ["OMP_NUM_THREADS"] = str(3)
+    # import tensorrt as trt
+
+    print("Torch version:", torch.__version__)
+    print("ONNX version:", onnx.__version__)
+    print("ONNX Runtime version:", onnxruntime.__version__)
+    print("CUDA version:", torch.version.cuda)
+    # print("TensorRT version: {}".format(trt.__version__))
+    print("CUDNN version:", torch.backends.cudnn.version())
+    providers = onnxruntime.get_available_providers()
+    print("Available providers:", providers)
+
+    import torch._dynamo as dynamo
+
+    print(dynamo.list_backends(None))
+    # test_trn_backend("/tmp/latest_net_G.onnx")
     # export()
+
     # optimize("/tmp/latest_net_G.onnx", "/tmp/latest_net_G.opt.onnx")
+
     # run_onnx_inference("/tmp/latest_net_G.onnx", torch.randn(1, 3, 256, 256))
-
     # run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))
-    run_onnx_inference("/tmp/latest_net_G.op2.onnx", torch.randn(1, 3, 256, 256))
-
     # run_onnx_inference("/tmp/latest_net_G.quant.onnx", torch.randn(1, 3, 256, 256))

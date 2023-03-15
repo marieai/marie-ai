@@ -280,12 +280,17 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
                 visited[overlap_idx] = True
                 bboxes_to_merge[idx].append(overlap_idx)
 
+        if len(bboxes_to_merge) == len(bboxes):
+            print("No more boxes to merge : bboxes_to_merge == bboxes")
+            break
+
         new_blocks = []
         for _k, idxs in bboxes_to_merge.items():
             items = np.array(bboxes)
             picks = items[idxs]
             block = merge_bboxes_as_block(picks)
             new_blocks.append(block)
+
         bboxes = new_blocks
 
         if last_box_size == len(bboxes):

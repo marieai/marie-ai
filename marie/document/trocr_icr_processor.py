@@ -34,6 +34,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     # Need this or we will get error indicating that Task is not registered
     # Currently, there is no support for mix precision(fp16) evaluation on CPU
     # https://github.com/pytorch/pytorch/issues/23377
+
     fp16 = True
     bp16 = True
     if device == "cpu":
@@ -65,35 +66,38 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
         },
     )
 
-    for m in model:
-        m.eval()
-        # https://github.com/pytorch/pytorch/issues/23377
-        if fp16:
-            m.half().to(device)
-        else:
-            m.to(device)
+    m = model[0]
+    m.eval()
 
-        # try to compile the model with torch.compile
-        if False:
-            try:
-                # Optimize model for Inference time
-                print("**** COMPILING TROCR Model***")
-                import torch._dynamo as dynamo
+    # https://github.com/pytorch/pytorch/issues/23377
+    if fp16:
+        m.half().to(device)
+    else:
+        m.to(device)
 
-                frozen_mod = torch.jit.optimize_for_inference(
-                    torch.jit.script(m.eval())
-                )
-                print(frozen_mod)
+    # try to compile the model with torch.compile
+    if True:
+        try:
+            # Optimize model for Inference time
+            print("**** COMPILING TROCR Model***")
+            import torch._dynamo as dynamo
 
-                model = torch.compile(
-                    model,
-                    mode="max-autotune",
-                    fullgraph=False,
-                )
-                print("**** COMPILED TROCR ***")
-            except Exception as e:
-                raise e
-                logger.error(f"Failed to compile model : {e}")
+            # frozen_mod = torch.jit.optimize_for_inference(
+            #     torch.jit.script(m.eval())
+            # )
+            # print(frozen_mod)
+
+            model[0] = torch.compile(
+                m,
+                mode="max-autotune",
+                fullgraph=True,
+                # backend="onnxrt",
+                backend="cudagraphs",
+            )
+            print("**** COMPILED TROCR ***")
+        except Exception as e:
+            raise e
+            logger.error(f"Failed to compile model : {e}")
 
     img_transform = transforms.Compose(
         [
@@ -115,6 +119,8 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
     bpe = inference_task.build_bpe(cfg.bpe)
 
+    print("**** TROCR INITIALIZED ***")
+    print(generator)
     return model, cfg, inference_task, generator, bpe, img_transform, device
 
 
@@ -130,9 +136,8 @@ def preprocess_image(image, img_transform, device):
     return im
 
 
-@Timer(text="Aug in {:.4f} seconds")
+# @Timer(text="Aug in {:.4f} seconds")
 def preprocess_samples(src_images, img_transform, device):
-    print("src_images : ", len(src_images), type(src_images))
     images = []
     for image in src_images:
         im = preprocess_image(image, img_transform, device)
@@ -148,9 +153,11 @@ def preprocess_samples(src_images, img_transform, device):
 
 # @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, samples, bpe):
+
     results = task.inference_step(
         generator, model, samples, prefix_tokens=None, constraints=None
     )
+
     predictions = []
     scores = []
     # https://fairseq.readthedocs.io/en/latest/getting_started.html
@@ -210,7 +217,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 2
+        beam = 1
         (
             self.model,
             self.cfg,
