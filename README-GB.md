@@ -391,7 +391,27 @@ sudo apt autoclean
 sudo apt install nvidia-driver-525 -f
 
 
-m-17
-m-16
-m-15
-m-14
+## TensorRT Notes
+
+# https://developer.nvidia.com/blog/end-to-end-ai-for-nvidia-based-pcs-cuda-and-tensorrt-execution-providers-in-onnx-runtime/
+
+# Installing TensorRT from source
+# https://github.com/NVIDIA/TensorRT
+# https://github.com/onnx/onnx-tensorrt
+# https://gist.github.com/dai1741/4a8c082761e8291280121d9ca242b1b8
+# https://onnxruntime.ai/docs/build/inferencing.html
+
+# git submodule init
+# git submodule update
+# cmake .. -DTENSORRT_ROOT=/home/gbugaj/dev/3rdparty/TensorRT-8.6.0.12  && make -j
+# ~/dev/3rdparty/onnx/onnx-tensorrt$ python3 setup.py install
+
+# configure Docker container
+# https://github.com/oborchers/Medium_Repo/blob/master/onnxruntime-issues/Dockerfile
+
+# Install TensorRT
+# https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#downloading
+# https://onnxruntime.ai/docs/execution-providers/TensorRT-ExecutionProvider.html
+# https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-tar
+# python3 -m pip install --upgrade tensorrt
+# pip install --ugrade onnx-tensorrt
