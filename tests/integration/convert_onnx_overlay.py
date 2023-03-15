@@ -25,6 +25,8 @@ from marie.models.pix2pix.util.util import tensor2im
 # http://www.xavierdupre.fr/app/onnxcustom/helpsphinx/gyexamples/plot_benchmark_graph_opt.html
 # https://medium.com/axinc-ai/using-the-onnx-official-optimizer-27d1c7da3531
 # https://github.com/microsoft/OLive
+# https://nietras.com/2021/01/25/onnxruntime/
+
 
 def run_onnx_inference(model_path, input_data):
     # ONNX model
@@ -256,7 +258,7 @@ if __name__ == "__main__":
     # optimize("/tmp/latest_net_G.onnx", "/tmp/latest_net_G.opt.onnx")
     # run_onnx_inference("/tmp/latest_net_G.onnx", torch.randn(1, 3, 256, 256))
 
-    run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))
-    # run_onnx_inference("/tmp/latest_net_G.op2.onnx", torch.randn(1, 3, 256, 256))
+    # run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))
+    run_onnx_inference("/tmp/latest_net_G.op2.onnx", torch.randn(1, 3, 256, 256))
 
     # run_onnx_inference("/tmp/latest_net_G.quant.onnx", torch.randn(1, 3, 256, 256))
