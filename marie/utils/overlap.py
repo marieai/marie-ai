@@ -52,6 +52,9 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
     if len(data) == 0:
         return [], [], []
 
+    # print("overlap ***********")
+    # print(data)
+
     x, y, w, h = box
     y1min = y
     y1max = y + h
@@ -62,6 +65,9 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
         _x, _y, _w, _h = bb
         y2min = _y
         y2max = _y + _h
+
+        if h <= 0 or _h <= 0:
+            continue
 
         # don't overlap exactly same boxes as target
         if np.array_equal(box, bb):
@@ -112,6 +118,13 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
     if len(bboxes) == 0:
         return [], [], []
 
+    bboxes = np.array(bboxes)
+    # filter out boxes that are not intersecting with the target box
+    # intersecting_boxes = bboxes[
+    #     (box[0] < bboxes[:, 0] + bboxes[:, 2]) & (box[0] + box[2] > bboxes[:, 0])
+    # ]
+    # intersecting_boxes = bboxes[box[0] < bboxes[:, 0] + bboxes[:, 2]]
+
     x, y, w, h = box
     x1min = x
     x1max = x + w
@@ -134,13 +147,12 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
 
         x_right = min(x1max, x2max)
         x_left = max(x1min, x2min)
-
-        # this is to make sure that the center of the box is within the center_y_overlap
-        if center_y_overlap is not None:
-            if _y + _h // 2 < center_start or _y + _h // 2 > center_end:
-                continue
-
         if x1min < x2max and x2min < x1max:
+            # this is to make sure that the center of the box is within the center_y_overlap
+            if center_y_overlap is not None:
+                if _y + _h // 2 < center_start or _y + _h // 2 > center_end:
+                    continue
+
             # intersection_area = min(y1max, y2max) - max(y1min, y2min)
             # intersection_area = (x_right - x_left) * (y_bottom - y_top)
             intersection_area = x_right - x_left
@@ -155,7 +167,7 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
 
             # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
             # compute the intersection over union by taking the intersection
-            # area and dividing it by the sum of prediction + ground-truth areas - the interesection area
+            # area and dividing it by the sum of prediction + ground-truth areas - the intersection area
             iou = intersection_area / float(bb1_area + bb2_area - intersection_area)
             # print(f"intersection_area  [{h} , {_h}]: {intersection_area} : {dr}  > iou = {iou}")
             assert iou >= 0.0
@@ -252,13 +264,14 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
     @return:
     """
 
+    # return bboxes_xyxy
     # convert to [x, y, w, h]
     bboxes = []
     for bbox in bboxes_xyxy:
         bb = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
         bboxes.append(bb)
 
-    bboxes = sorted(bboxes, key=lambda x: x[1])
+    # bboxes = sorted(bboxes, key=lambda x: x[1])
     last_box_size = len(bboxes)
     max_consecutive_merges = 3
 
@@ -270,6 +283,7 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
                 continue
             visited[idx] = True
             box = bboxes[idx]
+
             overlaps, indexes, scores = find_overlap_horizontal(
                 box, bboxes, center_y_overlap=0.5
             )
@@ -281,7 +295,6 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
                 bboxes_to_merge[idx].append(overlap_idx)
 
         if len(bboxes_to_merge) == len(bboxes):
-            print("No more boxes to merge : bboxes_to_merge == bboxes")
             break
 
         new_blocks = []
@@ -294,7 +307,6 @@ def merge_boxes(bboxes_xyxy, delta_x=0.0, delta_y=0.0):
         bboxes = new_blocks
 
         if last_box_size == len(bboxes):
-            print("No more boxes to merge")
             break
 
         max_consecutive_merges -= 1

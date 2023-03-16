@@ -13,6 +13,7 @@ def drawTrueTypeTextOnImage(
 ):
     """
     Print True Type fonts using PIL and convert image back into OpenCV
+    NOTE : This is a slow operation and should be avoided in loops, typically we should only use this for debugging
     """
     # Pass the image to PIL
     pil_im = Image.fromarray(frame)
@@ -31,6 +32,19 @@ def drawTrueTypeTextOnImage(
     # Make Numpy/OpenCV-compatible version
     cv2Image = np.array(pil_im)
     return cv2Image
+
+
+def get_default_font(size: int = 16):
+    # use a truetype font
+    try:
+        fontFace = np.random.choice(
+            ["FreeMono.ttf", "FreeMonoBold.ttf", "FreeMonoBold.ttf", "FreeSans.ttf"]
+        )
+        fontPath = os.path.join("./assets/fonts/truetype", "FreeMono.ttf")
+        font = ImageFont.truetype(fontPath, size)
+    except Exception as ex:
+        font = ImageFont.load_default()
+    return font
 
 
 def determine_font_size(line_height: int) -> int:

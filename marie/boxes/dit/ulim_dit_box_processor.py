@@ -4,24 +4,21 @@ import os
 import time
 from typing import Any, Tuple, Union
 
+import PIL
 import cv2
 import numpy as np
-import PIL
 import torch
+from PIL import Image, ImageDraw
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultPredictor
-from ditod import add_vit_config
-from PIL import Image, ImageDraw
 
+from ditod import add_vit_config
 from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
 from marie.boxes.line_processor import find_line_number, line_merge
-from marie.logger import setup_logger
+from marie.constants import __model_path__, __config_dir__
 from marie.logging.logger import MarieLogger
 from marie.utils.image_utils import imwrite, paste_fragment
-from marie.utils.nms import nms
 from marie.utils.overlap import merge_boxes
-from marie.utils.utils import ensure_exists
-from marie.constants import __model_path__, __config_dir__
 
 
 def setup_cfg(args, device):
@@ -232,19 +229,20 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def psm_sparse(self, image):
+        self.logger.info(f"Starting box predictions")
         predictions = self.predictor(image)
         predictions = predictions["instances"].to(self.cpu_device)
-        self.logger.info(f"Number of prediction : {len(predictions)}")
+        self.logger.info(f"Number of box predictions : {len(predictions)}")
 
         boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
         scores = predictions.scores if predictions.has("scores") else None
         classes = predictions.pred_classes if predictions.has("pred_classes") else None
 
         bboxes = _convert_boxes(boxes)
-        print(f"bboxes B : =============> {len(bboxes)}")
+        self.logger.info(f"bboxes B : =============> {len(bboxes)}")
         # merge boxes with iou > 0.1 as they are likely to be the same box
         bboxes = merge_boxes(bboxes, 0.08)
-        print(f"bboxes A : =============> {len(bboxes)}")
+        self.logger.info(f"bboxes A : =============> {len(bboxes)}")
         bboxes = np.array(bboxes)
 
         # sort by xy-coordinated
@@ -362,7 +360,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     # snippet = (snippet * 255).astype(np.uint8)
                     paste_fragment(pil_image, snippet, (x0, y0))
 
-            if True:
+            if False:
                 savepath = os.path.join(debug_dir, f"{key}_txt_overlay.jpg")
                 pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
 

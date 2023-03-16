@@ -68,7 +68,7 @@ class AdaptedVisionTransformer(VisionTransformer):
         # pop pretrained_cfg and pretrained_cfg_overlay to avoid error in timm 0.4.12 if the key is in kwargs
         if "pretrained_cfg" in kwargs :
             kwargs.pop("pretrained_cfg")
-
+        if "pretrained_cfg_overlay" in kwargs :
             kwargs.pop("pretrained_cfg_overlay")
         super().__init__(*args, **kwargs)
 
@@ -111,7 +111,11 @@ class AdaptedVisionTransformer(VisionTransformer):
 
         if self.mask_ratio != 0:
             probability_matrix = torch.full(x.shape[:2], self.mask_ratio)
-            masked_indices = torch.bernoulli(probability_matrix).bool()
+            # GB : during torchscript, torch.bernoulli(probability_matrix).bool() will raise error
+            # https://github.com/pytorch/pytorch/issues/70544
+            masked_indices = torch.bernoulli(probability_matrix).to(torch.bool)
+            # masked_indices = torch.bernoulli(probability_matrix).bool()
+
             x[masked_indices] = 0
 
         cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
@@ -124,7 +128,8 @@ class AdaptedVisionTransformer(VisionTransformer):
 
         if self.ape:            
             pos_embed_patch_num = int(self.pos_embed.size(1) ** 0.5)
-            offset = self.num_tokens
+            # offset = self.num_tokens
+            offset = 1
             adapt_pos_embed = self.pos_embed[:, offset:, :].view(self.pos_embed.shape[0], pos_embed_patch_num, pos_embed_patch_num, self.pos_embed.shape[-1])  # B 24 24 768
             adapt_pos_embed = adapt_pos_embed.permute(0, 3, 1, 2)
             pos_embed = F.interpolate(adapt_pos_embed, size=(Wh, Ww), mode='bicubic')

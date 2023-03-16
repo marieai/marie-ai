@@ -1,5 +1,4 @@
 import base64
-import json
 import os
 import sys
 import typing
@@ -7,13 +6,16 @@ import typing
 import PIL
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
 
 from marie.base_handler import BaseHandler
 from marie.logging.predefined import default_logger
-from marie.numpyencoder import NumpyEncoder
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
-from marie.utils.draw_truetype import drawTrueTypeTextOnImage, determine_font_size
+from marie.utils.draw_truetype import (
+    determine_font_size,
+    get_default_font,
+)
 from marie.utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -106,9 +108,13 @@ class IcrProcessor(BaseHandler):
 
         try:
             shape = img.shape
-            overlay_image = np.ones((shape[0], shape[1], 3), dtype=np.uint8) * 255
             debug_dir = ensure_exists(os.path.join("/tmp/icr", _id))
             debug_all_dir = ensure_exists(os.path.join("/tmp/icr", "fields", key))
+
+            pil_overlay = Image.new(
+                "RGB", (img.shape[1], img.shape[0]), (255, 255, 255)
+            )
+            draw_overlay = ImageDraw.Draw(pil_overlay)
 
             meta = {
                 "imageSize": {"width": img.shape[1], "height": img.shape[0]},
@@ -119,6 +125,7 @@ class IcrProcessor(BaseHandler):
             # fail fast as we have not found any bounding boxes
             if len(boxes) == 0:
                 logger.warning("Empty bounding boxes, possibly a blank page")
+                overlay_image = np.ones((shape[0], shape[1], 3), dtype=np.uint8) * 255
                 return {
                     "meta": meta,
                     "words": [],
@@ -133,7 +140,8 @@ class IcrProcessor(BaseHandler):
             results = np.array(results)
             indices = np.argsort(boxes[:, 0])
 
-            # for i, (box, fragment, line, extraction) in enumerate(zip(boxes, fragments, lines, results)):
+            logger.info("Starting line extraction")
+
             for i, index in enumerate(indices):
                 box = boxes[index]
                 fragment = fragments[index]
@@ -158,21 +166,21 @@ class IcrProcessor(BaseHandler):
 
                 if True:
                     font_size = determine_font_size(box[3])
-                    overlay_image = drawTrueTypeTextOnImage(
-                        overlay_image,
-                        txt_label,
+                    draw_overlay.text(
                         (box[0], box[1] + box[3] // 4),
-                        int(font_size * 1.25),
-                        (139, 0, 0),
-                    )
-                    overlay_image = drawTrueTypeTextOnImage(
-                        overlay_image,
-                        conf_label,
-                        (box[0], box[1] + box[3]),
-                        font_size,
-                        (0, 0, 255),
+                        str(txt_label),
+                        font=get_default_font(int(font_size * 1.25)),
+                        fill=(139, 0, 0),
                     )
 
+                    draw_overlay.text(
+                        (box[0], box[1] + box[3]),
+                        str(conf_label),
+                        font=get_default_font(int(font_size)),
+                        fill=(0, 0, 255),
+                    )
+
+            pil_overlay.save("/tmp/icr/overlay.png")
             if False:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
                 cv2.imwrite(savepath, overlay_image)
@@ -234,25 +242,10 @@ class IcrProcessor(BaseHandler):
                 raise Exception(
                     f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}"
                 )
-
-            if False:
-                with open("/tmp/icr/data.json", "w") as f:
-                    json.dump(
-                        result,
-                        f,
-                        sort_keys=True,
-                        separators=(",", ": "),
-                        ensure_ascii=False,
-                        indent=4,
-                        cls=NumpyEncoder,
-                    )
-
-                print("------ Extraction ------------")
-                for line in line_results:
-                    txt = line["text"]
-                    print(f" >> {txt}")
-
         except Exception as ex:
             raise ex
 
+        # this OP is slow, so we only do it if we need to return the overlay image
+        overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
+        logger.info("Box extraction complete")
         return result, overlay_image
