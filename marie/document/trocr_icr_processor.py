@@ -76,7 +76,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
         m.to(device)
 
     # try to compile the model with torch.compile
-    if True:
+    if False:
         try:
             # Optimize model for Inference time
             print("**** COMPILING TROCR Model***")

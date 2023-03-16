@@ -1,20 +1,19 @@
 from __future__ import print_function
 
 import os
+import timeit
 
 import numpy as np
 import onnx as onnx
 import onnxruntime as onnxruntime
-from onnxruntime import ExecutionMode, SessionIOBinding
-from onnxruntime.quantization import quantize_dynamic, QuantType, quantize_static
 import psutil
 import torch
 from PIL import Image
-import timeit
+from onnxruntime import ExecutionMode
+from onnxruntime.quantization import quantize_dynamic, QuantType
 
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
-
 
 # TODO: Try a better workaround to lazy import tensorrt package.
 tensorrt_imported = False
@@ -107,9 +106,6 @@ def run_onnx_inference(model_path, input_data):
     # Input > N x C x W x H
     # read image and add batch dimension
     img = Image.open("/home/gbugaj/sample.png").convert("RGB")
-    img = Image.open(
-        "/home/gbugaj/datasets/private/overlay_ssim/EOB/159000444_1.png"
-    ).convert("RGB")
     # img = Image.open("/tmp/segment-1024x-2048.png").convert("RGB")
     # make sure image is divisible by 32
     print("Image size: ", img.size)
@@ -324,6 +320,6 @@ if __name__ == "__main__":
 
     # optimize("/tmp/latest_net_G.onnx", "/tmp/latest_net_G.opt.onnx")
 
-    # run_onnx_inference("/tmp/latest_net_G.onnx", torch.randn(1, 3, 256, 256))
+    run_onnx_inference("/tmp/latest_net_G.onnx", torch.randn(1, 3, 256, 256))
     # run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))
     # run_onnx_inference("/tmp/latest_net_G.quant.onnx", torch.randn(1, 3, 256, 256))
