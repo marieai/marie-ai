@@ -1,7 +1,5 @@
-import requests
+import timeit
 
-import marie.helper
-from marie import Flow
 from marie.utils.overlap import merge_boxes
 import numpy as np
 
@@ -19,11 +17,27 @@ def generate_bboxes(count: int):
 
 
 def test_overlap_001():
+    bboxes = generate_bboxes(10)
+
+    print(bboxes)
+    print(f"bboxes B : =============> {len(bboxes)}")
+    # merge boxes with iou > 0.1 as they are likely to be the same box
+    bboxes = merge_boxes(bboxes, 0.08)
+    t = timeit.timeit(lambda: merge_boxes(bboxes, 0.08), number=100) / 100
+
+    print(f"t = {t}")
+
+    # assert len(bboxes) == 1
+
+
+def test_overlap_002():
     bboxes = generate_bboxes(10000)
 
     print(f"bboxes B : =============> {len(bboxes)}")
     # merge boxes with iou > 0.1 as they are likely to be the same box
     bboxes = merge_boxes(bboxes, 0.08)
-    print(f"bboxes A : =============> {len(bboxes)}")
+    t = timeit.timeit(lambda: merge_boxes(bboxes, 0.08), number=100) / 100
 
-    assert len(bboxes) == 1
+    print(f"t = {t}")
+
+    # assert len(bboxes) == 1

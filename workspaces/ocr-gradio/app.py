@@ -1,12 +1,9 @@
 import gradio as gr
 import torch as torch
-from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrIcrProcessor
-from marie.ocr import DefaultOcrEngine, CoordinateFormat
-from marie.executor.ner.utils import visualize_icr
 from marie.ocr.mock_ocr_engine import MockOcrEngine
 
 use_cuda = torch.cuda.is_available()

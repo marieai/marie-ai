@@ -120,11 +120,11 @@ def line_merge(image, bboxes) -> List[Any]:
     iou_scores = [0.6, 0.5, 0.4, 0.3]
     # iou_scores = [0.6, 0.6, 0.5, 0.35]
     merged_bboxes = bboxes
-    for i in range(0, 4):
-        overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
+    for i in range(0, len(iou_scores)):
         # overlay = copy.deepcopy(image)
         merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i])
         if False:
+            overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
             for box in merged_bboxes:
                 x, y, w, h = box
                 color = (255, 0, 0)  # list(np.random.random(size=3) * 256)

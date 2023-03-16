@@ -120,11 +120,11 @@ pytest:                       standard,core
 nlpaug:                       standard,core
 munch:                        standard,core
 
-# opentelemetry-api:            standard,core
+# opentelemetry-api:          standard,core
 
-onnx==1.13.0:                  standard,core
-onnxruntime==1.13.1:                  standard,core
-onnxruntime-gpu:      standard,core
+onnx==1.13.1:                 standard,core
+onnxruntime==1.13.1:          standard,core
+onnxruntime-gpu:              standard,core
 onnxconverter_common==1.13.0: standard,core
 onnxmltools:                  standard,core
 

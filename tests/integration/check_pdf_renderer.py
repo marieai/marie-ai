@@ -8,6 +8,7 @@ import numpy as np
 import tqdm
 from PIL import Image
 
+from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
@@ -55,6 +56,9 @@ def from_json_file(filename):
 
 
 if __name__ == "__main__":
+    import faulthandler
+    faulthandler.enable()
+
 
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
@@ -100,11 +104,9 @@ if __name__ == "__main__":
         image = cv2.imread(img_path)
         # image = __scale_width(src_img, 2000, 1000)
         # cv2.imwrite("/tmp/resized-2048.png", image)
-        box = BoxProcessorCraft(work_dir=work_dir_boxes, cuda=True)
+        box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
         icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 
-        # box = BoxProcessorTextFuseNet(work_dir=work_dir_boxes, models_dir='./models/fusenet', cuda=False)
-        # icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
         (
             boxes,
             fragments,
