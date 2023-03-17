@@ -20,7 +20,7 @@ def process_image(image):
 
 def interface():
     article = """
-         # Document Overlay via Pix2Pix
+         # Document Overlay
         """
 
     with gr.Blocks() as iface:
