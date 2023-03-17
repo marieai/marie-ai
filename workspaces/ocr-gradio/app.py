@@ -41,9 +41,9 @@ def process_image(image):
 
 def interface():
     article = """
-         # Bounding Boxes and ICR
-         [Dit: For textbox detection and  TROCR: Transformer-based OCR and ICR]
+         # Bounding Boxes and ICR         
         """
+    # [Dit: For textbox detection and  TROCR: Transformer-based OCR and ICR]
 
     with gr.Blocks() as iface:
         gr.Markdown(article)
