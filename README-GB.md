@@ -391,6 +391,11 @@ sudo apt autoclean
 sudo apt install nvidia-driver-525 -f
 
 
+# Autogluon
+https://github.com/autogluon/autogluon/
+
+
+
 ## TensorRT Notes
 
 # https://developer.nvidia.com/blog/end-to-end-ai-for-nvidia-based-pcs-cuda-and-tensorrt-execution-providers-in-onnx-runtime/
