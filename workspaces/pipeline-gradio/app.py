@@ -108,7 +108,9 @@ def process_image(image):
     else:
         real, fake, blended = image, image, image
 
-    image = Image.fromarray(blended)
+    # pil image from opencv
+    # image = Image.fromarray(blended)
+    image = blended
     (
         boxes,
         fragments,
@@ -206,15 +208,15 @@ def interface():
 
         with gr.Row():
             with gr.Column():
-                fake = gr.components.Image(type="pil", label="overlay")
+                fake = gr.components.Image(type="numpy", label="overlay")
             with gr.Column():
-                blended = gr.components.Image(type="pil", label="blended")
+                blended = gr.components.Image(type="numpy", label="blended")
 
         with gr.Row():
             with gr.Column():
-                bboxes_img = gr.components.Image(type="pil", label="bboxes")
+                bboxes_img = gr.components.Image(type="numpy", label="bboxes")
             with gr.Column():
-                lines_img = gr.components.Image(type="pil", label="lines")
+                lines_img = gr.components.Image(type="numpy", label="lines")
 
         # with gr.Row():
         #     with gr.Column():

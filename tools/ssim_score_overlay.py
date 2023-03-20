@@ -29,8 +29,6 @@ def filename_supplier_page(
     return f"{prefix}_{pagenumber:05}.{suffix}"
 
 
-#  Frechet Inception Distance (FID) for Evaluating GANs
-#
 def clean(src_dir, dst_dir):
     src_dir = os.path.expanduser(src_dir)
     dst_dir = os.path.expanduser(dst_dir)
@@ -190,7 +188,6 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     os.environ["OMP_NUM_THREADS"] = str(1)
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

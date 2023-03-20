@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import timeit
 from shutil import copyfile
 from typing import Tuple
 
@@ -16,13 +17,14 @@ from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
 from marie.timer import Timer
 from marie.utils.image_utils import imwrite, read_image, viewImage, hash_frames_fast
+from marie.utils.onnx import OnnxModule
 from marie.utils.utils import ensure_exists
 from PIL import Image
 
 # Add parent to the search path, so we can reference the module here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-debug_visualization_enabled = False
+debug_visualization_enabled = True
 
 
 # Returns the result of running `fn()` and the time it took for `fn()` to run,
@@ -46,10 +48,8 @@ class OverlayProcessor(BaseHandler):
         cuda: bool = True,
         **kwargs,
     ) -> None:
-        print(f"OverlayProcessor [cuda={cuda}]")
-        print(f"OverlayProcessor [models_dir={models_dir}]")
+        print(f"OverlayProcessor [cuda={cuda}, models_dir={models_dir}]")
 
-        # ./model_zoo/overlay
         checkpoint_dir = os.path.join(models_dir, "overlay")
         self.cuda = cuda
         self.models_dir = models_dir
@@ -106,7 +106,20 @@ class OverlayProcessor(BaseHandler):
         opt.no_flip = True
         opt.no_dropout = False
         opt.display_id = -1
-        opt.output_nc = 3  # Need to build model for BITONAL images only so we could output 1 chanell only
+        opt.output_nc = 3
+
+        # check if we have a onnx model and load it
+        if os.path.exists(
+            os.path.join(checkpoints_dir, "claim_mask", "latest_net_G.onnx")
+        ):
+            print("Loading ONNX model")
+            model_path = os.path.join(
+                checkpoints_dir, "claim_mask", "latest_net_G.onnx"
+            )
+            model_path = os.path.expanduser(model_path)
+            model = OnnxModule(model_path, providers=None)
+            print("Model setup complete : ONNX")
+            return opt, model
 
         model = create_model(opt)
         model.setup(opt)
@@ -115,113 +128,139 @@ class OverlayProcessor(BaseHandler):
         print("Model setup complete")
         return opt, model
 
-    @Timer(text="__extract_segmentation_mask in {:.2f} seconds")
-    def __extract_segmentation_mask(self, img, dataroot_dir, work_dir, debug_dir):
+    def preprocess(self, img):
+        # check if PIL image
+        if not isinstance(img, Image.Image):
+            img = Image.fromarray(img)
+
+        # make sure image is divisible by 32
+        ow, oh = img.size
+        base = 32  # image size must be divisible by 32
+        if ow % base != 0 or oh % base != 0:
+            h = oh // base * base + base
+            w = ow // base * base + base
+            img = img.resize((w, h), Image.LANCZOS)
+        return img
+
+    @Timer(text="__extract_segmentation_mask in {:.4f} seconds")
+    def __extract_segmentation_mask(self, img, dataroot_dir):
         """
         Extract overlay segmentation mask for the image
         """
         model = self.model
         opt = self.opt
         opt.dataroot = dataroot_dir
-        image_dir = work_dir
-        name = "overlay"
+
+        img = self.preprocess(img)
+        if isinstance(self.model, OnnxModule):
+            return self.postprocess(img, self.run_onnx(img))
 
         # create a dataset given opt.dataset_mode and other options
         dataset = create_dataset(opt)
-
         for i, data in enumerate(dataset):
             model.set_input(data)  # unpack data from data loader
-
-            # run inference
-            # _, gpu_eval_time = timed_cuda(lambda: model.test())
-            # print(f"gpu_eval_time {i}: {gpu_eval_time}")
-
             model.test()
+            visuals = model.get_current_visuals()  # get image results
+            fake_im_data = visuals["fake"]
+            image_numpy = tensor2im(fake_im_data)
 
-            if True:
-                visuals = model.get_current_visuals()  # get image results
-                # Debug
-                if False:
-                    for label, im_data in visuals.items():
-                        image_numpy = tensor2im(im_data)
-                        print(f"Tensor debug[{label}]: {image_numpy.shape}")
-                        # Tensor is in RGB format OpenCV requires BGR
-                        image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
-                        image_name = "%s_%s.png" % (name, label)
-                        save_path = os.path.join(debug_dir, image_name)
-                        imwrite(save_path, image_numpy)
-                        viewImage(image_numpy, "Tensor Image")
+            return self.postprocess(img, image_numpy)
 
-                label = "fake"
-                fake_im_data = visuals["fake"]
-                image_numpy = tensor2im(fake_im_data)
+    def postprocess(self, img, image_numpy):
+        image_dir = os.path.join(self.work_dir, "debug")
+        # Tensor is in RGB format OpenCV requires BGR
+        image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
+        save_path = os.path.join(image_dir, "fake.png")
 
-                # clear cuda memory after inference
-                del fake_im_data
-                del visuals
-                torch.cuda.empty_cache()
-                import gc
+        # testing only
+        if debug_visualization_enabled:
+            imwrite(save_path, image_numpy)
 
-                gc.collect()
+        # TODO : Figure out why after the forward pass it is possible
+        # to have different sizes(transforms have not been applied).
+        # This is a work around for now
 
-                # Tensor is in RGB format OpenCV requires BGR
-                image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
-                save_path = os.path.join(image_dir, "%s_%s.png" % (name, label))
+        if img.shape != image_numpy.shape:
+            print(
+                f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
+            )
+            return image_numpy[: img.shape[0], : img.shape[1], :]  # IF we do RGB2BGR
 
-                # testing only
-                if debug_visualization_enabled:
-                    imwrite(save_path, image_numpy)
-                # viewImage(image_numpy, 'Prediction image')
-
-                # TODO : Figure out why after the forward pass it is possible
-                # to have different sizes(transforms have not been applied).
-                # This is a work around for now
-
-                if img.shape != image_numpy.shape:
-                    print(
-                        f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
-                    )
-                    return image_numpy[
-                        : img.shape[0], : img.shape[1], :
-                    ]  # IF we do RGB2BGR
-
-            return image_numpy
+        return image_numpy
 
     @staticmethod
-    def blend_to_text(real_img, fake_img):
+    def blend_to_text(real_img, mask_img):
         """Blend real and fake(generated) images together to generate extracted text mask
 
         :param real_img: original image
-        :param fake_img: generated image
+        :param mask_img: generated image
         :return: blended image
         """
         real = read_image(real_img)
-        fake = read_image(fake_img)
+        mask = read_image(mask_img)
 
-        print(f"Image shapes (real, fake) : {real.shape} != {fake.shape}")
-        # Sizes of input arguments do not match
         # this happens sometimes after a forward pass, the FAKE image is larger than the input
-        if real.shape != fake.shape:
+        # image. This is a work around for now.
+        if real.shape != mask.shape:
             raise Exception(
-                f"Sizes of input arguments do not match(real, fake) : {real.shape} != {fake.shape}"
+                f"Sizes of input arguments do not match(real, fake) : {real.shape} != {mask.shape}"
             )
 
-        blended_img = cv2.bitwise_or(real, fake)
-        blended_img[blended_img >= 120] = [255]
+        # original method to blend the images
+        # blended_img = cv2.bitwise_or(real, mask)
+        # # blended_img[blended_img >= 120] = [255]
 
+        # new method to blend the images
+        def __mask_from_hsv_range(hsv_img, hsv_color_ranges) -> np.ndarray:
+            low_color = np.array(hsv_color_ranges[0], np.uint8)
+            high_color = np.array(hsv_color_ranges[1], np.uint8)
+            hsv_mask = cv2.inRange(hsv_img, low_color, high_color)
+            return hsv_mask
+
+        # converting from BGR to HSV color space(use hsv_selector.py tool to find the right values)
+        hsv = cv2.cvtColor(mask, cv2.COLOR_BGR2HSV)
+        # define range of red color in HSV color space
+        # (hMin = 0, sMin = 0, vMin = 0), (hMax = 179, sMax = 121, vMax = 255)
+        red_hsv_range = [[0, 137, 216], [179, 255, 255]]
+        hsv_mask_red = __mask_from_hsv_range(hsv, red_hsv_range)
+        hsv_mask_red = cv2.bitwise_not(hsv_mask_red)
+        hsv_mask_red = cv2.cvtColor(hsv_mask_red, cv2.COLOR_GRAY2BGR)
+        hsv_mask_red = cv2.cvtColor(hsv_mask_red, cv2.COLOR_BGR2GRAY)
+
+        imwrite(
+            os.path.join("/tmp/form-segmentation", f"hsv_mask_red.png"), hsv_mask_red
+        )
+
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        real = cv2.cvtColor(real, cv2.COLOR_BGR2GRAY)
+
+        print(f"mask.shape: {mask.shape}")
+        print(f"real.shape: {real.shape}")
+        print(f"hsv_mask_red.shape: {hsv_mask_red.shape}")
+
+        imwrite(os.path.join("/tmp/form-segmentation", f"mask.png"), mask)
+        imwrite(os.path.join("/tmp/form-segmentation", f"real.png"), real)
+
+        # OR original and generated mask and then AND with red mask
+        blended_img = cv2.bitwise_or(real, mask)
+        blended_img = cv2.bitwise_and(blended_img, hsv_mask_red)
+
+        imwrite(os.path.join("/tmp/form-segmentation", f"blended_img.png"), blended_img)
+        blended_img = cv2.cvtColor(blended_img, cv2.COLOR_GRAY2BGR)
         return blended_img
 
-    @Timer(text="Segmented in {:.2f} seconds")
+    @Timer(text="Segmented in {:.4f} seconds")
     def segment(
         self, document_id: str, img_path: str, checksum: str = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Segment form
+        Segment form image and return original, mask, segmented images. If there is no mask extracted we return original
+        image as mask and segmented image.
 
         :param document_id: unique document id
         :param img_path: image to process
         :param checksum: image checksum
-        :return: original, mask, segmented tuple of images
+        :return: original, mask, segmented tuple of images in numpy format
         """
 
         print(f"Creating overlay for : {document_id} > {img_path}")
@@ -235,9 +274,7 @@ class OverlayProcessor(BaseHandler):
         dataroot_dir = ensure_exists(
             os.path.join(self.work_dir, name, "dataroot_overlay")
         )
-
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
-
         print(f"dst_file_name : {dst_file_name}")
 
         if False and not os.path.exists(dst_file_name):
@@ -248,14 +285,16 @@ class OverlayProcessor(BaseHandler):
         if len(real_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
 
-        fake_mask = self.__extract_segmentation_mask(
-            real_img, dataroot_dir, work_dir, debug_dir
-        )
+        fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir)
 
         # Unable to segment return empty mask
         if np.array(fake_mask).size == 0:
             print(f"Unable to segment image :{img_path}")
-            return real_img, None, None
+            # create dummy white image
+            real_img = np.ones(
+                (real_img.shape[0], real_img.shape[1], 3), dtype=np.uint8
+            )
+            return real_img, fake_mask, real_img
 
         # Causes by forward pass, incrementing size of the output layer
         if real_img.shape != fake_mask.shape:
@@ -281,9 +320,10 @@ class OverlayProcessor(BaseHandler):
         tm = time.time_ns()
         if debug_visualization_enabled:
             imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
+
         return real_img, fake_mask, blended
 
-    @Timer(text="SegmentedFrame in {:.2f} seconds")
+    @Timer(text="SegmentedFrame in {:.4f} seconds")
     def segment_frame(
         self, document_id: str, frame: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -298,6 +338,41 @@ class OverlayProcessor(BaseHandler):
         img_path = os.path.join(
             self.work_dir, frame_checksum, f"{document_id}_{frame_checksum}.png"
         )
-        cv2.imwrite(img_path, frame)
 
         return self.segment(document_id, img_path, frame_checksum)
+
+    def run_onnx(self, img):
+        """
+        Run onnx model on given image
+        @param img:
+        @return:
+        """
+        model = self.model
+        # check if PIL image
+        if not isinstance(img, Image.Image):
+            raise Exception("Image must be PIL image")
+
+        print("Image size After: ", img.size)
+        data = np.array(img).astype(np.float32)
+        # convert from HWC to CHW
+        data = np.transpose(data, (2, 0, 1))
+        data = np.expand_dims(data, axis=0)  # add batch dimension  N x C x W x H
+
+        starttime = timeit.default_timer()
+        # Output > N x C x W x H
+        outputs = model(data)
+        print("Batch size is :", outputs[0].shape[0])
+        print("Inference time is :", timeit.default_timer() - starttime)
+        batch_output = outputs[0][0]  # get the first batch
+        # tensor to numpy
+        image_numpy = batch_output.detach().cpu().numpy()
+        # convert from CHW to HWC and scale from [-1, 1] to [0, 255]
+        image_numpy = (
+            (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+        )  # post-processing: transpose and scaling
+
+        # convert to pillow image
+        img = Image.fromarray(image_numpy.astype("uint8")).convert("RGB")
+        img.save(f"/tmp/onnx_test.png")
+        print("Eval time is :", timeit.default_timer() - starttime)
+        return image_numpy.astype("uint8")
