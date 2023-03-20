@@ -15,7 +15,7 @@ from boxes.box_processor import PSMode
 from common.file_io import PathManager
 from document.trocr_icr_processor import TrOcrIcrProcessor
 from numpyencoder import NumpyEncoder
-from overlay.overlay import OverlayProcessor
+from Toast.overlay import OverlayProcessor
 from renderer.adlib_renderer import AdlibRenderer
 from renderer.blob_renderer import BlobRenderer
 from renderer.pdf_renderer import PdfRenderer

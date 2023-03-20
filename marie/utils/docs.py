@@ -31,7 +31,6 @@ def get_document_type(file_path: str):
         file_type = imghdr.what(memfile)
 
     if file_type is None:
-
         try:
             PyPDF4.PdfFileReader(open(file_path, "rb"))
             file_type = "pdf"

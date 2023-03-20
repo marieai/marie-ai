@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import os
 import timeit
+from typing import Optional
 
 import numpy as np
 import onnx as onnx
@@ -14,6 +15,7 @@ from onnxruntime.quantization import quantize_dynamic, QuantType
 
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
+from marie.utils.onnx import OnnxModule
 
 # TODO: Try a better workaround to lazy import tensorrt package.
 tensorrt_imported = False
@@ -39,7 +41,54 @@ print(tensorrt_imported)
 # https://nietras.com/2021/01/25/onnxruntime/
 
 
+def run_onnx_inference_as_module(model_path: str, image_path: str) -> None:
+    model_path = os.path.expanduser(model_path)
+    # create onnx module for evaluation
+    model = OnnxModule(model_path, providers=None)
+    print(model)
+
+    # Input > N x C x W x H
+    # read image and add batch dimension
+    img = Image.open(image_path).convert("RGB")
+    # make sure image is divisible by 32
+    print("Image size: ", img.size)
+
+    ow, oh = img.size
+    base = 32  # image size must be divisible by 32
+    if ow % base != 0 or oh % base != 0:
+        h = oh // base * base + base
+        w = ow // base * base + base
+        img = img.resize((w, h), Image.LANCZOS)
+
+    print("Image size After: ", img.size)
+    data = np.array(img).astype(np.float32)
+    # convert from HWC to CHW
+    data = np.transpose(data, (2, 0, 1))
+    data = np.expand_dims(data, axis=0)  # add batch dimension  N x C x W x H
+
+    starttime = timeit.default_timer()
+    # data = np.random.rand(1, 3, 512, 512).astype(np.float32)
+    # Output > N x C x W x H
+    outputs = model(data)
+    print("Batch size is :", outputs[0].shape[0])
+    print("Inference time is :", timeit.default_timer() - starttime)
+    batch_output = outputs[0][0]  # get the first batch
+    # tensor to numpy
+    image_numpy = batch_output.detach().cpu().numpy()
+    # convert from CHW to HWC and scale from [-1, 1] to [0, 255]
+    image_numpy = (
+        (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+    )  # post-processing: transpose and scaling
+
+    # convert to pillow image
+    img = Image.fromarray(image_numpy.astype("uint8")).convert("RGB")
+    img.save(f"/tmp/onnx_test.png")
+    print("Eval time is :", timeit.default_timer() - starttime)
+
+
 def run_onnx_inference(model_path, input_data):
+    model_path = os.path.expanduser(model_path)
+
     # ONNX model
     sess_options = onnxruntime.SessionOptions()
     sess_options.add_session_config_entry("session.load_model_format", "ONNX")
@@ -91,7 +140,6 @@ def run_onnx_inference(model_path, input_data):
         ),
     ]
 
-    # model_path = "/tmp/optimized_model.onnx"
     # ONNX model
     session = onnxruntime.InferenceSession(model_path, sess_options, providers)
     # bind = SessionIOBinding(session._sess)
@@ -109,7 +157,6 @@ def run_onnx_inference(model_path, input_data):
     # img = Image.open("/tmp/segment-1024x-2048.png").convert("RGB")
     # make sure image is divisible by 32
     print("Image size: ", img.size)
-    # img = __make_power_2(img, base=4, method=Image.LANCZOS)
 
     ow, oh = img.size
     base = 32  # image size must be divisible by 32
@@ -132,7 +179,8 @@ def run_onnx_inference(model_path, input_data):
         starttime = timeit.default_timer()
         # data = np.random.rand(1, 3, 512, 512).astype(np.float32)
         # Output > N x C x W x H
-        outputs = session.run(None, {session.get_inputs()[0].name: data})
+        input_dict = {session.get_inputs()[0].name: data}
+        outputs = session.run(None, input_dict)
         print("Inference time is :", timeit.default_timer() - starttime)
         image_numpy = outputs[0][0]  # get the first batch
         # convert from CHW to HWC and scale from [-1, 1] to [0, 255]
@@ -208,11 +256,16 @@ def build_model():
     return model
 
 
-def export():
+def export_onnx(
+    path: str,
+    output_path_fp32: str,
+    verbose: Optional[bool] = True,
+    opset_version: Optional[int] = 16,
+):
     print("Exporting model")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    load_path = "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.pth"
+    load_path = path
     load_path = os.path.expanduser(load_path)
     model = load_torch_model(load_path, device)
 
@@ -222,38 +275,38 @@ def export():
         # input =  _generate_dummy_images()
     )
 
-    model_fp32 = "/tmp/latest_net_G.onnx"
+    model_fp32 = output_path_fp32
     torch.onnx.export(
         model,  # model being run
         tuple(inputs.values()),  # model input (or a tuple for multiple inputs)
         f=os.path.expanduser(
             model_fp32
         ),  # where to save the model (can be a file or file-like object)
-        verbose=True,
+        verbose=verbose,
         input_names=["input"],  # the model's input names
         output_names=["output"],  # the model's output names
         do_constant_folding=True,  # whether to execute constant folding for optimization
         export_params=True,
-        enable_onnx_checker=True,
-        opset_version=14,
+        opset_version=opset_version,
         dynamic_axes={
             "input": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
             "output": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
         },
     )
 
-    model_quant = "/tmp/latest_net_G.quant.onnx"
-    quantized_model = quantize_dynamic(
-        model_fp32,
-        model_quant,
-        weight_type=QuantType.QUInt8,
-        per_channel=True,
-        reduce_range=True,
-    )  # chnage QInt8 to QUInt8)
+    if False:
+        model_quant = "/tmp/latest_net_G.quant.onnx"
+        quantized_model = quantize_dynamic(
+            model_fp32,
+            model_quant,
+            weight_type=QuantType.QUInt8,
+            per_channel=True,
+            reduce_range=True,
+        )  # chnage QInt8 to QUInt8)
 
-    # https://github.com/microsoft/onnxruntime-inference-examples/blob/main/quantization/image_classification/cpu/run.py
-    print("Calibrated and quantized model saved.")
-    print("Done exporting model")
+        # https://github.com/microsoft/onnxruntime-inference-examples/blob/main/quantization/image_classification/cpu/run.py
+        print("Calibrated and quantized model saved.")
+        print("Done exporting model")
 
 
 def load_torch_model(load_path: str, device: torch.device):
@@ -275,6 +328,8 @@ def optimize(src_onnx, opt_onnx):
     import onnx
     import onnxoptimizer as onnxopt
 
+    src_onnx = os.path.expanduser(src_onnx)
+    opt_onnx = os.path.expanduser(opt_onnx)
     # load model
     model = onnx.load(src_onnx)
     # optimize
@@ -316,10 +371,32 @@ if __name__ == "__main__":
 
     print(dynamo.list_backends(None))
     # test_trn_backend("/tmp/latest_net_G.onnx")
-    # export()
+
+    if False:
+        export_onnx(
+            path="~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.pth",
+            output_path_fp32="~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.onnx",
+        )
+
+    if False:
+        optimize(
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.onnx",
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
+        )
 
     # optimize("/tmp/latest_net_G.onnx", "/tmp/latest_net_G.opt.onnx")
 
-    run_onnx_inference("/tmp/latest_net_G.onnx", torch.randn(1, 3, 256, 256))
+    if False:
+        run_onnx_inference(
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
+            torch.randn(1, 3, 256, 256),
+        )
+
+    if True:
+        run_onnx_inference_as_module(
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
+            "/home/gbugaj/sample.png",
+        )
+
     # run_onnx_inference("/tmp/latest_net_G.opt.onnx", torch.randn(1, 3, 256, 256))
     # run_onnx_inference("/tmp/latest_net_G.quant.onnx", torch.randn(1, 3, 256, 256))

@@ -2,6 +2,8 @@ import logging
 import os
 from typing import Dict, List, Optional, Tuple, Union
 
+import psutil
+from onnxruntime import ExecutionMode
 from torch import tensor
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,13 @@ class OnnxModule(object):
         logger.info("Loading ONNX file from path {}...".format(onnx_path))
         onnx_model = onnx.load(onnx_path)
 
+        # ONNX model
+        sess_options = ort.SessionOptions()
+        sess_options.add_session_config_entry("session.load_model_format", "ONNX")
+        sess_options.execution_mode = ExecutionMode.ORT_PARALLEL
+        sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
+        sess_options.log_verbosity_level = 1
+
         if providers == None:
             dirname = os.path.dirname(os.path.abspath(onnx_path))
             cache_path = os.path.join(dirname, "model_trt")
@@ -91,7 +100,7 @@ class OnnxModule(object):
                     {
                         "device_id": 0,
                         "arena_extend_strategy": "kNextPowerOfTwo",
-                        "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+                        # "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
                         "cudnn_conv_algo_search": "EXHAUSTIVE",
                         "do_copy_in_default_stream": True,
                     },
@@ -109,7 +118,7 @@ class OnnxModule(object):
                 )
 
         self.sess = ort.InferenceSession(
-            onnx_model.SerializeToString(), providers=providers
+            onnx_model.SerializeToString(), sess_options, providers=providers
         )
 
         if (
@@ -142,7 +151,9 @@ class OnnxModule(object):
         """
         import torch
 
-        input_dict = {k: args[i].cpu().numpy() for i, k in enumerate(self.input_names)}
+        # input_dict = {k: args[i].cpu().numpy() for i, k in enumerate(self.input_names)}
+        # input_dict = {k: args[i].numpy() for i, k in enumerate(self.input_names)}
+        input_dict = {k: args[i] for i, k in enumerate(self.input_names)}
         onnx_outputs = self.sess.run(self.output_names, input_dict)
         onnx_outputs = onnx_outputs[:3]
         onnx_outputs = [torch.from_numpy(out) for out in onnx_outputs]

@@ -1,6 +1,7 @@
 import glob
 import multiprocessing as mp
 import os
+import shutil
 import tempfile
 import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -13,7 +14,7 @@ import numpy as np
 # http://148.216.108.129/vython38/lib/python3.8/site-packages/willow/plugins/wand.py
 from tifffile import TiffWriter
 
-from marie.utils.docs import frames_from_file
+from marie.utils.docs import frames_from_file, get_document_type
 
 
 # https://github.com/joeatwork/python-lzw
@@ -157,6 +158,7 @@ def burst_tiff(
     bitonal=True,
     sequential=True,
     filename_generator: Optional[Callable] = None,
+    silence_errors=False,
 ):
     """
     Burst multipage tiff into individual frames and save them to output directory
@@ -166,7 +168,18 @@ def burst_tiff(
     :param bitonal: Should image be converted to bitonal image
     :param sequential: Should the document be process sequentially or in multithreaded fashion
     :param filename_generator: Function that generates filename for each frame
+    :param silence_errors: If True, errors will be silenced and file copy will be performed.
     """
+
+    image_type = get_document_type(src_img_path)
+    if image_type != "tiff":
+        if silence_errors:
+            print(f"Expected tiff file, got {image_type}, skipping...")
+            # copy file to destination directory
+            shutil.copy(src_img_path, dest_dir)
+            return
+        else:
+            raise ValueError(f"Expected tiff file, got {image_type}")
 
     frames = frames_from_file(src_img_path)
     burst_tiff_frames(frames, dest_dir, bitonal, sequential, filename_generator)
