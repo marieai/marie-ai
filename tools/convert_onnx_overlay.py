@@ -260,7 +260,7 @@ def export_onnx(
     path: str,
     output_path_fp32: str,
     verbose: Optional[bool] = True,
-    opset_version: Optional[int] = 16,
+    opset_version: Optional[int] = 17,
 ):
     print("Exporting model")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
