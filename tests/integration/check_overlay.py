@@ -22,7 +22,7 @@ if __name__ == "__main__":
     stack_dir = ensure_exists(os.path.join(root_dir, "stack"))
     clean_dir = ensure_exists(os.path.join(root_dir, "clean"))
 
-    img_path = os.path.join(root_dir, "159015281_2.png")
+    img_path = os.path.join(root_dir, "PID_1925_9289_0_157186264.tif")
     burst_tiff(img_path, burst_dir, silence_errors=True)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
