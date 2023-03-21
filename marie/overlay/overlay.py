@@ -97,11 +97,11 @@ class OverlayProcessor(BaseHandler):
 
         # check if we have a onnx model and load it
         model_path = os.path.expanduser(
-            os.path.join(checkpoints_dir, "claim_mask", "model.optimized.onnx")
+            os.path.join(checkpoints_dir, "claim_mask", "model.onnx")
         )
-        if os.path.exists(model_path):
+        if False and os.path.exists(model_path):
             print(f"Loading ONNX model :{model_path}")
-            model = OnnxModule(model_path, providers=None, use_io_binding=False)
+            model = OnnxModule(model_path, providers=None, use_io_binding=True)
             print("Model setup complete : ONNX")
             return opt, model
 

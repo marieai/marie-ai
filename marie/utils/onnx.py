@@ -53,6 +53,9 @@ class OnnxModule(object):
 
     The module can be generated with MultiModalPredictor.export_tensorrt(),
     so that we can predict with TensorRT by simply replacing predictor._model with OnnxModule.
+
+    ref : https://huggingface.co/docs/optimum/onnxruntime/usage_guides/gpu
+    ref : https://userweb.cs.txstate.edu/~k_y47/webpage/pubs/icess22.pdf
     """
 
     def __init__(
@@ -96,16 +99,16 @@ class OnnxModule(object):
             dirname = os.path.dirname(os.path.abspath(onnx_path))
             cache_path = os.path.join(dirname, "model_trt")
             providers = [
-                (
-                    "TensorrtExecutionProvider",
-                    {
-                        "device_id": 0,
-                        "trt_max_workspace_size": 2147483648,
-                        "trt_fp16_enable": True,
-                        "trt_engine_cache_path": cache_path,
-                        "trt_engine_cache_enable": True,
-                    },
-                ),
+                # (
+                #     "TensorrtExecutionProvider",
+                #     {
+                #         "device_id": 0,
+                #         # "trt_max_workspace_size": 2147483648,
+                #         "trt_fp16_enable": True,
+                #         "trt_engine_cache_path": cache_path,
+                #         "trt_engine_cache_enable": True,
+                #     },
+                # ),
                 (
                     "CUDAExecutionProvider",
                     {
