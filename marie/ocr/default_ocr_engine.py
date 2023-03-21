@@ -42,6 +42,7 @@ class DefaultOcrEngine(OcrEngine):
             has_cuda = False
 
         box_segmentation_mode = int(kwargs.get("box_segmentation_mode", "1"))
+        box_segmentation_mode = 1
         if box_segmentation_mode == 1:
             self.box_processor = BoxProcessorUlimDit(
                 work_dir=work_dir_boxes,
@@ -86,9 +87,8 @@ class DefaultOcrEngine(OcrEngine):
                 overlay = (
                     np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8) * 255
                 )
-
                 overlay[padding : h + padding, padding : w + padding] = img
-                cv2.imwrite(f"/tmp/marie/overlay_{i}.png", overlay)
+
                 (
                     boxes,
                     img_fragments,

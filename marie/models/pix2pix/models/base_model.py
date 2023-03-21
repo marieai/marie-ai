@@ -228,18 +228,16 @@ class BaseModel(ABC):
                 for param in net.parameters():
                     param.grad = None
 
-                # compile model
-                # TODO: fix this, it causes OOM and inference is very bad (distorts images)
-                if True:
+                # FIXME: fix this, it causes OOM and inference is very bad (distorts images)
+                if False:
                     try:
                         print("**** COMPILING ***")
                         import torch._dynamo as dynamo
                         torch._dynamo.config.verbose = True
                         # torch.backends.cudnn.benchmark = False
-                        # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never relased
+                        # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never released
                         # torch._dynamo.config.set("inductor", "cache_memory", 0)
                         # mode options: default, reduce-overhead, max-autotune
-                        # default, reduce-overhead, max-autotune
                         # ['aot_ts_nvfuser', 'cudagraphs', 'inductor', 'ipex', 'nvprims_nvfuser', 'onnxrt', 'tensorrt', 'tvm']
 
                         #  SymIntArrayRef expected to contain only concrete integers
@@ -250,8 +248,8 @@ class BaseModel(ABC):
                             mode="max-autotune",
                             dynamic=True,
                             fullgraph=True,
-                            backend="inductor",
-                        )
+                            backend="aot_ts_nvfuser",
+                         )
                         setattr(self, "net" + name, model)
                     except Exception as e:
                         print(f"Failed to compile model : {e}")

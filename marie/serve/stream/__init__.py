@@ -86,6 +86,7 @@ class RequestStreamer:
 
         try:
             async for response in async_iter:
+                print('response', response)
                 yield response
         except InternalNetworkError as err:
             if (

@@ -97,6 +97,8 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
                 f"Unable to read file from {uri} no suitable storage manager configured"
             )
 
+        # make sure the directory exists
+        ensure_exists(f"/tmp/marie")
         # Read remote file to a byte array
         with tempfile.NamedTemporaryFile(
             dir="/tmp/marie", delete=False

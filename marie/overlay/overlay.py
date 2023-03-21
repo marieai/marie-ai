@@ -24,7 +24,7 @@ from PIL import Image
 # Add parent to the search path, so we can reference the module here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-debug_visualization_enabled = True
+debug_visualization_enabled = False
 
 
 class OverlayProcessor(BaseHandler):
@@ -312,6 +312,7 @@ class OverlayProcessor(BaseHandler):
         img_path = os.path.join(
             self.work_dir, frame_checksum, f"{document_id}_{frame_checksum}.png"
         )
+        imwrite(img_path, frame)
 
         return self.segment(document_id, img_path, frame_checksum)
 

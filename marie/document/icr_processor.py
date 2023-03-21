@@ -180,7 +180,6 @@ class IcrProcessor(BaseHandler):
                         fill=(0, 0, 255),
                     )
 
-            pil_overlay.save("/tmp/icr/overlay.png")
             if False:
                 savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
                 cv2.imwrite(savepath, overlay_image)

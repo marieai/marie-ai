@@ -109,6 +109,7 @@ def burst_tiff_frames(
 ) -> None:
     """
     Burst multipage tiff into individual frames and save them to output directory
+    Ref : https://stackoverflow.com/questions/9627652/split-multi-page-tiff-with-python
 
     :param frames: Source image
     :param dest_dir: Destination directory
