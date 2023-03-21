@@ -230,7 +230,7 @@ class BaseModel(ABC):
 
                 # compile model
                 # TODO: fix this, it causes OOM and inference is very bad (distorts images)
-                if False:
+                if True:
                     try:
                         print("**** COMPILING ***")
                         import torch._dynamo as dynamo
@@ -242,11 +242,14 @@ class BaseModel(ABC):
                         # default, reduce-overhead, max-autotune
                         # ['aot_ts_nvfuser', 'cudagraphs', 'inductor', 'ipex', 'nvprims_nvfuser', 'onnxrt', 'tensorrt', 'tvm']
 
+                        #  SymIntArrayRef expected to contain only concrete integers
+                        torch._dynamo.config.suppress_errors = True
+
                         model = torch.compile(
                             net,
                             mode="max-autotune",
                             dynamic=True,
-                            fullgraph=False,
+                            fullgraph=True,
                             backend="inductor",
                         )
                         setattr(self, "net" + name, model)
