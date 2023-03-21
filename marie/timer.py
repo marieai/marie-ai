@@ -4,6 +4,8 @@ from contextlib import ContextDecorator
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Dict, Optional
 
+import torch
+
 
 class TimerError(Exception):
     """A custom exception used to report errors in use of Timer class"""
@@ -56,3 +58,16 @@ class Timer(ContextDecorator):
     def __exit__(self, *exc_info: Any) -> None:
         """Stop the context manager timer"""
         self.stop()
+
+
+# Returns the result of running `fn()` and the time it took for `fn()` to run,
+# in seconds. We use CUDA events and synchronization for the most accurate
+# measurements.
+def timed_cuda(fn):
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    result = fn()
+    end.record()
+    torch.cuda.synchronize()
+    return result, start.elapsed_time(end) / 1000

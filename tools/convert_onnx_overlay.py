@@ -372,16 +372,16 @@ if __name__ == "__main__":
     print(dynamo.list_backends(None))
     # test_trn_backend("/tmp/latest_net_G.onnx")
 
-    if False:
+    if True:
         export_onnx(
             path="~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.pth",
-            output_path_fp32="~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.onnx",
+            output_path_fp32="~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/model.onnx",
         )
 
-    if False:
+    if True:
         optimize(
-            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.onnx",
-            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/model.onnx",
+            "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/model.optimized.onnx",
         )
 
     # optimize("/tmp/latest_net_G.onnx", "/tmp/latest_net_G.opt.onnx")
@@ -392,7 +392,7 @@ if __name__ == "__main__":
             torch.randn(1, 3, 256, 256),
         )
 
-    if True:
+    if False:
         run_onnx_inference_as_module(
             "~/dev/marieai/marie-ai/model_zoo/overlay/claim_mask/latest_net_G.optimized.onnx",
             "/home/gbugaj/sample.png",

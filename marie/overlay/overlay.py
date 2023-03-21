@@ -3,7 +3,7 @@ import sys
 import time
 import timeit
 from shutil import copyfile
-from typing import Tuple
+from typing import Tuple, Union
 
 import cv2
 import torch
@@ -25,19 +25,6 @@ from PIL import Image
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
 debug_visualization_enabled = True
-
-
-# Returns the result of running `fn()` and the time it took for `fn()` to run,
-# in seconds. We use CUDA events and synchronization for the most accurate
-# measurements.
-def timed_cuda(fn):
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    start.record()
-    result = fn()
-    end.record()
-    torch.cuda.synchronize()
-    return result, start.elapsed_time(end) / 1000
 
 
 class OverlayProcessor(BaseHandler):
@@ -109,15 +96,12 @@ class OverlayProcessor(BaseHandler):
         opt.output_nc = 3
 
         # check if we have a onnx model and load it
-        if os.path.exists(
-            os.path.join(checkpoints_dir, "claim_mask", "latest_net_G.onnx")
-        ):
-            print("Loading ONNX model")
-            model_path = os.path.join(
-                checkpoints_dir, "claim_mask", "latest_net_G.onnx"
-            )
-            model_path = os.path.expanduser(model_path)
-            model = OnnxModule(model_path, providers=None)
+        model_path = os.path.expanduser(
+            os.path.join(checkpoints_dir, "claim_mask", "model.optimized.onnx")
+        )
+        if os.path.exists(model_path):
+            print(f"Loading ONNX model :{model_path}")
+            model = OnnxModule(model_path, providers=None, use_io_binding=False)
             print("Model setup complete : ONNX")
             return opt, model
 
@@ -128,7 +112,7 @@ class OverlayProcessor(BaseHandler):
         print("Model setup complete")
         return opt, model
 
-    def preprocess(self, img):
+    def preprocess(self, img: np.ndarray) -> np.ndarray:
         # check if PIL image
         if not isinstance(img, Image.Image):
             img = Image.fromarray(img)
@@ -140,7 +124,9 @@ class OverlayProcessor(BaseHandler):
             h = oh // base * base + base
             w = ow // base * base + base
             img = img.resize((w, h), Image.LANCZOS)
-        return img
+
+        # convert to numpy array
+        return np.array(img)
 
     @Timer(text="__extract_segmentation_mask in {:.4f} seconds")
     def __extract_segmentation_mask(self, img, dataroot_dir):
@@ -150,26 +136,27 @@ class OverlayProcessor(BaseHandler):
         model = self.model
         opt = self.opt
         opt.dataroot = dataroot_dir
+        try:
+            if isinstance(self.model, OnnxModule):
+                return self.run_onnx(img)
 
-        img = self.preprocess(img)
-        if isinstance(self.model, OnnxModule):
-            return self.postprocess(img, self.run_onnx(img))
+            # create a dataset given opt.dataset_mode and other options
+            dataset = create_dataset(opt)
+            for i, data in enumerate(dataset):
+                model.set_input(data)  # unpack data from data loader
+                model.test()
+                visuals = model.get_current_visuals()  # get image results
+                fake_im_data = visuals["fake"]
+                image_numpy = tensor2im(fake_im_data)
+                return image_numpy
+        finally:
+            # clear cuda memory afer inference
+            torch.cuda.empty_cache()
 
-        # create a dataset given opt.dataset_mode and other options
-        dataset = create_dataset(opt)
-        for i, data in enumerate(dataset):
-            model.set_input(data)  # unpack data from data loader
-            model.test()
-            visuals = model.get_current_visuals()  # get image results
-            fake_im_data = visuals["fake"]
-            image_numpy = tensor2im(fake_im_data)
-
-            return self.postprocess(img, image_numpy)
-
-    def postprocess(self, img, image_numpy):
+    def postprocess(self, real_img: np.ndarray, fake_mask: np.ndarray) -> np.ndarray:
         image_dir = os.path.join(self.work_dir, "debug")
         # Tensor is in RGB format OpenCV requires BGR
-        image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
+        image_numpy = cv2.cvtColor(fake_mask, cv2.COLOR_RGB2BGR)
         save_path = os.path.join(image_dir, "fake.png")
 
         # testing only
@@ -180,11 +167,24 @@ class OverlayProcessor(BaseHandler):
         # to have different sizes(transforms have not been applied).
         # This is a work around for now
 
-        if img.shape != image_numpy.shape:
+        # Causes by forward pass, incrementing size of the output layer
+        if real_img.shape != image_numpy.shape:
             print(
-                f"WARNING(FIXME): overlay shapes do not match(adjusting): {img.shape} != {image_numpy.shape}"
+                "WARNING(FIXME/ADJUSTING): Sizes of input arguments do not match(real,"
+                f" fake) : {real_img.shape} != {image_numpy.shape}"
             )
-            return image_numpy[: img.shape[0], : img.shape[1], :]  # IF we do RGB2BGR
+            # tmp_img = np.ones((fake.shape[0], fake.shape[1], 3), dtype = np.uint8) * 255
+            h = min(real_img.shape[0], image_numpy.shape[0])
+            w = min(real_img.shape[1], image_numpy.shape[1])
+            # # make a blank image
+            # img_r = np.ones((h, w), dtype = np.uint8) * 255
+            # img_f = np.ones((h, w), dtype = np.uint8) * 255
+            real_img = real_img[:h, :w, :]
+            image_numpy = image_numpy[:h, :w, :]
+
+            print(
+                f"Image shapes after(real, fake) : {real_img.shape} : {image_numpy.shape}"
+            )
 
         return image_numpy
 
@@ -227,26 +227,20 @@ class OverlayProcessor(BaseHandler):
         hsv_mask_red = cv2.cvtColor(hsv_mask_red, cv2.COLOR_GRAY2BGR)
         hsv_mask_red = cv2.cvtColor(hsv_mask_red, cv2.COLOR_BGR2GRAY)
 
-        imwrite(
-            os.path.join("/tmp/form-segmentation", f"hsv_mask_red.png"), hsv_mask_red
-        )
+        # imwrite(
+        #     os.path.join("/tmp/form-segmentation", f"hsv_mask_red.png"), hsv_mask_red
+        # )
 
         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
         real = cv2.cvtColor(real, cv2.COLOR_BGR2GRAY)
-
-        print(f"mask.shape: {mask.shape}")
-        print(f"real.shape: {real.shape}")
-        print(f"hsv_mask_red.shape: {hsv_mask_red.shape}")
-
-        imwrite(os.path.join("/tmp/form-segmentation", f"mask.png"), mask)
-        imwrite(os.path.join("/tmp/form-segmentation", f"real.png"), real)
+        # imwrite(os.path.join("/tmp/form-segmentation", f"mask.png"), mask)
+        # imwrite(os.path.join("/tmp/form-segmentation", f"real.png"), real)
 
         # OR original and generated mask and then AND with red mask
         blended_img = cv2.bitwise_or(real, mask)
         blended_img = cv2.bitwise_and(blended_img, hsv_mask_red)
-
-        imwrite(os.path.join("/tmp/form-segmentation", f"blended_img.png"), blended_img)
         blended_img = cv2.cvtColor(blended_img, cv2.COLOR_GRAY2BGR)
+
         return blended_img
 
     @Timer(text="Segmented in {:.4f} seconds")
@@ -277,14 +271,12 @@ class OverlayProcessor(BaseHandler):
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
         print(f"dst_file_name : {dst_file_name}")
 
-        if False and not os.path.exists(dst_file_name):
-            copyfile(img_path, dst_file_name)
-
-        copyfile(img_path, dst_file_name)
-        real_img = cv2.imread(dst_file_name)
+        real_img = cv2.imread(img_path)
         if len(real_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
 
+        real_img = self.preprocess(real_img)
+        imwrite(dst_file_name, real_img)
         fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir)
 
         # Unable to segment return empty mask
@@ -296,27 +288,9 @@ class OverlayProcessor(BaseHandler):
             )
             return real_img, fake_mask, real_img
 
-        # Causes by forward pass, incrementing size of the output layer
-        if real_img.shape != fake_mask.shape:
-            print(
-                "WARNING(FIXME/ADJUSTING): Sizes of input arguments do not match(real,"
-                f" fake) : {real_img.shape} != {fake_mask.shape}"
-            )
-            # tmp_img = np.ones((fake.shape[0], fake.shape[1], 3), dtype = np.uint8) * 255
-            h = min(real_img.shape[0], fake_mask.shape[0])
-            w = min(real_img.shape[1], fake_mask.shape[1])
-            # # make a blank image
-            # img_r = np.ones((h, w), dtype = np.uint8) * 255
-            # img_f = np.ones((h, w), dtype = np.uint8) * 255
-            real_img = real_img[:h, :w, :]
-            fake_mask = fake_mask[:h, :w, :]
-
-            print(
-                f"Image shapes after(real, fake) : {real_img.shape} : {fake_mask.shape}"
-            )
-
+        fake_mask = self.postprocess(real_img, fake_mask)
         blended = self.blend_to_text(real_img, fake_mask)
-        # viewImage(segmask, 'segmask')
+
         tm = time.time_ns()
         if debug_visualization_enabled:
             imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
@@ -341,7 +315,7 @@ class OverlayProcessor(BaseHandler):
 
         return self.segment(document_id, img_path, frame_checksum)
 
-    def run_onnx(self, img):
+    def run_onnx(self, img: Union[Image.Image, np.ndarray]) -> np.ndarray:
         """
         Run onnx model on given image
         @param img:
@@ -349,11 +323,13 @@ class OverlayProcessor(BaseHandler):
         """
         model = self.model
         # check if PIL image
-        if not isinstance(img, Image.Image):
-            raise Exception("Image must be PIL image")
+        if isinstance(img, Image.Image):
+            data = np.array(img).astype(np.float32)
+        else:
+            data = img.astype(np.float32)
 
-        print("Image size After: ", img.size)
-        data = np.array(img).astype(np.float32)
+        print("Image shape : ", data.shape)
+        # data = np.array(img).astype(np.float32)
         # convert from HWC to CHW
         data = np.transpose(data, (2, 0, 1))
         data = np.expand_dims(data, axis=0)  # add batch dimension  N x C x W x H

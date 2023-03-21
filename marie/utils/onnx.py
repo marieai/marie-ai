@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
+import torch
 from onnxruntime import ExecutionMode
 from torch import tensor
 
@@ -55,7 +56,10 @@ class OnnxModule(object):
     """
 
     def __init__(
-        self, onnx_path: str, providers: Optional[Union[dict, List[str]]] = None
+        self,
+        onnx_path: str,
+        providers: Optional[Union[dict, List[str]]] = None,
+        use_io_binding: bool = True,
     ):
         """
         Parameters
@@ -71,7 +75,9 @@ class OnnxModule(object):
         if not os.path.exists(onnx_path):
             raise FileNotFoundError(f"failed to located onnx file at {onnx_path}")
 
-        logger.info("Loading ONNX file from path {}...".format(onnx_path))
+        logger.info(
+            f"Loading ONNX[io_binding = {use_io_binding}] file from path {onnx_path}..."
+        )
         onnx_model = onnx.load(onnx_path)
 
         # ONNX model
@@ -80,7 +86,12 @@ class OnnxModule(object):
         sess_options.execution_mode = ExecutionMode.ORT_PARALLEL
         sess_options.intra_op_num_threads = psutil.cpu_count(logical=True)
         sess_options.log_verbosity_level = 1
+        sess_options.enable_profiling = False
+        sess_options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
 
+        # https://github.com/microsoft/onnxruntime/issues/15002
         if providers == None:
             dirname = os.path.dirname(os.path.abspath(onnx_path))
             cache_path = os.path.join(dirname, "model_trt")
@@ -99,11 +110,22 @@ class OnnxModule(object):
                     "CUDAExecutionProvider",
                     {
                         "device_id": 0,
-                        "arena_extend_strategy": "kNextPowerOfTwo",
-                        # "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
-                        "cudnn_conv_algo_search": "EXHAUSTIVE",
+                        "cudnn_conv_algo_search": "EXHAUSTIVE",  # EXHAUSTIVE
+                        "cudnn_conv_use_max_workspace": True,  # Reduces inference time by ~25%
                         "do_copy_in_default_stream": True,
+                        "arena_extend_strategy": "kNextPowerOfTwo",
+                        "enable_cuda_graph": False,
+                        "cudnn_conv1d_pad_to_nc1d": True,
+                        # "gpu_mem_limit": 6 * 1024 * 1024 * 1024,
                     },
+                    # "CUDAExecutionProvider",
+                    # {
+                    #     "device_id": 0,
+                    #     "arena_extend_strategy": "kNextPowerOfTwo",
+                    #     # "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+                    #     "cudnn_conv_algo_search": "EXHAUSTIVE",
+                    #     "do_copy_in_default_stream": True,
+                    # },
                 ),
                 ("CPUExecutionProvider", {}),
             ]
@@ -117,7 +139,7 @@ class OnnxModule(object):
                     "tensorrt package is not installed. The package can be install via `pip install tensorrt`."
                 )
 
-        self.sess = ort.InferenceSession(
+        self.session = ort.InferenceSession(
             onnx_model.SerializeToString(), sess_options, providers=providers
         )
 
@@ -125,19 +147,23 @@ class OnnxModule(object):
             get_provider_name(providers[0]) == "TensorrtExecutionProvider"
             and tensorrt_imported
         ):
-            assert "TensorrtExecutionProvider" in self.sess.get_providers(), (
-                f"unexpected TensorRT compilation failure: TensorrtExecutionProvider not in providers ({self.sess.get_providers()}). "
+            assert "TensorrtExecutionProvider" in self.session.get_providers(), (
+                f"unexpected TensorRT compilation failure: TensorrtExecutionProvider not in providers ({self.session.get_providers()}). "
                 "Make sure onnxruntime package gets lazy imported everywhere."
             )
 
-        inputs = self.sess.get_inputs()
-        outputs = self.sess.get_outputs()
+        inputs = self.session.get_inputs()
+        outputs = self.session.get_outputs()
         self.input_names = [i.name for i in inputs]
         self.output_names = [i.name for i in outputs]
+        self.io_binding = self.session.io_binding() if use_io_binding else None
 
     def __call__(self, *args):
         """
         Make the module callable like torch.nn.Module, while runnning forward pass with onnxruntime.
+
+        https://onnxruntime.ai/docs/api/python/api_summary.html#onnxruntime.InferenceSession.run
+        https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/transformers/bert_perf_test.py#L143
 
         Parameters
         ----------
@@ -151,13 +177,32 @@ class OnnxModule(object):
         """
         import torch
 
-        # input_dict = {k: args[i].cpu().numpy() for i, k in enumerate(self.input_names)}
-        # input_dict = {k: args[i].numpy() for i, k in enumerate(self.input_names)}
-        input_dict = {k: args[i] for i, k in enumerate(self.input_names)}
-        onnx_outputs = self.sess.run(self.output_names, input_dict)
-        onnx_outputs = onnx_outputs[:3]
-        onnx_outputs = [torch.from_numpy(out) for out in onnx_outputs]
-        return onnx_outputs
+        session = self.session
+        if self.io_binding is not None:
+            io_binding = self.io_binding
+
+            for i, k in enumerate(self.input_names):
+                io_binding.bind_cpu_input(k, args[i])
+
+            for i, k in enumerate(self.output_names):
+                io_binding.bind_output(k)
+
+            session.run_with_iobinding(io_binding)
+            onnx_outputs = io_binding.copy_outputs_to_cpu()
+            onnx_outputs = [torch.from_numpy(out) for out in onnx_outputs]
+
+            io_binding.clear_binding_inputs()
+            io_binding.clear_binding_outputs()
+
+            return onnx_outputs
+        else:
+
+            input_dict = {k: args[i] for i, k in enumerate(self.input_names)}
+            onnx_outputs = session.run(self.output_names, input_dict)
+            onnx_outputs = onnx_outputs[:3]
+            onnx_outputs = [torch.from_numpy(out) for out in onnx_outputs]
+
+            return onnx_outputs
 
     def to(self, *args):
         """A dummy function that act as torch.nn.Module.to() function"""
@@ -167,3 +212,13 @@ class OnnxModule(object):
                 pass
 
         return DummyModel
+
+
+def create_input_output_tensors(inputs, outputs, device):
+    input_tensors = {
+        name: torch.from_numpy(array).to(device) for name, array in inputs.items()
+    }
+    output_tensors = {
+        name: torch.from_numpy(array).to(device) for name, array in outputs.items()
+    }
+    return input_tensors, output_tensors
