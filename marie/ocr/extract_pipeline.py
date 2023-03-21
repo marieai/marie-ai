@@ -3,6 +3,7 @@ import os
 import shutil
 from functools import partial
 from typing import Union, List
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -185,7 +186,7 @@ class ExtractPipeline:
 
         return clean_frames
 
-    def __burst(
+    def burst_frames(
         self,
         ref_id: str,
         frames: Union[np.ndarray, List[Image.Image]],
@@ -221,7 +222,7 @@ class ExtractPipeline:
                 f"File count mismatch [burst] : {file_count} != {len(frames)}"
             )
 
-    def ocr(
+    def ocr_frames(
         self,
         ref_id: str,
         frames: Union[List[np.ndarray], List[Image.Image]],
@@ -264,22 +265,24 @@ class ExtractPipeline:
     def execute_frames_pipeline(
         self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str
     ) -> None:
-        self.logger.info(f"Executing pipeline for document : {ref_id}, {ref_type}")
+        self.logger.info(
+            f"Executing pipeline for document : {ref_id}, {ref_type} > {root_asset_dir}"
+        )
 
         # check if we have already processed this document and restore assets
-        if False:
-            self.restore_assets(
-                ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
-            )
+        self.restore_assets(
+            ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
+        )
 
-        self.logger.info(f"Root asset dir : {root_asset_dir}")
         # burst frames into individual images
-        self.__burst(ref_id, frames, root_asset_dir)
+        self.burst_frames(ref_id, frames, root_asset_dir)
 
         # make sure we have clean image
         clean_frames = self.segment(ref_id, frames, root_asset_dir)
+
         # clean frames are used for OCR and to generate clean document
-        ocr_results = self.ocr(ref_id, clean_frames, root_asset_dir)
+        ocr_results = self.ocr_frames(ref_id, clean_frames, root_asset_dir)
+
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
@@ -297,7 +300,6 @@ class ExtractPipeline:
         ps_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
     ) -> None:
-
         self.logger.info(
             f"Executing pipeline for document : {ref_id}, {ref_type} with regions : {regions}"
         )
@@ -308,7 +310,7 @@ class ExtractPipeline:
 
         # make sure we have clean image
         clean_frames = self.segment(ref_id, frames, root_asset_dir)
-        results = self.ocr(
+        results = self.ocr_frames(
             ref_id,
             clean_frames,
             root_asset_dir,
@@ -356,10 +358,13 @@ class ExtractPipeline:
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
-
-        # remove directory if exists
+        # create backup name by appending a timestamp
         if os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
-            shutil.rmtree(os.path.join("/tmp/generators", frame_checksum))
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")
+            shutil.move(
+                os.path.join("/tmp/generators", frame_checksum),
+                os.path.join("/tmp/generators", f"{frame_checksum}-{ts}"),
+            )
 
         root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
 

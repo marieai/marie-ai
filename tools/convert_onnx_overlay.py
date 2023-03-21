@@ -289,8 +289,10 @@ def export_onnx(
         export_params=True,
         opset_version=opset_version,
         dynamic_axes={
-            "input": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
-            "output": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
+            # "input": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
+            # "output": {0: "batch_size", 1: "channels", 2: "height", 3: "width"},
+            "input": {2: "height", 3: "width"},
+            "output": {2: "height", 3: "width"},
         },
     )
 

@@ -228,29 +228,43 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
-    def psm_sparse(self, image):
-        self.logger.info(f"Starting box predictions")
-        predictions = self.predictor(image)
-        predictions = predictions["instances"].to(self.cpu_device)
-        self.logger.info(f"Number of box predictions : {len(predictions)}")
+    def psm_sparse(self, image: np.ndarray):
+        try:
+            self.logger.debug(f"Starting box predictions")
+            predictions = self.predictor(image)
+            predictions = predictions["instances"]
+            # Following will hang if we move the predictions from GPU to CPU all at once
+            # This is a workaround to avoid the hang
+            # predictions = predictions.to(self.cpu_device)
+            boxes = (
+                predictions.pred_boxes.to(self.cpu_device)
+                if predictions.has("pred_boxes")
+                else None
+            )
+            scores = (
+                predictions.scores.to(self.cpu_device)
+                if predictions.has("scores")
+                else None
+            )
+            classes = (
+                predictions.pred_classes.to(self.cpu_device)
+                if predictions.has("pred_classes")
+                else None
+            )
+            del predictions
 
-        boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
-        scores = predictions.scores if predictions.has("scores") else None
-        classes = predictions.pred_classes if predictions.has("pred_classes") else None
+            bboxes = _convert_boxes(boxes)
+            bboxes = merge_boxes(bboxes, 0.08)
+            bboxes = np.array(bboxes)
 
-        bboxes = _convert_boxes(boxes)
-        self.logger.info(f"bboxes B : =============> {len(bboxes)}")
-        # merge boxes with iou > 0.1 as they are likely to be the same box
-        bboxes = merge_boxes(bboxes, 0.08)
-        self.logger.info(f"bboxes A : =============> {len(bboxes)}")
-        bboxes = np.array(bboxes)
+            # sort by xy-coordinated
+            ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
+            bboxes = bboxes[ind]
+            lines = lines_from_bboxes(image, bboxes)
 
-        # sort by xy-coordinated
-        ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
-        bboxes = bboxes[ind]
-        lines = lines_from_bboxes(image, bboxes)
-
-        return bboxes, classes, scores, lines, classes
+            return bboxes, classes, scores, lines, classes
+        except Exception as e:
+            self.logger.error(e)
 
     def psm_line(self, image):
         if self.strict_box_segmentation:

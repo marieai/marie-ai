@@ -106,8 +106,8 @@ PyPDF4:                       standard,core
 reportlab:                    standard,core
 pycocotools:                  standard,core
 nltk:                         standard,core
-timm==0.4.12:                 standard,core
-segmentation-models-pytorch:  standard,core
+timm==0.6.12:                 standard,core
+#segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
 Cython:                       standard,core

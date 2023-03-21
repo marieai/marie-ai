@@ -34,9 +34,14 @@ class TextExtractionExecutor(Executor):
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.pipeline = ExtractPipeline(cuda=use_cuda)
 
+        instance_name = "not_defined"
+        if kwargs is not None:
+            if "runtime_args" in kwargs:
+                instance_name = kwargs.get("runtime_args").get("name", "not_defined")
+
         self.runtimeinfo = {
             "name": self.__class__.__name__,
-            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "instance_name": instance_name,
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
@@ -54,7 +59,7 @@ class TextExtractionExecutor(Executor):
         return {"index": "complete"}
 
     @requests(on="/text/extract")
-    @safely_encoded
+    # @safely_encoded
     def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         """Load the image from `uri`, extract text and bounding boxes.
         :param parameters:
