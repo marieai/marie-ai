@@ -187,6 +187,7 @@ def get_main_parser():
     from marie.parsers.flow import set_flow_parser
     from marie.parsers.helper import _SHOW_ALL_ARGS, _chf
     from marie.parsers.ping import set_ping_parser
+    from marie.parsers.server import set_server_parser
 
     # create the top-level parser
     parser = set_base_parser()
@@ -267,6 +268,15 @@ def get_main_parser():
             'hub',
             help='Manage Executor on Marie Hub',
             description='Push/Pull an Executor to/from Marie Hub',
+            formatter_class=_chf,
+        )
+    )
+
+    set_server_parser(
+        sp.add_parser(
+            'server',
+            help='Manage Marie Server',
+            description='Manage Marie Server (e.g. start/stop/purge)',
             formatter_class=_chf,
         )
     )

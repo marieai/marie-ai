@@ -232,3 +232,25 @@ def cloud(args: 'Namespace'):
     from jcloud import api
 
     getattr(api, args.jc_cli.replace('-', '_'))(args)
+
+
+def server(args: 'Namespace'):
+    """
+    Start Marie server
+    :param args: arguments coming from the CLI.
+    """
+    import os
+    from marie_server import __main__ as srv
+    from marie.constants import (
+        __config_dir__,
+    )
+
+    print('Starting server')
+    print(args)
+
+    if args.uses:
+        _input = args.uses
+    else:
+        _input = os.path.join(__config_dir__, "service", "marie.yml")
+
+    srv.main(_input=_input, _env_file=args.env_file, _env=args.env)
