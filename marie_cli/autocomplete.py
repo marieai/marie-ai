@@ -3,6 +3,7 @@ ac_table = {
         '--help',
         '--version',
         '--version-full',
+        'server',
         'executor',
         'flow',
         'ping',
@@ -18,6 +19,10 @@ ac_table = {
         'client',
     ],
     'completions': {
+        'server': [
+            '--help',
+            '--name',
+        ],
         'executor': [
             '--help',
             '--name',

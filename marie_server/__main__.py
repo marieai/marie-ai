@@ -62,7 +62,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
 
 
-if __name__ == "__main__":
+def main(_input: str, _env: Dict[str, str], _env_file: str):
     install(show_locals=True)
 
     if "NO_VERSION_CHECK" not in os.environ:
@@ -74,14 +74,6 @@ if __name__ == "__main__":
 
     # install handler for exceptions
     sys.excepthook = handle_exception
-
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "-i":
-            _input = sys.stdin.read()
-        else:
-            _input = sys.argv[1]
-    else:
-        _input = os.path.join(__config_dir__, "service", "marie.yml")
 
     print(f"__model_path__ = {__model_path__}")
     print(f"__config_dir__ = {__config_dir__}")
@@ -116,3 +108,15 @@ if __name__ == "__main__":
 
     with f:
         f.block()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "-i":
+            _input = sys.stdin.read()
+        else:
+            _input = sys.argv[1]
+    else:
+        _input = os.path.join(__config_dir__, "service", "marie.yml")
+
+    main(_input)

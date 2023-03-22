@@ -106,7 +106,7 @@ def _try_plugin_command():
         return shutil.which(cmd) is not None
 
     subcommand = argv[1]
-    cmd = 'jina-' + subcommand
+    cmd = 'marie-' + subcommand
     if _cmd_exists(cmd):
         subprocess.run([cmd] + argv[2:])
         return True
@@ -121,7 +121,7 @@ def _try_plugin_command():
         console = get_rich_console()
         console.print(
             f"It seems like [yellow]{project}[/yellow] is not installed in your environment."
-            f"To use it via the [green]'jina {subcommand}'[/green] command, "
+            f"To use it via the [green]'marie {subcommand}'[/green] command, "
             f"install it first: [green]'pip install {package}'[/green]."
         )
         return True
