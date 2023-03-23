@@ -10,6 +10,7 @@
 
 
 
+
 <a name=release-note-__version__
 =
 
@@ -1492,4 +1493,20 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  - [[```1488998e```](https://github.com/marieai/marie-ai/commit/1488998e3e1f67c227d072556e97cc5a6bb84dd3)] __-__ integrated head from jina (*Greg*)
  - [[```39f2bf91```](https://github.com/marieai/marie-ai/commit/39f2bf91ddef11b60caf1af3d0e6b5c6c732ce1c)] __-__ integrated orchestrate from jina (*Greg*)
  - [[```47aa5466```](https://github.com/marieai/marie-ai/commit/47aa5466a6357f3c16a1941da2e8ab0fe30d61b3)] __-__ integrated serve runtimes from jina (*Greg*)
+
+<a name=release-note-3-0-02></a>
+## Release Note (`3.0.02`)
+
+> Release time: 2023-03-23 15:15:34
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  🙇
+
+
+### 🍹 Other Improvements
+
+ - [[```ab8fa02a```](https://github.com/marieai/marie-ai/commit/ab8fa02a4be856075c91fcc6c2debbe2e4a26521)] __-__ __release__: working on release (*Marie Dev Bot*)
+ - [[```a1a710a0```](https://github.com/marieai/marie-ai/commit/a1a710a03929264eb05e0a7d53a3bda05d3fc9b9)] __-__ __version__: the next version will be 3.0.02 (*Marie Dev Bot*)
 
