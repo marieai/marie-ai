@@ -245,12 +245,9 @@ def server(args: 'Namespace'):
         __config_dir__,
     )
 
-    print('Starting server')
-    print(args)
-
     if args.uses:
         _input = args.uses
     else:
         _input = os.path.join(__config_dir__, "service", "marie.yml")
 
-    srv.main(_input=_input, _env_file=args.env_file, _env=args.env)
+    srv.main(yml_config=_input, env=args.env, env_file=args.env_file)
