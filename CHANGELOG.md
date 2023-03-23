@@ -11,6 +11,7 @@
 
 
 
+
 <a name=release-note-__version__
 =
 
@@ -1509,4 +1510,19 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
 
  - [[```ab8fa02a```](https://github.com/marieai/marie-ai/commit/ab8fa02a4be856075c91fcc6c2debbe2e4a26521)] __-__ __release__: working on release (*Marie Dev Bot*)
  - [[```a1a710a0```](https://github.com/marieai/marie-ai/commit/a1a710a03929264eb05e0a7d53a3bda05d3fc9b9)] __-__ __version__: the next version will be 3.0.02 (*Marie Dev Bot*)
+
+<a name=release-note-3-0-03></a>
+## Release Note (`3.0.03`)
+
+> Release time: 2023-03-23 15:19:19
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  🙇
+
+
+### 🍹 Other Improvements
+
+ - [[```8bf5135b```](https://github.com/marieai/marie-ai/commit/8bf5135bb76112c01d59bc6e4efee212206904fe)] __-__ __version__: the next version will be 3.0.03 (*Marie Dev Bot*)
 
