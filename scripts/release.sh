@@ -33,8 +33,6 @@ function clean_build {
 }
 
 function pub_pypi {
-    return
-
     # publish to pypi
     clean_build
     cp extra-requirements.txt marie/resources/
