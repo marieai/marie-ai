@@ -15,8 +15,13 @@ import warnings as _warnings
 import docarray as _docarray
 from distutils.util import strtobool as strtobool
 
-if _sys.version_info < (3, 8, 0):
-    raise OSError(f"Marie requires Python >= 3.8, but yours is {_sys.version_info}")
+# do not change this line manually
+# this is managed by git tag and updated on every release
+# NOTE: this represents the NEXT release version
+__version__ = "3.0.0"
+
+if _sys.version_info < (3, 10, 0):
+    raise OSError(f"Marie requires Python >= 3.10, but yours is {_sys.version_info}")
 
 if True or strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
     import warnings
@@ -74,8 +79,8 @@ elif _sys.version_info >= (3, 8, 0) and _platform.system() == "Darwin":
 # do not change this line manually
 # this is managed by git tag and updated on every release
 # NOTE: this represents the NEXT release version
-
-__version__ = "3.0.0"
+# from .version import __version__
+# __version__ = "3.0.0"
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
