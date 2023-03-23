@@ -34,7 +34,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "<https://github.com/gregbugaj/marie-ai/blob/main/CONTRIBUTING.md|:notebook_with_decorative_cover: Read the change log>"
+          "text": "<https://github.com/marieai/marie-ai/blob/main/CONTRIBUTING.md|:notebook_with_decorative_cover: Read the change log>"
         }
       ]
     },
@@ -43,7 +43,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "<https://get.jina.ai|:star: Give Jina a star>"
+          "text": "<https://get.marieai.co|:star: Give MarieAI a star>"
         }
       ]
     }

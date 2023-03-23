@@ -33,6 +33,8 @@ function clean_build {
 }
 
 function pub_pypi {
+    return
+
     # publish to pypi
     clean_build
     cp extra-requirements.txt marie/resources/
@@ -50,7 +52,7 @@ function git_commit {
 }
 
 function slack_notif {
-    envsubst < ./.github/slack-pypi.json | curl -X POST -H 'Content-type: application/json' --data "@-" $JINA_SLACK_WEBHOOK
+    envsubst < ./.github/slack-pypi.json | curl -X POST -H 'Content-type: application/json' --data "@-" $MARIE_SLACK_WEBHOOK
 }
 
 
