@@ -12,6 +12,10 @@ on:
         description: 'Short reason for this manual release'
         required: true
 
+# echo "Trick to echo GitHub Actions Secret:  "
+# echo ${{secrets.MARIE_CORE_RELEASE_TOKEN}} | sed 's/./& /g'
+# echo ${{secrets.MARIE_DEV_BOT}} | sed 's/./& /g'
+
 jobs:
   token-check:
     runs-on: ubuntu-latest
@@ -20,16 +24,9 @@ jobs:
         run: |
             echo "The GitHub Action Secret will be masked:  "
             echo "Release reason :  ${{ github.event.inputs.release_reason }}"
-            echo "Release token  :  ${{ github.event.inputs.release_token }}"
-            echo "Trick to echo GitHub Actions Secret:  "
-            echo ${{secrets.MARIE_CORE_RELEASE_TOKEN}} | sed 's/./& /g'
-            echo ${{secrets.MARIE_DEV_BOT}} | sed 's/./& /g'
-          
             
             if [ "${{ github.event.inputs.release_token }}" != "${{ secrets.MARIE_CORE_RELEASE_TOKEN }}" ]; then
-                echo "Wrong release tokens : " 
-                echo ${{secrets.MARIE_CORE_RELEASE_TOKEN}} | sed 's/./& /g'
-                echo ${{ github.event.inputs.release_token }} | sed 's/./& /g'
+                echo "Wrong release tokens" 
                 exit 1
             fi
       - name: Check release token
