@@ -16,8 +16,9 @@ if sys.version_info < (3, 10, 0):
 
 try:
     # marie was already taken by PIP
-    pkg_name = "marie"
-    libinfo_py = path.join(pkg_name, "__init__.py")
+    pkg_name = "marieai"
+    lib_name = "marie"
+    libinfo_py = path.join(lib_name, "__init__.py")
     libinfo_content = open(libinfo_py, "r", encoding="utf8").readlines()
     version_line = [l.strip() for l in libinfo_content if l.startswith("__version__")][
         0
