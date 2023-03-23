@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "git-release-notes": "^5.0.0"
+  }
+}

@@ -143,3 +143,5 @@ logs/*
 env/
 output/
 /models/
+/node_modules/
+/CHANGELOG.tmp
