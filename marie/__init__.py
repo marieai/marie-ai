@@ -15,11 +15,6 @@ import warnings as _warnings
 import docarray as _docarray
 from distutils.util import strtobool as strtobool
 
-# do not change this line manually
-# this is managed by git tag and updated on every release
-# NOTE: this represents the NEXT release version
-__version__ = "3.0.0"
-
 if _sys.version_info < (3, 10, 0):
     raise OSError(f"Marie requires Python >= 3.10, but yours is {_sys.version_info}")
 
@@ -79,8 +74,7 @@ elif _sys.version_info >= (3, 8, 0) and _platform.system() == "Darwin":
 # do not change this line manually
 # this is managed by git tag and updated on every release
 # NOTE: this represents the NEXT release version
-# from .version import __version__
-# __version__ = "3.0.0"
+__version__ = '3.0.02'
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
@@ -162,6 +156,3 @@ from marie.serve.executors.decorators import (
 
 # Custom Gateway
 from marie.serve.gateway import BaseGateway as Gateway
-
-# ONLY FIRST CLASS CITIZENS ARE ALLOWED HERE, namely Document, Executor Flow
-from marie.version import __version__
