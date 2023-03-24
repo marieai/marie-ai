@@ -16,7 +16,7 @@ const config = {
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'gregbugaj', // Usually your GitHub org/user name.
+  organizationName: 'marieai', // Usually your GitHub org/user name.
   projectName: 'marie-ai', // Usually your repo name.
 
   i18n: {
@@ -34,7 +34,7 @@ const config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/gregbugaj/marie-ai/tree/develop/docs',
+            'https://github.com/marieai/marie-ai/tree/main/docs',
         },
 
         theme: {
