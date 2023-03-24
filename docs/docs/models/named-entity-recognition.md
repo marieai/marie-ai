@@ -13,22 +13,22 @@ Extracting Named Entity Recognition / Key Value pair extraction
 Basic executor setup and inference.
 
 ```python
-  from marie.executor import NerExtractionExecutor
-  from marie.utils.image_utils import hash_file
+from marie.executor import NerExtractionExecutor
+from marie.utils.image_utils import hash_file
 
-  # setup executor
-  models_dir = ("/mnt/data/models/")
-  executor = NerExtractionExecutor(models_dir)
+# setup executor
+models_dir = "/mnt/data/models/"
+executor = NerExtractionExecutor(models_dir)
 
-  img_path = "/tmp/sample.png"
-  checksum = hash_file(img_path)
+img_path = "/tmp/sample.png"
+checksum = hash_file(img_path)
 
-  # invoke executor
-  docs = None
-  kwa = {"checksum": checksum, "img_path": img_path}
-  results = executor.extract(docs, **kwa)
+# invoke executor
+docs = None
+kwa = {"checksum": checksum, "img_path": img_path}
+results = executor.extract(docs, **kwa)
 
-  print(results)
+print(results)
 ```
 
 ### Complete NER example
@@ -62,7 +62,6 @@ def process_file(
     storage_enabled: bool,
     storage_conf: Dict[str, str],
 ):
-
     with TimeContext(f"### extraction info"):
         filename = img_path.split("/")[-1].replace(".png", "")
         checksum = hash_file(img_path)
@@ -103,7 +102,6 @@ def process_dir(
 
 
 if __name__ == "__main__":
-
     # pip install git+https://github.com/huggingface/transformers
     # 4.18.0  -> 4.21.0.dev0 : We should pin it to this version
     print(transformers.__version__)
@@ -124,7 +122,6 @@ if __name__ == "__main__":
         process_file(executor, img_path, True, storage_conf)
     else:
         process_dir(executor, img_path, True, storage_conf)
-
 ```
 
 ## Fine-Tuning LayoutLM v3

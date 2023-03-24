@@ -25,6 +25,13 @@ repos:
       exclude: ^(hubble/resources/|tests|marie/models|marie/boxes/dit|marie/proto/pb/jina_pb2.py|marie/proto/pb/jina_pb2_grpc.py|marie/proto/pb2/jina_pb2.py|marie/proto/pb2/jina_pb2_grpc.py|docs/|marie/resources/)
       args:
         - -S
+
+  - repo: https://github.com/asottile/blacken-docs
+    rev: v1.12.1
+    hooks:
+    -   id: blacken-docs
+        args:
+          - -S
 #  - repo: https://github.com/pycqa/isort
 #    rev: 5.10.1
 #    hooks:

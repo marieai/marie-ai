@@ -371,8 +371,8 @@ class StorageManager:
             StorageManager.ensure_connection("s3://")
 
             # Silence exceptions
-            connected  = StorageManager.ensure_connection(silence_exceptions=True)
-            connected  = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+            connected = StorageManager.ensure_connection(silence_exceptions=True)
+            connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
 
         :param path: Optional path to ensure connection to.
         :param silence_exceptions:  If True, exceptions will be silenced and False will be returned instead.
@@ -474,7 +474,9 @@ class StorageManager:
 
             .. code-block:: python
 
-                StorageManager.copy_dir(tmpdir, "s3://marie", relative_to_dir=tmpdir, match_wildcard="*")
+                StorageManager.copy_dir(
+                    tmpdir, "s3://marie", relative_to_dir=tmpdir, match_wildcard="*"
+                )
 
         :param local_path:  The local directory to copy
         :param remote_path: The remote path to copy to

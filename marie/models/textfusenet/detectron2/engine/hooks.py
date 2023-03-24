@@ -238,7 +238,7 @@ class AutogradProfiler(HookBase):
     .. code-block:: python
 
         hooks.AutogradProfiler(
-             lambda trainer: trainer.iter > 10 and trainer.iter < 20, self.cfg.OUTPUT_DIR
+            lambda trainer: trainer.iter > 10 and trainer.iter < 20, self.cfg.OUTPUT_DIR
         )
 
     The above example will run the profiler for iteration 10~20 and dump

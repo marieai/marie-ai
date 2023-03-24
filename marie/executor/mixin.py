@@ -49,48 +49,48 @@ class StorageMixin:
         self, ref_id: str, ref_type: str, store_mode: str, docs: DocumentArray
     ) -> None:
         """Store results in configured storage provider
-
         EXAMPLE USAGE
 
         .. code-block:: python
+           def __init__(
+               self,
+               model_name_or_path: Optional[Union[str, os.PathLike]] = None,
+               storage_enabled: bool = False,
+               storage_conf: Dict[str, str] = None,
+               **kwargs,
+           ):
+               super().__init__(**kwargs)
 
-            def __init__(
-                self,
-                model_name_or_path: Optional[Union[str, os.PathLike]] = None,
-                storage_enabled: bool = False,
-                storage_conf: Dict[str, str] = None,
-                **kwargs,
-            ):
-                super().__init__(**kwargs)
+               self.logger.info(f"Storage enabled: {storage_enabled}")
+               self.setup_storage(storage_enabled, storage_conf)
 
-                self.logger.info(f"Storage enabled: {storage_enabled}")
-                self.setup_storage(storage_enabled, storage_conf)
 
-               def _tags(index: int, ftype: str, checksum: str):
-                    return {
-                        "index": index,
-                        "type": ftype,
-                        "ttl": 48 * 60,
-                        "checksum": checksum,
-                    }
+           def _tags(index: int, ftype: str, checksum: str):
+               return {
+                   "index": index,
+                   "type": ftype,
+                   "ttl": 48 * 60,
+                   "checksum": checksum,
+               }
 
-                if self.storage_enabled:
-                    frame_checksum = hash_frames_fast(frames=[frame])
-                    docs = DocumentArray(
-                        [
-                            Document(
-                                blob=convert_to_bytes(real),
-                                tags=_tags(i, "real", frame_checksum),
-                            ),
-                        ]
-                    )
 
-                    self.store(
-                        ref_id=ref_id,
-                        ref_type=ref_type,
-                        store_mode="blob",
-                        docs=docs,
-                    )
+           if self.storage_enabled:
+               frame_checksum = hash_frames_fast(frames=[frame])
+               docs = DocumentArray(
+                   [
+                       Document(
+                           blob=convert_to_bytes(real),
+                           tags=_tags(i, "real", frame_checksum),
+                       ),
+                   ]
+               )
+
+               self.store(
+                   ref_id=ref_id,
+                   ref_type=ref_type,
+                   store_mode="blob",
+                   docs=docs,
+               )
 
 
         :param ref_id:

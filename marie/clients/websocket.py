@@ -56,6 +56,7 @@ class AsyncWebSocketClient(
         from jina import Client
         from docarray import Document
 
+
         # async inputs for the client
         async def async_inputs():
             for _ in range(10):
