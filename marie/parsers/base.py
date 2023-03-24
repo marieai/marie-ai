@@ -14,9 +14,9 @@ def set_base_parser():
 
     # create the top-level parser
     urls = {
-        'Code': ('💻', 'https://github.com/gregbugaj/marie-ai'),
-        'Docs': ('📖', 'https://github.com/gregbugaj/marie-ai/tree/main/docs'),
-        'Help': ('💬', 'https://github.com/gregbugaj/marie-ai'),
+        'Code': ('💻', 'https://github.com/marieai/marie-ai'),
+        'Docs': ('📖', 'https://github.com/marieai/marie-ai/tree/main/docs'),
+        'Help': ('💬', 'https://github.com/marieai/marie-ai'),
     }
     url_str = '\n'.join(
         f'- {v[0]:<10} {k:10.10}\t{colored(v[1], "cyan", attrs=["underline"])}'
