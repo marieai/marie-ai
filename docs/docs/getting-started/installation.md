@@ -95,7 +95,7 @@ conda activate pytorch
 ### Verify Pytorch Install
 
 
-```python
+```shell
 python -c "import torch; print(torch.__version__)"
 ```
 
@@ -203,23 +203,22 @@ TODO GRADIO LINK
 Also, you can run the following codes in your Python interpreter:
 
 ```python
-  from marie.executor import NerExtractionExecutor
-  from marie.utils.image_utils import hash_file
+from marie.executor import NerExtractionExecutor
+from marie.utils.image_utils import hash_file
 
-  # setup executor
-  models_dir = ("/mnt/data/models/")
-  executor = NerExtractionExecutor(models_dir)
+# setup executor
+models_dir = "/mnt/data/models/"
+executor = NerExtractionExecutor(models_dir)
 
-  img_path = "/tmp/sample.png"
-  checksum = hash_file(img_path)
+img_path = "/tmp/sample.png"
+checksum = hash_file(img_path)
 
-  # invoke executor
-  docs = None
-  kwa = {"checksum": checksum, "img_path": img_path}
-  results = executor.extract(docs, **kwa)
+# invoke executor
+docs = None
+kwa = {"checksum": checksum, "img_path": img_path}
+results = executor.extract(docs, **kwa)
 
-  print(results)
-
+print(results)
 ```
 
 

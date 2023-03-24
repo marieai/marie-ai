@@ -87,6 +87,7 @@ def set_global_cfg(cfg: CfgNode) -> None:
     .. code-block:: python
 
         from detectron2.config import global_cfg
+
         print(global_cfg.KEY)
 
     By using a hacky global config, you can access these configs anywhere,

@@ -38,8 +38,8 @@ This is a basic usage of how to use the `ModelRegistry` all registered providers
 model.
 
 ```python
-    _name_or_path = "group/layoutlmv3-large-indexer-ner"
-    _name_or_path = ModelRegistry.get_local_path(_name_or_path)
+_name_or_path = "group/layoutlmv3-large-indexer-ner"
+_name_or_path = ModelRegistry.get_local_path(_name_or_path)
 ```
 
 **Customize model search directory**
@@ -47,8 +47,10 @@ model.
 We can customize model search directory by adding `__model_path__` to our `**kwargs` and passing them to the function.
 
 ```python
-    __model_path__ = os.path.join(os.path.abspath(os.path.join(__root_dir__, "..")), "model_zoo")
-    _name_or_path = "group/layoutlmv3-large-indexer-ner"
-    kwargs = {"__model_path__": __model_path__}
-    _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
+__model_path__ = os.path.join(
+    os.path.abspath(os.path.join(__root_dir__, "..")), "model_zoo"
+)
+_name_or_path = "group/layoutlmv3-large-indexer-ner"
+kwargs = {"__model_path__": __model_path__}
+_name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 ```

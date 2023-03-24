@@ -14,7 +14,7 @@ class Registry(object):
     .. code-block:: python
 
         @BACKBONE_REGISTRY.register()
-        class MyBackbone():
+        class MyBackbone:
             ...
 
     Or:
