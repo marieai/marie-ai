@@ -16,7 +16,7 @@ if sys.version_info < (3, 10, 0):
 
 try:
     # marie was already taken by PIP
-    pkg_name = "marieai"
+    pkg_name = "marie-ai"
     lib_name = "marie"
     libinfo_py = path.join(lib_name, "__init__.py")
     libinfo_content = open(libinfo_py, "r", encoding="utf8").readlines()
@@ -164,8 +164,8 @@ setup(
         "Intended Audience :: Developers",
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Programming Language :: Unix Shell",
         "Environment :: Console",
         "License :: OSI Approved :: Apache Software License",
