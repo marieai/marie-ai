@@ -1,19 +1,16 @@
 import argparse
-import json
 import threading
 import time
-
-# import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Tuple, Union
 
 import consul
 import yaml
 from consul.base import Check
-from logger import setup_logger
 
+from logger import setup_logger
+from marie.utils.network import find_open_port, get_ip_address
 from marie.utils.types import strtobool
-from utils.network import find_open_port, get_ip_address
 
 logger = setup_logger(__name__, "registry.log")
 config = None
