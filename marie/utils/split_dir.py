@@ -1,6 +1,6 @@
 import os
 
-from utils.utils import ensure_exists
+from marie.utils.utils import ensure_exists
 
 
 def split_dir(dir_src, dir_dest):
