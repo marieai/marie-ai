@@ -10,21 +10,22 @@ The container is setup with `app-svc` account so for that we will setup same acc
 
 Setting up user, for more info visit [Manage Docker as a non-root user](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user)
 
-```
-sudo useradd --comment 'app-svc' --create-home app-svc --shell /bin/bash
+```shell
+sudo groupadd -r app-svc -g 433
+sudo useradd -u 431 --comment 'app-svc' --create-home app-svc  --shell /usr/sbin/nologin
 sudo usermod -aG docker app-svc
 ```
 
 Directory structure, this is more of a convention than requirement.
 
-```sh
+```shell
 sudo mkdir -p /opt/containers/apps/marie-ai
 sudo mkdir -p /opt/containers/config/marie-ai
 ```
 
 Change permissions to `app` and `config`
 
-```
+```shell
 cd /opt/containers
 sudo chown app-svc:app-svc apps/ -R
 sudo chown app-svc:app-svc config/ -R
@@ -242,7 +243,7 @@ To change container version edit `id` file, it should contain a specific version
 gregbugaj/marie-icr:2.4-cuda
 ```
 
-This could also include your specific registy as well.
+This could also include your specific registry as well.
 
 ```
 localhost:5000/gregbugaj/marie-icr:2.4-cuda
@@ -277,6 +278,19 @@ CONTAINER_ID   >
 CONFIG         > config
 PORT           > 6000
 CONFIG_DIR     > /mnt/data/marie-ai/config
+```
+
+### Manually starting container
+
+Console mode
+
+```shell
+docker run --gpus all --rm -it --name=marieai --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --uses /etc/marie/config/service/marie.yml
+```
+
+Deamon mode
+```shell
+docker run --gpus all --name=marieai -d --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --uses /etc/marie/config/service/marie.yml
 ```
 
 ### References

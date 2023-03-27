@@ -159,11 +159,13 @@ COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 #RUN mkdir -p /etc/marie
 #COPY ./config/marie.yml /etc/marie/marie.yml
 
-# this is important otherwise we will get python error that module is not found
-#RUN export PYTHONPATH="/marie"
-
 # copy will almost always invalid the cache
 COPY . /marie/
+
+
+# this is important otherwise we will get python error that module is not found
+# RUN export PYTHONPATH="/marie"
+# ENV PYTHONPATH "${PYTHONPATH}:/marie"
 
 # install marie again but this time no deps
 RUN cd /marie && \

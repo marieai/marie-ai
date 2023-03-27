@@ -7,6 +7,7 @@ Control plane is responsible for orchestrating communication between nodes in th
 
 ## Docker Compose
 Quickest way to bootstrap control plane is via `docker compose`.
+Install new version of [docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository)
 Install new version of [docker compose cli plugin](https://docs.docker.com/compose/install/)
 
 
@@ -23,7 +24,7 @@ Assigned ID that are mapped from within the container to outside world.
 
 ```shell
 sudo groupadd -r app-svc -g 433
-sudo useradd -u 431 --comment 'app-svc' --create-home app-svc --shell /bin/bash
+sudo useradd -u 431 --comment 'app-svc' --create-home app-svc  --shell /usr/sbin/nologin -g app-svc
 sudo usermod -aG docker app-svc
 ```
 
@@ -52,7 +53,7 @@ The easiest way to manage container is by checking out the [Marie-AI project](ht
 
 ```shell
 sudo su app-svc
-git clone https://github.com/gregbugaj/marie-ai.git
+git clone https://github.com/marieai/marie-ai
 ```
 
 ### Networking setup
