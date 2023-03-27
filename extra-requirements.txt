@@ -43,7 +43,7 @@ packaging>=20.0:            standard,core
 docarray==0.19.1:           standard,core
 
 prometheus_client:          standard,perf
-psutil:                     test
+psutil:                     perf,standard,devel
 uvloop:                     perf,standard,devel
 
 opentelemetry-instrumentation-grpc: perf,standard,devel

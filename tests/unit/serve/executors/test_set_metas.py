@@ -56,7 +56,7 @@ def test_name_python_jaml_identical():
     # the way they were imported!
 
     # First way of import using py_modules argument in jaml file
-    from jina.jaml.helper import load_py_modules
+    from marie.jaml.helper import load_py_modules
 
     load_py_modules({'py_modules': ['metas_executors.py']})
     from metas_executors import TestExecutor

@@ -1,25 +1,26 @@
 import asyncio
+import sys
 import time
+import traceback
 import uuid
 from functools import partial
-from fastapi import FastAPI, Request, HTTPException
 from typing import TYPE_CHECKING, Any, Optional
-import traceback
-import sys
+
+from fastapi import HTTPException
 from fastapi import Request
+
 from marie import Client
 from marie.api import extract_payload
 from marie.api import value_from_payload_or_args
 from marie.logging.predefined import default_logger
-from marie.types.request.data import DataRequest
-from marie.utils.docs import docs_from_file, docs_from_file_specific
-from marie.utils.types import strtobool
-
 from marie.messaging import (
     mark_as_complete,
     mark_as_started,
     mark_as_failed,
 )
+from marie.types.request.data import DataRequest
+from marie.utils.docs import docs_from_file_specific
+from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
 
 if TYPE_CHECKING:  # pragma: no cover

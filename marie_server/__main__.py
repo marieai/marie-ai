@@ -78,6 +78,8 @@ def main(yml_config: str, env: Dict[str, str], env_file: str):
 
     from marie import Flow
 
+    PYTHONPATH = os.environ.get("PYTHONPATH", "")
+    print(f"PYTHONPATH = {PYTHONPATH}")
     logger.info(f"__model_path__ = {__model_path__}")
     logger.info(f"__config_dir__ = {__config_dir__}")
     logger.info(f"__marie_home__ = {__marie_home__}")
