@@ -7,8 +7,10 @@ Control plane is responsible for orchestrating communication between nodes in th
 
 ## Docker Compose
 Quickest way to bootstrap control plane is via `docker compose`.
-Install new version of [docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository)
-Install new version of [docker compose cli plugin](https://docs.docker.com/compose/install/)
+
+
+* Install new version of [docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository)
+* Install new version of [docker compose cli plugin](https://docs.docker.com/compose/install/)
 
 
 ### User and permission setup

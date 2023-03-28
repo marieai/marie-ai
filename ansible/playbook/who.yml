@@ -1,0 +1,13 @@
+---
+- name: Who Am I Status Check
+  hosts: ml.cluster
+
+  tasks:
+  - name: User Info
+    shell: whoami
+    register: out
+  - debug: var=out.stdout_lines
+
+  - name: Printing all the environment variables in Ansible
+    debug:
+      msg: "{{ ansible_env }}"

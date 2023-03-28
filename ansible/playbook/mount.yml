@@ -1,0 +1,21 @@
+---
+- name: Marie-AI Cluster - Mount shares
+  hosts: ml.cluster
+
+  tasks:
+  - name: User Info
+    shell: whoami
+    register: out
+  - debug: var=out.stdout_lines
+
+
+# Important that we have the'become_' defined here . Effectively this executes 'sudo ./script.sh'
+  - name: Mount /mnt/data/marie-ai
+    script: mount.sh
+    register: out
+    become_user: root # we need to be root to mount the share
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+  - debug: var=out.stderr
+
