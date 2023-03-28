@@ -1,0 +1,12 @@
+# Created by https://www.gitignore.io/api/ansible
+# Edit at https://www.gitignore.io/?templates=ansible
+
+### Ansible ###
+*.retry
+playbook/*.retry
+
+# End of https://www.gitignore.io/api/ansible(base)!
+
+# Ansible Vault
+vault.txt
+password.yml
