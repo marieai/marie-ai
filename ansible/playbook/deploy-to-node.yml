@@ -1,0 +1,54 @@
+---
+- name: Marie-AI Cluster - Provisioning
+  hosts: ml.cluster
+  gather_facts: false
+
+  tasks:
+  - name: User Info
+    shell: whoami
+    register: out
+  - debug: var=out.stdout_lines
+
+  # mount the share to /mnt/data/marie-ai on the node to be able to access the model files and configuration
+  - name: Mount /mnt/data/marie-ai
+    script: mount.sh
+    register: out
+    become_user: root # we need to be root to mount the share
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+  # install docker and docker-compose
+  - name: Install Docker and Docker Compose
+    script: install-docker.sh
+    register: out
+    become_user: root # we need to be root to install docker
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+  - name: Create user and group
+    script: create-user.sh app-svc
+    register: out
+    become_user: root # we need to be root to create the user
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+
+
+#  # setup application directory
+#  - name: Creates directory
+#    file:
+#      path: /opt/marie-ai
+#      state: directory
+#      owner: app-svc
+#      group: app-svc
+#      mode: 0775
+#      recurse: yes # create parent directories if needed
+#    register: out
+#    become_user: root # we need to be gpu-svc to create the directory
+#    become: yes
+#    become_method: sudo
+#  - debug: var=out.stdout_lines
+#

@@ -1,0 +1,13 @@
+---
+- name: Marie-AI Cluster - GPU Info
+  hosts: ml.cluster
+  gather_facts: false
+
+  tasks:
+  - name: NVIDIA GPU Info
+    ansible.builtin.shell: |
+        docker run --rm --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi
+    register: out
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
