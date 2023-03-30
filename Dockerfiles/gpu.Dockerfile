@@ -4,7 +4,7 @@ ARG CUDA_VERSION=11.8.0
 #ARG CUDA_VERSION=11.3.1
 
 #FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu22.04 as build-image
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
@@ -100,7 +100,7 @@ RUN python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.g
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-runtime-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
 
 ARG http_proxy
 ARG https_proxy

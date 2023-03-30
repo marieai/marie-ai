@@ -7,7 +7,7 @@ from pika.exchange_type import ExchangeType
 from marie.excepts import BadConfigSource
 
 
-class AmazonMQToastHandler(ToastHandler):
+class RabbitMQToastHandler(ToastHandler):
     """
     Amazon Toast Handler that publishes events to Amazon MQ
     TODO: Need to add support for SNS and make this asynchynous.
@@ -24,7 +24,6 @@ class AmazonMQToastHandler(ToastHandler):
     ) -> None:
         try:
             msg_config = self.config
-            print(msg_config)
             exchange = "marie.events"
             queue = "events"
             routing_key = notification["event"] if "event" in notification else "*"

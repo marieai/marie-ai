@@ -19,7 +19,7 @@ from marie.constants import (
 from marie.messaging import (
     Toast,
     NativeToastHandler,
-    AmazonMQToastHandler,
+    RabbitMQToastHandler,
     PsqlToastHandler,
 )
 from marie.storage import S3StorageHandler, StorageManager
@@ -35,11 +35,15 @@ torch.backends.cudnn.benchmark = True
 def setup_toast_events(toast_config: Dict[str, Any]):
     native_config = toast_config["native"]
     psql_config = toast_config["psql"]
-    amazon_config = toast_config["amazon-mq"]
+    rabbitmq_config = toast_config["rabbitmq"]
 
     Toast.register(NativeToastHandler("/tmp/events.json"), native=True)
-    Toast.register(PsqlToastHandler(psql_config), native=False)
-    Toast.register(AmazonMQToastHandler(amazon_config), native=False)
+
+    if psql_config is not None:
+        Toast.register(PsqlToastHandler(psql_config), native=False)
+
+    if rabbitmq_config is not None:
+        Toast.register(RabbitMQToastHandler(rabbitmq_config), native=False)
 
 
 def setup_storage(storage_config: Dict[str, Any]):

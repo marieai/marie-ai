@@ -11,9 +11,9 @@ version: "3.9"
 
 services:
   consul-server:
-    image: consul:1.13.3
+    image: consul:1.15.1
     container_name: consul_marie_server
-#    restart: always
+    restart: unless-stopped
     volumes:
      - ./config/consul/server.json:/consul/config/server.json:ro
      - ./config/consul:/etc/consul.d
@@ -55,7 +55,7 @@ services:
       - ./config/traefik:/etc/traefik
       - ./config/traefik/traefik.yml:/traefik.yml
       - ./config/traefik/certs:/certs
-      - letsencrypt_data/letsencrypt
+      - letsencrypt_data:/letsencrypt
       - "./config/traefik/user-credentials:/user-credentials:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
@@ -63,6 +63,7 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
+    restart: unless-stopped
     volumes:
      - ./config/prometheus:/etc/prometheus
      - prometheus_data:/prometheus
@@ -77,7 +78,7 @@ services:
      - "9090:9090"
 
   alertmanager:
-    image: prom/alertmanager:v0.23.0
+    image: prom/alertmanager:latest
     restart: unless-stopped
     networks:
       - public
@@ -90,6 +91,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    restart: unless-stopped
     user: "472"
     depends_on:
       - prometheus
@@ -105,12 +107,13 @@ services:
       - prometheus
     networks:
       - public
-    restart: always
 
   loki:
-    image: grafana/loki:2.6.1
+    image: grafana/loki:2.7.5
+    restart: unless-stopped
     volumes:
       - ./config/grafana/loki:/etc/loki
+      - loki_data:/loki
     ports:
       - "3100:3100"
     command: --config.file=/etc/loki/loki-config.yaml
@@ -141,14 +144,37 @@ services:
 #      - "traefik.http.routers.whoami.service=whoami" # We use docker provider so this is registed twice
       - "traefik.http.services.whoami-service.loadbalancer.server.port=8080" # Send traffic to the container via port 8080
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    container_name: 'marie-rabbitmq'
+    ports:
+        - 5672:5672 # AMQP
+        - 15672:15672 # HTTP
+    environment:
+        - RABBITMQ_DEFAULT_USER=guest
+        - RABBITMQ_DEFAULT_PASS=guest
+        - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+        - rabbitmq_data:/var/lib/rabbitmq
+        - rabbitmq_log:/var/log/rabbitmq
+    networks:
+        - public
+
 volumes:
   prometheus_data:
     driver: local
   grafana_data:
     driver: local
+  loki_data:
+    driver: local
   alertmanager_data:
     driver: local
   letsencrypt_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  rabbitmq_log:
     driver: local
 
 # ############### Networks ###############
