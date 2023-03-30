@@ -85,7 +85,7 @@ with:
     - http
     - grpc
   discovery: True
-  discovery_host: 127.0.0.1
+  discovery_host: 172.16.11.162
   discovery_port: 8500
 
   event_tracking: True
