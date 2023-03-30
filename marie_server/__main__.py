@@ -51,9 +51,9 @@ def setup_storage(storage_config: Dict[str, Any]):
     if "s3" in storage_config:
         handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
 
-        # export AWS_ACCESS_KEY_ID=MARIEACCESSKEY; export AWS_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY;  aws s3 ls --endpoint-url http://localhost:8000
         StorageManager.register_handler(handler=handler)
         StorageManager.ensure_connection("s3://")
+        StorageManager.mkdir("s3://marie")
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:

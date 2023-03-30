@@ -20,7 +20,6 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
     def __init__(self, config: Any, **kwargs: Any):
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Initializing PSQL Toast Handler")
-        print(config)
 
         if not config:
             self.storage_enabled = False
