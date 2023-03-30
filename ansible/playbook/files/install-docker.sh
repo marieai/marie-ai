@@ -3,7 +3,7 @@
 # check if docker is already installed
 if [ -x "$(command -v docker)" ]; then
   echo "Docker is already installed"
-#  exit 0
+  exit 0
 fi
 
 # install docker
@@ -31,8 +31,6 @@ echo \
 sudo apt-get update
 sudo apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# sudo apt autoremove -yq
-
 # Install the NVIDIA container toolkit
 # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker
 
@@ -49,3 +47,6 @@ sudo nvidia-ctk runtime configure --runtime=docker
 
 sudo systemctl restart docker
 sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi
+
+# cleanup
+sudo apt autoremove -yq

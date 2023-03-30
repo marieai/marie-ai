@@ -69,9 +69,21 @@ docker network create --driver=bridge public
 sysctl net.ipv4.conf.all.forwarding=1
 ```
 
-### Starting and stopping
-Starting and stopping specific services
+### Starting and stopping Control Plane
+All service could be started with single command and run on the same host, however, for production setup it is recommended to run storage service on separate host.
 
+#### Controller(Traefik, Consul, RabbitMQ, Prometheus, Alertmanager, Loki, Grafana) 
+
+```shell
+docker compose  --env-file ./config/.env.prod -f docker-compose.yml --project-directory . up  --build --remove-orphans
+```
+
+#### Storage
+```shell
+docker compose  --env-file ./config/.env.prod -f docker-compose.s3.yml -f docker-compose.storage.yml --project-directory . up  --build --remove-orphans
+```
+
+Starting and stopping specific services
 ```shell
 docker compose down \ 
 docker compose -f docker-compose.yml -f docker-compose.storage.yml \
@@ -89,9 +101,16 @@ There are number of services that made up control plane.
 
 Some admin service can only be accesses via `localhost` host. We will use SSH forwarding to allow this from our local machine to control-plane.
 
-Replace `ops-001` with the name of the control plane server.
+Replace `ops-001` with the name of the control plane server. 
+Alternatively you can edit `/etc/hosts` and add custom hostname.
+
 ```shell
-ssh -vnT -N -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 -L 3100:ops-001:3100 -L 9093:ops-001:9093 ops-001
+172.0.0.1   ops-001.marie-ai.com
+172.0.0.1   ops-001
+```
+
+```shell
+ssh -vnT -N -L 15672:ops-001:15672 -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9090:ops-001:9090 -L 3000:ops-001:3000 -L 3100:ops-001:3100 -L 9093:ops-001:9093 ops-001
 ```
 
 [Explain](https://explainshell.com/explain?cmd=ssh+-N+-L+8500%3Aops-001%3A8500+-L+7777%3Aops-001%3A7777+-L+9090%3Aops-001%3A9090+-L+3000%3Aops-001%3A3000+ops-001)
@@ -99,14 +118,15 @@ ssh -vnT -N -L 8500:ops-001:8500 -L 5000:ops-001:5000  -L 7777:ops-001:7777 -L 9
 :::
 
 
-| Service      | Endpoint                                                                              | Description                                                                                                                                                      |
-|--------------|---------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Consul       | http://localhost:8500/ui/                                                             | Consul is a distributed, highly available, and data center aware solution to connect and configure applications across dynamic, distributed infrastructure.      |
-| Traefik      | http://traefik.localhost:7777/dashboard/#/ http://traefik.localhost:7777/metrics      | Traefik is a modern HTTP reverse proxy and load balancer that makes deploying microservices easy.                                                                |
-| Grafana      | http://localhost:3000/                                                                | The open and composable observability and data visualization platform.                                                                                           |
-| Prometheus   | http://localhost:9090/                                                                | The Prometheus monitoring system and time series database.                                                                                                       |
-| Alertmanager | http://localhost:9093/                                                                | The Alertmanager handles alerts sent by client applications such as the Prometheus server.                                                                       |
-| Loki         | http://localhost:3100/ready                                                           | Loki is a horizontally scalable, highly available, multi-tenant log aggregation system inspired by Prometheus                                                    |
+| Service      | Endpoint                                                                         | Description                                                                                                                                                 |
+|--------------|----------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Consul       | http://localhost:8500/ui/                                                        | Consul is a distributed, highly available, and data center aware solution to connect and configure applications across dynamic, distributed infrastructure. |
+| Traefik      | http://traefik.localhost:7777/dashboard/#/ http://traefik.localhost:7777/metrics | Traefik is a modern HTTP reverse proxy and load balancer that makes deploying microservices easy.                                                           |
+| RabbitMQ     | http://localhost:15672                                                           | RabbitMQ message broker                                                                                                                                     |
+| Grafana      | http://localhost:3000/                                                           | The open and composable observability and data visualization platform.                                                                                      |
+| Prometheus   | http://localhost:9090/                                                           | The Prometheus monitoring system and time series database.                                                                                                  |
+| Alertmanager | http://localhost:9093/                                                           | The Alertmanager handles alerts sent by client applications such as the Prometheus server.                                                                  |
+| Loki         | http://localhost:3100/ready                                                      | Loki is a horizontally scalable, highly available, multi-tenant log aggregation system inspired by Prometheus                                               |
 
 
 Traefik - Service endpoints can be changed in the configs but by default they are as follow: 

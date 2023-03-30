@@ -15,5 +15,3 @@ sudo useradd -u 431 --comment 'app-svc' --create-home app-svc  --shell /bin/bash
 
 # add user to docker group
 sudo usermod -aG docker app-svc
-
-# sudo useradd -m -s /bin/bash -u 431 -g 433 app-svc

@@ -10,11 +10,11 @@
     image_tag: 3.0.5-cuda
     server_port: 8080
   tasks:
-    - name: Create network
-      community.docker.docker_network:
-        name: "marie-{{ stack_name }}"
-        state: present
-        driver: bridge
+#    - name: Create network
+#      community.docker.docker_network:
+#        name: "marie-{{ stack_name }}"
+#        state: present
+#        driver: bridge
     # https://docs.ansible.com/ansible/latest/collections/community/docker/docker_container_module.html
     - name: Run the inference-server
       community.docker.docker_container:
@@ -23,8 +23,8 @@
         state: started
         recreate: "{{ (stack_name == 'dev') | bool }}"
         pull: true
-        restart_policy: "no" # always | on-failure | unless-stopped
-        network_mode: "marie-{{ stack_name }}"
+        restart_policy: "always" # always | on-failure | unless-stopped
+        network_mode: host #"marie-{{ stack_name }}"
         command: server --start --uses /etc/marie/config/service/marie.yml
         device_requests:
           - # Add nVidia GPUs to this container
@@ -46,3 +46,7 @@
           - "/mnt/data/marie-ai/config:/etc/marie/config:ro"
           - "/mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw"
 
+
+# Docker debug command
+# docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)
+# docker run --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --start --uses /etc/marie/config/service/marie.yml
