@@ -1,6 +1,7 @@
 import asyncio
 from typing import Any, List
 
+from marie.logging.logger import MarieLogger
 from marie.messaging.rabbitmq import BlockingPikaClient
 from marie.messaging.toast_handler import ToastHandler
 from pika.exchange_type import ExchangeType
@@ -9,12 +10,13 @@ from marie.excepts import BadConfigSource
 
 class RabbitMQToastHandler(ToastHandler):
     """
-    Amazon Toast Handler that publishes events to Amazon MQ
-    TODO: Need to add support for SNS and make this asynchynous.
+    Amazon Toast Handler that publishes events to Amazon MQ or RabbitMQ.
+    TODO: Need to add support for SNS and make this asynchronous.
     """
 
     def __init__(self, config: Any, **kwargs: Any):
         self.config = config
+        self.logger = MarieLogger(context=self.__class__.__name__)
 
     def get_supported_events(self) -> List[str]:
         return ["*"]
