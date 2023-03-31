@@ -22,7 +22,10 @@ class BlockingPikaClient:
         tls_enabled = conf.get("tls", False)
 
         # b-ff3d0999-a25b-4a5a-9775-e7ba76f8fa3d.mq.us-east-1.amazonaws.com
-        url = f"amqps://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+        if tls_enabled:
+            url = f"amqps://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+        else:
+            url = f"amqp://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
 
         parameters = pika.URLParameters(url)
         if provider == "amazon-rabbitmq":
