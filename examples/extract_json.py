@@ -11,15 +11,10 @@ from marie.executor.ner.utils import visualize_icr
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
-api_base_url = "http://192.168.102.65:51000/api"
-api_base_url = "http://192.168.1.14:51000/api"
-api_base_url = "http://192.168.102.65:51000/api"
-api_base_url = "http://192.168.102.65:51000/api"
-# api_base_url = "http://184.105.3.112:51000/api"
-# api_base_url = "http://traefik.localhost:5000/api"
 
-api_base_url = "http://172.16.11.162:5000/api"
-api_base_url = "http://172.20.10.18:51000/api"
+api_base_url = "http://172.16.11.162:5000/api"  # loadballancer
+# api_base_url = "http://172.20.10.18:51000/api" # server
+# api_base_url = "http://192.168.102.65:51000/api"
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"

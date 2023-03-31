@@ -82,6 +82,11 @@ docker compose  --env-file ./config/.env.prod -f docker-compose.yml --project-di
 ```shell
 docker compose  --env-file ./config/.env.prod -f docker-compose.s3.yml -f docker-compose.storage.yml --project-directory . up  --build --remove-orphans
 ```
+After S3 is up and running we can mount via `s3fs` and test it out.
+
+```shell
+s3fs marie /mnt/s3-marie -o passwd_file=${HOME}/.passwd-s3fs -o url=http://127.0.0.1:8000 -o use_path_request_style
+```
 
 Starting and stopping specific services
 ```shell

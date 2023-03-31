@@ -1,9 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash -xv
+## #!/usr/bin/env bash
+
+export PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 # check if docker is already installed
 if [ -x "$(command -v docker)" ]; then
   echo "Docker is already installed"
-  exit 0
+#  exit 0
 fi
 
 # install docker
