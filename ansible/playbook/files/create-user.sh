@@ -7,7 +7,7 @@ fi
 
 if id -u $1 >/dev/null 2>&1; then
     echo "User $1 already exists, skipping"
-    exit 0
+#    exit 0
 fi
 
 sudo groupadd -r app-svc -g 433

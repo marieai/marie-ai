@@ -18,9 +18,23 @@
     become_method: sudo
   - debug: var=out.stdout_lines
 
+
+  # install docker and docker-compose
+  - name: Copy Install Docker and Docker Compose
+    copy:
+      src: ./files/install-docker.sh
+      dest: /tmp/install-docker.sh
+    register: out
+    become_user: root # we need to be root to install docker
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
   # install docker and docker-compose
   - name: Install Docker and Docker Compose
-    script: install-docker.sh
+#    script: install-docker.sh
+    shell:
+      sh /tmp/install-docker.sh
     register: out
     become_user: root # we need to be root to install docker
     become: yes
@@ -34,7 +48,6 @@
     become: yes
     become_method: sudo
   - debug: var=out.stdout_lines
-
 
 
 #  # setup application directory

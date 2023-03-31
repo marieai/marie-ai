@@ -343,7 +343,7 @@ class ExtractPipeline:
         2. Burst the document
         3. Perform OCR on the document
         4. Extract the regions from the document
-        5. Store the results in the backend store(s3 , redis, etc)
+        5. Store the results in the backend store(s3 , redis, etc.)
 
         :param ref_id:  reference id of the document (e.g. file name)
         :param ref_type: reference type of the document (e.g. invoice, receipt, etc)
