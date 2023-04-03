@@ -64,7 +64,6 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
             parameters=parameters,
             return_responses=True,
         ):
-            print("Parsing response to payload")
             payload = parse_response_to_payload(resp, expect_return_value=False)
             break  # we only need the first response
 
