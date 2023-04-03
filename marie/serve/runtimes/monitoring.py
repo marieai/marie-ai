@@ -57,7 +57,7 @@ class MonitoringRequestMixin:
         if metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the montitoring functionality of jina',
+                help_text='You need to install the `prometheus_client` to use the monitoring functionality of marie',
             ):
                 from prometheus_client import Counter, Gauge, Summary
 

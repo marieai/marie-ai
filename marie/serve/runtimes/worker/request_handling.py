@@ -133,7 +133,7 @@ class WorkerRequestHandler:
 
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the montitoring functionality of jina',
+                help_text='You need to install the `prometheus_client` to use the monitoring functionality of marie',
             ):
                 from prometheus_client import Counter, Summary
 
@@ -142,7 +142,7 @@ class WorkerRequestHandler:
                 self._document_processed_metrics = Counter(
                     'document_processed',
                     'Number of Documents that have been processed by the executor',
-                    namespace='jina',
+                    namespace='marie',
                     labelnames=('executor_endpoint', 'executor', 'runtime_name'),
                     registry=metrics_registry,
                 )
@@ -151,7 +151,7 @@ class WorkerRequestHandler:
                     old_name='request_size_bytes',
                     name='received_request_bytes',
                     documentation='The size in bytes of the request returned to the gateway',
-                    namespace='jina',
+                    namespace='marie',
                     labelnames=('executor_endpoint', 'executor', 'runtime_name'),
                     registry=metrics_registry,
                 )
@@ -159,7 +159,7 @@ class WorkerRequestHandler:
                 self._sent_response_size_metrics = Summary(
                     'sent_response_bytes',
                     'The size in bytes of the response sent to the gateway',
-                    namespace='jina',
+                    namespace='marie',
                     labelnames=('executor_endpoint', 'executor', 'runtime_name'),
                     registry=metrics_registry,
                 )
@@ -170,17 +170,17 @@ class WorkerRequestHandler:
 
         if meter:
             self._document_processed_counter = meter.create_counter(
-                name='jina_document_processed',
+                name='marie_document_processed',
                 description='Number of Documents that have been processed by the executor',
             )
 
             self._request_size_histogram = meter.create_histogram(
-                name='jina_received_request_bytes',
+                name='marie_received_request_bytes',
                 description='The size in bytes of the request returned to the gateway',
             )
 
             self._sent_response_size_histogram = meter.create_histogram(
-                name='jina_sent_response_bytes',
+                name='marie_sent_response_bytes',
                 description='The size in bytes of the response sent to the gateway',
             )
         else:
