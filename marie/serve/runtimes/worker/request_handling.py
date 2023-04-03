@@ -286,7 +286,7 @@ class WorkerRequestHandler:
             )
 
             self._sent_response_size_histogram = meter.create_histogram(
-                name='jmarie_sent_response_bytes',
+                name='marie_sent_response_bytes',
                 description='The size in bytes of the response sent to the gateway',
             )
         else:
