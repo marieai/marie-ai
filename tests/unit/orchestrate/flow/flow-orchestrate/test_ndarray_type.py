@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 from docarray import Document, DocumentArray
-from jina import Executor, Flow, requests
+from marie import Executor, Flow, requests
 
 
 class MyExec(Executor):

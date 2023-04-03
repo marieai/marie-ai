@@ -3,14 +3,12 @@ import functools
 import inspect
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Union, Any
+from typing import Callable, Dict, List, Optional, Sequence, Type, Union, Any
 
+from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.constants import __cache_path__
 from marie.helper import iscoroutinefunction
 from marie.importer import ImportExtensions
-
-if TYPE_CHECKING:  # pragma: no cover
-    from docarray import DocumentArray
 
 
 @functools.lru_cache()
@@ -107,18 +105,22 @@ def requests(
     ] = None,
     *,
     on: Optional[Union[str, Sequence[str]]] = None,
+    request_schema: Optional[Type[DocumentArray]] = None,
+    response_schema: Optional[Type[DocumentArray]] = None,
 ):
     """
-    `@requests` defines the endpoints of an Executor. It has a keyword `on=` to define the endpoint.
+    `@requests` defines the endpoints of an Executor. It has a keyword `on=` to
+    define the endpoint.
 
-    A class method decorated with plain `@requests` (without `on=`) is the default handler for all endpoints.
+    A class method decorated with plain `@requests` (without `on=`) is the default
+    handler for all endpoints.
     That means, it is the fallback handler for endpoints that are not found.
 
     EXAMPLE USAGE
 
     .. code-block:: python
 
-        from jina import Executor, requests, Flow
+        from marie import Executor, requests, Flow
         from docarray import Document
 
 
@@ -148,10 +150,13 @@ def requests(
             f.post(
                 on='/query', inputs=Document(text='Who is there?')
             )  # send doc to `search` method
-            f.post(on='/bar', inputs=Document(text='Who is there?'))  # send doc to `foo` method
+            f.post(on='/bar', inputs=Document(text='Who is there?'))  # send doc to
+            # `foo` method
 
     :param func: the method to decorate
     :param on: the endpoint string, by convention starts with `/`
+    :param request_schema: the type of the input document
+    :param response_schema: the type of the output document
     :return: decorated function
     """
     from marie.constants import __args_executor_func__, __default_endpoint__
@@ -184,8 +189,7 @@ def requests(
                 def arg_wrapper(
                     executor_instance, *args, **kwargs
                 ):  # we need to get the summary from the executor, so we need to access the self
-                    result = fn(executor_instance, *args, **kwargs)
-                    return result
+                    return fn(executor_instance, *args, **kwargs)
 
                 self.fn = arg_wrapper
 
@@ -196,16 +200,38 @@ def requests(
             else:
                 return fn
 
-        def _inject_owner_attrs(self, owner, name):
+        def _inject_owner_attrs(
+            self, owner, name, request_schema_arg, response_schema_arg
+        ):
             if not hasattr(owner, 'requests'):
                 owner.requests = {}
+
+            from marie.serve.executors import _FunctionWithSchema
+
+            fn_with_schema = _FunctionWithSchema.get_function_with_schema(self.fn)
+
+            request_schema_arg = (
+                request_schema_arg
+                if request_schema_arg
+                else fn_with_schema.request_schema
+            )
+            response_schema_arg = (
+                response_schema_arg
+                if response_schema_arg
+                else fn_with_schema.response_schema
+            )
+
+            fn_with_schema = _FunctionWithSchema(
+                fn_with_schema.fn, request_schema_arg, response_schema_arg
+            )
+
             if isinstance(on, (list, tuple)):
                 for o in on:
-                    owner.requests_by_class[owner.__name__][o] = self.fn
+                    owner.requests_by_class[owner.__name__][o] = fn_with_schema
             else:
                 owner.requests_by_class[owner.__name__][
                     on or __default_endpoint__
-                ] = self.fn
+                ] = fn_with_schema
 
             setattr(owner, name, self.fn)
 
@@ -214,7 +240,7 @@ def requests(
             if self._batching_decorator:
                 self._batching_decorator._inject_owner_attrs(owner, name)
             self.fn.class_name = owner.__name__
-            self._inject_owner_attrs(owner, name)
+            self._inject_owner_attrs(owner, name, request_schema, response_schema)
 
         def __call__(self, *args, **kwargs):
             # this is needed to make this decorator work in combination with `@requests`
@@ -305,7 +331,7 @@ def dynamic_batching(
         def __set_name__(self, owner, name):
             _init_requests_by_class(owner)
             if self._requests_decorator:
-                self._requests_decorator._inject_owner_attrs(owner, name)
+                self._requests_decorator._inject_owner_attrs(owner, name, None, None)
             self.fn.class_name = owner.__name__
             self._inject_owner_attrs(owner, name)
 
@@ -337,7 +363,7 @@ def monitor(
 
         .. code-block:: python
 
-            from jina import Executor, monitor
+            from marie import Executor, monitor
 
 
             class MyExecutor(Executor):
@@ -356,7 +382,7 @@ def monitor(
 
         .. code-block:: python
 
-            from jina import Executor, requests
+            from marie import Executor, requests
 
 
             class MyExecutor(Executor):
@@ -371,7 +397,7 @@ def monitor(
 
         .. code-block:: python
 
-            from jina import Flow
+            from marie import Flow
 
             f = Flow(monitoring=True, port_monitoring=9090).add(
                 uses=MyExecutor, port_monitoring=9091

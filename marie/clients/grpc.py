@@ -17,7 +17,7 @@ class GRPCClient(GRPCBaseClient, PostMixin, HealthCheckMixin, ProfileMixin):
 
     .. code-block:: python
 
-        from jina import Client
+        from marie import Client
         from docarray import Document
 
         # select host address to connect to
@@ -50,7 +50,7 @@ class AsyncGRPCClient(GRPCBaseClient, AsyncPostMixin, AsyncHealthCheckMixin):
 
     .. code-block:: python
 
-        from jina import Client
+        from marie import Client
         from docarray import Document
 
 

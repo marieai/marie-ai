@@ -12,7 +12,7 @@ from marie.constants import (
 )
 from marie.enums import PodRoleType
 from marie.excepts import NoContainerizedError
-from marie.orchestrate.deployments import BaseDeployment
+from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.deployments.config.helper import (
     construct_runtime_container_args,
     get_base_executor_version,
@@ -316,7 +316,7 @@ class DockerComposeConfig:
         uses_after = getattr(args, 'uses_after', None)
 
         if args.name != 'gateway' and shards > 1:
-            parsed_args['head_service'] = BaseDeployment._copy_to_head_args(self.args)
+            parsed_args['head_service'] = Deployment._copy_to_head_args(self.args)
             parsed_args['head_service'].port = port
             parsed_args['head_service'].uses = None
             parsed_args['head_service'].uses_metas = None

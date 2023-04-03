@@ -1,4 +1,4 @@
-from jina import Executor
+from marie import Executor
 
 
 class RaisingExecutor(Executor):

@@ -1,5 +1,5 @@
-"""This modules defines all kinds of exceptions raised in Jina."""
-from typing import Set, Union, Any, Optional
+"""This modules defines all kinds of exceptions raised in Marie."""
+from typing import Set, Union, Any, Optional, List
 
 import grpc.aio
 
@@ -145,6 +145,59 @@ class InternalNetworkError(grpc.aio.AioRpcError, BaseMarieException):
                 return self._details
 
         return self.og_exception.details()
+
+
+class ExecutorError(RuntimeError, BaseMarieException):
+    """Used to wrap the underlying Executor error that is serialized as a jina_pb2.StatusProto.ExceptionProto.
+    This class is mostly used to propagate the Executor error to the user. The user can decide to act on the error as
+    desired.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        args: List[str],
+        stacks: List[str],
+        executor: Optional[str] = None,
+    ):
+        self._name = name
+        self._args = args
+        self._stacks = stacks
+        self._executor = executor
+
+    @property
+    def name(self) -> str:
+        """
+        :return: the name of the Executor exception
+        """
+        return self._name
+
+    @property
+    def args(self) -> List[str]:
+        """
+        :return: a list of arguments used to construct the exception
+        """
+        return self._args
+
+    @property
+    def stacks(self) -> List[str]:
+        """
+        :return: a list of strings that contains the exception traceback
+        """
+        return self._stacks
+
+    @property
+    def executor(self) -> Optional[str]:
+        """
+        :return: the name of the executor that raised the exception if available
+        """
+        return self._executor
+
+    def __str__(self):
+        return "\n".join(self.stacks)
+
+    def __repr__(self):
+        return self.__str__()
 
 
 def raise_exception(

@@ -2,10 +2,11 @@ import argparse
 import asyncio
 import copy
 import multiprocessing
-import threading
 import os
+import platform
 import re
 import signal
+import threading
 import time
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
@@ -21,8 +22,7 @@ from marie.orchestrate.pods.container_helper import (
     get_docker_network,
     get_gpu_device_requests,
 )
-from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from marie.serve.runtimes.gateway import GatewayRuntime
+from marie.parsers import set_gateway_parser
 
 if TYPE_CHECKING:  # pragma: no cover
     from docker.client import DockerClient
@@ -74,9 +74,15 @@ def _docker_run(
 
     args.native = True
 
+    parser = (
+        set_gateway_parser()
+        if args.pod_role == PodRoleType.GATEWAY
+        else set_pod_parser()
+    )
+
     non_defaults = ArgNamespace.get_non_defaults_args(
         args,
-        set_pod_parser(),
+        parser,
         taboo={
             'uses',
             'entrypoint',
@@ -136,6 +142,13 @@ def _docker_run(
     else:
         ports = {f'{args.port}/tcp': args.port} if not net_mode else None
 
+    if platform.system() == 'Darwin':
+        image_architecture = client.images.get(uses_img).attrs.get('Architecture', '')
+        if not image_architecture.startswith('arm'):
+            logger.warning(
+                'The pulled image container does not support ARM architecture while the host machine relies on MacOS (Darwin).'
+                'The image may run with poor performance or fail if run via emulation.'
+            )
     docker_kwargs = args.docker_kwargs or {}
     container = client.containers.run(
         uses_img,
@@ -232,12 +245,12 @@ def run(
         client.close()
 
         def _is_ready():
-            if args.pod_role == PodRoleType.GATEWAY:
-                return GatewayRuntime.is_ready(
-                    runtime_ctrl_address, protocol=args.protocol[0]
-                )
-            else:
-                return AsyncNewLoopRuntime.is_ready(runtime_ctrl_address)
+            from marie.serve.runtimes.servers import BaseServer
+
+            return BaseServer.is_ready(
+                ctrl_address=runtime_ctrl_address,
+                protocol=getattr(args, 'protocol', ["grpc"])[0],
+            )
 
         def _is_container_alive(container) -> bool:
             import docker.errors
@@ -333,7 +346,7 @@ class ContainerPod(BasePod):
             if self.args.pod_role == PodRoleType.GATEWAY:
                 ctrl_address = f'{ctrl_host}:{self.args.port[0]}'
             else:
-                ctrl_address = f'{ctrl_host}:{self.args.port}'
+                ctrl_address = f'{ctrl_host}:{self.args.port[0]}'
 
             net_node, runtime_ctrl_address = self._get_network_for_dind_linux(
                 client, ctrl_address
@@ -359,7 +372,7 @@ class ContainerPod(BasePod):
                     if self.args.pod_role == PodRoleType.GATEWAY:
                         runtime_ctrl_address = f'{bridge_network.attrs["IPAM"]["Config"][0]["Gateway"]}:{self.args.port[0]}'
                     else:
-                        runtime_ctrl_address = f'{bridge_network.attrs["IPAM"]["Config"][0]["Gateway"]}:{self.args.port}'
+                        runtime_ctrl_address = f'{bridge_network.attrs["IPAM"]["Config"][0]["Gateway"]}:{self.args.port[0]}'
             except Exception as ex:
                 self.logger.warning(
                     f'Unable to set control address from "bridge" network: {ex!r}'

@@ -3,12 +3,11 @@ import os
 from typing import Optional
 
 from marie.importer import ImportExtensions
-from marie.serve.gateway import BaseGateway
-from marie.serve.runtimes.gateway.websocket.app import get_fastapi_app
+from marie.serve.runtimes.servers import BaseServer
 
 
-class WebSocketGateway(BaseGateway):
-    """WebSocket Gateway implementation"""
+class WebSocketServer(BaseServer):
+    """WebSocket Server implementation"""
 
     def __init__(
         self,
@@ -16,7 +15,7 @@ class WebSocketGateway(BaseGateway):
         ssl_certfile: Optional[str] = None,
         uvicorn_kwargs: Optional[dict] = None,
         proxy: Optional[bool] = None,
-        **kwargs,
+        **kwargs
     ):
         """Initialize the gateway
         :param ssl_keyfile: the path to the key file
@@ -39,15 +38,8 @@ class WebSocketGateway(BaseGateway):
         """
         Setup WebSocket Server
         """
-        from marie.helper import extend_rest_interface
-
-        self.app = extend_rest_interface(
-            get_fastapi_app(
-                streamer=self.streamer,
-                logger=self.logger,
-                tracing=self.tracing,
-                tracer_provider=self.tracer_provider,
-            )
+        self.app = self._request_handler._websocket_fastapi_default_app(
+            tracing=self.tracing, tracer_provider=self.tracer_provider
         )
 
         with ImportExtensions(required=True):
@@ -111,6 +103,7 @@ class WebSocketGateway(BaseGateway):
 
     async def shutdown(self):
         """Free other resources allocated with the server, e.g, gateway object, ..."""
+        await super().shutdown()
         self.server.should_exit = True
         await self.server.shutdown()
 

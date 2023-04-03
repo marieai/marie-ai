@@ -1,6 +1,6 @@
 import pytest
-from jina import Executor, Flow, requests
-from jina.excepts import BadClient
+from marie import Executor, Flow, requests
+from marie.excepts import BadClient
 
 
 class MyExec(Executor):

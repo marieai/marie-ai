@@ -6,7 +6,7 @@ from marie.logging.predefined import default_logger
 
 
 class NetworkChecker:
-    """Check if a BaseDeployment is running or not."""
+    """Check if a Deployment is running or not."""
 
     def __init__(self, args: 'argparse.Namespace'):
         """
@@ -19,28 +19,24 @@ class NetworkChecker:
 
         from marie.clients import Client
         from marie.logging.profile import TimeContext
-        from marie.serve.runtimes.gateway import GatewayRuntime
-        from marie.serve.runtimes.worker import WorkerRuntime
+        from marie.serve.runtimes.servers import BaseServer
 
         try:
             total_time = 0
             total_success = 0
+            timeout = args.timeout / 1000 if args.timeout != -1 else None
             for j in range(args.attempts):
                 with TimeContext(
                     f'ping {args.target} on {args.host} at {j} round', default_logger
                 ) as tc:
-                    if args.target == 'executor':
+                    if args.target == 'flow':
+                        r = Client(host=args.host).is_flow_ready(timeout=timeout)
+                    else:
                         hostname, port, protocol, _ = parse_host_scheme(args.host)
-                        r = WorkerRuntime.is_ready(ctrl_address=f'{hostname}:{port}')
-                    elif args.target == 'gateway':
-                        hostname, port, protocol, _ = parse_host_scheme(args.host)
-                        r = GatewayRuntime.is_ready(
-                            f'{hostname}:{port}',
-                            protocol=GatewayProtocolType.from_string(protocol),
-                        )
-                    elif args.target == 'flow':
-                        r = Client(host=args.host).is_flow_ready(
-                            timeout=args.timeout / 1000
+                        r = BaseServer.is_ready(
+                            ctrl_address=f'{hostname}:{port}',
+                            timeout=timeout,
+                            protocol=protocol,
                         )
                     if not r:
                         default_logger.warning(

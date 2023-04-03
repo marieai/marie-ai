@@ -1,8 +1,8 @@
 import asyncio
 from asyncio import Event, Task
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from docarray import DocumentArray
+from marie._docarray import DocumentArray
 from marie.types.request.data import DataRequest
 
 

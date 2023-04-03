@@ -1,8 +1,8 @@
 import pytest
 from docarray import DocumentArray
 
-from jina import Client, Flow
-from jina.helper import random_port
+from marie import Client, Flow
+from marie.helper import random_port
 
 
 @pytest.mark.parametrize('protocol', ['grpc', 'ws', 'http'])

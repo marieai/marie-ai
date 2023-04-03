@@ -1070,7 +1070,7 @@ metas:
         """
 
         try:
-            from jina import __version__ as jina_version
+            from marie import __version__ as jina_version
         except ImportError:
             jina_version = __unset_msg__
 

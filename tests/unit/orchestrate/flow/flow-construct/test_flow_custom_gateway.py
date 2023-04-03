@@ -2,7 +2,7 @@ import os
 
 import pytest
 import requests
-from jina import Flow
+from marie import Flow
 
 from tests.helper import ProcessExecutor, _validate_custom_gateway_process, _validate_dummy_custom_gateway_response
 from tests.unit.yaml.dummy_gateway import DummyGateway

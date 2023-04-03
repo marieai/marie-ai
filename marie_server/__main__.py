@@ -118,14 +118,14 @@ def main(yml_config: str, env: Dict[str, str], env_file: str):
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
 
-    marie.helper.extend_rest_interface = extend_rest_interface
-
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
     )
+
+    marie.helper.extend_rest_interface = extend_rest_interface
 
     with f:
         f.block()

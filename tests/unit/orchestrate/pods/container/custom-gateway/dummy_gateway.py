@@ -1,8 +1,8 @@
 from typing import Optional
 
 from docarray import Document, DocumentArray
-from jina import Gateway, __default_host__
-from jina.clients.request import request_generator
+from marie import Gateway, __default_host__
+from marie.clients.request import request_generator
 from pydantic import BaseModel
 from uvicorn import Config, Server
 

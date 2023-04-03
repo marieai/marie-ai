@@ -3,8 +3,8 @@ import os
 
 import pytest
 import yaml
-from jina import Flow
-from jina.serve.networking import GrpcConnectionPool
+from marie import Flow
+from marie.serve.networking import GrpcConnectionPool
 
 
 @pytest.mark.parametrize('protocol', ['http', 'grpc'])

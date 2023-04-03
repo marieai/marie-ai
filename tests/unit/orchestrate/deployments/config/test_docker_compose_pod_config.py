@@ -5,9 +5,9 @@ from typing import Dict, Tuple, Union
 import pytest
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
-from jina.helper import Namespace
-from jina.orchestrate.deployments.config.docker_compose import DockerComposeConfig
-from jina.parsers import set_deployment_parser, set_gateway_parser
+from marie.helper import Namespace
+from marie.orchestrate.deployments.config.docker_compose import DockerComposeConfig
+from marie.parsers import set_deployment_parser, set_gateway_parser
 
 
 def namespace_equal(

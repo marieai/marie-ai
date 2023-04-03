@@ -132,6 +132,7 @@ class DiscoveryServiceMixin:
         self.discovery_client, online = self._create_discovery_client(True)
 
         def __register(_service_host, _service_port, _service_scheme):
+
             # Calling /dry_run on the flow will check if the Flow is initialized fully
             # Expecting to get InternalNetworkError: failed to connect to all addresses
             service_url = f"{_service_scheme}://{_service_host}:{_service_port}/dry_run"

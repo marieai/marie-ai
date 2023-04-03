@@ -2,12 +2,9 @@ import asyncio
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from starlette import status
-
 from marie.clients.base import BaseClient
-from marie.clients.base.helper import HTTPClientlet
+from marie.clients.base.helper import HTTPClientlet, handle_response_status
 from marie.clients.helper import callback_exec
-from marie.excepts import BadClient
 from marie.importer import ImportExtensions
 from marie.logging.profile import ProgressBar
 from marie.serve.stream import RequestStreamer
@@ -20,26 +17,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 class HTTPBaseClient(BaseClient):
     """A MixIn for HTTP Client."""
-
-    def _handle_response_status(self, r_status, r_str, url):
-        if r_status == status.HTTP_404_NOT_FOUND:
-            raise BadClient(f'no such endpoint {url}')
-        elif (
-            r_status == status.HTTP_503_SERVICE_UNAVAILABLE
-            or r_status == status.HTTP_504_GATEWAY_TIMEOUT
-        ):
-            if (
-                'header' in r_str
-                and 'status' in r_str['header']
-                and 'description' in r_str['header']['status']
-            ):
-                raise ConnectionError(r_str['header']['status']['description'])
-            else:
-                raise ValueError(r_str)
-        elif (
-            r_status < status.HTTP_200_OK or r_status > status.HTTP_300_MULTIPLE_CHOICES
-        ):  # failure codes
-            raise ValueError(r_str)
 
     async def _is_flow_ready(self, **kwargs) -> bool:
         """Sends a dry run to the Flow to validate if the Flow is ready to receive requests
@@ -66,7 +43,7 @@ class HTTPBaseClient(BaseClient):
                 r_status = response.status
 
                 r_str = await response.json()
-                self._handle_response_status(r_status, r_str, url)
+                handle_response_status(r_status, r_str, url)
                 if r_str['code'] == jina_pb2.StatusProto.SUCCESS:
                     return True
                 else:
@@ -90,6 +67,7 @@ class HTTPBaseClient(BaseClient):
         max_backoff: float = 0.1,
         backoff_multiplier: float = 1.5,
         results_in_order: bool = False,
+        prefetch: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -102,11 +80,12 @@ class HTTPBaseClient(BaseClient):
         :param max_backoff: The maximum accepted backoff after the exponential incremental delay
         :param backoff_multiplier: The n-th attempt will occur at random(0, min(initialBackoff*backoffMultiplier**(n-1), maxBackoff))
         :param results_in_order: return the results in the same order as the inputs
+        :param prefetch: How many Requests are processed from the Client at the same time.
         :param kwargs: kwargs coming from the public interface. Includes arguments to be passed to the `HTTPClientlet`
         :yields: generator over results
         """
         with ImportExtensions(required=True):
-            import aiohttp
+            pass
 
         self.inputs = inputs
         request_iterator = self._get_requests(**kwargs)
@@ -146,11 +125,14 @@ class HTTPBaseClient(BaseClient):
             def _result_handler(result):
                 return result
 
+            streamer_args = vars(self.args)
+            if prefetch:
+                streamer_args['prefetch'] = prefetch
             streamer = RequestStreamer(
                 request_handler=_request_handler,
                 result_handler=_result_handler,
                 logger=self.logger,
-                **vars(self.args),
+                **streamer_args,
             )
             async for response in streamer.stream(
                 request_iterator=request_iterator, results_in_order=results_in_order
@@ -158,11 +140,11 @@ class HTTPBaseClient(BaseClient):
                 r_status = response.status
 
                 r_str = await response.json()
-                self._handle_response_status(r_status, r_str, url)
+                handle_response_status(r_status, r_str, url)
 
                 da = None
                 if 'data' in r_str and r_str['data'] is not None:
-                    from docarray import DocumentArray
+                    from marie._docarray import DocumentArray
 
                     da = DocumentArray.from_dict(r_str['data'])
                     del r_str['data']

@@ -1,6 +1,6 @@
-import argparse
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
+from marie._docarray import docarray_v2
 from marie.clients.request import request_generator
 from marie.enums import DataInputType, WebsocketSubProtocols
 from marie.excepts import InternalNetworkError
@@ -13,7 +13,7 @@ from marie.types.request.status import StatusMessage
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
 
-    from marie.serve.streamer import GatewayStreamer
+    from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
 
 def _fits_ws_close_msg(msg: str):
@@ -39,7 +39,7 @@ def get_fastapi_app(
     :return: fastapi app
     """
 
-    from marie.serve.runtimes.gateway.http.models import JinaEndpointRequestModel
+    from marie.serve.runtimes.gateway.models import JinaEndpointRequestModel
 
     with ImportExtensions(required=True):
         from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect, status
@@ -185,7 +185,14 @@ def get_fastapi_app(
                         yield DataRequest(request)
 
         try:
-            async for msg in streamer.stream(request_iterator=req_iter()):
+            async for msg in streamer.rpc_stream(request_iterator=req_iter()):
+                if not docarray_v2:
+                    for i in range(len(msg.data._content.docs.docs)):
+                        if msg.data._content.docs.docs[i].HasField('embedding'):
+                            msg.data._content.docs.docs[i].embedding.cls_name = 'numpy'
+
+                        if msg.data._content.docs.docs[i].HasField('tensor'):
+                            msg.data._content.docs.docs[i].tensor.cls_name = 'numpy'
                 await manager.send(websocket, msg)
         except InternalNetworkError as err:
             import grpc
@@ -215,15 +222,14 @@ def get_fastapi_app(
         :param request_iterator: request iterator, with length of 1
         :return: the first result from the request iterator
         """
-        async for k in streamer.stream(request_iterator=request_iterator):
+        async for k in streamer.rpc_stream(request_iterator=request_iterator):
             request_dict = k.to_dict()
             return request_dict
 
-    from docarray import DocumentArray
-
+    from marie._docarray import DocumentArray
     from marie.proto import jina_pb2
     from marie.serve.executors import __dry_run_endpoint__
-    from marie.serve.runtimes.gateway.http.models import PROTO_TO_PYDANTIC_MODELS
+    from marie.serve.runtimes.gateway.models import PROTO_TO_PYDANTIC_MODELS
 
     @app.get(
         path='/dry_run',
@@ -238,7 +244,7 @@ def get_fastapi_app(
 
         """
 
-        da = DocumentArray()
+        da = DocumentArray([])
 
         try:
             _ = await _get_singleton_result(
@@ -265,9 +271,9 @@ def get_fastapi_app(
 
         await manager.connect(websocket)
 
-        da = DocumentArray()
+        da = DocumentArray([])
         try:
-            async for _ in streamer.stream(
+            async for _ in streamer.rpc_stream(
                 request_iterator=request_generator(
                     exec_endpoint=__dry_run_endpoint__,
                     data=da,

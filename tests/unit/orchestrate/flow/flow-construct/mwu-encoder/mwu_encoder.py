@@ -1,7 +1,7 @@
 import os
 from typing import Any
 
-from jina import Executor, requests
+from marie import Executor, requests
 
 
 class MWUEncoder(Executor):

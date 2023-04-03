@@ -4,12 +4,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
-from jina import Executor, Flow
-from jina.enums import GatewayProtocolType
-from jina.excepts import BadYAMLVersion
-from jina.jaml import JAML
-from jina.jaml.parsers import get_supported_versions
-from jina.parsers.flow import set_flow_parser
+from marie import Executor, Flow
+from marie.enums import GatewayProtocolType
+from marie.excepts import BadYAMLVersion
+from marie.jaml import JAML
+from marie.jaml.parsers import get_supported_versions
+from marie.parsers.flow import set_flow_parser
 
 cur_dir = Path(__file__).parent
 
@@ -189,7 +189,7 @@ def test_flow_uses_from_dict():
 
 
 def test_flow_yaml_override_with_protocol():
-    from jina.enums import GatewayProtocolType
+    from marie.enums import GatewayProtocolType
 
     path = os.path.join(
         cur_dir.parent.parent.parent, 'yaml/examples/faiss/flow-index.yml'
