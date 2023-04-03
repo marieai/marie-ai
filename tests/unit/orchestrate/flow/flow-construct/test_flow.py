@@ -6,13 +6,13 @@ import os
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
-from jina import Document, DocumentArray, Executor, Flow, __windows__, requests
-from jina.enums import FlowBuildLevel, GatewayProtocolType
-from jina.excepts import RuntimeFailToStart
-from jina.helper import random_identity
-from jina.orchestrate.deployments import BaseDeployment
-from jina.serve.executors import BaseExecutor
-from jina.types.request.data import Response
+from marie import Document, DocumentArray, Executor, Flow, __windows__, requests
+from marie.enums import FlowBuildLevel, GatewayProtocolType
+from marie.excepts import RuntimeFailToStart
+from marie.helper import random_identity
+from marie.orchestrate.deployments import BaseDeployment
+from marie.serve.executors import BaseExecutor
+from marie.types.request.data import Response
 
 from tests import random_docs
 

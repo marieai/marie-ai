@@ -22,8 +22,8 @@ class AsyncFlow(AsyncPostMixin, AsyncProfileMixin, AsyncHealthCheckMixin, Flow):
     .. highlight:: python
     .. code-block:: python
 
-        from jina import AsyncFlow
-        from jina.types.document.generators import from_ndarray
+        from marie import AsyncFlow
+        from marie.types.document.generators import from_ndarray
         import numpy as np
 
         with AsyncFlow().add() as f:

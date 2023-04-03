@@ -3,8 +3,8 @@ import os.path
 
 import pytest
 from docarray import Document, DocumentArray
-from jina import Client, Executor, Flow, requests
-from jina.helper import random_port
+from marie import Client, Executor, Flow, requests
+from marie.helper import random_port
 
 PROTOCOLS = ['grpc', 'http', 'websocket']
 cur_dir = os.path.dirname(__file__)

@@ -1,157 +1,68 @@
+import asyncio
 import copy
 import json
 import os
 import re
 import subprocess
-import asyncio
-
-from abc import abstractmethod
+import threading
+import time
 from argparse import Namespace
 from collections import defaultdict
 from contextlib import ExitStack
 from itertools import cycle
-from typing import Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Type, Union, overload
 
 from hubble.executor.helper import replace_secret_of_hub_uri
 from hubble.executor.hubio import HubIO
+from rich import print
+from rich.panel import Panel
 
-from marie.constants import __default_executor__, __default_host__, __docker_host__
-from marie.enums import DeploymentRoleType, PodRoleType, PollingType
-from marie.helper import CatchAllCleanupContextManager, parse_host_scheme, random_port
-from marie.orchestrate.deployments.install_requirements_helper import (
-    install_package_dependencies,
-    _get_package_path_from_uses,
+from marie.clients import Client
+from marie.clients.mixin import PostMixin
+from marie.constants import (
+    __default_executor__,
+    __default_grpc_gateway__,
+    __default_host__,
+    __docker_host__,
+    __windows__,
 )
+from marie.enums import DeploymentRoleType, PodRoleType, PollingType
+from marie.helper import (
+    ArgNamespace,
+    parse_host_scheme,
+    random_port,
+    send_telemetry_event,
+)
+from marie.importer import ImportExtensions
+from marie.jaml import JAMLCompatible
+from marie.logging.logger import MarieLogger
+from marie.orchestrate.deployments.install_requirements_helper import (
+    _get_package_path_from_uses,
+    install_package_dependencies,
+)
+from marie.orchestrate.orchestrator import BaseOrchestrator
 from marie.orchestrate.pods.factory import PodFactory
+from marie.parsers import set_deployment_parser, set_gateway_parser
 from marie.parsers.helper import _update_gateway_args
-from marie.serve.networking import host_is_local, in_docker
+from marie.serve.networking import GrpcConnectionPool
+from marie.serve.networking.utils import host_is_local, in_docker
 
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
 
+if TYPE_CHECKING:
+    import multiprocessing
 
-class BaseDeployment(ExitStack):
-    """A BaseDeployment is an immutable set of pods.
-    Internally, the pods can run with the process/thread backend.
-    They can be also run in their own containers on remote machines.
-    """
-
-    @abstractmethod
-    def start(self) -> 'BaseDeployment':
-        """Start to run all :class:`Pod` in this BaseDeployment.
-
-        .. note::
-            If one of the :class:`Pod` fails to start, make sure that all of them
-            are properly closed.
-        """
-        ...
-
-    @property
-    def role(self) -> 'DeploymentRoleType':
-        """Return the role of this :class:`BaseDeployment`.
-
-        .. # noqa: DAR201
-        """
-        return self.args.deployment_role
-
-    @property
-    def name(self) -> str:
-        """The name of this :class:`BaseDeployment`.
+    from marie.clients.base import BaseClient
+    from marie.serve.executors import BaseExecutor
 
 
-        .. # noqa: DAR201
-        """
-        return self.args.name
+class DeploymentType(type(ExitStack), type(JAMLCompatible)):
+    """Type of Deployment, metaclass of :class:`Deployment`"""
 
-    @property
-    def head_host(self) -> str:
-        """Get the host of the HeadPod of this deployment
-        .. # noqa: DAR201
-        """
-        return self.head_args.host if self.head_args else None
-
-    @property
-    def head_port(self):
-        """Get the port of the HeadPod of this deployment
-        .. # noqa: DAR201
-        """
-        return self.head_args.port if self.head_args else None
-
-    @property
-    def head_port_monitoring(self):
-        """Get the port_monitoring of the HeadPod of this deployment
-        .. # noqa: DAR201
-        """
-        return self.head_args.port_monitoring if self.head_args else None
-
-    def __enter__(self) -> 'BaseDeployment':
-        with CatchAllCleanupContextManager(self):
-            return self.start()
-
-    @staticmethod
-    def _copy_to_head_args(args: Namespace) -> Namespace:
-        """
-        Set the outgoing args of the head router
-
-        :param args: basic arguments
-        :return: enriched head arguments
-        """
-
-        _head_args = copy.deepcopy(args)
-        _head_args.polling = args.polling
-        _head_args.port = args.port[0]
-        _head_args.host = args.host[0]
-        _head_args.uses = args.uses
-        _head_args.pod_role = PodRoleType.HEAD
-        _head_args.runtime_cls = 'HeadRuntime'
-        _head_args.replicas = 1
-
-        if args.name:
-            _head_args.name = f'{args.name}/head'
-        else:
-            _head_args.name = f'head'
-
-        return _head_args
-
-    @property
-    @abstractmethod
-    def head_args(self) -> Namespace:
-        """Get the arguments for the `head` of this BaseDeployment.
-
-        .. # noqa: DAR201
-        """
-        ...
-
-    @abstractmethod
-    def join(self):
-        """Wait until all deployment and pods exit."""
-        ...
-
-    @property
-    @abstractmethod
-    def _mermaid_str(self) -> List[str]:
-        """String that will be used to represent the Deployment graphically when `Flow.plot()` is invoked
+    pass
 
 
-        .. # noqa: DAR201
-        """
-        ...
-
-    @property
-    def deployments(self) -> List[Dict]:
-        """Get deployments of the deployment. The BaseDeployment just gives one deployment.
-
-        :return: list of deployments
-        """
-        return [
-            {
-                'name': self.name,
-                'head_host': self.head_host,
-                'head_port': self.head_port,
-            }
-        ]
-
-
-class Deployment(BaseDeployment):
+class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=DeploymentType):
     """A Deployment is an immutable set of pods, which run in replicas. They share the same input and output socket.
     Internally, the pods can run with the process/thread backend. They can be also run in their own containers
     :param args: arguments parsed from the CLI
@@ -197,8 +108,7 @@ class Deployment(BaseDeployment):
 
         def __enter__(self):
             for _args in self.args:
-                if getattr(self.deployment_args, 'noblock_on_start', False):
-                    _args.noblock_on_start = True
+                _args.noblock_on_start = True
                 self._pods.append(PodFactory.build_pod(_args).start())
             return self
 
@@ -213,11 +123,217 @@ class Deployment(BaseDeployment):
             if exc_val is None and closing_exception is not None:
                 raise closing_exception
 
+    # overload_inject_start_deployment
+    @overload
     def __init__(
-        self, args: Union['Namespace', Dict], needs: Optional[Set[str]] = None
+        self,
+        *,
+        allow_concurrent: Optional[bool] = False,
+        compression: Optional[str] = None,
+        connection_list: Optional[str] = None,
+        disable_auto_volume: Optional[bool] = False,
+        docker_kwargs: Optional[dict] = None,
+        entrypoint: Optional[str] = None,
+        env: Optional[dict] = None,
+        env_from_secret: Optional[dict] = None,
+        exit_on_exceptions: Optional[List[str]] = [],
+        external: Optional[bool] = False,
+        floating: Optional[bool] = False,
+        force_update: Optional[bool] = False,
+        gpus: Optional[str] = None,
+        grpc_channel_options: Optional[dict] = None,
+        grpc_metadata: Optional[dict] = None,
+        grpc_server_options: Optional[dict] = None,
+        host: Optional[List[str]] = ['0.0.0.0'],
+        install_requirements: Optional[bool] = False,
+        log_config: Optional[str] = None,
+        metrics: Optional[bool] = False,
+        metrics_exporter_host: Optional[str] = None,
+        metrics_exporter_port: Optional[int] = None,
+        monitoring: Optional[bool] = False,
+        name: Optional[str] = 'executor',
+        native: Optional[bool] = False,
+        no_reduce: Optional[bool] = False,
+        output_array_type: Optional[str] = None,
+        polling: Optional[str] = 'ANY',
+        port: Optional[int] = None,
+        port_monitoring: Optional[int] = None,
+        prefer_platform: Optional[str] = None,
+        py_modules: Optional[List[str]] = None,
+        quiet: Optional[bool] = False,
+        quiet_error: Optional[bool] = False,
+        reload: Optional[bool] = False,
+        replicas: Optional[int] = 1,
+        retries: Optional[int] = -1,
+        runtime_cls: Optional[str] = 'WorkerRuntime',
+        shards: Optional[int] = 1,
+        timeout_ctrl: Optional[int] = 60,
+        timeout_ready: Optional[int] = 600000,
+        timeout_send: Optional[int] = None,
+        tls: Optional[bool] = False,
+        traces_exporter_host: Optional[str] = None,
+        traces_exporter_port: Optional[int] = None,
+        tracing: Optional[bool] = False,
+        uses: Optional[Union[str, Type['BaseExecutor'], dict]] = 'BaseExecutor',
+        uses_after: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
+        uses_after_address: Optional[str] = None,
+        uses_before: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
+        uses_before_address: Optional[str] = None,
+        uses_dynamic_batching: Optional[dict] = None,
+        uses_metas: Optional[dict] = None,
+        uses_requests: Optional[dict] = None,
+        uses_with: Optional[dict] = None,
+        volumes: Optional[List[str]] = None,
+        when: Optional[dict] = None,
+        workspace: Optional[str] = None,
+        **kwargs,
+    ):
+        """Create a Deployment to serve or deploy and Executor or Gateway
+
+        :param allow_concurrent: Allow concurrent requests to be processed by the Executor. This is only recommended if the Executor is thread-safe.
+        :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
+        :param connection_list: dictionary JSON with a list of connections to configure
+        :param disable_auto_volume: Do not automatically mount a volume for dockerized Executors.
+        :param docker_kwargs: Dictionary of kwargs arguments that will be passed to Docker SDK when starting the docker '
+          container.
+
+          More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
+        :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
+        :param env: The map of environment variables that are available inside runtime
+        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
+        :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
+        :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
+        :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
+        :param force_update: If set, always pull the latest Hub Executor bundle even it exists on local
+        :param gpus: This argument allows dockerized Jina Executors to discover local gpu devices.
+
+              Note,
+              - To access all gpus, use `--gpus all`.
+              - To access multiple gpus, e.g. make use of 2 gpus, use `--gpus 2`.
+              - To access specified gpus based on device id, use `--gpus device=[YOUR-GPU-DEVICE-ID]`
+              - To access specified gpus based on multiple device id, use `--gpus device=[YOUR-GPU-DEVICE-ID1],device=[YOUR-GPU-DEVICE-ID2]`
+              - To specify more parameters, use `--gpus device=[YOUR-GPU-DEVICE-ID],runtime=nvidia,capabilities=display
+        :param grpc_channel_options: Dictionary of kwargs arguments that will be passed to the grpc channel as options when creating a channel, example : {'grpc.max_send_message_length': -1}. When max_attempts > 1, the 'grpc.service_config' option will not be applicable.
+        :param grpc_metadata: The metadata to be passed to the gRPC request.
+        :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
+        :param host: The host of the Gateway, which the client should connect to, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts.  Then, every resulting address will be considered as one replica of the Executor.
+        :param install_requirements: If set, try to install `requirements.txt` from the local Executor if exists in the Executor folder. If using Hub, install `requirements.txt` in the Hub Executor bundle to local.
+        :param log_config: The config name or the absolute path to the YAML config file of the logger used in this object.
+        :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
+        :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
+        :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
+        :param monitoring: If set, spawn an http server with a prometheus endpoint to expose metrics
+        :param name: The name of this object.
+
+              This will be used in the following places:
+              - how you refer to this object in Python/YAML/CLI
+              - visualization
+              - log message header
+              - ...
+
+              When not given, then the default naming strategy will apply.
+        :param native: If set, only native Executors is allowed, and the Executor is always run inside WorkerRuntime.
+        :param no_reduce: Disable the built-in reduction mechanism. Set this if the reduction is to be handled by the Executor itself by operating on a `docs_matrix` or `docs_map`
+        :param output_array_type: The type of array `tensor` and `embedding` will be serialized to.
+
+          Supports the same types as `docarray.to_protobuf(.., ndarray_type=...)`, which can be found
+          `here <https://docarray.jina.ai/fundamentals/document/serialization/#from-to-protobuf>`.
+          Defaults to retaining whatever type is returned by the Executor.
+        :param polling: The polling strategy of the Deployment and its endpoints (when `shards>1`).
+              Can be defined for all endpoints of a Deployment or by endpoint.
+              Define per Deployment:
+              - ANY: only one (whoever is idle) Pod polls the message
+              - ALL: all Pods poll the message (like a broadcast)
+              Define per Endpoint:
+              JSON dict, {endpoint: PollingType}
+              {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
+        :param port: The port for input data to bind to, default is a random port between [49152, 65535]. In the case of an external Executor (`--external` or `external=True`) this can be a list of ports. Then, every resulting address will be considered as one replica of the Executor.
+        :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
+        :param py_modules: The customized python modules need to be imported before loading the executor
+
+          Note that the recommended way is to only import a single module - a simple python file, if your
+          executor can be defined in a single file, or an ``__init__.py`` file if you have multiple files,
+          which should be structured as a python package. For more details, please see the
+          `Executor cookbook <https://docs.jina.ai/concepts/executor/executor-files/>`__
+        :param quiet: If set, then no log will be emitted from this object.
+        :param quiet_error: If set, then exception stack information will not be added to the log
+        :param reload: If set, the Executor will restart while serving if YAML configuration source or Executor modules are changed. If YAML configuration is changed, the whole deployment is reloaded and new processes will be restarted. If only Python modules of the Executor have changed, they will be reloaded to the interpreter without restarting process.
+        :param replicas: The number of replicas in the deployment
+        :param retries: Number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param runtime_cls: The runtime class to run inside the Pod
+        :param shards: The number of shards in the deployment running at the same time. For more details check https://docs.jina.ai/concepts/flow/create-flow/#complex-flow-topologies
+        :param timeout_ctrl: The timeout in milliseconds of the control request, -1 for waiting forever
+        :param timeout_ready: The timeout in milliseconds of a Pod waits for the runtime to be ready, -1 for waiting forever
+        :param timeout_send: The timeout in milliseconds used when sending data requests to Executors, -1 means no timeout, disabled by default
+        :param tls: If set, connect to deployment using tls encryption
+        :param traces_exporter_host: If tracing is enabled, this hostname will be used to configure the trace exporter agent.
+        :param traces_exporter_port: If tracing is enabled, this port will be used to configure the trace exporter agent.
+        :param tracing: If set, the sdk implementation of the OpenTelemetry tracer will be available and will be enabled for automatic tracing of requests and customer span creation. Otherwise a no-op implementation will be provided.
+        :param uses: The config of the executor, it could be one of the followings:
+                  * the string literal of an Executor class name
+                  * an Executor YAML file (.yml, .yaml, .jaml)
+                  * a Jina Hub Executor (must start with `jinahub://` or `jinahub+docker://`)
+                  * a docker image (must start with `docker://`)
+                  * the string literal of a YAML config (must start with `!` or `jtype: `)
+                  * the string literal of a JSON config
+
+                  When use it under Python, one can use the following values additionally:
+                  - a Python dict that represents the config
+                  - a text file stream has `.read()` interface
+        :param uses_after: The executor attached after the Pods described by --uses, typically used for receiving from all shards, accepted type follows `--uses`. This argument only applies for sharded Deployments (shards > 1).
+        :param uses_after_address: The address of the uses-before runtime
+        :param uses_before: The executor attached before the Pods described by --uses, typically before sending to all shards, accepted type follows `--uses`. This argument only applies for sharded Deployments (shards > 1).
+        :param uses_before_address: The address of the uses-before runtime
+        :param uses_dynamic_batching: Dictionary of keyword arguments that will override the `dynamic_batching` configuration in `uses`
+        :param uses_metas: Dictionary of keyword arguments that will override the `metas` configuration in `uses`
+        :param uses_requests: Dictionary of keyword arguments that will override the `requests` configuration in `uses`
+        :param uses_with: Dictionary of keyword arguments that will override the `with` configuration in `uses`
+        :param volumes: The path on the host to be mounted inside the container.
+
+          Note,
+          - If separated by `:`, then the first part will be considered as the local host path and the second part is the path in the container system.
+          - If no split provided, then the basename of that directory will be mounted into container's root path, e.g. `--volumes="/user/test/my-workspace"` will be mounted into `/my-workspace` inside the container.
+          - All volumes are mounted with read-write mode.
+        :param when: The condition that the documents need to fulfill before reaching the Executor.The condition can be defined in the form of a `DocArray query condition <https://docarray.jina.ai/fundamentals/documentarray/find/#query-by-conditions>`
+        :param workspace: The working directory for any IO operations in this object. If not set, then derive from its parent `workspace`.
+
+        .. # noqa: DAR202
+        .. # noqa: DAR101
+        .. # noqa: DAR003
+        """
+
+    # overload_inject_end_deployment
+
+    def __init__(
+        self,
+        args: Union['Namespace', Dict, None] = None,
+        needs: Optional[Set[str]] = None,
+        include_gateway: bool = True,
+        **kwargs,
     ):
         super().__init__()
+
+        self._gateway_kwargs = {}
+        self._include_gateway = include_gateway
+        if self._include_gateway:
+            # arguments exclusive to the gateway
+            for field in ['port']:
+                if field in kwargs:
+                    self._gateway_kwargs[field] = kwargs.pop(field)
+
+            # arguments common to both gateway and the Executor
+            for field in ['host', 'log_config']:
+                if field in kwargs:
+                    self._gateway_kwargs[field] = kwargs[field]
+
+        parser = set_deployment_parser()
+        if args is None:
+            args = ArgNamespace.kwargs2namespace(kwargs, parser, True)
         self.args = args
+        log_config = kwargs.get('log_config')
+        if log_config:
+            self.args.log_config = log_config
         self.args.polling = (
             args.polling if hasattr(args, 'polling') else PollingType.ANY
         )
@@ -251,14 +367,61 @@ class Deployment(BaseDeployment):
         self.uses_before_pod = None
         self.uses_after_pod = None
         self.head_pod = None
+        self.gateway_pod = None
         self.shards = {}
         self._update_port_monitoring_args()
         self.update_pod_args()
+
+        if self._include_gateway:
+            gateway_parser = set_gateway_parser()
+            args = ArgNamespace.kwargs2namespace(
+                self._gateway_kwargs, gateway_parser, True
+            )
+
+            args.deployments_addresses = json.dumps(
+                {'executor': self._get_connection_list()}
+            )
+            args.graph_description = (
+                '{"start-gateway": ["executor"], "executor": ["end-gateway"]}'
+            )
+            self.pod_args['gateway'] = args
+        else:
+            self.pod_args['gateway'] = None
+
         self._sandbox_deployed = False
+
+        self.logger = MarieLogger(self.__class__.__name__, **vars(self.args))
+
+    def _get_connection_list(self) -> List[str]:
+        if self.head_args:
+            # add head information
+            return [f'{self.protocol}://{self.host}:{self.head_port}']
+        else:
+            # there is no head, add the worker connection information instead
+            ports = self.ports
+            hosts = [
+                __docker_host__
+                if host_is_local(host) and in_docker() and self.dockerized_uses
+                else host
+                for host in self.hosts
+            ]
+            return [
+                f'{self.protocol}://{host}:{port}' for host, port in zip(hosts, ports)
+            ]
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         super().__exit__(exc_type, exc_val, exc_tb)
         self.join()
+        if self._include_gateway:
+            self._stop_time = time.time()
+            send_telemetry_event(
+                event='stop',
+                obj_cls_name=self.__class__.__name__,
+                entity_id=self._entity_id,
+                duration=self._stop_time - self._start_time,
+                exc_type=str(exc_type),
+            )
+        self.logger.close()
 
     def _parse_addresses_into_host_and_port(self):
         # splits addresses passed to `host` into separate `host` and `port`
@@ -337,10 +500,10 @@ class Deployment(BaseDeployment):
             host, port = HubIO.deploy_public_sandbox(self.args)
             self._sandbox_deployed = True
             self.first_pod_args.host = host
-            self.first_pod_args.port = port
+            self.first_pod_args.port = [port]
             if self.head_args:
                 self.pod_args['head'].host = host
-                self.pod_args['head'].port = port
+                self.pod_args['head'].port = [port]
 
     def update_worker_pod_args(self):
         """Update args of all its worker pods based on Deployment args. Does not touch head and tail"""
@@ -357,6 +520,98 @@ class Deployment(BaseDeployment):
 
         uses = getattr(self.args, 'uses') or ''
         return is_valid_sandbox_uri(uses)
+
+    @property
+    def role(self) -> 'DeploymentRoleType':
+        """Return the role of this :class:`Deployment`.
+
+        .. # noqa: DAR201
+        """
+        return self.args.deployment_role
+
+    @property
+    def name(self) -> str:
+        """The name of this :class:`Deployment`.
+
+
+        .. # noqa: DAR201
+        """
+        return self.args.name
+
+    @property
+    def head_host(self) -> str:
+        """Get the host of the HeadPod of this deployment
+        .. # noqa: DAR201
+        """
+        return self.head_args.host if self.head_args else None
+
+    @property
+    def head_port(self):
+        """Get the port of the HeadPod of this deployment
+        .. # noqa: DAR201
+        """
+        return self.head_args.port[0] if self.head_args else None
+
+    @property
+    def head_port_monitoring(self):
+        """Get the port_monitoring of the HeadPod of this deployment
+        .. # noqa: DAR201
+        """
+        return self.head_args.port_monitoring if self.head_args else None
+
+    @property
+    def client(self) -> 'BaseClient':
+        """Return a :class:`BaseClient` object attach to this Flow.
+
+        .. # noqa: DAR201"""
+
+        kwargs = dict(
+            host=self.host,
+            port=self.port,
+            protocol=self.protocol,
+            grpc_channel_options=self.args.grpc_channel_options,
+        )
+        kwargs.update(self._gateway_kwargs)
+        return Client(**kwargs)
+
+    @staticmethod
+    def _copy_to_head_args(args: Namespace) -> Namespace:
+        """
+        Set the outgoing args of the head router
+
+        :param args: basic arguments
+        :return: enriched head arguments
+        """
+
+        _head_args = copy.deepcopy(args)
+        _head_args.polling = args.polling
+        _head_args.port = args.port
+        _head_args.host = args.host[0]
+        _head_args.uses = args.uses
+        _head_args.pod_role = PodRoleType.HEAD
+        _head_args.runtime_cls = 'HeadRuntime'
+        _head_args.replicas = 1
+
+        if args.name:
+            _head_args.name = f'{args.name}/head'
+        else:
+            _head_args.name = f'head'
+
+        return _head_args
+
+    @property
+    def deployments(self) -> List[Dict]:
+        """Get deployments of the deployment. The Deployment just gives one deployment.
+
+        :return: list of deployments
+        """
+        return [
+            {
+                'name': self.name,
+                'head_host': self.head_host,
+                'head_port': self.head_port,
+            }
+        ]
 
     @property
     def _is_docker(self) -> bool:
@@ -414,7 +669,9 @@ class Deployment(BaseDeployment):
         """
         :return: the protocol of this deployment
         """
-        protocol = getattr(self.args, 'protocol', ['grpc'])
+        args = self.pod_args['gateway'] or self.args
+
+        protocol = getattr(args, 'protocol', ['grpc'])
         if not isinstance(protocol, list):
             protocol = [protocol]
         protocol = [str(_p) + ('s' if self.tls_enabled else '') for _p in protocol]
@@ -431,7 +688,7 @@ class Deployment(BaseDeployment):
         .. # noqa: DAR201
         """
         # note this will be never out of boundary
-        return self.pod_args['pods'][0][0]
+        return self.pod_args['gateway'] or self.pod_args['pods'][0][0]
 
     @property
     def host(self) -> str:
@@ -447,7 +704,7 @@ class Deployment(BaseDeployment):
         """
         :return: the port of this deployment
         """
-        return self.first_pod_args.port
+        return self.first_pod_args.port[0]
 
     @property
     def ports(self) -> List[int]:
@@ -552,7 +809,7 @@ class Deployment(BaseDeployment):
 
     @property
     def all_args(self) -> List[Namespace]:
-        """Get all arguments of all Pods in this BaseDeployment.
+        """Get all arguments of all Pods in this Deployment.
 
         .. # noqa: DAR201
         """
@@ -560,6 +817,7 @@ class Deployment(BaseDeployment):
             ([self.pod_args['uses_before']] if self.pod_args['uses_before'] else [])
             + ([self.pod_args['uses_after']] if self.pod_args['uses_after'] else [])
             + ([self.pod_args['head']] if self.pod_args['head'] else [])
+            + ([self.pod_args['gateway']] if self._include_gateway else [])
         )
         for shard_id in self.pod_args['pods']:
             all_args += self.pod_args['pods'][shard_id]
@@ -578,12 +836,14 @@ class Deployment(BaseDeployment):
             num_pods += 1
         if self.uses_after_pod is not None:
             num_pods += 1
+        if self.gateway_pod is not None:
+            num_pods += 1
         if self.shards:  # external deployments
             for shard_id in self.shards:
                 num_pods += self.shards[shard_id].num_pods
         return num_pods
 
-    def __eq__(self, other: 'BaseDeployment'):
+    def __eq__(self, other: 'Deployment'):
         return self.num_pods == other.num_pods and self.name == other.name
 
     @staticmethod
@@ -607,9 +867,39 @@ class Deployment(BaseDeployment):
         )
         return worker_host
 
+    def _wait_until_all_ready(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            wait_for_ready_coro = self.async_wait_start_success()
+
+            try:
+                _ = asyncio.get_event_loop()
+            except:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            async def _f():
+                pass
+
+            running_in_event_loop = False
+            try:
+                asyncio.get_event_loop().run_until_complete(_f())
+            except:
+                running_in_event_loop = True
+
+            if not running_in_event_loop:
+                asyncio.get_event_loop().run_until_complete(wait_for_ready_coro)
+            else:
+                wait_ready_thread = threading.Thread(
+                    target=self.wait_start_success, daemon=True
+                )
+                wait_ready_thread.start()
+                wait_ready_thread.join()
+
     def start(self) -> 'Deployment':
         """
-        Start to run all :class:`Pod` in this BaseDeployment.
+        Start to run all :class:`Pod` in this Deployment.
 
         :return: started deployment
 
@@ -617,6 +907,8 @@ class Deployment(BaseDeployment):
             If one of the :class:`Pod` fails to start, make sure that all of them
             are properly closed.
         """
+
+        self._start_time = time.time()
         if self.is_sandbox and not self._sandbox_deployed:
             self.update_sandbox_args()
 
@@ -625,22 +917,24 @@ class Deployment(BaseDeployment):
 
         if self.pod_args['uses_before'] is not None:
             _args = self.pod_args['uses_before']
-            if getattr(self.args, 'noblock_on_start', False):
-                _args.noblock_on_start = True
+            _args.noblock_on_start = True
             self.uses_before_pod = PodFactory.build_pod(_args)
             self.enter_context(self.uses_before_pod)
         if self.pod_args['uses_after'] is not None:
             _args = self.pod_args['uses_after']
-            if getattr(self.args, 'noblock_on_start', False):
-                _args.noblock_on_start = True
+            _args.noblock_on_start = True
             self.uses_after_pod = PodFactory.build_pod(_args)
             self.enter_context(self.uses_after_pod)
         if self.pod_args['head'] is not None:
             _args = self.pod_args['head']
-            if getattr(self.args, 'noblock_on_start', False):
-                _args.noblock_on_start = True
+            _args.noblock_on_start = True
             self.head_pod = PodFactory.build_pod(_args)
             self.enter_context(self.head_pod)
+        if self._include_gateway:
+            _args = self.pod_args['gateway']
+            _args.noblock_on_start = True
+            self.gateway_pod = PodFactory.build_pod(_args)
+            self.enter_context(self.gateway_pod)
         for shard_id in self.pod_args['pods']:
             self.shards[shard_id] = self._ReplicaSet(
                 self.args,
@@ -649,6 +943,22 @@ class Deployment(BaseDeployment):
             )
             self.enter_context(self.shards[shard_id])
 
+        if not self.args.noblock_on_start:
+            self._wait_until_all_ready()
+        if self._include_gateway:
+            all_panels = []
+            self._get_summary_table(all_panels)
+
+            from rich.rule import Rule
+
+            print(Rule(':tada: Deployment is ready to serve!'), *all_panels)
+
+            send_telemetry_event(
+                event='start',
+                obj_cls_name=self.__class__.__name__,
+                entity_id=self._entity_id,
+            )
+
         return self
 
     def wait_start_success(self) -> None:
@@ -656,10 +966,6 @@ class Deployment(BaseDeployment):
 
         If not successful, it will raise an error hoping the outer function to catch it
         """
-        if not self.args.noblock_on_start:
-            raise ValueError(
-                f'{self.wait_start_success!r} should only be called when `noblock_on_start` is set to True'
-            )
         try:
             if self.uses_before_pod is not None:
                 self.uses_before_pod.wait_start_success()
@@ -667,6 +973,8 @@ class Deployment(BaseDeployment):
                 self.uses_after_pod.wait_start_success()
             if self.head_pod is not None:
                 self.head_pod.wait_start_success()
+            if self.gateway_pod is not None:
+                self.gateway_pod.wait_start_success()
             for shard_id in self.shards:
                 self.shards[shard_id].wait_start_success()
         except:
@@ -678,10 +986,6 @@ class Deployment(BaseDeployment):
 
         If not successful, it will raise an error hoping the outer function to catch it
         """
-        if not self.args.noblock_on_start:
-            raise ValueError(
-                f'{self.async_wait_start_success!r} should only be called when `noblock_on_start` is set to True'
-            )
         try:
             coros = []
             if self.uses_before_pod is not None:
@@ -690,6 +994,8 @@ class Deployment(BaseDeployment):
                 coros.append(self.uses_after_pod.async_wait_start_success())
             if self.head_pod is not None:
                 coros.append(self.head_pod.async_wait_start_success())
+            if self.gateway_pod is not None:
+                coros.append(self.gateway_pod.async_wait_start_success())
             for shard_id in self.shards:
                 coros.append(self.shards[shard_id].async_wait_start_success())
             await asyncio.gather(*coros)
@@ -706,6 +1012,8 @@ class Deployment(BaseDeployment):
                 self.uses_after_pod.join()
             if self.head_pod is not None:
                 self.head_pod.join()
+            if self.gateway_pod is not None:
+                self.gateway_pod.join()
             if self.shards:
                 for shard_id in self.shards:
                     self.shards[shard_id].join()
@@ -737,6 +1045,8 @@ class Deployment(BaseDeployment):
             is_ready = self.uses_before_pod.is_ready.is_set()
         if is_ready and self.uses_after_pod is not None:
             is_ready = self.uses_after_pod.is_ready.is_set()
+        if is_ready and self.gateway_pod is not None:
+            is_ready = self.gateway_pod.is_ready.is_set()
         return is_ready
 
     @staticmethod
@@ -783,7 +1093,7 @@ class Deployment(BaseDeployment):
         return all_devices[slice(*[int(p) if p else None for p in parts])]
 
     @staticmethod
-    def _roundrobin_cuda_device(device_str: str, replicas: int):
+    def _roundrobin_cuda_device(device_str: Optional[str], replicas: int):
         """Parse cuda device string with RR prefix
 
         :param device_str: `RRm:n`, where `RR` is the prefix, m:n is python slice format
@@ -819,18 +1129,27 @@ class Deployment(BaseDeployment):
         result = {}
         shards = getattr(self.args, 'shards', 1)
         replicas = getattr(self.args, 'replicas', 1)
+        if self.args.deployment_role == DeploymentRoleType.GATEWAY:
+            replicas = 1
         sharding_enabled = shards and shards > 1
 
         cuda_device_map = None
-        if self.args.env:
+        if self.args.env or os.environ.get('CUDA_VISIBLE_DEVICES', '').startswith('RR'):
+            args_env = self.args.env or {}
+            cuda_visible_devices = args_env.get(
+                'CUDA_VISIBLE_DEVICES'
+            ) or os.environ.get('CUDA_VISIBLE_DEVICES', None)
+
             cuda_device_map = Deployment._roundrobin_cuda_device(
-                self.args.env.get('CUDA_VISIBLE_DEVICES'), replicas
+                cuda_visible_devices, replicas
             )
 
         for shard_id in range(shards):
             replica_args = []
             for replica_id in range(replicas):
                 _args = copy.deepcopy(self.args)
+                if self.args.deployment_role == DeploymentRoleType.GATEWAY:
+                    _args.replicas = replicas
                 _args.shard_id = shard_id
                 # for gateway pods, the pod role shouldn't be changed
                 if _args.pod_role != PodRoleType.GATEWAY:
@@ -843,6 +1162,7 @@ class Deployment(BaseDeployment):
                     _args.host = self.args.host
 
                 if cuda_device_map:
+                    _args.env = _args.env or {}
                     _args.env['CUDA_VISIBLE_DEVICES'] = str(cuda_device_map[replica_id])
 
                 if _args.name:
@@ -860,7 +1180,7 @@ class Deployment(BaseDeployment):
 
                 elif not self.external:
                     if shards == 1 and replicas == 1:
-                        _args.port = self.args.port[0]
+                        _args.port = self.args.port
                         _args.port_monitoring = self.args.port_monitoring
 
                     elif shards == 1:
@@ -871,7 +1191,7 @@ class Deployment(BaseDeployment):
                         )
                         # if there are no shards/replicas, we dont need to distribute ports randomly
                         # we should rather use the pre assigned one
-                        _args.port = random_port()
+                        _args.port = [random_port()]
                     elif shards > 1:
                         port_monitoring_index = (
                             replica_id + replicas * shard_id + 1
@@ -884,13 +1204,13 @@ class Deployment(BaseDeployment):
                                 port_monitoring_index
                             ]  # we skip the head port here
                         )
-                        _args.port = random_port()
+                        _args.port = [random_port()]
                     else:
-                        _args.port = random_port()
+                        _args.port = [random_port()]
                         _args.port_monitoring = random_port()
 
                 else:
-                    _args.port = self.ext_repl_ports[replica_id]
+                    _args.port = [self.ext_repl_ports[replica_id]]
                     _args.host = self.ext_repl_hosts[replica_id]
                     _args.scheme = self.ext_repl_schemes[replica_id]
                     _args.tls = self.ext_repl_tls[replica_id]
@@ -900,6 +1220,7 @@ class Deployment(BaseDeployment):
                     _args.workspace = self.args.workspace
                 replica_args.append(_args)
             result[shard_id] = replica_args
+
         return result
 
     @staticmethod
@@ -908,7 +1229,7 @@ class Deployment(BaseDeployment):
         _args = copy.deepcopy(args)
         _args.pod_role = PodRoleType.WORKER
         _args.host = _args.host[0] or __default_host__
-        _args.port = random_port()
+        _args.port = [random_port()]
 
         if _args.name:
             _args.name += f'/{entity_type}-0'
@@ -936,6 +1257,7 @@ class Deployment(BaseDeployment):
             'head': None,
             'uses_before': None,
             'uses_after': None,
+            'gateway': None,
             'pods': {},
         }
 
@@ -951,7 +1273,7 @@ class Deployment(BaseDeployment):
                 )
                 parsed_args['uses_before'] = uses_before_args
                 args.uses_before_address = (
-                    f'{uses_before_args.host}:{uses_before_args.port}'
+                    f'{uses_before_args.host}:{uses_before_args.port[0]}'
                 )
             if (
                 getattr(args, 'uses_after', None)
@@ -962,10 +1284,10 @@ class Deployment(BaseDeployment):
                 )
                 parsed_args['uses_after'] = uses_after_args
                 args.uses_after_address = (
-                    f'{uses_after_args.host}:{uses_after_args.port}'
+                    f'{uses_after_args.host}:{uses_after_args.port[0]}'
                 )
 
-            parsed_args['head'] = BaseDeployment._copy_to_head_args(args)
+            parsed_args['head'] = Deployment._copy_to_head_args(args)
 
         parsed_args['pods'] = self._set_pod_args()
 
@@ -975,7 +1297,9 @@ class Deployment(BaseDeployment):
             for shard_id in parsed_args['pods']:
                 for pod_idx, pod_args in enumerate(parsed_args['pods'][shard_id]):
                     worker_host = self.get_worker_host(pod_args, self._is_docker, False)
-                    connection_list[shard_id].append(f'{worker_host}:{pod_args.port}')
+                    connection_list[shard_id].append(
+                        f'{worker_host}:{pod_args.port[0]}'
+                    )
             parsed_args['head'].connection_list = json.dumps(connection_list)
 
         return parsed_args
@@ -1067,3 +1391,279 @@ class Deployment(BaseDeployment):
 
             mermaid_graph.append('end;')
         return mermaid_graph
+
+    def block(
+        self,
+        stop_event: Optional[Union['threading.Event', 'multiprocessing.Event']] = None,
+    ):
+        """Block the Deployment until `stop_event` is set or user hits KeyboardInterrupt
+
+        :param stop_event: a threading event or a multiprocessing event that once set will resume the control flow
+            to main thread.
+        """
+
+        def _reload_deployment(changed_file):
+            self.logger.info(
+                f'change in Executor configuration YAML {changed_file} observed, reloading Executor deployment'
+            )
+            self.__exit__(None, None, None)
+            new_deployment = Deployment(
+                self.args, self.needs, include_gateway=self._include_gateway
+            )
+            self.__dict__ = new_deployment.__dict__
+            self.__enter__()
+
+        try:
+            watch_changes = self.args.reload
+
+            if watch_changes and self._is_executor_from_yaml:
+
+                with ImportExtensions(
+                    required=True,
+                    help_text='''reload requires watchfiles dependency to be installed. You can do `pip install 
+                    watchfiles''',
+                ):
+                    from watchfiles import watch
+
+                new_stop_event = stop_event or threading.Event()
+                if self._is_executor_from_yaml:
+                    for changes in watch(*[self.args.uses], stop_event=new_stop_event):
+                        for _, changed_file in changes:
+                            _reload_deployment(self.args.uses)
+            else:
+                wait_event = stop_event
+                if not wait_event:
+                    self._stop_event = threading.Event()
+                    wait_event = self._stop_event
+                if not __windows__:
+                    wait_event.wait()
+                else:
+                    while True:
+                        if wait_event.is_set():
+                            break
+                        time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+
+    def _get_summary_table(self, all_panels: List[Panel]):
+        address_table = self._init_table()
+
+        if not isinstance(self.protocol, list):
+            _protocols = [str(self.protocol)]
+        else:
+            _protocols = [str(_p) for _p in self.protocol]
+
+        if not isinstance(self.port, list):
+            _ports = [self.port]
+        else:
+            _ports = [str(_p) for _p in self.port]
+
+        for _port, _protocol in zip(_ports, _protocols):
+
+            address_table.add_row(':chains:', 'Protocol', _protocol)
+
+            _protocol = _protocol.lower()
+            address_table.add_row(
+                ':house:',
+                'Local',
+                f'[link={_protocol}://{self.host}:{_port}]{self.host}:{_port}[/]',
+            )
+            address_table.add_row(
+                ':lock:',
+                'Private',
+                f'[link={_protocol}://{self.address_private}:{_port}]{self.address_private}:{_port}[/]',
+            )
+
+            if self.address_public:
+                address_table.add_row(
+                    ':earth_africa:',
+                    'Public',
+                    f'[link={_protocol}://{self.address_public}:{_port}]{self.address_public}:{_port}[/]',
+                )
+
+        all_panels.append(
+            Panel(
+                address_table,
+                title=':link: [b]Endpoint[/]',
+                expand=False,
+            )
+        )
+
+        return all_panels
+
+    @property
+    def _docker_compose_address(self):
+        from marie.orchestrate.deployments.config.docker_compose import port
+        from marie.orchestrate.deployments.config.helper import to_compatible_name
+
+        if self.external:
+            docker_compose_address = [f'{self.protocol}://{self.host}:{self.port}']
+        elif self.head_args:
+            docker_compose_address = [
+                f'{to_compatible_name(self.head_args.name)}:{port}'
+            ]
+        else:
+            if self.args.replicas == 1 or self.name == 'gateway':
+                docker_compose_address = [f'{to_compatible_name(self.name)}:{port}']
+            else:
+                docker_compose_address = []
+                for rep_id in range(self.args.replicas):
+                    node_name = f'{self.name}/rep-{rep_id}'
+                    docker_compose_address.append(
+                        f'{to_compatible_name(node_name)}:{port}'
+                    )
+        return docker_compose_address
+
+    def _to_docker_compose_config(self, deployments_addresses=None):
+        from marie.orchestrate.deployments.config.docker_compose import (
+            DockerComposeConfig,
+        )
+
+        docker_compose_deployment = DockerComposeConfig(
+            args=self.args, deployments_addresses=deployments_addresses
+        )
+        return docker_compose_deployment.to_docker_compose_config()
+
+    def _inner_gateway_to_docker_compose_config(self):
+        from marie.orchestrate.deployments.config.docker_compose import (
+            DockerComposeConfig,
+        )
+
+        self.pod_args['gateway'].port = self.pod_args['gateway'].port or [random_port()]
+        cargs = copy.deepcopy(self.pod_args['gateway'])
+        cargs.uses = __default_grpc_gateway__
+        cargs.graph_description = (
+            f'{{"{self.name}": ["end-gateway"], "start-gateway": ["{self.name}"]}}'
+        )
+
+        docker_compose_deployment = DockerComposeConfig(
+            args=cargs,
+            deployments_addresses={self.name: self._docker_compose_address},
+        )
+        return docker_compose_deployment.to_docker_compose_config()
+
+    def to_docker_compose_yaml(
+        self,
+        output_path: Optional[str] = None,
+        network_name: Optional[str] = None,
+    ):
+        """
+        Converts a Jina Deployment into a Docker compose YAML file
+
+        If you don't want to rebuild image on Jina Hub,
+        you can set `JINA_HUB_NO_IMAGE_REBUILD` environment variable.
+
+        :param output_path: The path where to dump the yaml file
+        :param network_name: The name of the network that will be used by the deployment
+        """
+        import yaml
+
+        output_path = output_path or 'docker-compose.yml'
+        network_name = network_name or 'jina-network'
+
+        docker_compose_dict = {
+            'version': '3.3',
+            'networks': {network_name: {'driver': 'bridge'}},
+        }
+        services = {}
+
+        service_configs = self._to_docker_compose_config()
+
+        for service_name, service in service_configs:
+            service['networks'] = [network_name]
+            services[service_name] = service
+
+        if self._include_gateway:
+            service_configs = self._inner_gateway_to_docker_compose_config()
+
+            for service_name, service in service_configs:
+                service['networks'] = [network_name]
+                services[service_name] = service
+
+        docker_compose_dict['services'] = services
+        with open(output_path, 'w+') as fp:
+            yaml.dump(docker_compose_dict, fp, sort_keys=False)
+
+        command = (
+            'docker-compose up'
+            if output_path is None
+            else f'docker-compose -f {output_path} up'
+        )
+
+        self.logger.info(
+            f'Docker compose file has been created under [b]{output_path}[/b]. You can use it by running [b]{command}[/b]'
+        )
+
+    def _to_kubernetes_yaml(
+        self,
+        output_base_path: str,
+        k8s_namespace: Optional[str] = None,
+        k8s_deployments_addresses: Optional[Dict] = None,
+        k8s_port: Optional[int] = GrpcConnectionPool.K8S_PORT,
+    ):
+        import yaml
+
+        from marie.orchestrate.deployments.config.k8s import K8sDeploymentConfig
+
+        if self.external:
+            self.logger.warning(
+                'The Deployment is external, cannot create YAML deployment files'
+            )
+            return
+
+        if self.args.name == 'gateway':
+            if self.args.default_port:
+                from marie.serve.networking import GrpcConnectionPool
+
+                self.args.port = [GrpcConnectionPool.K8S_PORT]
+                self.first_pod_args.port = [GrpcConnectionPool.K8S_PORT]
+
+                self.args.port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
+                self.first_pod_args.port_monitoring = (
+                    GrpcConnectionPool.K8S_PORT_MONITORING
+                )
+
+                self.args.default_port = False
+
+            self.args.deployments_addresses = k8s_deployments_addresses
+        k8s_deployment = K8sDeploymentConfig(
+            args=self.args, k8s_namespace=k8s_namespace, k8s_port=k8s_port
+        )
+
+        configs = k8s_deployment.to_kubernetes_yaml()
+
+        for name, k8s_objects in configs:
+            filename = os.path.join(output_base_path, f'{name}.yml')
+            os.makedirs(output_base_path, exist_ok=True)
+            with open(filename, 'w+') as fp:
+                for i, k8s_object in enumerate(k8s_objects):
+                    yaml.dump(k8s_object, fp)
+                    if i < len(k8s_objects) - 1:
+                        fp.write('---\n')
+
+    def to_kubernetes_yaml(
+        self,
+        output_base_path: str,
+        k8s_namespace: Optional[str] = None,
+    ):
+        """
+        Converts a Jina Deployment into a set of yaml deployments to deploy in Kubernetes.
+
+        If you don't want to rebuild image on Jina Hub,
+        you can set `JINA_HUB_NO_IMAGE_REBUILD` environment variable.
+
+        :param output_base_path: The base path where to dump all the yaml files
+        :param k8s_namespace: The name of the k8s namespace to set for the configurations. If None, the name of the Flow will be used.
+        """
+        k8s_namespace = k8s_namespace or 'default'
+        k8s_port = self.port[0] if isinstance(self.port, list) else self.port
+        self._to_kubernetes_yaml(
+            output_base_path,
+            k8s_namespace=k8s_namespace,
+            k8s_port=k8s_port or GrpcConnectionPool.K8S_PORT,
+        )
+        self.logger.info(
+            f'K8s yaml files have been created under [b]{output_base_path}[/]. You can use it by running [b]kubectl apply -R -f {output_base_path}[/]'
+        )
+
+    to_k8s_yaml = to_kubernetes_yaml

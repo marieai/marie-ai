@@ -108,7 +108,6 @@ class MarieLogger:
 
     :param context: The context identifier of the class, module or method.
     :param log_config: The configuration file for the logger.
-    configuration to group logs by deployment.
     :return:: an executor object.
     """
 

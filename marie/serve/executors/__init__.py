@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import copy
@@ -7,8 +9,21 @@ import multiprocessing
 import os
 import warnings
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    overload,
+)
 
+from marie._docarray import DocumentArray
 from marie.constants import __args_executor_init__, __cache_path__, __default_endpoint__
 from marie.enums import BetterEnum
 from marie.helper import (
@@ -84,6 +99,63 @@ class ExecutorType(type(JAMLCompatible), type):
         return cls
 
 
+T = TypeVar('T', bound='_FunctionWithSchema')
+
+
+class _FunctionWithSchema(NamedTuple):
+    fn: Callable
+    request_schema: Type[DocumentArray] = DocumentArray
+    response_schema: Type[DocumentArray] = DocumentArray
+
+    @staticmethod
+    def get_function_with_schema(fn: Callable) -> T:
+
+        docs_annotation = fn.__annotations__.get('docs', None)
+
+        if docs_annotation is None:
+            pass
+        elif type(docs_annotation) is str:
+            warnings.warn(
+                f'`docs` annotation must be a type hint, got {docs_annotation}'
+                ' instead, you should maybe remove the string annotation. Default value'
+                'DocumentArray will be used instead.'
+            )
+            docs_annotation = None
+        elif not isinstance(docs_annotation, type):
+            warnings.warn(
+                f'`docs` annotation must be a class if you want to use it'
+                f' as schema input, got {docs_annotation}. try to remove the Optional'
+                f'.fallback to default behavior'
+                ''
+            )
+            docs_annotation = None
+
+        return_annotation = fn.__annotations__.get('return', None)
+
+        if return_annotation is None:
+            pass
+        elif type(return_annotation) is str:
+            warnings.warn(
+                f'`return` annotation must be a class if you want to use it'
+                f' as schema input, got {docs_annotation}. try to remove the Optional'
+                f'.fallback to default behavior'
+                ''
+            )
+            return_annotation = None
+        elif not isinstance(return_annotation, type):
+            warnings.warn(
+                f'`return` annotation must be a class if you want to use it'
+                f'as schema input, got {docs_annotation}, fallback to default behavior'
+                ''
+            )
+            return_annotation = None
+
+        request_schema = docs_annotation or DocumentArray
+        response_schema = return_annotation or DocumentArray
+
+        return _FunctionWithSchema(fn, request_schema, response_schema)
+
+
 class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
     """
     The base class of all Executors, can be used to build encoder, indexer, etc.
@@ -94,7 +166,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
     .. code-block:: python
 
-        from jina import Executor, requests, Flow
+        from marie import Executor, requests, Flow
 
 
         class MyExecutor(Executor):
@@ -152,23 +224,29 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         self._init_instrumentation(runtime_args)
         self._init_monitoring()
         self._init_workspace = workspace
-        self.logger = MarieLogger(self.__class__.__name__)
+        self.logger = MarieLogger(self.__class__.__name__, **vars(self.runtime_args))
         if __dry_run_endpoint__ not in self.requests:
-            self.requests[__dry_run_endpoint__] = self._dry_run_func
+            self.requests[__dry_run_endpoint__] = _FunctionWithSchema(
+                self._dry_run_func
+            )
         else:
             self.logger.warning(
                 f' Endpoint {__dry_run_endpoint__} is defined by the Executor. Be aware that this endpoint is usually reserved to enable health checks from the Client through the gateway.'
                 f' So it is recommended not to expose this endpoint. '
             )
         if type(self) == BaseExecutor:
-            self.requests[__default_endpoint__] = self._dry_run_func
+            self.requests[__default_endpoint__] = _FunctionWithSchema(
+                self._dry_run_func
+            )
 
+        self._lock = contextlib.AsyncExitStack()
         try:
-            self._lock = (
-                asyncio.Lock()
-            )  # Lock to run in Executor non async methods in a way that does not block the event loop to do health checks without the fear of having race conditions or multithreading issues.
+            if not getattr(self.runtime_args, 'allow_concurrent', False):
+                self._lock = (
+                    asyncio.Lock()
+                )  # Lock to run in Executor non async methods in a way that does not block the event loop to do health checks without the fear of having race conditions or multithreading issues.
         except RuntimeError:
-            self._lock = contextlib.AsyncExitStack()
+            pass
 
     def _dry_run_func(self, *args, **kwargs):
         pass
@@ -188,7 +266,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 'process_request_seconds',
                 'Time spent when calling the executor request method',
                 registry=self.runtime_args.metrics_registry,
-                namespace='jina',
+                namespace='marie',
                 labelnames=('executor', 'executor_endpoint', 'runtime_name'),
             )
             self._metrics_buffer = {'process_request_seconds': self._summary_method}
@@ -199,7 +277,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if self.meter:
             self._process_request_histogram = self.meter.create_histogram(
-                name='jina_process_request_seconds',
+                name='marie_process_request_seconds',
                 description='Time spent when calling the executor request method',
             )
             self._histogram_buffer = {
@@ -251,7 +329,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
     def _add_requests(self, _requests: Optional[Dict]):
         if _requests:
-            func_names = {f.__name__: e for e, f in self.requests.items()}
+            func_names = {f.fn.__name__: e for e, f in self.requests.items()}
             for endpoint, func in _requests.items():
                 # the following line must be `getattr(self.__class__, func)` NOT `getattr(self, func)`
                 # this to ensure we always have `_func` as unbound method
@@ -262,10 +340,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 _func = getattr(self.__class__, func)
                 if callable(_func):
                     # the target function is not decorated with `@requests` yet
-                    self.requests[endpoint] = _func
+                    self.requests[
+                        endpoint
+                    ] = _FunctionWithSchema.get_function_with_schema(_func)
                 elif typename(_func) == 'marie.executors.decorators.FunctionMapper':
                     # the target function is already decorated with `@requests`, need unwrap with `.fn`
-                    self.requests[endpoint] = _func.fn
+                    self.requests[
+                        endpoint
+                    ] = _FunctionWithSchema.get_function_with_schema(_func.fn)
                 else:
                     raise TypeError(
                         f'expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}'
@@ -370,7 +452,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
     async def __acall_endpoint__(
         self, req_endpoint, tracing_context: Optional['Context'], **kwargs
     ):
-        func = self.requests[req_endpoint]
+        func, input_doc, output_doc = self.requests[req_endpoint]
 
         async def exec_func(
             summary, histogram, histogram_metric_labels, tracing_context
@@ -486,7 +568,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         .. highlight:: python
         .. code-block:: python
 
-            from jina import Executor
+            from marie import Executor
             from docarray import Document, DocumentArray
 
             executor = Executor.from_hub(
@@ -522,21 +604,25 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             uses_dynamic_batching=uses_dynamic_batching,
         )
 
+    # overload_inject_start_executor_serve
     @overload
     def serve(
         self,
         *,
+        allow_concurrent: Optional[bool] = False,
         compression: Optional[str] = None,
         connection_list: Optional[str] = None,
         disable_auto_volume: Optional[bool] = False,
         docker_kwargs: Optional[dict] = None,
         entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
+        env_from_secret: Optional[dict] = None,
         exit_on_exceptions: Optional[List[str]] = [],
         external: Optional[bool] = False,
         floating: Optional[bool] = False,
         force_update: Optional[bool] = False,
         gpus: Optional[str] = None,
+        grpc_channel_options: Optional[dict] = None,
         grpc_metadata: Optional[dict] = None,
         grpc_server_options: Optional[dict] = None,
         host: Optional[List[str]] = ['0.0.0.0'],
@@ -546,13 +632,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         metrics_exporter_host: Optional[str] = None,
         metrics_exporter_port: Optional[int] = None,
         monitoring: Optional[bool] = False,
-        name: Optional[str] = None,
+        name: Optional[str] = 'executor',
         native: Optional[bool] = False,
         no_reduce: Optional[bool] = False,
         output_array_type: Optional[str] = None,
         polling: Optional[str] = 'ANY',
         port: Optional[int] = None,
         port_monitoring: Optional[int] = None,
+        prefer_platform: Optional[str] = None,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
         quiet_error: Optional[bool] = False,
@@ -583,6 +670,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         **kwargs,
     ):
         """Serve this Executor in a temporary Flow. Useful in testing an Executor in remote settings.
+
+        :param allow_concurrent: Allow concurrent requests to be processed by the Executor. This is only recommended if the Executor is thread-safe.
         :param compression: The compression mechanism used when sending requests from the Head to the WorkerRuntimes. For more details, check https://grpc.github.io/grpc/python/grpc.html#compression.
         :param connection_list: dictionary JSON with a list of connections to configure
         :param disable_auto_volume: Do not automatically mount a volume for dockerized Executors.
@@ -592,6 +681,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
+        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
         :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -604,11 +694,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
               - To access specified gpus based on device id, use `--gpus device=[YOUR-GPU-DEVICE-ID]`
               - To access specified gpus based on multiple device id, use `--gpus device=[YOUR-GPU-DEVICE-ID1],device=[YOUR-GPU-DEVICE-ID2]`
               - To specify more parameters, use `--gpus device=[YOUR-GPU-DEVICE-ID],runtime=nvidia,capabilities=display
+        :param grpc_channel_options: Dictionary of kwargs arguments that will be passed to the grpc channel as options when creating a channel, example : {'grpc.max_send_message_length': -1}. When max_attempts > 1, the 'grpc.service_config' option will not be applicable.
         :param grpc_metadata: The metadata to be passed to the gRPC request.
         :param grpc_server_options: Dictionary of kwargs arguments that will be passed to the grpc server as options when starting the server, example : {'grpc.max_send_message_length': -1}
         :param host: The host of the Gateway, which the client should connect to, by default it is 0.0.0.0. In the case of an external Executor (`--external` or `external=True`) this can be a list of hosts.  Then, every resulting address will be considered as one replica of the Executor.
         :param install_requirements: If set, try to install `requirements.txt` from the local Executor if exists in the Executor folder. If using Hub, install `requirements.txt` in the Hub Executor bundle to local.
-        :param log_config: The YAML config of the logger used in this object.
+        :param log_config: The config name or the absolute path to the YAML config file of the logger used in this object.
         :param metrics: If set, the sdk implementation of the OpenTelemetry metrics will be available for default monitoring and custom measurements. Otherwise a no-op implementation will be provided.
         :param metrics_exporter_host: If tracing is enabled, this hostname will be used to configure the metrics exporter agent.
         :param metrics_exporter_port: If tracing is enabled, this port will be used to configure the metrics exporter agent.
@@ -639,6 +730,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
               {'/custom': 'ALL', '/search': 'ANY', '*': 'ANY'}
         :param port: The port for input data to bind to, default is a random port between [49152, 65535]. In the case of an external Executor (`--external` or `external=True`) this can be a list of ports. Then, every resulting address will be considered as one replica of the Executor.
         :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
+        :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
@@ -691,6 +783,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         .. # noqa: DAR003
         """
 
+    # overload_inject_end_executor_serve
+
     @classmethod
     def serve(
         cls,
@@ -715,18 +809,24 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
 
         """
-        from marie.orchestrate.flow.base import Flow
+        warnings.warn(
+            f'Executor.serve() is no more supported and will be deprecated soon. Use Deployment to serve an Executor instead: '
+            f'https://docs.jina.ai/concepts/executor/serve/',
+            DeprecationWarning,
+        )
+        from marie.orchestrate.deployments import Deployment
 
-        f = Flow(**kwargs).add(
+        dep = Deployment(
             uses=cls,
             uses_with=uses_with,
             uses_metas=uses_metas,
             uses_requests=uses_requests,
             uses_dynamic_batching=uses_dynamic_batching,
             reload=reload,
+            **kwargs,
         )
-        with f:
-            f.block(stop_event)
+        with dep:
+            dep.block(stop_event)
 
     class StandaloneExecutorType(BetterEnum):
         """
@@ -766,6 +866,11 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's dynamic_batching field
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
         """
+        warnings.warn(
+            f'Executor.to_kubernetes_yaml() is no more supported and will be deprecated soon. Use Deployment to export kubernetes YAML files: '
+            f'https://docs.jina.ai/concepts/executor/serve/#serve-via-kubernetes',
+            DeprecationWarning,
+        )
         from marie.orchestrate.flow.base import Flow
 
         Flow(**kwargs).add(
@@ -809,6 +914,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's requests field
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
         """
+
+        warnings.warn(
+            f'Executor.to_docker_compose_yaml() is no more supported and will be deprecated soon. Use Deployment to export docker compose YAML files: '
+            f'https://docs.jina.ai/concepts/executor/serve/#serve-via-docker-compose',
+            DeprecationWarning,
+        )
         from marie.orchestrate.flow.base import Flow
 
         f = Flow(**kwargs).add(

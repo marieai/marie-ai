@@ -1,14 +1,19 @@
 from marie.helper import GATEWAY_NAME
 from marie.parsers.helper import _SHOW_ALL_ARGS
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
+from marie.parsers.logging import mixin_suppress_root_logging_parser
 from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
+from marie.parsers.orchestrate.runtimes.grpc_channel import (
+    mixin_grpc_channel_options_parser,
+)
 from marie.parsers.orchestrate.runtimes.head import mixin_head_parser
+from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 
 
-def set_pod_parser(parser=None):
+def set_pod_parser(parser=None, default_name=None):
     """Set the parser for the Pod
 
     :param parser: an optional existing parser to build upon
+    :param default_name: default pod name
     :return: the parser
     """
     if not parser:
@@ -17,22 +22,19 @@ def set_pod_parser(parser=None):
         parser = set_base_parser()
 
     from marie.parsers.orchestrate.base import mixin_scalable_deployment_parser
-    from marie.parsers.orchestrate.pod import (
-        mixin_pod_parser,
-        mixin_hub_pull_options_parser,
-    )
+    from marie.parsers.orchestrate.pod import mixin_pod_parser
     from marie.parsers.orchestrate.runtimes.container import (
         mixin_container_runtime_parser,
     )
     from marie.parsers.orchestrate.runtimes.remote import mixin_remote_runtime_parser
     from marie.parsers.orchestrate.runtimes.worker import mixin_worker_runtime_parser
 
-    mixin_scalable_deployment_parser(parser)
+    mixin_scalable_deployment_parser(parser, default_name=default_name)
     mixin_worker_runtime_parser(parser)
     mixin_container_runtime_parser(parser)
     mixin_remote_runtime_parser(parser)
     mixin_pod_parser(parser)
-    mixin_hub_pull_options_parser(parser)
+    # mixin_hub_pull_options_parser(parser)
     mixin_head_parser(parser)
 
     return parser
@@ -49,7 +51,7 @@ def set_deployment_parser(parser=None):
 
         parser = set_base_parser()
 
-    set_pod_parser(parser)
+    set_pod_parser(parser, default_name='executor')
 
     from marie.parsers.orchestrate.deployment import mixin_base_deployment_parser
 
@@ -151,7 +153,9 @@ def set_client_cli_parser(parser=None):
     mixin_client_gateway_parser(parser)
     mixin_client_features_parser(parser)
     mixin_client_protocol_parser(parser)
+    mixin_grpc_channel_options_parser(parser)
     mixin_prefetch_parser(parser)
+    mixin_suppress_root_logging_parser(parser)
 
     return parser
 
@@ -280,17 +284,6 @@ def get_main_parser():
             formatter_class=_chf,
         )
     )
-
-    # from jcloud.parsers import get_main_parser as get_jcloud_parser
-    #
-    # get_jcloud_parser(
-    #     sp.add_parser(
-    #         'cloud',
-    #         description='Manage Flows on Marie Cloud',
-    #         formatter_class=_chf,
-    #         help='Manage Flows on Marie Cloud',
-    #     )
-    # )
 
     set_help_parser(
         sp.add_parser(

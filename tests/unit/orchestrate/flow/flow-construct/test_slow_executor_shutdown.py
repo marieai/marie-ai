@@ -2,7 +2,7 @@ import os
 import time
 
 import pytest
-from jina import Executor, Flow
+from marie import Executor, Flow
 
 
 class SlowExecutor(Executor):

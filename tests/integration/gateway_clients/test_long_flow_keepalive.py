@@ -3,7 +3,7 @@ import time
 import pytest
 from docarray import DocumentArray
 
-from jina import Executor, Flow, requests
+from jimariena import Executor, Flow, requests
 
 
 @pytest.fixture()

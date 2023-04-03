@@ -303,7 +303,7 @@ def _create_test_data_message(counter=0):
 @pytest.mark.timeout(5)
 @pytest.mark.skip
 async def test_decorator_monitoring(port_generator):
-    from jina import monitor
+    from marie import monitor
 
     class DummyExecutor(Executor):
         @requests

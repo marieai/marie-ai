@@ -1,7 +1,5 @@
-import asyncio
-import copy
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 from marie.importer import ImportExtensions
 from marie.proto import jina_pb2
@@ -16,24 +14,24 @@ if TYPE_CHECKING:  # pragma: no cover
 class MonitoringMixin:
     """The Monitoring Mixin for pods"""
 
-    def _setup_monitoring(self):
+    def _setup_monitoring(self, monitoring: bool, port_monitoring: Union[int, str]):
         """
         Wait for the monitoring server to start
+        :param monitoring: flag indicating whether monitoring has to be activated
+        :param port_monitoring: port where to expose the monitoring
         """
 
-        if self.args.monitoring:
+        if monitoring:
             from prometheus_client import CollectorRegistry
 
             self.metrics_registry = CollectorRegistry()
         else:
             self.metrics_registry = None
 
-        if self.args.monitoring:
+        if monitoring:
             from prometheus_client import start_http_server
 
-            start_http_server(
-                int(self.args.port_monitoring), registry=self.metrics_registry
-            )
+            start_http_server(int(port_monitoring), registry=self.metrics_registry)
 
 
 class MonitoringRequestMixin:
@@ -67,7 +65,7 @@ class MonitoringRequestMixin:
                 'receiving_request_seconds',
                 'Time spent processing successful request',
                 registry=metrics_registry,
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
             ).labels(runtime_name)
 
@@ -75,7 +73,7 @@ class MonitoringRequestMixin:
                 'number_of_pending_requests',
                 'Number of pending requests',
                 registry=metrics_registry,
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
             ).labels(runtime_name)
 
@@ -83,7 +81,7 @@ class MonitoringRequestMixin:
                 'failed_requests',
                 'Number of failed requests',
                 registry=metrics_registry,
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
             ).labels(runtime_name)
 
@@ -91,7 +89,7 @@ class MonitoringRequestMixin:
                 'successful_requests',
                 'Number of successful requests',
                 registry=metrics_registry,
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
             ).labels(runtime_name)
 
@@ -99,7 +97,7 @@ class MonitoringRequestMixin:
                 old_name='request_size_bytes',
                 name='received_request_bytes',
                 documentation='The size in bytes of the request returned to the client',
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
                 registry=metrics_registry,
             ).labels(runtime_name)
@@ -107,7 +105,7 @@ class MonitoringRequestMixin:
             self._sent_response_bytes = Summary(
                 'sent_response_bytes',
                 'The size in bytes of the request returned to the client',
-                namespace='jina',
+                namespace='marie',
                 labelnames=('runtime_name',),
                 registry=metrics_registry,
             ).labels(runtime_name)
@@ -122,32 +120,32 @@ class MonitoringRequestMixin:
 
         if meter:
             self._receiving_request_histogram = meter.create_histogram(
-                name='jina_receiving_request_seconds',
+                name='marie_receiving_request_seconds',
                 description='Time spent processing successful request',
             )
 
             self._pending_requests_up_down_counter = meter.create_up_down_counter(
-                name='jina_number_of_pending_requests',
+                name='marie_number_of_pending_requests',
                 description='Number of pending requests',
             )
 
             self._failed_requests_counter = meter.create_counter(
-                name='jina_failed_requests',
+                name='marie_failed_requests',
                 description='Number of failed requests',
             )
 
             self._successful_requests_counter = meter.create_counter(
-                name='jina_successful_requests',
+                name='marie_successful_requests',
                 description='Number of successful requests',
             )
 
             self._request_size_histogram = meter.create_histogram(
-                name='jina_received_request_bytes',
+                name='marie_received_request_bytes',
                 description='The size in bytes of the request returned to the client',
             )
 
             self._sent_response_bytes_histogram = meter.create_histogram(
-                name='jina_sent_response_bytes',
+                name='marie_sent_response_bytes',
                 description='The size in bytes of the request returned to the client',
             )
         else:

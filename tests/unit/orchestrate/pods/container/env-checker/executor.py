@@ -1,6 +1,6 @@
 import os
 
-from jina import Executor
+from marie import Executor
 
 
 class EnvChecker(Executor):

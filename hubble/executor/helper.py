@@ -171,7 +171,7 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     from hubble import __version__ as __hubble_version__
 
     try:
-        from jina.helper import get_full_version
+        from marie.helper import get_full_version
 
         metas, env_info = get_full_version()
     except ImportError:

@@ -5,10 +5,10 @@ from typing import Dict, Tuple, Union
 import pytest
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
-from jina.helper import Namespace
-from jina.orchestrate.deployments.config.k8s import K8sDeploymentConfig
-from jina.parsers import set_deployment_parser, set_gateway_parser
-from jina.serve.networking import GrpcConnectionPool
+from marie.helper import Namespace
+from marie.orchestrate.deployments.config.k8s import K8sDeploymentConfig
+from marie.parsers import set_deployment_parser, set_gateway_parser
+from marie.serve.networking import GrpcConnectionPool
 
 
 def namespace_equal(

@@ -1,6 +1,6 @@
 import os
 
-from jina import Executor, requests
+from marie import Executor, requests
 
 
 class DummyExec(Executor):

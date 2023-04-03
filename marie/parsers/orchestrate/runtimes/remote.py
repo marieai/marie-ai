@@ -2,8 +2,11 @@
 
 from marie.constants import __default_host__
 from marie.parsers.helper import CastHostAction, KVAppendAction, add_arg_group
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
+from marie.parsers.orchestrate.runtimes.grpc_channel import (
+    mixin_grpc_channel_options_parser,
+)
 from marie.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
+from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 
 
 def mixin_remote_runtime_parser(parser):
@@ -160,7 +163,14 @@ which should be structured as a python package.
 ''',
     )
 
+    gp.add_argument(
+        '--replicas',
+        type=int,
+        default=1,
+        help='The number of replicas of the Gateway. This replicas will only be applied when converted into Kubernetes YAML',
+    )
     mixin_base_runtime_parser(gp)
+    mixin_grpc_channel_options_parser(gp)
     mixin_gateway_streamer_parser(gp)
     mixin_gateway_discovery_parser(gp)
 

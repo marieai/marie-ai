@@ -1,4 +1,4 @@
-from jina import DocumentArray, Executor, requests
+from marie import DocumentArray, Executor, requests
 
 
 class {{exec_name}}(Executor):

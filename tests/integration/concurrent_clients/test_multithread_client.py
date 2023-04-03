@@ -3,8 +3,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from jina import Client, Document, Executor, Flow, requests
-from jina.helper import random_port
+from marie import Client, Document, Executor, Flow, requests
+from marie.helper import random_port
 
 
 class MyExecutor(Executor):

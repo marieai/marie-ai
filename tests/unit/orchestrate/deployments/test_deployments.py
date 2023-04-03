@@ -3,13 +3,13 @@ import os
 import socket
 
 import pytest
-from jina import Document, DocumentArray, Executor, __default_executor__, __default_host__, requests
-from jina.clients.request import request_generator
-from jina.enums import PollingType
-from jina.excepts import RuntimeFailToStart
-from jina.orchestrate.deployments import Deployment
-from jina.parsers import set_deployment_parser, set_gateway_parser
-from jina.serve.networking import GrpcConnectionPool
+from marie import Document, DocumentArray, Executor, __default_executor__, __default_host__, requests
+from marie.clients.request import request_generator
+from marie.enums import PollingType
+from marie.excepts import RuntimeFailToStart
+from marie.orchestrate.deployments import Deployment
+from marie.parsers import set_deployment_parser, set_gateway_parser
+from marie.serve.networking import GrpcConnectionPool
 
 from tests.unit.test_helper import MyDummyExecutor
 

@@ -3,7 +3,7 @@ import threading
 import time
 
 import pytest
-from jina import Document, Executor, Flow, helper, requests
+from marie import Document, Executor, Flow, helper, requests
 
 
 @pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])

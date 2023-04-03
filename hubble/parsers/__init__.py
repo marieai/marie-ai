@@ -31,7 +31,7 @@ def get_main_parser(parser=None):
 
     sp.add_parser(
         'logout',
-        description='Logout from Jina AI Ecosystem',
+        description='Logout from Marie AI Ecosystem',
         formatter_class=_chf,
     )
 

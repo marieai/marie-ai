@@ -2,9 +2,10 @@ import argparse
 import os
 from typing import Any, Dict, Optional
 
-from marie.orchestrate.flow.base import Flow
 from marie.helper import GATEWAY_NAME, ArgNamespace, expand_env_var
 from marie.jaml.parsers.base import VersionedYAMLParser
+from marie.orchestrate.deployments import Deployment
+from marie.orchestrate.flow.base import Flow
 from marie.parsers import set_deployment_parser, set_gateway_parser
 
 
@@ -69,15 +70,35 @@ class V1Parser(VersionedYAMLParser):
 
         pp = data.get('executors', data.get('deployments', []))
         for deployments in pp:
-            p_deployment_attr = {
-                kk: expand_env_var(vv) for kk, vv in deployments.items()
-            }
-            # in v1 YAML, flow is an optional argument
-            if p_deployment_attr.get('name', None) != GATEWAY_NAME:
-                # ignore gateway when reading, it will be added during build()
-                method = p_deployment_attr.get('method', 'add')
-                # support methods: add, needs, inspect
-                getattr(obj, method)(**p_deployment_attr, copy_flow=False)
+            if isinstance(deployments, str):
+                dep = Deployment.load_config(
+                    deployments,
+                    extra_search_paths=data.get('with', {}).get('extra_search_paths'),
+                    include_gateway=False,
+                    noblock_on_start=True,
+                )
+                getattr(obj, 'add')(dep, copy_flow=False)
+            elif (
+                isinstance(deployments, dict)
+                and deployments.get('jtype') == 'Deployment'
+            ):
+                dep = Deployment.load_config(
+                    deployments,
+                    extra_search_paths=data.get('with', {}).get('extra_search_paths'),
+                    include_gateway=False,
+                    noblock_on_start=True,
+                )
+                getattr(obj, 'add')(dep, copy_flow=False)
+            else:
+                p_deployment_attr = {
+                    kk: expand_env_var(vv) for kk, vv in deployments.items()
+                }
+                # in v1 YAML, flow is an optional argument
+                if p_deployment_attr.get('name', None) != GATEWAY_NAME:
+                    # ignore gateway when reading, it will be added during build()
+                    method = p_deployment_attr.get('method', 'add')
+                    # support methods: add, needs, inspect
+                    getattr(obj, method)(**p_deployment_attr, copy_flow=False)
         gateway = data.get(GATEWAY_NAME, {})
         if gateway:
             gateway_attr = {kk: expand_env_var(vv) for kk, vv in gateway.items()}
@@ -122,7 +143,7 @@ class V1Parser(VersionedYAMLParser):
                 if t in kwargs:
                     kwargs.pop(t)
             if k != GATEWAY_NAME:
-                last_name = kwargs['name']
+                last_name = v.args.name
                 r['executors'].append(kwargs)
 
         gateway_kwargs = {}

@@ -22,7 +22,7 @@ class HTTPClient(
 
     .. code-block:: python
 
-        from jina import Client
+        from marie import Client
         from docarray import Document
 
         # select host address to connect to
@@ -61,7 +61,7 @@ class AsyncHTTPClient(
 
     .. code-block:: python
 
-        from jina import Client
+        from marie import Client
         from docarray import Document
 
 

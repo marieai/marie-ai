@@ -1,16 +1,21 @@
 import time
 import warnings
 from functools import partialmethod
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, List, Optional, Type, Union
 
+import grpc.aio
+
+from marie.clients.base.grpc import GRPCBaseClient
+from marie.clients.base.retry import wait_or_raise_err
+from marie.excepts import InternalNetworkError
 from marie.helper import deprecate_by, get_or_reuse_loop, run_async
 from marie.importer import ImportExtensions
 
 if TYPE_CHECKING:  # pragma: no cover
-    from docarray import DocumentArray
 
     from marie.clients.base import CallbackFnType, InputType
     from marie.types.request.data import Response
+from marie._docarray import Document, DocumentArray
 
 
 def _include_results_field_in_param(parameters: Optional['Dict']) -> 'Dict':
@@ -206,6 +211,131 @@ class AsyncProfileMixin:
 class PostMixin:
     """The Post Mixin class for Client and Flow"""
 
+    def _with_retry(
+        self,
+        func,
+        inputs,
+        on_done,
+        on_error,
+        on_always,
+        exec_endpoint,
+        target_executor,
+        parameters,
+        request_size,
+        max_attempts,
+        initial_backoff,
+        max_backoff,
+        backoff_multiplier,
+        results_in_order,
+        stream,
+        prefetch,
+        **kwargs,
+    ):
+        is_document_or_documentarray = isinstance(inputs, Document) or isinstance(
+            inputs, DocumentArray
+        )
+        if (
+            is_document_or_documentarray
+            and isinstance(self.client, GRPCBaseClient)
+            and max_attempts > 1
+            and stream
+        ):
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return PostMixin._run_async(
+                        backoff_multiplier,
+                        exec_endpoint,
+                        func,
+                        initial_backoff,
+                        inputs,
+                        kwargs,
+                        max_attempts,
+                        max_backoff,
+                        on_always,
+                        on_done,
+                        on_error,
+                        parameters,
+                        prefetch,
+                        request_size,
+                        results_in_order,
+                        stream,
+                        target_executor,
+                    )
+                except (
+                    grpc.aio.AioRpcError,
+                    InternalNetworkError,
+                    ConnectionError,
+                ) as err:
+                    run_async(
+                        wait_or_raise_err,
+                        attempt=attempt,
+                        err=err,
+                        max_attempts=max_attempts,
+                        backoff_multiplier=backoff_multiplier,
+                        initial_backoff=initial_backoff,
+                        max_backoff=max_backoff,
+                    )
+        else:
+            return PostMixin._run_async(
+                backoff_multiplier,
+                exec_endpoint,
+                func,
+                initial_backoff,
+                inputs,
+                kwargs,
+                max_attempts,
+                max_backoff,
+                on_always,
+                on_done,
+                on_error,
+                parameters,
+                prefetch,
+                request_size,
+                results_in_order,
+                stream,
+                target_executor,
+            )
+
+    @staticmethod
+    def _run_async(
+        backoff_multiplier,
+        exec_endpoint,
+        func,
+        initial_backoff,
+        inputs,
+        kwargs,
+        max_attempts,
+        max_backoff,
+        on_always,
+        on_done,
+        on_error,
+        parameters,
+        prefetch,
+        request_size,
+        results_in_order,
+        stream,
+        target_executor,
+    ):
+        return run_async(
+            func,
+            inputs=inputs,
+            on_done=on_done,
+            on_error=on_error,
+            on_always=on_always,
+            exec_endpoint=exec_endpoint,
+            target_executor=target_executor,
+            parameters=parameters,
+            request_size=request_size,
+            max_attempts=max_attempts,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+            backoff_multiplier=backoff_multiplier,
+            results_in_order=results_in_order,
+            stream=stream,
+            prefetch=prefetch,
+            **kwargs,
+        )
+
     def post(
         self,
         on: str,
@@ -221,10 +351,12 @@ class PostMixin:
         return_responses: bool = False,
         max_attempts: int = 1,
         initial_backoff: float = 0.5,
-        max_backoff: float = 0.1,
+        max_backoff: float = 2,
         backoff_multiplier: float = 1.5,
         results_in_order: bool = False,
         stream: bool = True,
+        prefetch: Optional[int] = None,
+        return_type: Type[DocumentArray] = DocumentArray,
         **kwargs,
     ) -> Optional[Union['DocumentArray', List['Response']]]:
         """Post a general data request to the Flow.
@@ -246,6 +378,8 @@ class PostMixin:
         :param backoff_multiplier: The n-th attempt will occur at random(0, min(initialBackoff*backoffMultiplier**(n-1), maxBackoff))
         :param results_in_order: return the results in the same order as the inputs
         :param stream: Applicable only to grpc client. If True, the requests are sent to the target using the gRPC streaming interface otherwise the gRPC unary interface will be used. The value is True by default.
+        :param prefetch: How many Requests are processed from the Client at the same time. If not provided then Gateway prefetch value will be used.
+        :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
         :param kwargs: additional parameters
         :return: None or DocumentArray containing all response Documents
 
@@ -259,23 +393,22 @@ class PostMixin:
 
         parameters = _include_results_field_in_param(parameters)
 
-        from docarray import DocumentArray
-
         return_results = (on_always is None) and (on_done is None)
 
         async def _get_results(*args, **kwargs):
-            result = [] if return_responses else DocumentArray()
+            result = [] if return_responses else return_type([])
             async for resp in c._get_results(*args, **kwargs):
                 if return_results:
                     if return_responses:
                         result.append(resp)
                     else:
+                        resp.document_array_cls = return_type
                         result.extend(resp.data.docs)
             if return_results:
                 return result
 
-        return run_async(
-            _get_results,
+        return self._with_retry(
+            func=_get_results,
             inputs=inputs,
             on_done=on_done,
             on_error=on_error,
@@ -284,12 +417,13 @@ class PostMixin:
             target_executor=target_executor,
             parameters=parameters,
             request_size=request_size,
-            max_attempts=max_attempts,
+            max_attempts=max(max_attempts, 1),
             initial_backoff=initial_backoff,
             max_backoff=max_backoff,
             backoff_multiplier=backoff_multiplier,
             results_in_order=results_in_order,
             stream=stream,
+            prefetch=prefetch,
             **kwargs,
         )
 
@@ -318,10 +452,12 @@ class AsyncPostMixin:
         return_responses: bool = False,
         max_attempts: int = 1,
         initial_backoff: float = 0.5,
-        max_backoff: float = 0.1,
+        max_backoff: float = 2,
         backoff_multiplier: float = 1.5,
         results_in_order: bool = False,
         stream: bool = True,
+        prefetch: Optional[int] = None,
+        return_type: Type[DocumentArray] = DocumentArray,
         **kwargs,
     ) -> AsyncGenerator[None, Union['DocumentArray', 'Response']]:
         """Async Post a general data request to the Flow.
@@ -343,6 +479,8 @@ class AsyncPostMixin:
         :param backoff_multiplier: The n-th attempt will occur at random(0, min(initialBackoff*backoffMultiplier**(n-1), maxBackoff))
         :param results_in_order: return the results in the same order as the inputs
         :param stream: Applicable only to grpc client. If True, the requests are sent to the target using the gRPC streaming interface otherwise the gRPC unary interface will be used. The value is True by default.
+        :param prefetch: How many Requests are processed from the Client at the same time. If not provided then Gateway prefetch value will be used.
+        :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
         :param kwargs: additional parameters, can be used to pass metadata or authentication information in the server call
         :yield: Response object
 
@@ -364,15 +502,18 @@ class AsyncPostMixin:
             target_executor=target_executor,
             parameters=parameters,
             request_size=request_size,
-            max_attempts=max_attempts,
+            max_attempts=max(max_attempts, 1),
             initial_backoff=initial_backoff,
             max_backoff=max_backoff,
             backoff_multiplier=backoff_multiplier,
             results_in_order=results_in_order,
             stream=stream,
+            prefetch=prefetch,
+            return_type=return_type,
             **kwargs,
         ):
             if not return_responses:
+                result.document_array_cls = return_type
                 yield result.data.docs
             else:
                 yield result

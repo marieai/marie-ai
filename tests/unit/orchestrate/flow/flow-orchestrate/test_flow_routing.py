@@ -1,6 +1,6 @@
 import pytest
 from docarray import Document, DocumentArray
-from jina import Executor, Flow, requests
+from marie import Executor, Flow, requests
 
 
 class SimplExecutor(Executor):

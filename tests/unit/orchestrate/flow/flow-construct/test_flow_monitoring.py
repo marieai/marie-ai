@@ -1,5 +1,5 @@
 import pytest
-from jina import Executor, Flow, requests
+from marie import Executor, Flow, requests
 
 
 @pytest.fixture()

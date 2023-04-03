@@ -1,7 +1,7 @@
 import pytest
 from docarray import DocumentArray
-from jina import Client, Document, Executor, Flow, requests, types
-from jina.excepts import BadServer
+from marie import Client, Document, Executor, Flow, requests, types
+from marie.excepts import BadServer
 
 
 class SimplExecutor(Executor):

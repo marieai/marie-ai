@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 import yaml
-from jina import Flow, __cache_path__
+from marie import Flow, __cache_path__
 
 
 @pytest.mark.parametrize('protocol', ['http', 'grpc'])
