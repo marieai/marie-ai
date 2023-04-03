@@ -23,7 +23,7 @@ def api_to_dict(show_all_args: bool = False):
         'description': 'Build cross-modal and multi-modal applications on the cloud',
         'license': 'Apache 2.0',
         'vendor': 'Marie AI Limited',
-        'source': 'https://github.com/gregbugaj/marie-ai'
+        'source': 'https://github.com/marieai/marie-ai'
         + os.environ.get('MARIE_VCS_VERSION', 'main'),
         'url': 'https://marieai.co',
         'docs': 'https://docs.marieai.co',
