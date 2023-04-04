@@ -1,5 +1,7 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
+#ARG CUDA_VERSION=11.6.1
 ARG CUDA_VERSION=11.8.0
+#ARG CUDA_VERSION=11.3.1
 
 #FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04 as build-image
@@ -13,7 +15,7 @@ ARG MARIE_CONFIGURATION="production"
 
 # given by builder's env
 ARG VCS_REF
-ARG PY_VERSION=3.10.10
+ARG PY_VERSION=3.10
 ARG BUILD_DATE
 ARG MARIE_VERSION
 ARG TARGETPLATFORM
@@ -35,21 +37,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN apt-get update && apt-get upgrade -y && \
+RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
-#RUN add-apt-repository ppa:deadsnakes/ppa
-
-# compile python from source - avoid unsupported library problems
-RUN DEBIAN_FRONTEND=noninteractive \
-    apt-get install -y make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev tk-dev && \
-    cd /tmp/ && \
-    wget https://www.python.org/ftp/python/3.10.10/Python-3.10.10.tgz && \
-    tar xzf Python-3.10.10.tgz && \
-    cd Python-3.10.10 && \
-    ./configure --prefix=/usr --enable-optimizations --with-lto --with-computed-gotos --with-system-ffi && \
-    make -j "$(nproc)" && \
-    make install && \
-    rm /tmp/Python-3.10.10.tgz
+RUN add-apt-repository ppa:deadsnakes/ppa
 
 
 RUN apt-get update && apt-get upgrade -y && \
@@ -60,7 +50,16 @@ RUN apt-get update && apt-get upgrade -y && \
         lshw \
         zlib1g \
         pkg-config \
+        python3.10 \
+        python3.10-dev \
+        python3-virtualenv \
+        python3.10-venv \
+        python3-dev \
+        python3-pip \
+        python3-wheel \
         python3-opencv \
+        python3-venv \
+        python3-setuptools \
         libopenblas-dev \
         libopenmpi-dev \
         openmpi-bin \
@@ -85,7 +84,12 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 
 RUN python3.10 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
+RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
+
+#RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
+
 RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
 
 # Order is important, need to install detectron2 last expected version is 0.6
@@ -151,6 +155,10 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # Install and initialize MARIE-AI, copy all necessary files
 # copy will almost always invalididate the cache
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
+
+## This is where we will map all of our configs
+#RUN mkdir -p /etc/marie
+#COPY ./config/marie.yml /etc/marie/marie.yml
 
 # copy will almost always invalid the cache
 COPY . /marie/
