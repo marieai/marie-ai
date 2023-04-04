@@ -18,6 +18,7 @@ from marie.messaging import (
     mark_as_started,
     mark_as_failed,
 )
+from marie.messaging.publisher import mark_as_scheduled
 from marie.types.request.data import DataRequest
 from marie.utils.docs import docs_from_file_specific
 from marie.utils.types import strtobool
@@ -176,9 +177,12 @@ async def handle_request(
 
 async def process_request(api_tag: str, job_id: str, payload: Any, handler: callable):
     """
-    When request is processed, it will be marked as  `STARTED` and then `COMPLETED`.
-    If there is an error, it will be marked as `FAILED` with the error message and then `COMPLETED`
-    to indicate that the request is finished.
+    When request is processed, it will be marked as  `STARTED` and then `COMPLETED` or `FAILED`.
+    If there is an error, it will be marked as `FAILED` with the error message supplied from the caller.
+
+    Job Lifecycle:
+        SCHEDULED -> STARTED -> COMPLETED
+        SCHEDULED -> STARTED -> FAILED
 
     Args:
         api_tag:
@@ -197,9 +201,15 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         default_logger.info(f"Starting request: {job_id}")
         parameters, input_docs = await parse_payload_to_docs(payload)
         job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
+        # payload data attribute should be stripped at this time
         parameters["payload"] = payload  # THIS IS TEMPORARY HERE
 
-        # payload data attribute should be stripped at this time
+        # Currently we are scheduling the job before we start processing the request to avoid out of order jobs
+        # When we start processing the request, we will mark the job as `STARTED` in the worker node
+        await mark_as_scheduled(
+            job_id, api_tag, job_tag, status, int(time.time()), payload
+        )
+
         await mark_as_started(
             job_id, api_tag, job_tag, status, int(time.time()), payload
         )
@@ -208,6 +218,11 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
             return await op(_docs, _param)
 
         results = await run(handler, input_docs, parameters)
+
+        await mark_as_complete(
+            job_id, api_tag, job_tag, status, int(time.time()), results
+        )
+
         return results
     except BaseException as e:
         default_logger.error(f"processing error : {e}", exc_info=False)
@@ -228,9 +243,4 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
             "name": name,
             "line_no": line_no,
         }
-        results = str(e)
         await mark_as_failed(job_id, api_tag, job_tag, status, int(time.time()), exc)
-    finally:
-        await mark_as_complete(
-            job_id, api_tag, job_tag, status, int(time.time()), results
-        )
