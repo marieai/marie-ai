@@ -150,7 +150,7 @@ class OverlayProcessor(BaseHandler):
                 image_numpy = tensor2im(fake_im_data)
                 return image_numpy
         finally:
-            # clear cuda memory afer inference
+            # clear cuda memory after inference
             torch.cuda.empty_cache()
 
     def postprocess(self, real_img: np.ndarray, fake_mask: np.ndarray) -> np.ndarray:
@@ -200,7 +200,7 @@ class OverlayProcessor(BaseHandler):
         mask = read_image(mask_img)
 
         # this happens sometimes after a forward pass, the FAKE image is larger than the input
-        # image. This is a work around for now.
+        # image. This is a workaround for now.
         if real.shape != mask.shape:
             raise Exception(
                 f"Sizes of input arguments do not match(real, fake) : {real.shape} != {mask.shape}"
@@ -258,6 +258,9 @@ class OverlayProcessor(BaseHandler):
         """
 
         print(f"Creating overlay for : {document_id} > {img_path}")
+        if True:
+            raise Exception("FIXME: This is not working")
+
         if not os.path.exists(img_path):
             raise Exception("File not found : {}".format(img_path))
 

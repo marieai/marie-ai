@@ -356,6 +356,9 @@ class ExtractPipeline:
         :return:
         """
 
+        if True:
+            raise Exception("BORKING OUT")
+
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
         # create backup name by appending a timestamp

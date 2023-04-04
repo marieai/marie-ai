@@ -4,7 +4,12 @@ from .rabbit_handler import RabbitMQToastHandler
 from .psql_handler import PsqlToastHandler
 
 
-from .publisher import mark_as_complete, mark_as_started, mark_as_failed
+from .publisher import (
+    mark_as_complete,
+    mark_as_started,
+    mark_as_failed,
+    mark_as_scheduled,
+)
 
 __all__ = [
     "Toast",
@@ -13,5 +18,6 @@ __all__ = [
     "PsqlToastHandler",
     "mark_as_complete",
     "mark_as_started",
+    "mark_as_scheduled",
     "mark_as_failed",
 ]

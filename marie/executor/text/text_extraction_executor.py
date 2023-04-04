@@ -39,7 +39,7 @@ class TextExtractionExecutor(Executor):
             if "runtime_args" in kwargs:
                 instance_name = kwargs.get("runtime_args").get("name", "not_defined")
 
-        self.runtimeinfo = {
+        self.runtime_info = {
             "name": self.__class__.__name__,
             "instance_name": instance_name,
             "model": "",
@@ -137,13 +137,21 @@ class TextExtractionExecutor(Executor):
                 **payload_kwargs,
             )
 
-            return {"status": "complete"}
+            return {"status": "succeeded", "runtime_info": self.runtime_info}
         except BaseException as error:
-            self.logger.error("Extract error", error)
+            self.logger.error(f"Extract error : {error}", exc_info=False)
             if self.show_error:
-                return {"error": str(error)}
+                return {
+                    "status": "error",
+                    "runtime_info": self.runtime_info,
+                    "error": str(error),
+                }
             else:
-                return {"error": "inference exception"}
+                return {
+                    "status": "error",
+                    "runtime_info": self.runtime_info,
+                    "error": "inference exception",
+                }
 
 
 class ExtractExecutor(Executor):
