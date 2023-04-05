@@ -258,8 +258,6 @@ class OverlayProcessor(BaseHandler):
         """
 
         print(f"Creating overlay for : {document_id} > {img_path}")
-        if True:
-            raise Exception("FIXME: This is not working")
 
         if not os.path.exists(img_path):
             raise Exception("File not found : {}".format(img_path))
