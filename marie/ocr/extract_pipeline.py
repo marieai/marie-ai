@@ -265,6 +265,10 @@ class ExtractPipeline:
     def execute_frames_pipeline(
         self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str
     ) -> None:
+
+        if ref_type is None or ref_id is None:
+            raise ValueError("Invalid reference type or id")
+
         self.logger.info(
             f"Executing pipeline for document : {ref_id}, {ref_type} > {root_asset_dir}"
         )

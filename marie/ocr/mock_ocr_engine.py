@@ -46,5 +46,5 @@ class MockOcrEngine(OcrEngine):
         try:
             return load_json_file(json_path)
         except BaseException as error:
-            self.logger.error("Extract error", error)
+            self.logger.error("Extract error", error=error)
             raise error

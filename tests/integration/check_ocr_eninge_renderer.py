@@ -25,6 +25,8 @@ if __name__ == "__main__":
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
     # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
+    img_path = "/tmp/generators/5547aaa25c7b72199036016b46b1f46c/clean/4.tif"
+    img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
 
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
@@ -32,7 +34,7 @@ if __name__ == "__main__":
 
     key = img_path.split("/")[-1]
     frames = frames_from_file(img_path)
-    frames = [crop_to_content(frame, True) for frame in frames]
+    # frames = [crop_to_content(frame, True) for frame in frames]
 
     if True:
         use_cuda = torch.cuda.is_available()

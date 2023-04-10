@@ -1,5 +1,6 @@
 import copy
 import os
+import traceback
 from distutils.util import strtobool as strtobool
 from typing import Any, Dict, List, Union
 import cv2
@@ -121,9 +122,10 @@ class DefaultOcrEngine(OcrEngine):
                 result["meta"]["format"] = coordinate_format.name.lower()
 
                 results.append(result)
-            except Exception as ex:
-                self.logger.error(ex)
-                raise ex
+            except Exception:
+                print(traceback.format_exc())
+                # self.logger.error(ex)
+                raise
         return results
 
     def __process_extract_regions(
@@ -289,5 +291,5 @@ class DefaultOcrEngine(OcrEngine):
             # store_json_object(results, '/tmp/fragments/results-complex.json')
             return results
         except BaseException as error:
-            self.logger.error("Extract error", error)
+            self.logger.error("Extract error", exc_info=True)
             raise error
