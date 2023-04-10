@@ -241,8 +241,8 @@ class IcrProcessor(BaseHandler):
                 raise Exception(
                     f"Aligned words should match original words got: {len(aligned_words)}, {len(words)}"
                 )
-        except Exception as ex:
-            raise ex
+        except Exception:
+            raise
 
         # this OP is slow, so we only do it if we need to return the overlay image
         overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
