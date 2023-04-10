@@ -22,7 +22,7 @@ if __name__ == "__main__":
     stack_dir = ensure_exists(os.path.join(root_dir, "stack"))
     clean_dir = ensure_exists(os.path.join(root_dir, "clean"))
 
-    img_path = os.path.join(root_dir, "PID_1925_9289_0_157186264.tif")
+    img_path = os.path.join(root_dir, "158955602_1.png")
     burst_tiff(img_path, burst_dir, silence_errors=True)
 
     # os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     overlay_processor = OverlayProcessor(work_dir=work_dir, cuda=True)
 
-    framed = False
+    framed = True
     NITER = 1
 
     # process each image from the bursts directory
@@ -47,14 +47,25 @@ if __name__ == "__main__":
                     # continue
 
                 src_img_path = os.path.join(burst_dir, filename)
+                loaded, frames = load_image(src_img_path)
+                frame = frames[0]
 
                 if framed:
-                    loaded, frames = load_image(src_img_path)
                     real, fake, blended = overlay_processor.segment_frame(
-                        docId, frames[0]
+                        docId, frame
                     )
                 else:
                     real, fake, blended = overlay_processor.segment(docId, src_img_path)
+
+                assert real is not None
+                assert fake is not None
+                assert blended is not None
+
+                assert frame.shape == fake.shape
+                assert frame.shape == blended.shape
+
+                assert real.shape == fake.shape
+                assert real.shape == blended.shape
 
                 # debug image
                 if True:
@@ -69,5 +80,4 @@ if __name__ == "__main__":
                 print(f"Saving  document : {save_path}")
 
         except Exception as ident:
-            # raise ident
-            print(ident)
+            raise ident

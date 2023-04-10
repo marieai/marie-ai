@@ -112,14 +112,13 @@ class OverlayProcessor(BaseHandler):
         print("Model setup complete")
         return opt, model
 
-    def preprocess(self, img: np.ndarray) -> np.ndarray:
+    def preprocess_mm(self, img: np.ndarray) -> np.ndarray:
         # check if PIL image
         if not isinstance(img, Image.Image):
             img = Image.fromarray(img)
-
         # make sure image is divisible by 32
         ow, oh = img.size
-        base = 32  # image size must be divisible by 32
+        base = 32
         if ow % base != 0 or oh % base != 0:
             h = oh // base * base + base
             w = ow // base * base + base
@@ -127,6 +126,23 @@ class OverlayProcessor(BaseHandler):
 
         # convert to numpy array
         return np.array(img)
+
+    def preprocess(self, img: np.ndarray) -> np.ndarray:
+        # check if PIL image
+        # make sure image is divisible by 32
+        if len(img.shape) != 3:
+            raise Exception("Image must be 3 channel")
+        oh, ow, channels = img.shape
+        base = 32
+
+        if ow % base != 0 or oh % base != 0:
+            h = oh // base * base + base
+            w = ow // base * base + base
+            overlay = np.ones((h, w, channels), dtype=np.uint8) * 255
+            overlay[:oh, :ow, :] = img
+            return overlay
+
+        return img
 
     @Timer(text="__extract_segmentation_mask in {:.4f} seconds")
     def __extract_segmentation_mask(self, img, dataroot_dir):
@@ -153,40 +169,46 @@ class OverlayProcessor(BaseHandler):
             # clear cuda memory after inference
             torch.cuda.empty_cache()
 
-    def postprocess(self, real_img: np.ndarray, fake_mask: np.ndarray) -> np.ndarray:
+    def postprocess(
+        self, src_img: np.ndarray, real_img: np.ndarray, fake_mask: np.ndarray
+    ) -> np.ndarray:
         image_dir = os.path.join(self.work_dir, "debug")
         # Tensor is in RGB format OpenCV requires BGR
-        image_numpy = cv2.cvtColor(fake_mask, cv2.COLOR_RGB2BGR)
+        fake_mask_np = cv2.cvtColor(fake_mask, cv2.COLOR_RGB2BGR)
         save_path = os.path.join(image_dir, "fake.png")
 
         # testing only
         if debug_visualization_enabled:
-            imwrite(save_path, image_numpy)
+            imwrite(save_path, fake_mask_np)
 
         # TODO : Figure out why after the forward pass it is possible
         # to have different sizes(transforms have not been applied).
         # This is a work around for now
 
         # Causes by forward pass, incrementing size of the output layer
-        if real_img.shape != image_numpy.shape:
+        if real_img.shape != fake_mask_np.shape:
             print(
                 "WARNING(FIXME/ADJUSTING): Sizes of input arguments do not match(real,"
-                f" fake) : {real_img.shape} != {image_numpy.shape}"
+                f" fake) : {real_img.shape} != {fake_mask_np.shape}"
             )
             # tmp_img = np.ones((fake.shape[0], fake.shape[1], 3), dtype = np.uint8) * 255
-            h = min(real_img.shape[0], image_numpy.shape[0])
-            w = min(real_img.shape[1], image_numpy.shape[1])
-            # # make a blank image
-            # img_r = np.ones((h, w), dtype = np.uint8) * 255
-            # img_f = np.ones((h, w), dtype = np.uint8) * 255
+            h = min(real_img.shape[0], fake_mask_np.shape[0])
+            w = min(real_img.shape[1], fake_mask_np.shape[1])
             real_img = real_img[:h, :w, :]
-            image_numpy = image_numpy[:h, :w, :]
+            fake_mask_np = fake_mask_np[:h, :w, :]
 
             print(
-                f"Image shapes after(real, fake) : {real_img.shape} : {image_numpy.shape}"
+                f"Image shapes after(real, fake) : {real_img.shape} : {fake_mask_np.shape}"
             )
 
-        return image_numpy
+        # blend the fake image with the real image
+        blended = self.blend_to_text(real_img, fake_mask)
+
+        # crop mask and blended image to original image size
+        fake_mask_np = fake_mask_np[: src_img.shape[0], : src_img.shape[1], :]
+        blended = blended[: src_img.shape[0], : src_img.shape[1], :]
+
+        return fake_mask_np, blended
 
     @staticmethod
     def blend_to_text(real_img, mask_img):
@@ -272,11 +294,12 @@ class OverlayProcessor(BaseHandler):
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
         print(f"dst_file_name : {dst_file_name}")
 
-        real_img = cv2.imread(img_path)
-        if len(real_img.shape) != 3:
+        src_img = cv2.imread(img_path)
+        if len(src_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
 
-        real_img = self.preprocess(real_img)
+        # TODO : load image from memory rather than disk
+        real_img = self.preprocess(src_img)
         imwrite(dst_file_name, real_img)
         fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir)
 
@@ -284,19 +307,16 @@ class OverlayProcessor(BaseHandler):
         if np.array(fake_mask).size == 0:
             print(f"Unable to segment image :{img_path}")
             # create dummy white image
-            real_img = np.ones(
-                (real_img.shape[0], real_img.shape[1], 3), dtype=np.uint8
-            )
+            real_img = np.ones((src_img.shape[0], src_img.shape[1], 3), dtype=np.uint8)
             return real_img, fake_mask, real_img
 
-        fake_mask = self.postprocess(real_img, fake_mask)
-        blended = self.blend_to_text(real_img, fake_mask)
+        fake_mask, blended = self.postprocess(src_img, real_img, fake_mask)
 
         tm = time.time_ns()
         if debug_visualization_enabled:
             imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
 
-        return real_img, fake_mask, blended
+        return src_img, fake_mask, blended
 
     @Timer(text="SegmentedFrame in {:.4f} seconds")
     def segment_frame(
