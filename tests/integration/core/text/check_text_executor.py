@@ -41,6 +41,7 @@ def check_executor():
 
     img_path = "~/tmp/marie-cleaner/169150505/PID_1898_9172_0_169150505.tif"
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
+    img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175238378.tif"
 
     mode="sparse"
     docs = docs_from_file(img_path)
@@ -83,7 +84,6 @@ def check_executor():
         "doc_type": "overlay",
         # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
     }
-
 
     # load payload from file
     if False:
