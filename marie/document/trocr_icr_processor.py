@@ -119,8 +119,6 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
     bpe = inference_task.build_bpe(cfg.bpe)
 
-    print("**** TROCR INITIALIZED ***")
-    print(generator)
     return model, cfg, inference_task, generator, bpe, img_transform, device
 
 
@@ -249,11 +247,10 @@ class TrOcrIcrProcessor(IcrProcessor):
         if free_memory > 0:
             # batch_size = int(free_memory / 3e9 * 64)
             batch_size = int(free_memory / 8e9 * 32)  # ~100 @ 24GB
-
-        logger.info(f"Free memory : {free_memory}, batch_size : {batch_size}")
+        logger.debug(f"Free memory : {free_memory}, batch_size : {batch_size}")
 
         result = self.__recognize_from_fragments(src_images, batch_size, **kwargs)
-        logger.info("Fragments time : %s" % (time.time() - start))
+        logger.debug("Fragments time : %s" % (time.time() - start))
         return result
 
     @torch.no_grad()
@@ -285,7 +282,7 @@ class TrOcrIcrProcessor(IcrProcessor):
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
                 logger.info(
-                    f"Processing batch [batch_idx, batch_size,] : {i}, {len(batch)}"
+                    f"Processing batch [batch_idx, batch_size] : {i}, {len(batch)}"
                 )
 
                 eval_data = MemoryDataset(images=batch, opt=opt)
@@ -307,7 +304,6 @@ class TrOcrIcrProcessor(IcrProcessor):
                     logger.debug(f"results : {row}")
 
                 logger.info("Batch time : %s" % (time.time() - batch_start))
-
             logger.info("ICR Time elapsed: %s" % (time.time() - start))
 
         except Exception as ex:

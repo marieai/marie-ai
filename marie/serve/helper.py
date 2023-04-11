@@ -125,6 +125,17 @@ def get_default_grpc_options() -> List[Tuple[str, Any]]:
         # allow grpc pings from client every 9 seconds
         ('grpc.http1.min_ping_interval_without_data_ms', 5000),
         # allow grpc pings from client without data every 4 seconds
+        ('grpc.http2.max_pings_without_data', 0),
+        # allow unlimited amount of keepalive pings without data
+        ('grpc.http2.min_time_between_pings_ms', 10000),
+        # allow grpc pings from client every 9 seconds
+        ('grpc.http2.min_ping_interval_without_data_ms', 5000),
+        #  Disable the SO_REUSEPORT socket option, which allows binding to an address that is already in use.
+        ('grpc.so_reuseport', 0),
+        # This suppresses the gRPC server printing "too many pings" error message
+        # This is a workaround for https://github.com/marieai/marie-ai/issues/59
+        ('grpc.http2.max_ping_strikes', 0),
+        ('grpc.http1.max_ping_strikes', 0),
     ]
 
 

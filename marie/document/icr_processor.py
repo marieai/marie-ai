@@ -140,8 +140,6 @@ class IcrProcessor(BaseHandler):
             results = np.array(results)
             indices = np.argsort(boxes[:, 0])
 
-            logger.info("Starting line extraction")
-
             for i, index in enumerate(indices):
                 box = boxes[index]
                 fragment = fragments[index]
