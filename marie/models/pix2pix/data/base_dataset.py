@@ -182,15 +182,13 @@ def __make_power_2(img, base, method=Image.LANCZOS):
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
 
-    print(f"__make_power_2: ow={ow}, oh={oh}, w={w}, h={h}")
-
     if h == oh and w == ow:
         return img
 
     print("WARNING: resizing from %dx%d to %dx%d. This may distort images")
-
-    __print_size_warning(ow, oh, w, h)
-    return img.resize((w, h), method)
+    raise Exception("WARNING: resizing from %dx%d to %dx%d. This may distort images. Images should be preprocessed to be a multiple of %d" % (ow, oh, w, h, base))
+    # __print_size_warning(ow, oh, w, h)
+    # return img.resize((w, h), method)
 
 def __scale_width(img, target_size, crop_size, method=Image.LANCZOS):
     ow, oh = img.size
