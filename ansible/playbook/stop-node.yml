@@ -1,0 +1,16 @@
+---
+- name: Marie-AI - Stop Node
+  hosts: ml.cluster
+  gather_facts: false
+
+  tasks:
+    - name: Get running containers
+      docker_host_info:
+        containers: yes
+      register: docker_info
+
+    - name: Stop running containers
+      docker_container:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ docker_info.containers | map(attribute='Id') | list }}"
