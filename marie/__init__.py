@@ -155,3 +155,4 @@ from marie.serve.executors.decorators import (
 )
 
 # Custom Gateway
+from marie.serve.runtimes.gateway.gateway import Gateway

@@ -107,7 +107,8 @@ class BaseOptions():
                 comment = '\t[default: %s]' % str(default)
             message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
         message += '----------------- End -------------------'
-        print(message)
+        if False:
+            print(message)
 
         # save to the disk
         expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
@@ -119,9 +120,6 @@ class BaseOptions():
 
     def parse(self, args):
         """Parse our options, create checkpoints directory suffix, and set up gpu device."""
-
-        print('Parsing parameters')
-        print(args)
         opt = self.gather_options(args)
         opt.isTrain = self.isTrain   # train or test
 

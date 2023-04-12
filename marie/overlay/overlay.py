@@ -35,8 +35,7 @@ class OverlayProcessor(BaseHandler):
         cuda: bool = True,
         **kwargs,
     ) -> None:
-        print(f"OverlayProcessor [cuda={cuda}, models_dir={models_dir}]")
-
+        # print(f"OverlayProcessor [cuda={cuda}, models_dir={models_dir}]")
         checkpoint_dir = os.path.join(models_dir, "overlay")
         self.cuda = cuda
         self.models_dir = models_dir
@@ -109,7 +108,6 @@ class OverlayProcessor(BaseHandler):
         model.setup(opt)
         model.eval()
 
-        print("Model setup complete")
         return opt, model
 
     def preprocess_mm(self, img: np.ndarray) -> np.ndarray:
@@ -292,8 +290,6 @@ class OverlayProcessor(BaseHandler):
             os.path.join(self.work_dir, name, "dataroot_overlay")
         )
         dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
-        print(f"dst_file_name : {dst_file_name}")
-
         src_img = cv2.imread(img_path)
         if len(src_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
@@ -350,7 +346,6 @@ class OverlayProcessor(BaseHandler):
         else:
             data = img.astype(np.float32)
 
-        print("Image shape : ", data.shape)
         # data = np.array(img).astype(np.float32)
         # convert from HWC to CHW
         data = np.transpose(data, (2, 0, 1))

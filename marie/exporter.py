@@ -1,10 +1,11 @@
 import json
 
-from marie_cli.export import api_to_dict
 from marie.orchestrate.flow.base import Flow
+from marie.orchestrate.deployments import Deployment
 from marie.jaml import JAML
 from marie.logging.predefined import default_logger
 from marie.schemas import get_full_schema
+from marie_cli.export import api_to_dict
 
 
 def export_kubernetes(args):
@@ -12,9 +13,18 @@ def export_kubernetes(args):
 
     :param args: args from CLI
     """
-    Flow.load_config(args.flowpath).to_kubernetes_yaml(
-        output_base_path=args.outpath, k8s_namespace=args.k8s_namespace
-    )
+    from marie.jaml import JAMLCompatible
+
+    obj = JAMLCompatible.load_config(args.config_path)
+
+    if isinstance(obj, (Flow, Deployment)):
+        obj.to_kubernetes_yaml(
+            output_base_path=args.outpath, k8s_namespace=args.k8s_namespace
+        )
+    else:
+        raise NotImplementedError(
+            f'Object of class {obj.__class__.__name__} cannot be exported to Kubernetes'
+        )
 
 
 def export_docker_compose(args):
@@ -23,9 +33,18 @@ def export_docker_compose(args):
     :param args: args from CLI
     """
 
-    Flow.load_config(args.flowpath).to_docker_compose_yaml(
-        output_path=args.outpath, network_name=args.network_name
-    )
+    from marie.jaml import JAMLCompatible
+
+    obj = JAMLCompatible.load_config(args.config_path)
+
+    if isinstance(obj, (Flow, Deployment)):
+        obj.to_docker_compose_yaml(
+            output_path=args.outpath, network_name=args.network_name
+        )
+    else:
+        raise NotImplementedError(
+            f'Object of class {obj.__class__.__name__} cannot be exported to Docker Compose'
+        )
 
 
 def export_flowchart(args):
@@ -33,7 +52,7 @@ def export_flowchart(args):
 
     :param args: args from CLI
     """
-    Flow.load_config(args.flowpath).plot(
+    Flow.load_config(args.config_path).plot(
         args.outpath, vertical_layout=args.vertical_layout
     )
 

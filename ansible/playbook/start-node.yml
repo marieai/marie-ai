@@ -1,6 +1,4 @@
 ---
-- name: Marie-AI - Start Node
-  hosts: ml.cluster
 
 - name: Deploy to node
   hosts: ml.cluster
@@ -38,6 +36,7 @@
               # for a list of capabilities supported by the nvidia driver
         env:
           MARIE_DEFAULT_MOUNT: "/etc/marie"
+          MARIE_LOG_CONFIG: docker
           JINA_LOG_LEVEL:
             "{{ lookup('ansible.builtin.env', 'JINA_LOG_LEVEL') | default('DEBUG', true) }}"
 #        ports:
@@ -45,7 +44,6 @@
         volumes:
           - "/mnt/data/marie-ai/config:/etc/marie/config:ro"
           - "/mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw"
-
 
 # Docker debug command
 # docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)

@@ -421,8 +421,6 @@ class ExtractPipeline:
 
     def render_blobs(self, ref_id: str, frames, results, root_asset_dir):
         blobs_dir = ensure_exists(os.path.join(root_asset_dir, "blobs"))
-
-        print(f"Rendering blob : {blobs_dir}")
         filename, prefix, suffix = split_filename(ref_id)
 
         renderer = BlobRenderer(config={})
@@ -435,7 +433,7 @@ class ExtractPipeline:
 
     def render_adlib(self, ref_id: str, frames, results, root_asset_dir):
         adlib_dir = ensure_exists(os.path.join(root_asset_dir, "adlib"))
-        print(f"Rendering adlib : {adlib_dir}")
+        self.logger.info(f"Rendering adlib : {adlib_dir}")
 
         filename, prefix, suffix = split_filename(ref_id)
         renderer = AdlibRenderer(summary_filename=f"{filename}.xml", config={})

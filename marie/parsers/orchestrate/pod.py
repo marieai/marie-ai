@@ -4,7 +4,7 @@ import argparse
 from dataclasses import dataclass
 from typing import Dict
 
-from marie.enums import PodRoleType
+from marie.enums import PodRoleType, ProtocolType
 from marie.helper import random_port
 
 from marie.parsers.helper import (
@@ -164,6 +164,17 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         help=port_description,
     )
 
+    server_name = 'Gateway' if pod_type == 'gateway' else 'Executor'
+    arg_group.add_argument(
+        '--protocol',
+        '--protocols',
+        nargs='+',
+        type=ProtocolType.from_string,
+        choices=list(ProtocolType),
+        default=[ProtocolType.GRPC],
+        help=f'Communication protocol of the server exposed by the {server_name}. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: {[protocol.to_string() for protocol in list(ProtocolType)]}.',
+    )
+
     arg_group.add_argument(
         '--monitoring',
         action='store_true',
@@ -231,21 +242,6 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         type=int,
         default=None,
         help='If tracing is enabled, this port will be used to configure the metrics exporter agent.',
-    )
-
-
-def mixin_hub_pull_options_parser(parser):
-    """Add the arguments for hub pull options to the parser
-    :param parser: the parser configure
-    """
-
-    gp = add_arg_group(parser, title='Pull')
-    gp.add_argument(
-        '--force-update',
-        '--force',
-        action='store_true',
-        default=False,
-        help='If set, always pull the latest Hub Executor bundle even it exists on local',
     )
 
 

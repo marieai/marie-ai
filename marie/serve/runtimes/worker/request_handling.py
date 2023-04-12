@@ -146,6 +146,20 @@ class WorkerRequestHandler:
         if self.args.reload:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
 
+    def _http_fastapi_default_app(self, **kwargs):
+        from marie.serve.runtimes.worker.http_fastapi_app import (
+            get_fastapi_app,
+        )  # For Gateway, it works as for head
+
+        request_models_map = self._executor._get_endpoint_models_dict()
+
+        def call_handle(request):
+            return self.handle([request], None)
+
+        return get_fastapi_app(
+            request_models_map=request_models_map, caller=call_handle, **kwargs
+        )
+
     async def _hot_reload(self):
         import inspect
 
@@ -460,6 +474,7 @@ class WorkerRequestHandler:
         if return_data is not None:
             if isinstance(return_data, DocumentArray):
                 docs = return_data
+            # GB: Allow us to return list[dict] or dict
             elif isinstance(return_data, (dict, list)):
                 params = requests[0].parameters
                 results_key = self._KEY_RESULT

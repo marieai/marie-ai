@@ -29,7 +29,7 @@ from rich.traceback import install
 from marie_server.rest_extension import extend_rest_interface
 
 torch.set_float32_matmul_precision("high")
-torch.backends.cudnn.benchmark = True
+# torch.backends.cudnn.benchmark = True
 
 
 def setup_toast_events(toast_config: Dict[str, Any]):
@@ -59,6 +59,7 @@ def setup_storage(storage_config: Dict[str, Any]):
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
     from dotenv import load_dotenv
 
+    logger.info(f"Loading env file from {dotenv_path}")
     load_dotenv(dotenv_path=dotenv_path, verbose=True)
 
 
@@ -79,6 +80,26 @@ def main(yml_config: str, env: Dict[str, str], env_file: str):
         from marie_server.helper import is_latest_version
 
         is_latest_version(github_repo="marie-ai")
+
+    if False:
+        import shutil
+
+        print(f"shutil.which('python') = {shutil.which('python')}")
+        print(shutil.get_terminal_size())
+
+        import logging
+        import shutil
+        from rich.logging import RichHandler
+        from rich.console import Console
+
+        logging.basicConfig(
+            level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)]
+        )
+        logging.error('test')
+        logging.warning('test')
+        logging.info('test')
+        logging.debug('test')
+        Console().print(shutil.get_terminal_size())
 
     from marie import Flow
 
@@ -109,8 +130,9 @@ def main(yml_config: str, env: Dict[str, str], env_file: str):
             os.environ[k] = v
 
     # dump environment variables
-    for k, v in os.environ.items():
-        print(f"{k} = {v}")
+    if "DUMP_ENV" in os.environ:
+        for k, v in os.environ.items():
+            print(f"{k} = {v}")
 
     # Load the config file and setup the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
@@ -126,9 +148,22 @@ def main(yml_config: str, env: Dict[str, str], env_file: str):
     )
 
     marie.helper.extend_rest_interface = extend_rest_interface
+    filter_endpoint()
 
     with f:
         f.block()
+
+
+def filter_endpoint():
+    import logging
+
+    # filter out dry_run endpoint from uvicorn logs
+
+    class _EndpointFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return record.getMessage().find("GET /dry_run") == -1
+
+    logging.getLogger("uvicorn.access").addFilter(_EndpointFilter())
 
 
 if __name__ == "__main__":
