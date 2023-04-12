@@ -3,7 +3,7 @@ import argparse
 import os
 from typing import Tuple
 
-from marie.enums import GatewayProtocolType
+from marie.enums import ProtocolType
 from marie.logging.predefined import default_logger
 
 _SHOW_ALL_ARGS = 'MARIE_FULL_CLI' in os.environ
@@ -261,20 +261,25 @@ class _ColoredHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return lines
 
 
-def _get_gateway_class(protocol):
+def _get_gateway_class(protocol, works_as_load_balancer=False):
     from marie.serve.runtimes.gateway.grpc import GRPCGateway
     from marie.serve.runtimes.gateway.http import HTTPGateway
     from marie.serve.runtimes.gateway.websocket import WebSocketGateway
 
     gateway_dict = {
-        GatewayProtocolType.GRPC: GRPCGateway,
-        GatewayProtocolType.WEBSOCKET: WebSocketGateway,
-        GatewayProtocolType.HTTP: HTTPGateway,
+        ProtocolType.GRPC: GRPCGateway,
+        ProtocolType.WEBSOCKET: WebSocketGateway,
+        ProtocolType.HTTP: HTTPGateway,
     }
-    return gateway_dict[protocol]
+    if protocol == ProtocolType.HTTP and works_as_load_balancer:
+        from jina.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
+
+        return LoadBalancerGateway
+    else:
+        return gateway_dict[protocol]
 
 
-def _set_gateway_uses(args: 'argparse.Namespace'):
+def _set_gateway_uses(args: 'argparse.Namespace', gateway_load_balancer: bool = False):
     if not args.uses:
         if len(args.protocol) == 1 and len(args.port) == 1:
             args.uses = _get_gateway_class(args.protocol[0]).__name__
@@ -293,10 +298,14 @@ def _set_gateway_uses(args: 'argparse.Namespace'):
             from marie.serve.runtimes.gateway.composite import CompositeGateway
 
             args.uses = CompositeGateway.__name__
+        elif gateway_load_balancer:
+            from jina.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
+
+            args.uses = LoadBalancerGateway.__name__
 
 
-def _update_gateway_args(args: 'argparse.Namespace'):
-    _set_gateway_uses(args)
+def _update_gateway_args(args: 'argparse.Namespace', **kwargs):
+    _set_gateway_uses(args, **kwargs)
 
 
 class CastToIntAction(argparse.Action):

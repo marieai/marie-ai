@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Type, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional, Type, Union
 
 from marie.constants import __ready_msg__, __stop_msg__, __windows__
 from marie.enums import PodRoleType
@@ -89,7 +89,11 @@ def run(
     try:
         _set_envs()
 
-        runtime = AsyncNewLoopRuntime(args=args, req_handler_cls=req_handler_cls)
+        runtime = AsyncNewLoopRuntime(
+            args=args,
+            req_handler_cls=req_handler_cls,
+            gateway_load_balancer=getattr(args, 'gateway_load_balancer', False),
+        )
     except Exception as ex:
         logger.error(
             f'{ex!r} during {runtime_cls!r} initialization'
@@ -124,7 +128,12 @@ class BasePod(ABC):
         self.args = args
 
         if self.args.pod_role == PodRoleType.GATEWAY:
-            _update_gateway_args(self.args)
+            _update_gateway_args(
+                self.args,
+                gateway_load_balancer=getattr(
+                    self.args, 'gateway_load_balancer', False
+                ),
+            )
         self.args.parallel = getattr(self.args, 'shards', 1)
         self.name = self.args.name or self.__class__.__name__
         self.is_forked = False

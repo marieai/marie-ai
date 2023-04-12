@@ -75,7 +75,7 @@ def __process_burst(frame, bitonal, generated_name, dest_dir, index, tmp_dir):
     try:
         output_path_tmp = os.path.join(tmp_dir, generated_name)
         output_path = os.path.join(dest_dir, generated_name)
-        print(f"Bursting page# {index} : {generated_name} > {output_path}")
+        # print(f"Bursting page# {index} : {generated_name} > {output_path}")
         # check if root directory exists
         photometric = "rbg"
         if bitonal:
@@ -124,7 +124,6 @@ def burst_tiff_frames(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         if sequential:
-            print("created temporary directory", tmp_dir)
             for i, frame in enumerate(frames):
                 index = i + 1
                 generated_name = filename_generator(pagenumber=index)
@@ -138,7 +137,7 @@ def burst_tiff_frames(
                 )
         else:
             with ThreadPoolExecutor(max_workers=mp.cpu_count()) as executor:
-                print("created temporary directory", tmp_dir)
+                # print("created temporary directory", tmp_dir)
                 for i, frame in enumerate(frames):
                     index = i + 1
                     generated_name = filename_generator(pagenumber=index)
@@ -235,9 +234,6 @@ def save_frame_as_tiff_g4(frame, output_filename):
             generated_name = f"{uuid.uuid4()}.tif"
             output_path_tmp = os.path.join(tmp_dir, generated_name)
 
-            print(
-                f"save_frame_as_tiff_g4  page# > {output_filename} > : {output_path_tmp}"
-            )
             # check if root directory exists
             bitonal = True
 

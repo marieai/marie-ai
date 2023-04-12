@@ -5,7 +5,7 @@ level: INFO
 configs:
   FileHandler:
     format: '%(asctime)s:{name:>15}@%(process)2d[%(levelname).1s]:%(message)s'
-    output: 'jina-%(uptime)s.log'
+    output: 'marie-%(uptime)s.log'
     formatter: JsonFormatter
   StreamHandler:
     format: '🐳 %(asctime)s: %(message)s'
@@ -16,8 +16,8 @@ configs:
     port: # when not given then record it locally
     formatter: PlainFormatter
   RichHandler:
-    format: '🐳 %(message)s'
+    format: '{name}@%(process)2d %(message)s'
     markup: false
+    rich_tracebacks: false
     show_path: false
-    show_level: false
-    show_time: false
+    log_time_format: '[%x %X]'

@@ -134,8 +134,8 @@ class MarieLogger:
             name = os.getenv('MARIE_DEPLOYMENT_NAME', context)
 
         # Remove all handlers associated with the root logger object.
-        for handler in logging.root.handlers[:]:
-            logging.root.removeHandler(handler)
+        # for handler in logging.root.handlers[:]:
+        #     logging.root.removeHandler(handler)
 
         self.logger = logging.getLogger(context)
         self.logger.propagate = False

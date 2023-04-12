@@ -244,5 +244,5 @@ class IcrProcessor(BaseHandler):
 
         # this OP is slow, so we only do it if we need to return the overlay image
         overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
-        logger.info("Box extraction complete")
+        logger.debug("Box extraction complete")
         return result, overlay_image

@@ -44,7 +44,7 @@ class StorageMixin:
                         "Storage enabled but config not setup correctly"
                     ) from e
 
-    @Timer(text="stored in {:.4f} seconds")
+    # @Timer(text="stored in {:.4f} seconds")
     def store(
         self, ref_id: str, ref_type: str, store_mode: str, docs: DocumentArray
     ) -> None:

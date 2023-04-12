@@ -3,6 +3,7 @@ import argparse
 
 from marie.enums import DeploymentRoleType
 from marie.parsers.helper import _SHOW_ALL_ARGS, KVAppendAction, add_arg_group
+from marie.parsers.orchestrate.runtimes.remote import _mixin_http_server_parser
 
 
 def mixin_base_deployment_parser(parser):
@@ -67,3 +68,5 @@ def mixin_base_deployment_parser(parser):
         default=False,
         help='If set, connect to deployment using tls encryption',
     )
+
+    _mixin_http_server_parser(gp)
