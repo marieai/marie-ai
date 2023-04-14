@@ -189,7 +189,7 @@ def _install_health_check(app: 'FastAPI', logger):
     health_check_exists = False
     for route in app.routes:
         if getattr(route, 'path', None) == '/' and 'GET' in getattr(
-            route, 'methods', None
+            route, 'methods', []
         ):
             health_check_exists = True
             logger.warning(
