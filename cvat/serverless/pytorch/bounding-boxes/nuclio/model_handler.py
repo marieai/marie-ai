@@ -4,8 +4,7 @@ import torch
 
 
 def convert_mask_to_polygon(mask):
-    contours = None
-
+    contours = []
     polygon = []
     for point in contours:
         polygon.append([int(point[0]), int(point[1])])
@@ -21,8 +20,6 @@ class ModelHandler:
         self.latest_image = None
         self.predictor = None
 
-    def handle(self, image, pos_points, neg_points):
-        object_mask = None
-
-        polygon = convert_mask_to_polygon(object_mask)
-        return object_mask, polygon
+    def handle(self, image):
+        self.latest_image = image
+        return None, None

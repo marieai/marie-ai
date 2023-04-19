@@ -1,4 +1,4 @@
 ml.cluster:
   hosts:
-    GPU-008:
-      ansible_host: "ASP-GPU005"
+    GPU-009:
+      ansible_host: "ASP-GPU009"

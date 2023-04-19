@@ -5,7 +5,7 @@
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag: 3.0.11-cuda
+    image_tag: 3.0.12-cuda
     server_port: 8080
   tasks:
 #    - name: Create network

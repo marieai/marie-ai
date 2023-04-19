@@ -46,6 +46,18 @@ It contains code examples for:
 * And more
 
 
+## Run with default entrypoint
+
+```shell
+docker run --rm  -it marieai/marie:3.0.12-cuda 
+```
+
+## Run the server with custom entrypoint
+
+```shell
+docker run --rm  -it --entrypoint /bin/bash  marieai/marie:3.0.12-cuda  
+```
+
 ## Telemetry
 https://telemetry.marieai.co/
 

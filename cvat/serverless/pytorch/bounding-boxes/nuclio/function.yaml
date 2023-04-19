@@ -1,5 +1,5 @@
 metadata:
-  name: py-marieai-bbox
+  name: pth.marieai.bboxes
   namespace: cvat
   annotations:
     name: Bounding box detection with MARIE-AI
@@ -7,7 +7,7 @@ metadata:
     framework: pytorch
     spec: |
       [
-        { "id": 0, "name": "Boxes" },
+        { "id": 0, "name": "Boxes" }
       ]
 
 spec:
@@ -15,19 +15,21 @@ spec:
 
   runtime: 'python:3.9'
   handler: main:handler
-  eventTimeout: 30s
+  eventTimeout: 120s
   env:
     - name: MARIEAI_DIR
       value: /opt/nuclio/marieai
   build:
-    image: cvat.py.marieai.bboxes
-    baseImage: marieai/marieai:3.9-cuda
+    image: cvat.pth.marieai.bboxes
+    baseImage: marieai/marie:3.0.12-cuda
     directives:
       postCopy:
         - kind: WORKDIR
           value: /opt/nuclio
         - kind: RUN
           value: apt update && apt install --no-install-recommends -y git curl
+        - kind: ENTRYPOINT
+          value: '["/bin/bash", "-c"]'
 
   triggers:
     myHttpTrigger:
@@ -37,6 +39,9 @@ spec:
       attributes:
         maxRequestBodySize: 33554432 # 32MB
 
+  resources:
+    limits:
+      nvidia.com/gpu: 1
 
   platform:
     attributes:
