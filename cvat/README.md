@@ -17,5 +17,8 @@ Starting CVAT with some overrides and the serverless components:
 docker compose -f ./docker-compose.yml -f ./docker-compose.override.yml  -f components/serverless/docker-compose.serverless.yml --project-directory . up --build
 ```
 
-## Usage
+## List all registered serverless functions
 
+```shell
+nuctl get function --namespace nuclio
+```

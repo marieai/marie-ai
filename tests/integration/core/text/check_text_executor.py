@@ -42,6 +42,7 @@ def check_executor():
     img_path = "~/tmp/marie-cleaner/169150505/PID_1898_9172_0_169150505.tif"
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175238378.tif"
+    img_path = "/opt/shares/medrxprovdata/510/PID/20230417/PID_510_7077_0_175677910.tif"
 
     mode="sparse"
     docs = docs_from_file(img_path)
