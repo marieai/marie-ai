@@ -2,12 +2,12 @@ metadata:
   name: pth.marieai.bboxes
   namespace: cvat
   annotations:
-    name: Bounding box detection with MARIE-AI
+    name: Bounding box detection MARIE-AI 001
     type: detector
     framework: pytorch
     spec: |
       [
-        { "id": 0, "name": "Boxes" }
+        { "id": 1, "name": "bbox" }
       ]
 
 spec:
@@ -18,14 +18,26 @@ spec:
   eventTimeout: 120s
   env:
     - name: MARIEAI_DIR
-      value: /opt/nuclio/marieai
+      value: /marieai
+    - name: MARIE_DEFAULT_MOUNT
+      value: /etc/marie
+
+  volumes:
+    - volume:
+        name: marie-config
+        hostPath:
+          path: /home/greg/dev/marieai/marie-ai
+      volumeMount:
+        name: marie-config
+        mountPath: /etc/marie
+
   build:
     image: cvat.pth.marieai.bboxes
     baseImage: marieai/marie:3.0.12-cuda
     directives:
       postCopy:
         - kind: WORKDIR
-          value: /opt/nuclio
+          value: /etc/marie
         - kind: RUN
           value: apt update && apt install --no-install-recommends -y git curl
         - kind: ENTRYPOINT
@@ -46,6 +58,6 @@ spec:
   platform:
     attributes:
       restartPolicy:
-        name: always
+        name: on-failure
         maximumRetryCount: 3
       mountMode: volume
