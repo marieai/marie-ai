@@ -14,7 +14,7 @@ def setup_storage():
             "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
             "S3_STORAGE_BUCKET_NAME": "marie",
             "S3_ENDPOINT_URLXX": "http://localhost:8000",
-            "S3_ENDPOINT_URL": "http://64.62.141.143:8000",
+            "S3_ENDPOINT_URL": "http://gext-05.rms-asp.com:8000",
             "S3_ADDRESSING_STYLE": "path",
         }
     )
@@ -27,27 +27,9 @@ def setup_storage():
 if __name__ == "__main__":
     setup_storage()
 
-    # incoming/PID_1367_8177_0_172520676.tif
-
-    # StorageManager.read_to_file("s3://marie/incoming/PID_1367_8177_0_172520676.tif", "/home/gbugaj/datasets/dataset/medprov/PID/172520676/PID_1367_8177_0_172520676.tif")
-    # os.exit()
-
     img_path = (
-        "~/datasets/dataset/medprov/PID/172520676/PID_1367_8177_0_172520676.tif"
+        "~/tmp/4007/176081094.tif"
     )
-
-    # img_path = (
-    #     "~/datasets/dataset/medprov/PID/150300411/burst/PID_576_7188_0_150300411.tif"
-    # )
-
-    # img_path = "~/datasets/dataset/medprov/PID/150300431/PID_576_7188_0_150300431.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/169836035/PID_1007_7803_0_169836035.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/168483375/image8031655297039171311.pdf.merged.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/171131488/PID_1971_9380_0_171131488.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/168698807/image7494523172838185732.pdf.merged.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/169750819/PID_179_8268_0_169750819.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/169549209/PID_1015_7811_0_169549209.tif"
-    # img_path = "~/datasets/dataset/medprov/PID/169837125/PID_1015_7811_0_169837125.tif"
 
     # # Register VFS handlers
     # # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
