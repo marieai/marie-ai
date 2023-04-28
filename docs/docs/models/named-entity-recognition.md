@@ -510,6 +510,20 @@ CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=1 python ./train.py
 ```
 
 
+## DIT Bounding Boxes 
+
+Convert 
+```shell
+ PYTHONPATH="$PWD" python ./tools/coco_funsd_converter.py convert --mode train  --strip_file_name_path true --dir ~/datasets/funsd_bboxes  --config ~/datasets/funsd_bboxes/config.json
+```
+
+Rescale
+
+```shell
+PYTHONPATH="$PWD" python ./tools/coco_funsd_converter.py rescale --mode train --dir ~/datasets/funsd_bboxes/output/dataset --suffix ''
+```
+
+
 
 
 ## Reference
