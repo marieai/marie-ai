@@ -5,7 +5,7 @@ from google.protobuf import json_format
 
 from marie._docarray import DocumentArray, docarray_v2
 from marie.excepts import BadRequestType
-from marie.helper import cached_property, random_identity, typename
+from marie.helper import random_identity, typename
 from marie.proto import jina_pb2
 from marie.types.request import Request
 
@@ -265,7 +265,10 @@ class DataRequest(Request):
             preserving_proto_field_name=True,
             use_integers_for_enums=True,
         )
-        d['data'] = da.to_dict()
+        if docarray_v2:
+            d['data'] = da
+        else:
+            d['data'] = da.to_dict()
         return d
 
     @property

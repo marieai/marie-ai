@@ -1,6 +1,5 @@
 import argparse
 
-from marie.enums import ProtocolType
 from marie.helper import parse_host_scheme
 from marie.logging.predefined import default_logger
 
