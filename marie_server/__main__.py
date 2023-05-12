@@ -29,7 +29,6 @@ from rich.traceback import install
 from marie_server.rest_extension import extend_rest_interface
 
 torch.set_float32_matmul_precision("high")
-# torch.backends.cudnn.benchmark = True
 
 
 def setup_toast_events(toast_config: Dict[str, Any]):
