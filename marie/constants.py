@@ -79,6 +79,8 @@ _names_with_underscore = [
 __all__ = [_s for _s in dir() if not _s.startswith("_")]
 __all__.extend(_names_with_underscore)
 
+RAFT_TO_EXECUTOR_PORT = 100
+
 __root_dir__ = _os.path.dirname(_os.path.abspath(__file__))
 
 __default_mount_point__ = _os.environ.get(
