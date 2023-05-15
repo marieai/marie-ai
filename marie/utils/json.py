@@ -26,7 +26,13 @@ def load_json_file(filename) -> Any:
         return data
 
 
-def to_json(results) -> str:
+def deserialize_value(json_str) -> Any:
+    """Deserialize a JSON string to an object."""
+    data = json.load(json_str)
+    return data
+
+
+def to_json(results, **json_kwargs) -> str:
     """Convert object to a JSON object"""
     return json.dumps(
         results,
@@ -35,4 +41,5 @@ def to_json(results) -> str:
         ensure_ascii=True,
         indent=2,
         cls=NumpyEncoder,
+        **json_kwargs
     )

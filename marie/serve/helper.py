@@ -1,5 +1,6 @@
 import functools
 import inspect
+import os
 import typing
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -100,6 +101,16 @@ def format_grpc_error(error: grpc.aio.AioRpcError) -> str:
         return f'{default_string}\n{trailing_metadata}'
 
     return default_string
+
+
+def _get_workspace_from_name_and_shards(workspace, name, shard_id):
+    if workspace:
+        complete_workspace = os.path.join(workspace, name)
+        if shard_id is not None and shard_id != -1:
+            complete_workspace = os.path.join(complete_workspace, str(shard_id))
+        if not os.path.exists(complete_workspace):
+            os.makedirs(complete_workspace, exist_ok=True)
+        return os.path.abspath(complete_workspace)
 
 
 def get_default_grpc_options() -> List[Tuple[str, Any]]:

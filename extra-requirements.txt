@@ -131,7 +131,8 @@ onnxmltools:                  standard,core
 pika:                         standard,core
 sentencepiece:                standard,core
 Levenshtein:                  standard,core
-boto3:                  standard,core
+boto3:                       standard,core
+sqlalchemy:                   standard,core
 
 # this version is required for the current version of detectron2
 omegaconf==2.3.0:             standard,core

@@ -17,7 +17,7 @@ def get_fastapi_app(request_models_map: Dict, caller: Callable, **kwargs):
     with ImportExtensions(required=True):
         from fastapi import FastAPI, Response, HTTPException
         import pydantic
-    from jina.proto import jina_pb2
+    from marie.proto import jina_pb2
 
     app = FastAPI()
 
@@ -65,7 +65,7 @@ def get_fastapi_app(request_models_map: Dict, caller: Callable, **kwargs):
                 output_model=endpoint_output_model,
             )
 
-    from jina.serve.runtimes.gateway.models import JinaHealthModel
+    from marie.serve.runtimes.gateway.models import JinaHealthModel
 
     @app.get(
         path='/',
