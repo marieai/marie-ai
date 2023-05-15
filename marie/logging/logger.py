@@ -4,18 +4,45 @@ import logging.handlers
 import os
 import platform
 import sys
-from typing import Optional
+from typing import Optional, NamedTuple, Mapping, Union
 
 from rich.logging import LogRender as _LogRender
 from rich.logging import RichHandler as _RichHandler
 
+from marie import check
 from marie.constants import __resources_path__, __uptime__, __windows__
+from marie.core.utils import coerce_valid_log_level
 from marie.enums import LogVerbosity
 from marie.jaml import JAML
 from marie.logging import formatter
+from marie.utils.json import to_json
+from typing import Mapping, Union
+from collections import OrderedDict
+
+from typing_extensions import Final
 
 # TODO : Implement MDC like context for logging
 # https://stackoverflow.com/questions/6618513/python-logging-with-context
+
+BACKFILL_TAG_LENGTH = 8
+
+PYTHON_LOGGING_LEVELS_MAPPING: Final[Mapping[str, int]] = OrderedDict(
+    {"CRITICAL": 50, "ERROR": 40, "WARNING": 30, "INFO": 20, "DEBUG": 10}
+)
+
+PYTHON_LOGGING_LEVELS_ALIASES: Final[Mapping[str, str]] = OrderedDict(
+    {"FATAL": "CRITICAL", "WARN": "WARNING"}
+)
+
+PYTHON_LOGGING_LEVELS_NAMES = frozenset(
+    [
+        level_name.lower()
+        for level_name in sorted(
+            list(PYTHON_LOGGING_LEVELS_MAPPING.keys())
+            + list(PYTHON_LOGGING_LEVELS_ALIASES.keys())
+        )
+    ]
+)
 
 
 class _MyLogRender(_LogRender):
@@ -262,3 +289,124 @@ class MarieLogger:
         if 'MARIE_LOG_LEVEL' in os.environ:
             verbose_level = LogVerbosity.from_string(os.environ['MARIE_LOG_LEVEL'])
         self.logger.setLevel(verbose_level.value)
+
+
+class JsonFileHandler(logging.Handler):
+    def __init__(self, json_path: str):
+        super(JsonFileHandler, self).__init__()
+        self.json_path = check.str_param(json_path, "json_path")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            log_dict = copy.copy(record.__dict__)
+
+            # This horrific monstrosity is to maintain backwards compatability
+            # with the old behavior of the JsonFileHandler, which the clarify
+            # project has a dependency on. It relied on the dagster-defined
+            # properties smashing all the properties of the LogRecord object
+            # and uploads all of those properties to a redshift table for
+            # in order to do analytics on the log
+
+            if "dagster_meta" in log_dict:
+                dagster_meta_dict = log_dict["dagster_meta"]
+                del log_dict["dagster_meta"]
+            else:
+                dagster_meta_dict = {}
+
+            log_dict.update(dagster_meta_dict)
+
+            with open(self.json_path, "a", encoding="utf8") as ff:
+                text_line = to_json(log_dict)
+                ff.write(text_line + "\n")
+        # Need to catch Exception here, so disabling lint
+        except Exception as e:
+            logging.critical("[%s] Error during logging!", self.__class__.__name__)
+            logging.exception(str(e))
+
+
+class StructuredLoggerMessage(
+    NamedTuple(
+        "_StructuredLoggerMessage",
+        [
+            ("name", str),
+            ("message", str),
+            ("level", int),
+            ("meta", Mapping[object, object]),
+            ("record", logging.LogRecord),
+        ],
+    )
+):
+    def __new__(
+        cls,
+        name: str,
+        message: str,
+        level: int,
+        meta: Mapping[object, object],
+        record: logging.LogRecord,
+    ):
+        return super(StructuredLoggerMessage, cls).__new__(
+            cls,
+            check.str_param(name, "name"),
+            check.str_param(message, "message"),
+            coerce_valid_log_level(level),
+            check.mapping_param(meta, "meta"),
+            check.inst_param(record, "record", logging.LogRecord),
+        )
+
+
+class JsonEventLoggerHandler(logging.Handler):
+    def __init__(self, json_path: str, construct_event_record):
+        super(JsonEventLoggerHandler, self).__init__()
+        self.json_path = check.str_param(json_path, "json_path")
+        self.construct_event_record = construct_event_record
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            event_record = self.construct_event_record(record)
+            with open(self.json_path, "a", encoding="utf8") as ff:
+                text_line = to_json(event_record.to_dict())
+                ff.write(text_line + "\n")
+
+        # Need to catch Exception here, so disabling lint
+        except Exception as e:
+            logging.critical("[%s] Error during logging!", self.__class__.__name__)
+            logging.exception(str(e))
+
+
+class StructuredLoggerHandler(logging.Handler):
+    def __init__(self, callback):
+        super(StructuredLoggerHandler, self).__init__()
+        self.callback = check.is_callable(callback, "callback")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.callback(
+                StructuredLoggerMessage(
+                    name=record.name,
+                    message=record.msg,
+                    level=record.levelno,
+                    meta=record.dagster_meta,  # type: ignore
+                    record=record,
+                )
+            )
+        # Need to catch Exception here, so disabling lint
+        except Exception as e:
+            logging.critical("[%s] Error during logging!", self.__class__.__name__)
+            logging.exception(str(e))
+
+
+def construct_single_handler_logger(name, level, handler):
+    check.str_param(name, "name")
+    check.inst_param(handler, "handler", logging.Handler)
+
+    level = coerce_valid_log_level(level)
+
+    # @logger
+    def single_handler_logger(_init_context):
+        klass = logging.getLoggerClass()
+        logger_ = klass(name, level=level)
+        logger_.addHandler(handler)
+        handler.setLevel(level)
+        return logger_
+
+    return single_handler_logger

@@ -69,7 +69,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
 
 
-def main(yml_config: str, env: Dict[str, str], env_file: str):
+def main(yml_config: str, env: Dict[str, str], env_file: str = None):
     # install handler for exceptions
     sys.excepthook = handle_exception
     install(show_locals=True)
