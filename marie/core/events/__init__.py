@@ -9,6 +9,8 @@ from marie.core.definitions.events import AssetKey
 from marie.core.execution.context import IPlanContext
 from marie.storage.marie_run import MarieRunStatus
 
+from marie.core.execution.plan.handle import StepHandle, ResolvedFromDynamicStepHandle
+
 
 class MarieEventType(str, Enum):
     """The types of events that may be yielded by op and job execution."""
