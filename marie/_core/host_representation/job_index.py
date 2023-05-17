@@ -1,0 +1,2 @@
+class JobIndex:
+    pass
