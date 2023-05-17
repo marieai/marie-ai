@@ -1,3 +1,8 @@
+from .config_class import (
+    ConfigurableClass as ConfigurableClass,
+    ConfigurableClassData as ConfigurableClassData,
+    class_from_code_pointer as class_from_code_pointer,
+)
 from .serdes import (
     WhitelistMap as WhitelistMap,
     deserialize_value as deserialize_value,
