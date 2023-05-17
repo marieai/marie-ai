@@ -19,7 +19,7 @@ from .schedules.base import ScheduleStorage
 from .schedules.sqlite.sqlite_schedule_storage import SqliteScheduleStorage
 
 if TYPE_CHECKING:
-    from dagster._core.instance import DagsterInstance
+    from marie._core.instance import DagsterInstance
 
 
 class SqliteStorageConfig(TypedDict):
