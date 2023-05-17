@@ -53,7 +53,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Flask stuff:
-instance/
+./instance
 .webassets-cache
 
 # Scrapy stuff:

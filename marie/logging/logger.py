@@ -11,7 +11,7 @@ from rich.logging import RichHandler as _RichHandler
 
 from marie import check
 from marie.constants import __resources_path__, __uptime__, __windows__
-from marie.core.utils import coerce_valid_log_level
+from marie._core.utils import coerce_valid_log_level
 from marie.enums import LogVerbosity
 from marie.jaml import JAML
 from marie.logging import formatter
