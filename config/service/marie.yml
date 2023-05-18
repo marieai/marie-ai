@@ -24,14 +24,24 @@ shared_config:
       virtualhost: /
 
 
+    rabbitmq :  &rabbitmq_conf_shared
+      provider: rabbitmq
+      hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+      port: ${{ ENV.RABBIT_MQ_PORT }}
+      username: ${{ ENV.RABBIT_MQ_USERNAME }}
+      password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+      tls: False
+      virtualhost: /
+
+
 # Toast event tracking system
 # It can be backed by Message Queue and Database backed
 toast:
   native:
     enabled: True
     path: /tmp/marie/events.json
-  amazon-mq:
-    <<: *amazon_mq_conf_shared
+  rabbitmq:
+    <<: *rabbitmq_conf_shared
     enabled : True
   psql:
     <<: *psql_conf_shared
@@ -73,7 +83,12 @@ storage:
     default_table: store_metadata
     enabled : False
 
-
+# Job Queue scheduler
+scheduler:
+  psql:
+    <<: *psql_conf_shared
+    default_table: job_queue
+    enabled : True
 
 # FLOW / GATEWAY configuration
 
@@ -87,6 +102,10 @@ with:
   discovery: True
   discovery_host: 172.16.11.162
   discovery_port: 8500
+
+  # monitoring
+  monitoring: true
+  port_monitoring: 57843
 
   event_tracking: True
 
