@@ -122,10 +122,10 @@ class DefaultOcrEngine(OcrEngine):
                 result["meta"]["format"] = coordinate_format.name.lower()
 
                 results.append(result)
-            except Exception:
+            except Exception as ex:
                 print(traceback.format_exc())
-                # self.logger.error(ex)
-                raise
+                self.logger.error(ex)
+                raise ex
         return results
 
     def __process_extract_regions(

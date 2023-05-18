@@ -1,4 +1,6 @@
+import glob
 import os
+from typing import Dict
 
 import torch
 
@@ -12,51 +14,70 @@ from marie.utils.json import store_json_object, load_json_file
 from marie.utils.utils import ensure_exists
 
 
+def process_dir(
+        ocr_engine: DefaultOcrEngine,
+        image_dir: str,
+):
+    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
+        try:
+            process_file(ocr_engine, img_path)
+        except Exception as e:
+            print(e)
+            # raise e
+
+
+def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
+    try:
+        print("Processing", img_path)
+        img_path = os.path.expanduser(img_path)
+        if not os.path.exists(img_path):
+            raise Exception(f"File not found : {img_path}")
+
+        key = img_path.split("/")[-1]
+        frames = frames_from_file(img_path)
+
+        results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
+
+        print("Testing text renderer")
+        store_json_object(results, os.path.join("/tmp/fragments", f"results-{key}.json"))
+
+        results = load_json_file(os.path.join("/tmp/fragments", f"results-{key}.json"))
+
+        renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+        renderer.render(
+            frames,
+            results,
+            output_filename=os.path.join(work_dir_icr, f"results-{key}.pdf"),
+        )
+
+        renderer = TextRenderer(config={"preserve_interword_spaces": True})
+        renderer.render(
+            frames,
+            results,
+            output_filename=os.path.join(work_dir_icr, f"results-{key}.txt"),
+        )
+    except Exception as e:
+        print("Error processing", img_path)
+        print(e)
+        raise e
+
+
 if __name__ == "__main__":
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "~/tmp/163611436.tif"
-    img_path = "~/tmp/wrong-ocr/169118830.tif"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
-    img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042272.png"
-    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9308042269.png"
-    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_0_9359961522.png"
-    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800604.png"
-    # img_path = "~/tmp/wrong-ocr/regions/overlay_image_1_9359800610.png"
-    img_path = "/tmp/generators/5547aaa25c7b72199036016b46b1f46c/clean/4.tif"
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
+    img_path = "/home/gbugaj/tmp/4007/176073139.tif"
+    img_path = "/tmp/s3/incoming"
 
-    img_path = os.path.expanduser(img_path)
-    if not os.path.exists(img_path):
-        raise Exception(f"File not found : {img_path}")
-
-    key = img_path.split("/")[-1]
-    frames = frames_from_file(img_path)
     # frames = [crop_to_content(frame, True) for frame in frames]
 
-    if True:
-        use_cuda = torch.cuda.is_available()
-        ocr_engine = DefaultOcrEngine(cuda=use_cuda)
-        results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
+    use_cuda = torch.cuda.is_available()
+    ocr_engine = DefaultOcrEngine(cuda=use_cuda)
 
-        print(results)
-        print("Testing text render")
-        store_json_object(results, os.path.join("/tmp/fragments", "results.json"))
-
-    results = load_json_file(os.path.join("/tmp/fragments", "results.json"))
-
-    renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-    renderer.render(
-        frames,
-        results,
-        output_filename=os.path.join(work_dir_icr, "results.pdf"),
-    )
-
-    renderer = TextRenderer(config={"preserve_interword_spaces": True})
-    renderer.render(
-        frames,
-        results,
-        output_filename=os.path.join(work_dir_icr, "results.txt"),
-    )
+    # check if we can process a single file or a directory
+    if os.path.isdir(img_path):
+        process_dir(ocr_engine, img_path)
+    else:
+        process_file(ocr_engine, img_path)
