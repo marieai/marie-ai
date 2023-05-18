@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import os
 import sys
@@ -91,6 +92,15 @@ def main(
     env: Optional[Dict[str, str]] = None,
     env_file: Optional[str] = None,
 ):
+    loop = marie.helper.get_or_reuse_loop()
+    loop.run_until_complete(__main__(yml_config, env, env_file))
+    # asyncio.get_event_loop().run_until_complete(__main__(yml_config, env, env_file))
+
+async def __main__(
+    yml_config: str,
+    env: Optional[Dict[str, str]] = None,
+    env_file: Optional[str] = None,
+):
     """Main entry point for the Marie server
     :param yml_config:
     :param env:
@@ -162,11 +172,12 @@ def main(
     # Load the config file and setup the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
 
-    setup_toast_events(config.get("toast", {}))
-    setup_storage(config.get("storage", {}))
+    # setup_toast_events(config.get("toast", {}))
+    # setup_storage(config.get("storage", {}))
     setup_scheduler(config.get("scheduler", {}))
 
-    return
+    await asyncio.sleep(10)
+
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
