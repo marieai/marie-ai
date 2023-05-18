@@ -105,6 +105,11 @@ Start consul server
 docker compose -f ./Dockerfiles/docker-compose.yml --project-directory . up consul-server  --build  --remove-orphans
 ```
 
+Start storage
+```shell
+docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
+
+```
 ## Docker 
 
 ### CPU

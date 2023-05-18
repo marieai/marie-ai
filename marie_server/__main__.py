@@ -55,6 +55,17 @@ def setup_storage(storage_config: Dict[str, Any]):
         StorageManager.mkdir("s3://marie")
 
 
+def setup_scheduler(scheduler_config: Dict[str, Any]):
+    """Set up the job scheduler"""
+    if "psql" in scheduler_config:
+        # check if the scheduler is enabled
+        if scheduler_config["psql"]["enabled"]:
+            from marie_server.scheduler import PsqlJobScheduler
+
+            scheduler = PsqlJobScheduler(config=scheduler_config["psql"])
+            scheduler.start_schedule()
+
+
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
     from dotenv import load_dotenv
 
@@ -63,13 +74,28 @@ def load_env_file(dotenv_path: Optional[str] = None) -> None:
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
+    """
+    Handle uncaught exceptions
+    :param exc_type:
+    :param exc_value:
+    :param exc_traceback:
+    """
     logger.error("exc_type", exc_type)
     logger.error("exc_value", exc_value)
     logger.error("exc_traceback", exc_traceback)
     traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
 
 
-def main(yml_config: str, env: Dict[str, str], env_file: str = None):
+def main(
+    yml_config: str,
+    env: Optional[Dict[str, str]] = None,
+    env_file: Optional[str] = None,
+):
+    """Main entry point for the Marie server
+    :param yml_config:
+    :param env:
+    :param env_file:
+    """
     # install handler for exceptions
     sys.excepthook = handle_exception
     install(show_locals=True)
@@ -103,7 +129,7 @@ def main(yml_config: str, env: Dict[str, str], env_file: str = None):
     from marie import Flow
 
     PYTHONPATH = os.environ.get("PYTHONPATH", "")
-    print(f"PYTHONPATH = {PYTHONPATH}")
+
     logger.info(f"__model_path__ = {__model_path__}")
     logger.info(f"__config_dir__ = {__config_dir__}")
     logger.info(f"__marie_home__ = {__marie_home__}")
@@ -138,7 +164,9 @@ def main(yml_config: str, env: Dict[str, str], env_file: str = None):
 
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
+    setup_scheduler(config.get("scheduler", {}))
 
+    return
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
@@ -154,6 +182,10 @@ def main(yml_config: str, env: Dict[str, str], env_file: str = None):
 
 
 def filter_endpoint():
+    """
+    Filter out dry_run endpoint from uvicorn logs
+    :return:
+    """
     import logging
 
     # filter out dry_run endpoint from uvicorn logs
