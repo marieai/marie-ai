@@ -253,6 +253,11 @@ class BoxProcessorUlimDit(BoxProcessor):
             )
             del predictions
 
+            # check if boxes are empty, which means no boxes were detected(blank image)
+            if boxes is None or len(boxes) == 0:
+                return [], [], [], [], []
+
+            # convert boxes to xywh
             bboxes = _convert_boxes(boxes)
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
@@ -263,6 +268,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             lines = lines_from_bboxes(image, bboxes)
 
             return bboxes, classes, scores, lines, classes
+
         except Exception as e:
             self.logger.error(e)
 
