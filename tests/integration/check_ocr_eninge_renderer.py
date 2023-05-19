@@ -26,6 +26,9 @@ def process_dir(
             # raise e
 
 
+from marie.timer import Timer
+
+@Timer(text="Process time {:.4f} seconds")
 def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
     try:
         print("Processing", img_path)
@@ -39,10 +42,10 @@ def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
         results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
 
         print("Testing text renderer")
-        store_json_object(results, os.path.join("/tmp/fragments", f"results-{key}.json"))
 
-        results = load_json_file(os.path.join("/tmp/fragments", f"results-{key}.json"))
-
+        # store_json_object(results, os.path.join("/tmp/fragments", f"results-{key}.json"))
+        # results = load_json_file(os.path.join("/tmp/fragments", f"results-{key}.json"))
+        #
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
         renderer.render(
             frames,
@@ -50,12 +53,13 @@ def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
             output_filename=os.path.join(work_dir_icr, f"results-{key}.pdf"),
         )
 
-        renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(
-            frames,
-            results,
-            output_filename=os.path.join(work_dir_icr, f"results-{key}.txt"),
-        )
+        if False:
+            renderer = TextRenderer(config={"preserve_interword_spaces": True})
+            renderer.render(
+                frames,
+                results,
+                output_filename=os.path.join(work_dir_icr, f"results-{key}.txt"),
+            )
     except Exception as e:
         print("Error processing", img_path)
         print(e)
@@ -69,7 +73,8 @@ if __name__ == "__main__":
 
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
     img_path = "/home/gbugaj/tmp/4007/176073139.tif"
-    img_path = "/tmp/s3/incoming"
+    img_path = "/home/greg/tmp/s3-data"
+    # img_path = "/home/greg/tmp/s3-data/PID_1012_7808_0_177192249.tif" # failed assertion
 
     # frames = [crop_to_content(frame, True) for frame in frames]
 

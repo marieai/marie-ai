@@ -248,7 +248,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             # batch_size = int(free_memory / 3e9 * 64)
             batch_size = int(free_memory / 8e9 * 32)  # ~100 @ 24GB
         logger.debug(f"Free memory : {free_memory}, batch_size : {batch_size}")
-
+        batch_size = 256
         result = self.__recognize_from_fragments(src_images, batch_size, **kwargs)
         logger.debug("Fragments time : %s" % (time.time() - start))
         return result
@@ -281,10 +281,6 @@ class TrOcrIcrProcessor(IcrProcessor):
             start = time.time()
 
             for i, batch in enumerate(batchify(src_images, batch_size)):
-                logger.info(
-                    f"Processing batch [batch_idx, batch_size] : {i}, {len(batch)}"
-                )
-
                 eval_data = MemoryDataset(images=batch, opt=opt)
                 batch_start = time.time()
 
@@ -303,9 +299,11 @@ class TrOcrIcrProcessor(IcrProcessor):
                     results.append(row)
                     logger.debug(f"results : {row}")
 
-                logger.info("Batch time : %s" % (time.time() - batch_start))
+                logger.info(
+                    "Batch time [%s, %s]: %s"
+                    % (i, len(batch), time.time() - batch_start)
+                )
             logger.info("ICR Time elapsed: %s" % (time.time() - start))
-
         except Exception as ex:
             raise ex
         return results
