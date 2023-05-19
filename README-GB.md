@@ -336,7 +336,9 @@ https://github.com/alibaba/EasyNLP?ref=stackshare
 https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
 https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
 https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
+
 https://github.com/ray-project/ray
+
 https://www.marktechpost.com/2022/11/01/a-new-mlops-system-called-alaas-active-learning-as-a-service-adopts-the-philosophy-of-machine-learning-as-service-and-implements-a-server-client-architecture/
 https://github.com/ocrmypdf/OCRmyPDF
 
