@@ -105,16 +105,18 @@ class IcrProcessor(BaseHandler):
             lines
         ), "You must provide the same number of lines as boxes."
         encode_fragments = False
+        draw_debug_overlay = False
 
         try:
             shape = img.shape
             debug_dir = ensure_exists(os.path.join("/tmp/icr", _id))
             debug_all_dir = ensure_exists(os.path.join("/tmp/icr", "fields", key))
 
-            pil_overlay = Image.new(
-                "RGB", (img.shape[1], img.shape[0]), (255, 255, 255)
-            )
-            draw_overlay = ImageDraw.Draw(pil_overlay)
+            if draw_debug_overlay:
+                pil_overlay = Image.new(
+                    "RGB", (img.shape[1], img.shape[0]), (255, 255, 255)
+                )
+                draw_overlay = ImageDraw.Draw(pil_overlay)
 
             meta = {
                 "imageSize": {"width": img.shape[1], "height": img.shape[0]},
@@ -162,7 +164,7 @@ class IcrProcessor(BaseHandler):
 
                 words.append(payload)
 
-                if True:
+                if draw_debug_overlay:
                     font_size = determine_font_size(box[3])
                     draw_overlay.text(
                         (box[0], box[1] + box[3] // 4),
@@ -243,6 +245,8 @@ class IcrProcessor(BaseHandler):
             raise
 
         # this OP is slow, so we only do it if we need to return the overlay image
-        overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
+        # overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
+        overlay_image = None
         logger.debug("Box extraction complete")
+
         return result, overlay_image

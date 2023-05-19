@@ -288,7 +288,6 @@ class DefaultOcrEngine(OcrEngine):
                     ro_frames, queue_id, checksum, pms_mode, regions, **kwargs
                 )
 
-            # store_json_object(results, '/tmp/fragments/results-complex.json')
             return results
         except BaseException as error:
             self.logger.error("Extract error", exc_info=True)

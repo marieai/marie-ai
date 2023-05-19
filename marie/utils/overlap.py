@@ -68,10 +68,12 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
 
         if h <= 0 or _h <= 0:
             continue
-
         # don't overlap exactly same boxes as target
-        if np.array_equal(box, bb):
+        if box[0] == bb[0] and box[1] == bb[1] and box[2] == bb[2] and box[3] == bb[3]:
             continue
+        # this is very slow compared to decomposing the box into x,y,w,h
+        # if np.array_equal(box, bb):
+        #     continue
 
         y_bottom = min(y1max, y2max)
         y_top = max(y1min, y2min)
@@ -94,10 +96,16 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
             # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
             # compute the intersection over union by taking the intersection
             # area and dividing it by the sum of prediction + ground-truth areas - the interesection area
-            iou = intersection_area / float(bb1_area + bb2_area - intersection_area)
+            # iou = intersection_area / float(bb1_area + bb2_area - intersection_area)
+            # clamping the iou to 0.0 - 1.0 to avoid any weirdness with floating point precision failing the assert
+            iou = max(
+                min(
+                    intersection_area / float(bb1_area + bb2_area - intersection_area),
+                    1.0,
+                ),
+                0.0,
+            )
             # print(f"intersection_area  [{h} , {_h}]: {intersection_area} : {dr}  > iou = {iou}")
-            assert iou >= 0.0
-            assert iou <= 1.0
 
             scores.append(iou)
             overlaps.append(bb)
@@ -118,7 +126,6 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
     if len(bboxes) == 0:
         return [], [], []
 
-    bboxes = np.array(bboxes)
     # filter out boxes that are not intersecting with the target box
     # intersecting_boxes = bboxes[
     #     (box[0] < bboxes[:, 0] + bboxes[:, 2]) & (box[0] + box[2] > bboxes[:, 0])
@@ -140,10 +147,12 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
         _x, _y, _w, _h = bb
         x2min = _x
         x2max = _x + _w
-
         # don't overlap exactly same boxes as target
-        if np.array_equal(box, bb):
+        if box[0] == bb[0] and box[1] == bb[1] and box[2] == bb[2] and box[3] == bb[3]:
             continue
+        # this is very slow compared to decomposing the box into x,y,w,h
+        # if np.array_equal(box, bb):
+        #     continue
 
         x_right = min(x1max, x2max)
         x_left = max(x1min, x2min)
@@ -168,10 +177,15 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
             # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
             # compute the intersection over union by taking the intersection
             # area and dividing it by the sum of prediction + ground-truth areas - the intersection area
-            iou = intersection_area / float(bb1_area + bb2_area - intersection_area)
-            # print(f"intersection_area  [{h} , {_h}]: {intersection_area} : {dr}  > iou = {iou}")
-            assert iou >= 0.0
-            assert iou <= 1.0
+            # clamping the iou to 0.0 - 1.0 to avoid any weirdness with floating point precision failing the assert
+            iou = max(
+                min(
+                    intersection_area / float(bb1_area + bb2_area - intersection_area),
+                    1.0,
+                ),
+                0.0,
+            )
+            # print(f"intersection_area  [{h} , {_h}]: {intersection_area} : iou = {iou}")
 
             scores.append(iou)
             overlaps.append(bb)

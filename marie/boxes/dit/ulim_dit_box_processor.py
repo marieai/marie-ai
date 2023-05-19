@@ -270,7 +270,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             return bboxes, classes, scores, lines, classes
 
         except Exception as e:
-            self.logger.error(e)
+            raise e
 
     def psm_line(self, image):
         if self.strict_box_segmentation:
@@ -352,9 +352,11 @@ class BoxProcessorUlimDit(BoxProcessor):
             prediction_result["scores"] = scores
             prediction_result["heatmap"] = None
 
-            pil_image = Image.new(
-                "RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0)
-            )
+            debug_image = False
+            if debug_image:
+                pil_image = Image.new(
+                    "RGB", (image.shape[1], image.shape[0]), color=(0, 255, 0, 0)
+                )
 
             rect_from_poly = []
             rect_line_numbers = []
@@ -378,9 +380,10 @@ class BoxProcessorUlimDit(BoxProcessor):
 
                     # After normalization image is in 0-1 range
                     # snippet = (snippet * 255).astype(np.uint8)
-                    paste_fragment(pil_image, snippet, (x0, y0))
+                    if debug_image:
+                        paste_fragment(pil_image, snippet, (x0, y0))
 
-            if False:
+            if debug_image:
                 savepath = os.path.join(debug_dir, f"{key}_txt_overlay.jpg")
                 pil_image.save(savepath, format="JPEG", subsampling=0, quality=100)
 
