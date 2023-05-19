@@ -94,7 +94,6 @@ def main(
 ):
     loop = marie.helper.get_or_reuse_loop()
     loop.run_until_complete(__main__(yml_config, env, env_file))
-    # asyncio.get_event_loop().run_until_complete(__main__(yml_config, env, env_file))
 
 async def __main__(
     yml_config: str,
