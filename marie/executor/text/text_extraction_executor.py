@@ -154,7 +154,7 @@ class TextExtractionExecutor(Executor):
                 }
 
 
-class ExtractExecutor(Executor):
+class TextExtractionExecutorMock(Executor):
     def __init__(
         self,
         name: str = "",

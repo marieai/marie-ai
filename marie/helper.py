@@ -1022,7 +1022,7 @@ def _update_policy():
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         except ModuleNotFoundError:
             warnings.warn(
-                'Install `uvloop` via `pip install "jina[uvloop]"` for better performance.'
+                'Install `uvloop` via `pip install "marie[uvloop]"` for better performance.'
             )
 
 
@@ -1032,9 +1032,12 @@ def get_or_reuse_loop():
 
     :return: A new eventloop or reuse the current opened eventloop.
     """
+
+    print("get_or_reuse_loop")
     _update_policy()
     try:
         loop = asyncio.get_event_loop()
+        print("loop", loop)
         if loop.is_closed():
             raise RuntimeError
     except RuntimeError:
