@@ -12,21 +12,24 @@ from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import crop_to_content
 from marie.utils.json import store_json_object, load_json_file
 from marie.utils.utils import ensure_exists
+from marie.timer import Timer
 
 
 def process_dir(
         ocr_engine: DefaultOcrEngine,
         image_dir: str,
 ):
-    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
+    import random
+    items = glob.glob(os.path.join(image_dir, "*.*"))
+    random.shuffle(items)
+
+    for idx, img_path in enumerate(items):
         try:
             process_file(ocr_engine, img_path)
         except Exception as e:
             print(e)
             # raise e
 
-
-from marie.timer import Timer
 
 @Timer(text="Process time {:.4f} seconds")
 def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
@@ -73,7 +76,8 @@ if __name__ == "__main__":
 
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
     img_path = "/home/gbugaj/tmp/4007/176073139.tif"
-    img_path = "/home/greg/tmp/s3-data"
+    img_path = "/tmp/s3/incoming"
+    # img_path = "/tmp/s3/incoming/PID_89_6334_0_177354975.tif"
     # img_path = "/home/greg/tmp/s3-data/PID_1012_7808_0_177192249.tif" # failed assertion
 
     # frames = [crop_to_content(frame, True) for frame in frames]

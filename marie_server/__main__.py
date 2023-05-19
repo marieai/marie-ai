@@ -65,6 +65,8 @@ def setup_scheduler(scheduler_config: Dict[str, Any]):
 
             scheduler = PsqlJobScheduler(config=scheduler_config["psql"])
             scheduler.start_schedule()
+    else:
+        logger.warning("No scheduler config found")
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
@@ -92,10 +94,11 @@ def main(
     env: Optional[Dict[str, str]] = None,
     env_file: Optional[str] = None,
 ):
-    loop = marie.helper.get_or_reuse_loop()
-    loop.run_until_complete(__main__(yml_config, env, env_file))
+    print("main*****************")
+    __main__(yml_config, env, env_file)
 
-async def __main__(
+
+def __main__(
     yml_config: str,
     env: Optional[Dict[str, str]] = None,
     env_file: Optional[str] = None,
@@ -175,7 +178,7 @@ async def __main__(
     # setup_storage(config.get("storage", {}))
     setup_scheduler(config.get("scheduler", {}))
 
-    await asyncio.sleep(10)
+    await asyncio.sleep(5)
 
     f = Flow.load_config(
         config,
