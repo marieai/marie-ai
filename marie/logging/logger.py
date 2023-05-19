@@ -11,7 +11,6 @@ from rich.logging import RichHandler as _RichHandler
 
 from marie import check
 from marie.constants import __resources_path__, __uptime__, __windows__
-from marie._core.utils import coerce_valid_log_level
 from marie.enums import LogVerbosity
 from marie.jaml import JAML
 from marie.logging import formatter
@@ -393,6 +392,10 @@ class StructuredLoggerHandler(logging.Handler):
         except Exception as e:
             logging.critical("[%s] Error during logging!", self.__class__.__name__)
             logging.exception(str(e))
+
+
+def coerce_valid_log_level(level):
+    return level
 
 
 def construct_single_handler_logger(name, level, handler):
