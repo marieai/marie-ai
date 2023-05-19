@@ -5,7 +5,7 @@ import sys
 import traceback
 from typing import Dict, Any, Optional
 import torch
-
+from marie import Flow
 from marie import __version__
 import marie.helper
 from marie.logging.predefined import default_logger as logger
@@ -138,8 +138,6 @@ def __main__(
         logging.debug('test')
         Console().print(shutil.get_terminal_size())
 
-    from marie import Flow
-
     PYTHONPATH = os.environ.get("PYTHONPATH", "")
 
     logger.info(f"__model_path__ = {__model_path__}")
@@ -174,24 +172,28 @@ def __main__(
     # Load the config file and setup the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
 
-    # setup_toast_events(config.get("toast", {}))
-    # setup_storage(config.get("storage", {}))
-    setup_scheduler(config.get("scheduler", {}))
-
-    await asyncio.sleep(5)
-
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
+        # include_gateway=False,
+        # noblock_on_start=True,
     )
 
     marie.helper.extend_rest_interface = extend_rest_interface
     filter_endpoint()
 
+    print("Loading flow")
     with f:
+        setup_server(config)
         f.block()
+
+
+def setup_server(config: Dict[str, Any]) -> None:
+    # setup_toast_events(config.get("toast", {}))
+    # setup_storage(config.get("storage", {}))
+    setup_scheduler(config.get("scheduler", {}))
 
 
 def filter_endpoint():
