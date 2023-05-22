@@ -61,9 +61,9 @@ def setup_scheduler(scheduler_config: Dict[str, Any]):
     if "psql" in scheduler_config:
         # check if the scheduler is enabled
         if scheduler_config["psql"]["enabled"]:
-            from marie_server.scheduler import PsqlJobScheduler
+            from marie_server.scheduler import PostgreSQLJobScheduler
 
-            scheduler = PsqlJobScheduler(config=scheduler_config["psql"])
+            scheduler = PostgreSQLJobScheduler(config=scheduler_config["psql"])
             scheduler.start_schedule()
     else:
         logger.warning("No scheduler config found")

@@ -1,1 +1,1 @@
-from .psql import PsqlJobScheduler
+from .psql import PostgreSQLJobScheduler
