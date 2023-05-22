@@ -3,6 +3,12 @@ import sys as _sys
 from pathlib import Path as _Path
 import datetime as _datetime
 
+# Internal kv namespaces
+KV_NAMESPACE_DASHBOARD = b"dashboard"
+KV_NAMESPACE_SESSION = b"session"
+KV_NAMESPACE_TRACING = b"tracing"
+KV_NAMESPACE_JOB = b"job"
+
 __windows__ = _sys.platform == "win32"
 __uptime__ = _datetime.datetime.now().isoformat()
 

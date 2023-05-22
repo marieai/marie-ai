@@ -23,6 +23,7 @@ from marie.types.request.data import DataRequest
 from marie.utils.docs import docs_from_file_specific
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
+from marie_server.job.job_manager import generate_job_id
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI, Request
@@ -53,10 +54,6 @@ def extend_rest_interface(app: "FastAPI") -> "FastAPI":
     extend_rest_interface_overlay(app, client)
 
     return app
-
-
-def generate_job_id() -> str:
-    return str(uuid.uuid4())
 
 
 def parse_response_to_payload(
