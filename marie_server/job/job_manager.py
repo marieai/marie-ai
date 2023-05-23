@@ -5,6 +5,12 @@ from typing import Optional, Dict, Any, Iterator
 from marie.logging.logger import MarieLogger
 from marie_server.job.common import JobInfo, JobStatus, JobInfoStorageClient
 from marie_server.storage.storage_client import StorageArea
+from marie_server.job.scheduling_strategies import (
+    NodeAffinitySchedulingStrategy,
+    SchedulingStrategyT,
+)
+
+ActorHandle = Any
 
 
 def generate_job_id() -> str:
@@ -18,6 +24,76 @@ def generate_job_id() -> str:
     #   Timestamp          Randomness
     #   48bits             80bits
     return str(ULID.from_datetime(datetime.now()))
+
+
+def get_event_logger():
+    # TODO: Implement this
+    return None
+
+
+class JobSupervisor:
+    """
+    Supervise jobs and keep track of their status.
+    """
+
+    DEFAULT_JOB_STOP_WAIT_TIME_S = 3
+
+    def __init__(
+        self,
+        job_id: str,
+        job_info_client: JobInfoStorageClient,
+    ):
+        self._job_id = job_id
+        self._job_info_client = job_info_client
+
+    def ping(self):
+        """Used to check the health of the actor/executor/deployment."""
+        pass
+
+    async def run(
+        self,
+        # Signal actor used in testing to capture PENDING -> RUNNING cases
+        _start_signal_actor: Optional[ActorHandle] = None,
+    ):
+        """
+        Stop and start both happen asynchronously, coordinated by asyncio event
+        and coroutine, respectively.
+
+        1) Sets job status as running
+        2) Pass runtime env and metadata to subprocess as serialized env
+            variables.
+        3) Handle concurrent events of driver execution and
+        """
+        curr_info = await self._job_info_client.get_info(self._job_id)
+        if curr_info is None:
+            raise RuntimeError(f"Status could not be retrieved for job {self._job_id}.")
+        curr_status = curr_info.status
+        curr_message = curr_info.message
+        if curr_status == JobStatus.RUNNING:
+            raise RuntimeError(
+                f"Job {self._job_id} is already in RUNNING state. "
+                f"JobSupervisor.run() should only be called once. "
+            )
+        if curr_status != JobStatus.PENDING:
+            raise RuntimeError(
+                f"Job {self._job_id} is not in PENDING state. "
+                f"Current status is {curr_status} with message {curr_message}."
+            )
+        if _start_signal_actor:
+            # Block in PENDING state until start signal received.
+            await _start_signal_actor.wait.remote()
+
+        driver_agent_http_address = "grpc://127.0.0.1"
+        driver_node_id = "GET_NODE_ID_FROM_CLUSTER"
+
+        await self._job_info_client.put_status(
+            self._job_id,
+            JobStatus.RUNNING,
+            jobinfo_replace_kwargs={
+                "driver_agent_http_address": driver_agent_http_address,
+                "driver_node_id": driver_node_id,
+            },
+        )
 
 
 class JobManager:
@@ -35,7 +111,24 @@ class JobManager:
         # self._log_client = JobLogStorageClient()
         self.monitored_jobs = set()
         self._job_info_client = JobInfoStorageClient(storage)
-        self.monitored_jobs = set()
+
+        try:
+            self.event_logger = get_event_logger()
+        except Exception:
+            self.event_logger = None
+
+    async def _get_scheduling_strategy(
+        self, resources_specified: bool
+    ) -> SchedulingStrategyT:
+        """Get the scheduling strategy for the job.
+        Returns:
+            The scheduling strategy to use for the job.
+        """
+        if resources_specified:
+            return "DEFAULT"
+
+        scheduling_strategy = NodeAffinitySchedulingStrategy()
+        return scheduling_strategy
 
     async def submit_job(
         self,
@@ -44,10 +137,13 @@ class JobManager:
         submission_id: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
         runtime_env: Optional[Dict[str, Any]] = None,
+        _start_signal_actor: Optional[ActorHandle] = None,
     ) -> str:
         """
         Job execution happens asynchronously.
         """
+        if submission_id is None:
+            submission_id = generate_job_id()
 
         self.logger.info(f"Starting job with submission_id: {submission_id}")
         entrypoint_num_cpus = 1
@@ -91,6 +187,11 @@ class JobManager:
                 self.event_logger.info(
                     f"Started a  job {submission_id}.", submission_id=submission_id
                 )
+
+            supervisor = JobSupervisor(
+                job_id=submission_id, job_info_client=self._job_info_client
+            )
+            await supervisor.run(_start_signal_actor=_start_signal_actor)
 
             # Monitor the job in the background so we can detect errors without
             # requiring a client to poll.
