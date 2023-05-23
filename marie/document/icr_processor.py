@@ -105,7 +105,7 @@ class IcrProcessor(BaseHandler):
             lines
         ), "You must provide the same number of lines as boxes."
         encode_fragments = False
-        draw_debug_overlay = False
+        draw_debug_overlay = True
 
         try:
             shape = img.shape
@@ -245,8 +245,8 @@ class IcrProcessor(BaseHandler):
             raise
 
         # this OP is slow, so we only do it if we need to return the overlay image
-        # overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
-        overlay_image = None
+        overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
+        # overlay_image = None
         logger.debug("Box extraction complete")
 
         return result, overlay_image
