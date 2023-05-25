@@ -1,6 +1,7 @@
 import asyncio
 import time
 from typing import Optional, Dict, Any, Iterator
+from uuid_extensions import uuid7, uuid7str
 
 from marie.logging.logger import MarieLogger
 from marie_server.job.common import JobInfo, JobStatus, JobInfoStorageClient
@@ -14,16 +15,9 @@ ActorHandle = Any
 
 
 def generate_job_id() -> str:
-    # https://github.com/mdomke/python-ulid
-    from ulid import ULID
-    from datetime import datetime
-
-    # A ULID is a universally unique lexicographically sortable identifier.
-    #  01AN4Z07BY      79KA1307SR9X4MV3
-    # |----------|    |----------------|
-    #   Timestamp          Randomness
-    #   48bits             80bits
-    return str(ULID.from_datetime(datetime.now()))
+    # A uuidv7 is a universally unique lexicographically sortable identifier
+    # This will be in standard library in Python 3.11
+    return uuid7str()
 
 
 def get_event_logger():

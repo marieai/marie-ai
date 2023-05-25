@@ -5,7 +5,7 @@ from typing import Any
 
 
 def wait_for_condition(
-    condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
+        condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
 ):
     """Wait until a condition is met or time out with an exception.
 
@@ -33,7 +33,7 @@ def wait_for_condition(
 
 
 async def async_wait_for_condition(
-    condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
+        condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
 ):
     """Wait until a condition is met or time out with an exception.
 
@@ -61,7 +61,7 @@ async def async_wait_for_condition(
 
 
 async def async_wait_for_condition_async_predicate(
-    async_condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
+        async_condition_predictor, timeout=10, retry_interval_ms=100, **kwargs: Any
 ):
     """Wait until a condition is met or time out with an exception.
 
@@ -86,3 +86,8 @@ async def async_wait_for_condition_async_predicate(
     if last_ex is not None:
         message += f" Last exception: {last_ex}"
     raise RuntimeError(message)
+
+
+async def async_delay(coro, seconds):
+    await asyncio.sleep(seconds)
+    return await coro
