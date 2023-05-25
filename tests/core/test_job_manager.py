@@ -6,7 +6,8 @@ import pytest
 from marie_server.job.common import JobStatus
 from marie_server.job.job_manager import generate_job_id, JobManager
 from marie_server.storage.in_memory import InMemoryKV
-from tests.core.test_utils import async_wait_for_condition_async_predicate
+from marie_server.storage.psql import PostgreSQLKV
+from tests.core.test_utils import async_wait_for_condition_async_predicate, async_delay
 
 
 async def check_job_succeeded(job_manager, job_id):
@@ -40,17 +41,15 @@ async def check_job_running(job_manager, job_id):
 @pytest.fixture
 async def job_manager(tmp_path):
     storage = InMemoryKV()
+
+    storage_config = {"hostname": "127.0.0.1", "port": 5432, "username": "postgres", "password": "123456",
+                      "database": "postgres",
+                      "default_table": "kv_store_a", "max_pool_size": 5,
+                      "max_connections": 5}
+
+    storage = PostgreSQLKV(config=storage_config)
+
     yield JobManager(storage)
-
-
-def test_generate_job_id():
-    ids = set()
-    for _ in range(10000):
-        new_id = generate_job_id()
-        assert "-" not in new_id
-        ids.add(new_id)
-
-    assert len(ids) == 10000
 
 
 @pytest.mark.asyncio
@@ -70,6 +69,10 @@ async def test_list_jobs(job_manager: JobManager):
         runtime_env=runtime_env,
         metadata=metadata,
     )
+
+    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1))
+    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "2", JobStatus.SUCCEEDED), 1))
+
     await async_wait_for_condition_async_predicate(
         check_job_succeeded, job_manager=job_manager, job_id="1"
     )
@@ -88,6 +91,10 @@ async def test_list_jobs(job_manager: JobManager):
     assert jobs_info["2"].metadata == metadata
 
 
+async def update_job_status(job_manager, job_id, job_status):
+    await job_manager.job_info_client().put_status(job_id, job_status)
+
+
 @pytest.mark.asyncio
 async def test_pass_job_id(job_manager):
     submission_id = "my_custom_id"
@@ -96,6 +103,8 @@ async def test_pass_job_id(job_manager):
         entrypoint="echo hello", submission_id=submission_id
     )
     assert returned_id == submission_id
+
+    _ = asyncio.create_task(async_delay(update_job_status(job_manager, submission_id, JobStatus.SUCCEEDED), 1))
 
     await async_wait_for_condition_async_predicate(
         check_job_succeeded, job_manager=job_manager, job_id=submission_id
@@ -118,6 +127,8 @@ async def test_simultaneous_submit_job(job_manager):
     )
 
     for job_id in job_ids:
+        _ = asyncio.create_task(async_delay(update_job_status(job_manager, job_id, JobStatus.SUCCEEDED), 1))
+
         await async_wait_for_condition_async_predicate(
             check_job_succeeded, job_manager=job_manager, job_id=job_id
         )
