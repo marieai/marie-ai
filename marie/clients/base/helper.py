@@ -336,13 +336,15 @@ class WebsocketClientlet(AioHttpClientlet):
         return self.websocket.close_code if self.websocket else None
 
 
-def handle_response_status(http_status: int, response_string: str, url: str):
+def handle_response_status(
+    http_status: int, response_content: Union[Dict, str], url: str
+):
     """
     Raise BadClient exception for HTTP 404 status.
     Raise ConnectionError for HTTP status codes 504, 504 if header information is available.
     Raise ValueError for everything other non 200 status code.
     :param http_status: http status code
-    :param response_string: response string
+    :param response_content: response content as json dict or string
     :param url: request url string
     """
     if http_status == status.HTTP_404_NOT_FOUND:
@@ -352,15 +354,16 @@ def handle_response_status(http_status: int, response_string: str, url: str):
         or http_status == status.HTTP_504_GATEWAY_TIMEOUT
     ):
         if (
-            'header' in response_string
-            and 'status' in response_string['header']
-            and 'description' in response_string['header']['status']
+            isinstance(response_content, dict)
+            and 'header' in response_content
+            and 'status' in response_content['header']
+            and 'description' in response_content['header']['status']
         ):
-            raise ConnectionError(response_string['header']['status']['description'])
+            raise ConnectionError(response_content['header']['status']['description'])
         else:
-            raise ValueError(response_string)
+            raise ValueError(response_content)
     elif (
         http_status < status.HTTP_200_OK
         or http_status > status.HTTP_300_MULTIPLE_CHOICES
     ):  # failure codes
-        raise ValueError(response_string)
+        raise ValueError(response_content)
