@@ -97,8 +97,8 @@ class JobSupervisor:
         )
 
         #  GatewayStreamer should be started here
-        streamer = GatewayStreamer.get_streamer()
-        streamer.stream(self._job_id)
+        # streamer = GatewayStreamer.get_streamer()
+        # streamer.stream(self._job_id)
 
 
 class JobManager:
