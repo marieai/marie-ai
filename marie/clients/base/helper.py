@@ -1,9 +1,10 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union, Dict
 
 import aiohttp
 from aiohttp import WSMsgType
+from aiohttp.payload import BytesPayload
 from starlette import status
 
 from marie.clients.base import retry
@@ -13,11 +14,30 @@ from marie.importer import ImportExtensions
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
 from marie.types.request.status import StatusMessage
+from marie._docarray import docarray_v2
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
 
     from marie.logging.logger import MarieLogger
+
+if docarray_v2:
+    from docarray.base_doc.io.json import orjson_dumps
+
+    class JinaJsonPayload(BytesPayload):
+        def __init__(
+            self,
+            value,
+            *args,
+            **kwargs,
+        ) -> None:
+            super().__init__(
+                orjson_dumps(value),
+                content_type="application/json",
+                encoding="utf-8",
+                *args,
+                **kwargs,
+            )
 
 
 class AioHttpClientlet(ABC):
@@ -63,6 +83,9 @@ class AioHttpClientlet(ABC):
             self._session_kwargs['auth'] = kwargs.get('auth')
         if kwargs.get('cookies', None):
             self._session_kwargs['cookies'] = kwargs.get('cookies')
+        if kwargs.get('timeout', None):
+            timeout = aiohttp.ClientTimeout(total=kwargs.get('timeout'))
+            self._session_kwargs['timeout'] = timeout
         self.max_attempts = max_attempts
         self.initial_backoff = initial_backoff
         self.max_backoff = max_backoff
@@ -138,10 +161,18 @@ class HTTPClientlet(AioHttpClientlet):
             req_dict['target_executor'] = req_dict['header']['target_executor']
         for attempt in range(1, self.max_attempts + 1):
             try:
-                response = await self.session.post(
-                    url=self.url, json=req_dict
-                ).__aenter__()
-                r_str = await response.json()
+                request_kwargs = {'url': self.url}
+                if not docarray_v2:
+                    request_kwargs['json'] = req_dict
+                else:
+                    from docarray.base_doc.io.json import orjson_dumps
+
+                    request_kwargs['data'] = JinaJsonPayload(value=req_dict)
+                response = await self.session.post(**request_kwargs).__aenter__()
+                try:
+                    r_str = await response.json()
+                except aiohttp.ContentTypeError:
+                    r_str = await response.text()
                 handle_response_status(response.status, r_str, self.url)
                 return response
             except (ValueError, ConnectionError, BadClient, aiohttp.ClientError) as err:
