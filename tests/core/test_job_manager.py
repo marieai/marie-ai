@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from marie_server.job.common import JobStatus
-from marie_server.job.job_manager import generate_job_id, JobManager
+from marie_server.job.job_manager import JobManager
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
 from tests.core.test_utils import async_wait_for_condition_async_predicate, async_delay
