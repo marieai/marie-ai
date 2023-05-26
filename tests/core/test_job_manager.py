@@ -48,7 +48,6 @@ async def job_manager(tmp_path):
                       "max_connections": 5}
 
     storage = PostgreSQLKV(config=storage_config)
-
     yield JobManager(storage)
 
 

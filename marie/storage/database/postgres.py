@@ -87,7 +87,7 @@ class PostgresqlMixin:
             (self.table,),
         ).fetchall()[0][0]
 
-    def _execute_sql_gracefully(self, statement, data=tuple()):
+    def _execute_sql_gracefully(self, statement, data=tuple()) -> psycopg2.extras.DictCursor:
         try:
             cursor = self.connection.cursor()
             if data:

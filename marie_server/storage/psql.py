@@ -11,6 +11,12 @@ from datetime import datetime
 
 
 class PostgreSQLKV(PostgresqlMixin, StorageArea):
+    """
+    PostgreSQLKV is a key-value store backed by PostgreSQL.
+    Provides a simple key-value interface for storing and retrieving data from a PostgreSQL database utilizing the
+    JSONB data type.
+    """
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__()
         self.logger = MarieLogger("PostgreSQLKV")
@@ -24,24 +30,36 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         self._execute_sql_gracefully(
             f"""
              CREATE TABLE IF NOT EXISTS {self.table} (
-                 id UUID PRIMARY KEY,
+                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                  namespace VARCHAR(1024) NULL,
                  key VARCHAR(1024) NOT NULL,                 
                  value JSONB NULL,
-                 shard int,
-                 created_at timestamp with time zone default current_timestamp,
-                 updated_at timestamp with time zone default current_timestamp,
+                 shard int DEFAULT 0,
+                 created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+                 updated_at timestamp with time zone DEFAULT NULL,
                  is_deleted BOOL DEFAULT FALSE
              );
---              CREATE INDEX index_queue_on_scheduled_for ON queue (scheduled_for);
---              CREATE INDEX index_queue_on_status ON queue (status);
+             CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
              """,
         )
 
     async def internal_kv_get(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
     ) -> Optional[Any]:
-        raise NotImplementedError
+        if key is None:
+            raise ValueError("key cannot be None")
+        if namespace is None:
+            namespace = b"DEFAULT"
+
+        query = f"SELECT key, value FROM {self.table} WHERE key = '{key.decode()}'  AND namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+        cursor = self._execute_sql_gracefully(query, data=())
+
+        result = cursor.fetchone()
+        print("result", result)
+        if result and (result[0] is not None):
+            return result[1]
+
+        return None
 
     async def internal_kv_multi_get(
         self,
@@ -59,8 +77,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         namespace: Optional[bytes],
         timeout: Optional[float] = None,
     ) -> int:
-
-        self.logger.debug(
+        self.logger.info(
             f"internal_kv_put: {key!r}, {namespace!r}, {overwrite}, {value!r}"
         )
         if key is None:
@@ -69,20 +86,24 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             namespace = b"DEFAULT"
 
         uid = uuid7str()
-        query = f"""
-            INSERT INTO {self.table} (id, namespace, key, value, shard, created_at, updated_at) 
-            VALUES (
-                 '{uid}', 
-                 '{namespace.decode()}',
-                 '{key.decode()}', 
-                 '{value.decode()}',
-                 1, 
-                 current_timestamp, 
-                 current_timestamp
-            )
-            """
+        shard = 0
 
-        self._execute_sql_gracefully(query)
+        insert_q = f"""
+            INSERT INTO {self.table} (id, namespace, key, value, shard, created_at, updated_at) 
+            VALUES ('{uid}', '{namespace.decode()}', '{key.decode()}', '{value.decode()}', {shard},current_timestamp,current_timestamp )
+        """
+
+        upsert_q = f"""
+            ON CONFLICT (key, namespace) 
+            DO 
+            UPDATE SET value = '{value.decode()}', updated_at = current_timestamp
+        """
+
+        query = insert_q + upsert_q if overwrite else insert_q
+        cursor = self._execute_sql_gracefully(query)
+        if cursor is None:
+            return 0
+        return cursor.rowcount
 
     async def internal_kv_del(
         self,

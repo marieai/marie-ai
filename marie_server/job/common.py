@@ -202,8 +202,10 @@ class JobInfoStorageClient:
         )
         if serialized_info is None:
             return None
-        else:
+        elif isinstance(serialized_info, bytes):
             return JobInfo.from_json(json.loads(serialized_info))
+        elif isinstance(serialized_info, dict):
+            return JobInfo.from_json(serialized_info)
 
     async def delete_info(self, job_id: str, timeout: int = 30):
         await self.storage.internal_kv_del(
