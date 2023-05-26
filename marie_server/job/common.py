@@ -257,7 +257,8 @@ class JobInfoStorageClient:
             timeout=timeout,
         )
         job_ids_with_prefixes = [
-            job_id.decode() for job_id in raw_job_ids_with_prefixes
+            job_id.decode() if isinstance(job_id, bytes) else job_id
+            for job_id in raw_job_ids_with_prefixes
         ]
         job_ids = []
         for job_id_with_prefix in job_ids_with_prefixes:

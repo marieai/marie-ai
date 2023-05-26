@@ -47,7 +47,7 @@ async def job_manager(tmp_path):
                       "default_table": "kv_store_a", "max_pool_size": 5,
                       "max_connections": 5}
 
-    storage = PostgreSQLKV(config=storage_config)
+    storage = PostgreSQLKV(config=storage_config, reset=True)
     yield JobManager(storage)
 
 
@@ -131,6 +131,27 @@ async def test_simultaneous_submit_job(job_manager):
         await async_wait_for_condition_async_predicate(
             check_job_succeeded, job_manager=job_manager, job_id=job_id
         )
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_with_same_id(job_manager):
+    """Test that we can submit multiple jobs at once with the same id.
+
+    The second job should raise a friendly error.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        await asyncio.gather(
+            job_manager.submit_job(entrypoint="echo hello", submission_id="1"),
+            job_manager.submit_job(entrypoint="echo hello", submission_id="1"),
+        )
+    assert "Job with submission_id 1 already exists" in str(excinfo.value)
+
+    # Check that the (first) job can still succeed.
+    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1))
+
+    await async_wait_for_condition_async_predicate(
+        check_job_succeeded, job_manager=job_manager, job_id="1"
+    )
 
 
 if __name__ == "__main__":

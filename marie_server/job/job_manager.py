@@ -1,9 +1,12 @@
 import asyncio
+import os
 import time
 from typing import Optional, Dict, Any, Iterator
 from uuid_extensions import uuid7, uuid7str
 
+from marie._core.utils import run_background_task
 from marie.logging.logger import MarieLogger
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie_server.job.common import JobInfo, JobStatus, JobInfoStorageClient
 from marie_server.storage.storage_client import StorageArea
 from marie_server.job.scheduling_strategies import (
@@ -12,6 +15,10 @@ from marie_server.job.scheduling_strategies import (
 )
 
 ActorHandle = Any
+
+# The max time to wait for the JobSupervisor to start before failing the job.
+DEFAULT_JOB_START_TIMEOUT_SECONDS = 60 * 15
+JOB_START_TIMEOUT_SECONDS_ENV_VAR = "JOB_START_TIMEOUT_SECONDS"
 
 
 def generate_job_id() -> str:
@@ -89,6 +96,10 @@ class JobSupervisor:
             },
         )
 
+        #  GatewayStreamer should be started here
+        streamer = GatewayStreamer.get_streamer()
+        streamer.stream(self._job_id)
+
 
 class JobManager:
     """Provide python APIs for job submission and management.
@@ -110,6 +121,56 @@ class JobManager:
             self.event_logger = get_event_logger()
         except Exception:
             self.event_logger = None
+
+        run_background_task(self._recover_running_jobs())
+
+    async def _recover_running_jobs(self):
+        """Recovers all running jobs from the status client.
+
+        For each job, we will spawn a coroutine to monitor it.
+        Each will be added to self._running_jobs and reconciled.
+        """
+        self.logger.debug("Recovering running jobs.")
+        all_jobs = await self._job_info_client.get_all_jobs()
+        for job_id, job_info in all_jobs.items():
+            if not job_info.status.is_terminal():
+                run_background_task(self._monitor_job(job_id))
+
+    async def _monitor_job(
+        self, job_id: str, job_supervisor: Optional[ActorHandle] = None
+    ):
+        """Monitors the specified job until it enters a terminal state.
+
+        This is necessary because we need to handle the case where the
+        JobSupervisor dies unexpectedly.
+        """
+        self.logger.info(f"Monitoring job : {job_id}.")
+        if job_id in self.monitored_jobs:
+            self.logger.debug(f"Job {job_id} is already being monitored.")
+            return
+
+        self.monitored_jobs.add(job_id)
+        try:
+            await self._monitor_job_internal(job_id, job_supervisor)
+        finally:
+            self.monitored_jobs.remove(job_id)
+
+    async def _monitor_job_internal(
+        self, job_id: str, job_supervisor: Optional[ActorHandle] = None
+    ):
+        """Monitors the specified job until it enters a terminal state.
+        @param job_id: The id of the job to monitor.
+        @param job_supervisor:
+        """
+        self.logger.info(f"Monitoring job internal : {job_id}.")
+        timeout = float(
+            os.environ.get(
+                JOB_START_TIMEOUT_SECONDS_ENV_VAR,
+                DEFAULT_JOB_START_TIMEOUT_SECONDS,
+            )
+        )
+
+        is_alive = True
 
     async def _get_scheduling_strategy(
         self, resources_specified: bool
@@ -189,9 +250,9 @@ class JobManager:
 
             # Monitor the job in the background so we can detect errors without
             # requiring a client to poll.
-            # run_background_task(
-            #     self._monitor_job(submission_id, job_supervisor=supervisor)
-            # )
+            run_background_task(
+                self._monitor_job(submission_id, job_supervisor=supervisor)
+            )
         except Exception as e:
             await self._job_info_client.put_status(
                 submission_id,

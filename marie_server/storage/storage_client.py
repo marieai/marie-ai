@@ -85,13 +85,20 @@ class StorageArea(abc.ABC):
     @abc.abstractmethod
     async def internal_kv_keys(
         self, prefix: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
-    ) -> List[bytes]:
+    ) -> List[bytes | str]:
         """
         Returns a list of keys in the internal key-value store.
         :param prefix: the prefix to filter on
         :param namespace: the namespace to retrieve the key from
         :param timeout: the timeout in seconds
         :return: a list of keys
+        """
+
+    @abc.abstractmethod
+    def internal_kv_reset(self) -> None:
+        """
+        Resets the internal key-value store.
+        This is useful for testing purposes and should not be used in production as it is a destructive operation.
         """
 
     @abc.abstractmethod

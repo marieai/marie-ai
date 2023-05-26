@@ -92,13 +92,17 @@ class InMemoryKV(StorageArea):
 
     async def internal_kv_keys(
         self, prefix: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
-    ) -> List[bytes]:
+    ) -> List[bytes | str]:
         self.logger.debug(f"internal_kv_keys: {prefix!r}, {namespace!r}")
         if namespace is None:
             namespace = b"DEFAULT"
         if namespace not in self.kv_store:
             return []
         return [k for k in self.kv_store[namespace].keys() if k.startswith(prefix)]
+
+    def internal_kv_reset(self) -> None:
+        self.logger.debug(f"internal_kv_reset")
+        self.kv_store = {}
 
     def debug_info(self) -> str:
         return f"InMemoryKV: {self.kv_store}"

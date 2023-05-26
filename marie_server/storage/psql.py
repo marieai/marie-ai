@@ -1,13 +1,11 @@
 from typing import Dict, Any, Optional, List
 
+import psycopg2
 from uuid_extensions import uuid7str
 
 from marie.logging.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
-from marie.utils import json
-from marie.utils.json import to_json
 from marie_server.storage.storage_client import StorageArea
-from datetime import datetime
 
 
 class PostgreSQLKV(PostgresqlMixin, StorageArea):
@@ -17,12 +15,16 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
     JSONB data type.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], reset=True):
         super().__init__()
         self.logger = MarieLogger("PostgreSQLKV")
         print("config", config)
         self.running = False
-        self._setup_storage(config, create_table_callback=self.create_table_callback)
+        self._setup_storage(
+            config,
+            create_table_callback=self.create_table_callback,
+            reset_table_callback=self.internal_kv_reset if reset else None,
+        )
 
     def create_table_callback(self, table_name: str):
         self.logger.info(f"Creating table : {table_name}")
@@ -55,10 +57,8 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         cursor = self._execute_sql_gracefully(query, data=())
 
         result = cursor.fetchone()
-        print("result", result)
         if result and (result[0] is not None):
             return result[1]
-
         return None
 
     async def internal_kv_multi_get(
@@ -121,8 +121,24 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
 
     async def internal_kv_keys(
         self, prefix: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
-    ) -> List[bytes]:
-        raise NotImplementedError
+    ) -> List[bytes | str]:
+        if namespace is None:
+            namespace = b"DEFAULT"
+        result = []
+        with self:
+            try:
+                query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
+                for record in self._execute_sql_gracefully(query, data=()):
+                    print(result)
+                    result.append(record[0])
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error executing sql statement: {error}")
+        return result
+
+    def internal_kv_reset(self) -> None:
+        self.logger.info(f"internal_kv_reset : {self.table}")
+        query = f"DROP TABLE IF EXISTS {self.table}"
+        self._execute_sql_gracefully(query)
 
     def debug_info(self) -> str:
         return "PostgreSQLKV"

@@ -12,7 +12,16 @@ class PostgresqlMixin:
 
     provider = 'postgres'
 
-    def _setup_storage(self, config: Dict[str, Any], create_table_callback: Optional[Callable] = None) -> None:
+    def _setup_storage(self, config: Dict[str, Any], create_table_callback: Optional[Callable] = None,
+                       reset_table_callback: Optional[Callable] = None) -> None:
+        """
+        Setup PostgreSQL connection pool.
+
+        @param config:
+        @param create_table_callback: Create table if it doesn't exist.
+        @param reset_table_callback:  Reset table if it exists.
+        @return:
+        """
         try:
             hostname = config["hostname"]
             port = int(config["port"])
@@ -34,7 +43,7 @@ class PostgresqlMixin:
                 host=hostname,
                 port=port,
             )
-            self._init_table(create_table_callback)
+            self._init_table(create_table_callback, reset_table_callback)
 
         except Exception as e:
             raise BadConfigSource(
@@ -61,11 +70,17 @@ class PostgresqlMixin:
         connection.autocommit = False
         return connection
 
-    def _init_table(self, create_table_callback: Optional[Callable] = None) -> None:
+    def _init_table(self, create_table_callback: Optional[Callable] = None,
+                    reset_table_callback: Optional[Callable] = None) -> None:
         """
         Use table if exists or create one if it doesn't.
         """
         with self:
+
+            if reset_table_callback:
+                self.logger.info(f"Resetting table : {self.table}")
+                reset_table_callback()
+
             if self._table_exists():
                 self.logger.info(f"Using existing table : {self.table}")
             else:
@@ -87,9 +102,16 @@ class PostgresqlMixin:
             (self.table,),
         ).fetchall()[0][0]
 
-    def _execute_sql_gracefully(self, statement, data=tuple()) -> psycopg2.extras.DictCursor:
+    def _execute_sql_gracefully(self, statement, data=tuple(), *,
+                                named_cursor_name: Optional[str] = None,
+                                itersize: Optional[int] = 10000) -> psycopg2.extras.DictCursor:
         try:
-            cursor = self.connection.cursor()
+            if named_cursor_name:
+                cursor = self.connection.cursor(named_cursor_name)
+                cursor.itersize = itersize
+            else:
+                cursor = self.connection.cursor()
+
             if data:
                 cursor.execute(statement, data)
             else:
