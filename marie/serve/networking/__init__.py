@@ -339,9 +339,17 @@ class GrpcConnectionPool:
         # if an Executor is down behind an API gateway, grpc.StatusCode.NOT_FOUND is returned
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
-        self._logger.debug(
-            f'GRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
-        )
+        if (
+            error.code() == grpc.StatusCode.UNAVAILABLE
+            and 'not the leader' in error.details()
+        ):
+            self._logger.debug(
+                f'RAFT node of {current_deployment} is not the leader. Trying next replica, if available.'
+            )
+        else:
+            self._logger.debug(
+                f'gRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
+            )
         errors_to_retry = [
             grpc.StatusCode.UNAVAILABLE,
             grpc.StatusCode.DEADLINE_EXCEEDED,
@@ -357,7 +365,7 @@ class GrpcConnectionPool:
             return error
         elif error.code() in errors_to_retry and retry_i >= total_num_tries - 1:
             self._logger.debug(
-                f'GRPC call for {current_deployment} failed, retries exhausted'
+                f'gRPC call for {current_deployment} failed, retries exhausted'
             )
             from marie.excepts import InternalNetworkError
 
@@ -375,10 +383,18 @@ class GrpcConnectionPool:
                 details=error.details(),
             )
         else:
-            self._logger.debug(
-                f'GRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
-                f' Trying next replica, if available.'
-            )
+            if (
+                error.code() == grpc.StatusCode.UNAVAILABLE
+                and 'not the leader' in error.details()
+            ):
+                self._logger.debug(
+                    f'RAFT node of {current_deployment} is not the leader. Trying next replica, if available.'
+                )
+            else:
+                self._logger.debug(
+                    f'gRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
+                    f' Trying next replica, if available.'
+                )
             return None
 
     def _send_requests(
@@ -402,6 +418,7 @@ class GrpcConnectionPool:
 
         async def task_wrapper():
             tried_addresses = set()
+            num_replicas = len(connections.get_all_connections())
             if retries is None or retries < 0:
                 total_num_tries = (
                     max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
@@ -410,9 +427,18 @@ class GrpcConnectionPool:
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                current_connection = await connections.get_next_connection(
-                    num_retries=total_num_tries
-                )
+                current_connection = None
+                while (
+                    current_connection is None
+                    or current_connection.address in tried_addresses
+                ):
+                    current_connection = await connections.get_next_connection(
+                        num_retries=total_num_tries
+                    )
+                    # if you request to retry more than the amount of replicas, we just skip, we could balance the
+                    # retries in the future
+                    if len(tried_addresses) >= num_replicas:
+                        break
                 tried_addresses.add(current_connection.address)
                 try:
                     return await current_connection.send_requests(

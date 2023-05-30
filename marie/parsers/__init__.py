@@ -201,7 +201,7 @@ def get_main_parser():
         sp.add_parser(
             'executor',
             help='Start an Executor',
-            description='Start an Executor. Executor is how Jina processes Document.',
+            description='Start an Executor. Jina uses Executors process Documents',
             formatter_class=_chf,
         )
     )
@@ -209,7 +209,7 @@ def get_main_parser():
     set_flow_parser(
         sp.add_parser(
             'flow',
-            description='Start a Flow. Flow is how Jina streamlines and distributes Executors.',
+            description='Start a Flow. Jina uses Flows to streamline and distribute Executors',
             help='Start a Flow',
             formatter_class=_chf,
         )

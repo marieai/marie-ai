@@ -74,7 +74,7 @@ elif _sys.version_info >= (3, 8, 0) and _platform.system() == "Darwin":
 # do not change this line manually
 # this is managed by git tag and updated on every release
 # NOTE: this represents the NEXT release version
-__version__ = '3.0.05'
+__version__ = '3.1.0'
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
@@ -135,11 +135,14 @@ def _set_nofile(nofile_atleast=4096):
 
 _set_nofile()
 
+# ONLY FIRST CLASS CITIZENS ARE ALLOWED HERE, namely Document, Executor Flow
+
 # Document
-from docarray import Document, DocumentArray
+from marie._docarray import Document, DocumentArray
 
 # Client
 from marie.clients import Client
+from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.flow.asyncio import AsyncFlow
 
 # Flow

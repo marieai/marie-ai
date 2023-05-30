@@ -64,7 +64,6 @@ class AsyncRequestsIterator:
 
     async def __anext__(self):
         if isinstance(self.iterator, Iterator):
-
             """
             An `Iterator` indicates "blocking" code, which might block all tasks in the event loop.
             Hence we iterate in the default executor provided by asyncio.
