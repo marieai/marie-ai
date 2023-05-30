@@ -135,6 +135,7 @@ boto3:                       standard,core
 sqlalchemy:                   standard,core
 pendulum:                     standard,core
 uuid7:                        standard,core
+orjson:                        standard,core
 
 # this version is required for the current version of detectron2
 omegaconf==2.3.0:             standard,core

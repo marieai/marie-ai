@@ -6,7 +6,7 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: 172.16.11.163
       port: 5432
       username: postgres
       password: 123456
@@ -83,12 +83,7 @@ storage:
     default_table: store_metadata
     enabled : False
 
-# Job Queue scheduler
-scheduler:
-  psql:
-    <<: *psql_conf_shared
-    default_table: job_queue
-    enabled : True
+
 
 # FLOW / GATEWAY configuration
 
@@ -136,13 +131,13 @@ with:
 executors:
   - name: extract_t
     uses:
-      jtype: TextExtractionExecutorMock
+      jtype: TextExtractionExecutor
       metas:
         py_modules:
           - marie.executor.text
     timeout_ready: 3000000
-    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
+    #    replicas: 1
+    replicas: ${{ CONTEXT.gpu_device_count }}
     env :
       CUDA_VISIBLE_DEVICES: RR
 
@@ -176,4 +171,3 @@ executors:
 #    timeout_ready: 3000000
 #    replicas: 1
 #
-

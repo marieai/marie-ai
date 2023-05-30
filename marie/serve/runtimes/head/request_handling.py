@@ -4,7 +4,7 @@ import json
 import os
 import threading
 from collections import defaultdict
-from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Tuple, Any
 
 import grpc
 
@@ -16,6 +16,90 @@ from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.monitoring import MonitoringRequestMixin
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types.request.data import DataRequest, Response
+from marie._docarray import docarray_v2
+
+if docarray_v2:
+    from docarray.base_doc import AnyDoc
+    from jina._docarray import docarray_v2
+    from docarray import DocList, BaseDoc
+
+    def _create_pydantic_model_from_schema(
+        schema: Dict[str, any], model_name: str
+    ) -> type:
+        from pydantic import create_model
+
+        fields = {}
+        for field_name, field_schema in schema.get('properties', {}).items():
+            field_type = field_schema.get('type', None)
+            if field_type == 'string':
+                field_type = str
+            elif field_type == 'integer':
+                field_type = int
+            elif field_type == 'number':
+                field_type = float
+            elif field_type == 'boolean':
+                field_type = bool
+            elif field_type == 'array':
+                field_item_type = field_schema.get('items', {}).get('type', None)
+                if field_item_type == 'string':
+                    field_type = List[str]
+                elif field_item_type == 'integer':
+                    field_type = List[int]
+                elif field_item_type == 'number':
+                    field_type = List[float]
+                elif field_item_type == 'boolean':
+                    field_type = List[bool]
+                elif field_item_type == 'object' or field_item_type is None:
+                    # Check if array items are references to definitions
+                    items_ref = field_schema.get('items', {}).get('$ref')
+                    if items_ref:
+                        ref_name = items_ref.split('/')[-1]
+                        field_type = DocList[
+                            _create_pydantic_model_from_schema(
+                                schema['definitions'][ref_name], ref_name
+                            )
+                        ]
+                    else:
+                        field_type = DocList[
+                            _create_pydantic_model_from_schema(
+                                field_schema.get('items', {}), field_name
+                            )
+                        ]
+                else:
+                    raise ValueError(
+                        f"Unknown array item type: {field_item_type} for field_name {field_name}"
+                    )
+            elif field_type == 'object' or field_type is None:
+                # Check if object is a reference to definitions
+                if 'additionalProperties' in field_schema:
+                    additional_props = field_schema['additionalProperties']
+                    if additional_props.get('type') == 'object':
+                        field_type = Dict[
+                            str,
+                            _create_pydantic_model_from_schema(
+                                additional_props, field_name
+                            ),
+                        ]
+                    else:
+                        field_type = Dict[str, Any]
+                else:
+                    obj_ref = field_schema.get('$ref')
+                    if obj_ref:
+                        ref_name = obj_ref.split('/')[-1]
+                        field_type = _create_pydantic_model_from_schema(
+                            schema['definitions'][ref_name], ref_name
+                        )
+                    else:
+                        field_type = _create_pydantic_model_from_schema(
+                            field_schema, field_name
+                        )
+            else:
+                raise ValueError(
+                    f"Unknown field type: {field_type} for field_name {field_name}"
+                )
+            fields[field_name] = (field_type, field_schema.get('description'))
+        return create_model(model_name, __base__=BaseDoc, **fields)
+
 
 if TYPE_CHECKING:  # pragma: no cover
     from prometheus_client import CollectorRegistry
@@ -140,6 +224,18 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 deployment=self._deployment_name,
             )
         )
+        self._pydantic_models_by_endpoint = None
+        self.endpoints_discovery_stop_event = threading.Event()
+        self.endpoints_discovery_task = None
+        if docarray_v2:
+            self.endpoints_discovery_task = asyncio.create_task(
+                self._get_endpoints_from_workers(
+                    connection_pool=self.connection_pool,
+                    name=self._deployment_name,
+                    retries=self._retries,
+                    stop_event=self.endpoints_discovery_stop_event,
+                )
+            )
 
     def _default_polling_dict(self, default_polling):
         return defaultdict(
@@ -215,9 +311,19 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         reduce,
         polling_type,
         deployment_name,
+        endpoint,
     ) -> Tuple['DataRequest', Dict]:
         for req in requests:
+            if docarray_v2:
+                req.document_array_cls = DocList[AnyDoc]
             self._update_start_request_metrics(req)
+
+        if self._pydantic_models_by_endpoint is None and docarray_v2:
+            try:
+                await self.endpoints_discovery_task
+            except:
+                raise
+
         WorkerRequestHandler.merge_routes(requests)
 
         uses_before_metadata = None
@@ -260,6 +366,16 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         worker_results, metadata = zip(*worker_results)
 
         response_request = worker_results[0]
+        found = False
+        if docarray_v2:
+            model = self._pydantic_models_by_endpoint[endpoint]['output']
+        for i, worker_result in enumerate(worker_results):
+            if docarray_v2:
+                worker_result.document_array_cls = DocList[model]
+            if not found and worker_result.status.code == jina_pb2.StatusProto.SUCCESS:
+                response_request = worker_result
+                found = True
+
         uses_after_metadata = None
         if uses_after_address:
             result = await connection_pool.send_requests_once(
@@ -294,6 +410,57 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
         return response_request, merged_metadata
 
+    def _get_endpoints_from_workers(
+        self, connection_pool: GrpcConnectionPool, name: str, retries: int, stop_event
+    ):
+        from google.protobuf import json_format
+
+        async def task():
+            self.logger.debug(
+                f'starting get endpoints from workers task for deployment {name}'
+            )
+            while not stop_event.is_set():
+                try:
+                    endpoints = await connection_pool.send_discover_endpoint(
+                        name, retries=retries, shard_id=0, head=False
+                    )
+                    if endpoints is not None:
+                        endp, _ = endpoints
+                        schemas = json_format.MessageToDict(endp.schemas)
+                        self._pydantic_models_by_endpoint = {}
+                        models_created_by_name = {}
+                        for endpoint, inner_dict in schemas.items():
+                            input_model_name = inner_dict['input']['name']
+                            input_model_schema = inner_dict['input']['model']
+                            output_model_name = inner_dict['output']['name']
+                            output_model_schema = inner_dict['output']['model']
+                            if input_model_name not in models_created_by_name:
+                                input_model = _create_pydantic_model_from_schema(
+                                    input_model_schema, input_model_name
+                                )
+                                models_created_by_name[input_model_name] = input_model
+                            if output_model_name not in models_created_by_name:
+                                output_model = _create_pydantic_model_from_schema(
+                                    output_model_schema, output_model_name
+                                )
+                                models_created_by_name[output_model_name] = output_model
+
+                            self._pydantic_models_by_endpoint[endpoint] = {
+                                'input': models_created_by_name[input_model_name],
+                                'output': models_created_by_name[output_model_name],
+                            }
+                        stop_event.set()
+                        return
+                    else:
+                        await asyncio.sleep(0.1)
+                except Exception as exc:
+                    self.logger.debug(
+                        f'Exception raised from sending discover endpoint {exc}'
+                    )
+                    await asyncio.sleep(0.1)
+
+        return task()
+
     async def warmup(
         self,
         connection_pool: GrpcConnectionPool,
@@ -327,9 +494,26 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 self.logger.debug(f'exception during warmup task cancellation: {ex}')
                 pass
 
+    def cancel_endpoint_discovery_from_workers_task(self):
+        """Cancel endpoint_discovery_from_worker task if exists and is not completed. Cancellation is required if the Flow is being terminated before the
+        task is successful or hasn't reached the max timeout.
+        """
+        if self.endpoints_discovery_task:
+            try:
+                if not self.endpoints_discovery_task.done():
+                    self.logger.debug(f'Cancelling endpoint discovery task.')
+                    self.endpoints_discovery_stop_event.set()  # this event is useless if simply cancel
+                    self.endpoints_discovery_task.cancel()
+            except Exception as ex:
+                self.logger.debug(
+                    f'exception during endpoint discovery task cancellation: {ex}'
+                )
+                pass
+
     async def close(self):
         """Close the data request handler, by closing the executor and the batch queues."""
         self.cancel_warmup_task()
+        self.cancel_endpoint_discovery_from_workers_task()
         await self.connection_pool.close()
 
     async def process_single_data(self, request: DataRequest, context) -> DataRequest:
@@ -383,6 +567,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 timeout_send=self.timeout_send,
                 polling_type=self._polling[endpoint],
                 deployment_name=self._deployment_name,
+                endpoint=endpoint,
             )
             context.set_trailing_metadata(metadata.items())
             return response
@@ -435,6 +620,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 deployment=self._deployment_name, head=False
             )
             response.endpoints.extend(worker_response.endpoints)
+            response.schemas.update(worker_response.schemas)
         except InternalNetworkError as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
             return self._handle_internalnetworkerror(
                 err=err, context=context, response=response

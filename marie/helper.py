@@ -1485,7 +1485,9 @@ def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
 def get_ci_vendor() -> Optional[str]:
     from marie.constants import __resources_path__
 
-    with open(os.path.join(__resources_path__, 'ci-vendors.json')) as fp:
+    with open(
+        os.path.join(__resources_path__, 'ci-vendors.json'), encoding='utf-8'
+    ) as fp:
         all_cis = json.load(fp)
         for c in all_cis:
             if isinstance(c['env'], str) and c['env'] in os.environ:

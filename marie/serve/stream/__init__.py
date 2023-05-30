@@ -10,7 +10,6 @@ from typing import (
     Union,
 )
 
-from aiostream.aiter_utils import anext
 
 from marie.excepts import InternalNetworkError
 from marie.logging.logger import MarieLogger
@@ -281,4 +280,4 @@ class RequestStreamer:
         :param context: grpc context
         :return: response DataRequest
         """
-        return await anext(self.stream(iter([request]), context=context))
+        return await self.stream(iter([request]), context=context).__anext__()

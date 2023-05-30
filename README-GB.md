@@ -3,6 +3,20 @@
 
 Integrate AI-powered OCR features into your applications
 
+## TODO :
+
+ - Add new Polling method
+ - prefetch
+ - Flow to gateway conversion
+ - Remove CRUD operations
+
+
+# IMPORTANT 
+Merge CAREFULLY with the `master` branch of Jina.
+
+- serve/runtimes/worker/request_handling.py  > Added support for returning Dictionary object and not only Document
+- serve/helper.py  > Default GRPC options 
+
 ## Installation
 
 create folder structure

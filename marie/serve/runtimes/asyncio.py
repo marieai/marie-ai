@@ -11,6 +11,7 @@ from marie.helper import ArgNamespace, is_port_free, random_ports, send_telemetr
 from marie.logging.logger import MarieLogger
 from marie.parsers import set_gateway_parser
 from marie.parsers.helper import _set_gateway_uses
+from marie.serve.networking.utils import send_health_check_async
 
 # Keep these imports even if not used, since YAML parser needs to find them in imported modules
 from marie.serve.runtimes.gateway.composite import CompositeGateway
