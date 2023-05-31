@@ -45,7 +45,7 @@ jobs:
             Thanks for your contribution :heart:
             :broken_heart: Unfortunately, this PR has one ore more **bad commit messages**, it can not be merged. To fix this problem, please refer to:
             - Commit Message Guideline for the First Time Contributor
-            - [Contributing Guideline](https://github.com/gregbugaj/marie-ai/blob/master/CONTRIBUTING.md)
+            - [Contributing Guideline](https://github.com/marieai/marie-ai/blob/main/CONTRIBUTING.md)
 
             Note, other CI tests will *not* *start* until the commit messages get fixed.
 

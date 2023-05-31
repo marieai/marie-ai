@@ -1,7 +1,7 @@
 import pydantic
 import pytest
 
-from marie.serve.runtimes.gateway.http.models import (
+from marie.serve.runtimes.gateway.models import (
     PROTO_TO_PYDANTIC_MODELS,
     JinaRequestModel,
 )

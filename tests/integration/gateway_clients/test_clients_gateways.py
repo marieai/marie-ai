@@ -10,7 +10,8 @@ from docarray import Document, DocumentArray
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
 from marie.serve import networking
-from marie.serve.runtimes.gateway import GatewayRuntime
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.types.request.data import DataRequest
 
 
@@ -194,7 +195,7 @@ def create_runtime(
             '_decompress_wo_data',
             decompress_wo_data,
         )
-    with GatewayRuntime(
+    with AsyncNewLoopRuntime(
         set_gateway_parser().parse_args(
             [
                 '--port',
@@ -206,7 +207,7 @@ def create_runtime(
                 '--protocol',
                 protocol,
             ]
-        )
+        ), req_handler_cls=GatewayRequestHandler
     ) as runtime:
         runtime.run_forever()
 

@@ -145,7 +145,14 @@ class GatewayRequestHandler:
         tracer_provider,
     ):
         from marie.helper import extend_rest_interface
-        from marie.serve.runtimes.gateway.http_fastapi_app import get_fastapi_app
+        from marie._docarray import docarray_v2
+
+        if not docarray_v2:
+            from marie.serve.runtimes.gateway.http_fastapi_app import get_fastapi_app
+        else:
+            from marie.serve.runtimes.gateway.http_fastapi_app_docarrayv2 import (
+                get_fastapi_app,
+            )
 
         return extend_rest_interface(
             get_fastapi_app(

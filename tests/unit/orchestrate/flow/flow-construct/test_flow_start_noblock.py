@@ -2,9 +2,9 @@ import time
 
 import pytest
 from marie import Flow
-from jina.excepts import RuntimeFailToStart
-from jina.logging.profile import TimeContext
-from jina.serve.executors import BaseExecutor
+from marie.excepts import RuntimeFailToStart
+from marie.logging.profile import TimeContext
+from marie.serve.executors import BaseExecutor
 
 
 class SlowExecutor(BaseExecutor):

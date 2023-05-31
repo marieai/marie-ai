@@ -53,7 +53,6 @@ from marie.serve.networking.utils import host_is_local, in_docker
 WRAPPED_SLICE_BASE = r'\[[-\d:]+\]'
 
 if TYPE_CHECKING:
-    import multiprocessing
 
     from marie.clients.base import BaseClient
     from marie.serve.executors import BaseExecutor
@@ -950,16 +949,6 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
             return [self.head_host]
         else:
             return [replica.host for replica in self.pod_args['pods'][0]]
-
-    @property
-    def dockerized_uses(self) -> bool:
-        """Checks if this Deployment uses a dockerized Executor
-
-        .. # noqa: DAR201
-        """
-        return self.args.uses.startswith('docker://') or self.args.uses.startswith(
-            'mariehub+docker://'
-        )
 
     def _parse_args(
         self, args: Namespace

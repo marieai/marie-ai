@@ -171,7 +171,7 @@ def set_help_parser(parser=None):
     parser.add_argument(
         'query',
         type=str,
-        help='Lookup the usage & mention of the argument name in Marie API. The name can be fuzzy',
+        help='Look up usage & mention of argument name in Marie API. The name can be fuzzy',
     )
     return parser
 
@@ -237,7 +237,7 @@ def get_main_parser():
         sp.add_parser(
             'new',
             help='Create a new Marie project',
-            description='Create a new Marie toy project with the predefined template.',
+            description='Create a new Marie project with a predefined template',
             formatter_class=_chf,
         )
     )
@@ -245,7 +245,7 @@ def get_main_parser():
     set_gateway_parser(
         sp.add_parser(
             'gateway',
-            description='Start a Gateway that receives client Requests via gRPC/REST interface',
+            description='Start a Gateway to receive client Requests via gRPC/RESTful interface',
             **(dict(help='Start a Gateway')) if _SHOW_ALL_ARGS else {},
             formatter_class=_chf,
         )

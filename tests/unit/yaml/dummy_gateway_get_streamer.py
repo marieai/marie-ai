@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from marie import Gateway
-from marie.serve.streamer import GatewayStreamer
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
 
 class DummyResponseModel(BaseModel):

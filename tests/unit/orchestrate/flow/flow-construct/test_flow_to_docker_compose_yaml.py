@@ -5,7 +5,8 @@ from unittest import mock
 
 import pytest
 import yaml
-from marie import Flow, __cache_path__
+from marie import Flow
+from marie.constants import __cache_path__
 
 
 @pytest.mark.parametrize('protocol', ['http', 'grpc'])
@@ -31,7 +32,7 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     )
 
     configuration = None
-    with open(dump_path) as f:
+    with open(dump_path, encoding='utf-8') as f:
         configuration = yaml.safe_load(f)
 
     assert set(configuration.keys()) == {'version', 'services', 'networks'}
@@ -65,8 +66,7 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     assert '--graph-description' in gateway_args
     assert (
         gateway_args[gateway_args.index('--graph-description') + 1]
-        == '{"executor0": ["executor1"], "start-gateway": ["executor0"], "executor1":'
-        ' ["executor2"], "executor2": ["end-gateway"]}'
+        == '{"executor0": ["executor1"], "start-gateway": ["executor0"], "executor1": ["executor2"], "executor2": ["end-gateway"]}'
     )
     assert '--deployments-addresses' in gateway_args
     assert (
@@ -190,9 +190,8 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
     assert executor2_head_args[executor2_head_args.index('--pod-role') + 1] == 'HEAD'
     assert '--native' in executor2_head_args
     assert '--connection-list' in executor2_head_args
-    assert (
-        executor2_head_args[executor2_head_args.index('--connection-list') + 1]
-        == '{"0": ["executor2-0-rep-0:8081", "executor2-0-rep-1:8081"],'
+    assert executor2_head_args[executor2_head_args.index('--connection-list') + 1] == (
+        '{"0": ["executor2-0-rep-0:8081", "executor2-0-rep-1:8081"],'
         ' "1": '
         '["executor2-1-rep-0:8081", "executor2-1-rep-1:8081"]}'
     )
@@ -303,7 +302,7 @@ def test_flow_to_docker_compose_yaml(tmpdir, protocol):
 
 
 def test_raise_exception_invalid_executor():
-    from jina.excepts import NoContainerizedError
+    from marie.excepts import NoContainerizedError
 
     with pytest.raises(NoContainerizedError):
         f = Flow().add(uses='A')
@@ -329,7 +328,7 @@ def test_docker_compose_set_volume(tmpdir):
     )
 
     configuration = None
-    with open(dump_path) as f:
+    with open(dump_path, encoding='utf-8') as f:
         configuration = yaml.safe_load(f)
 
     assert set(configuration.keys()) == {'version', 'services', 'networks'}
@@ -377,7 +376,7 @@ def test_disable_auto_volume(tmpdir):
     flow.to_docker_compose_yaml(output_path=dump_path)
 
     configuration = None
-    with open(dump_path) as f:
+    with open(dump_path, encoding='utf-8') as f:
         configuration = yaml.safe_load(f)
 
     assert set(configuration.keys()) == {'version', 'services', 'networks'}
@@ -392,10 +391,12 @@ def test_disable_auto_volume(tmpdir):
     assert 'volumes' not in services['executor0']
 
 
-def test_flow_to_docker_compose_sandbox(tmpdir):
-    flow = Flow(name='test-flow', port=8080).add(
-        uses=f'jinahub+sandbox://DummyHubExecutor'
-    )
+@pytest.mark.parametrize(
+    'uses',
+    ['jinaai+sandbox://jina-ai/DummyHubExecutor'],
+)
+def test_flow_to_docker_compose_sandbox(tmpdir, uses):
+    flow = Flow(name='test-flow', port=8080).add(uses=uses)
 
     dump_path = os.path.join(str(tmpdir), 'test_flow_docker_compose.yml')
 
@@ -404,7 +405,7 @@ def test_flow_to_docker_compose_sandbox(tmpdir):
     )
 
     configuration = None
-    with open(dump_path) as f:
+    with open(dump_path, encoding='utf-8') as f:
         configuration = yaml.safe_load(f)
 
     services = configuration['services']
@@ -427,7 +428,7 @@ def test_flow_to_docker_compose_gpus(tmpdir, count):
     )
 
     configuration = None
-    with open(dump_path) as f:
+    with open(dump_path, encoding='utf-8') as f:
         configuration = yaml.safe_load(f)
 
     services = configuration['services']

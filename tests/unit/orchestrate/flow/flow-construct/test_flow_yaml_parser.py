@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
 from marie import Executor, Flow
-from marie.enums import GatewayProtocolType
+from marie.enums import ProtocolType
 from marie.excepts import BadYAMLVersion
 from marie.jaml import JAML
 from marie.jaml.parsers import get_supported_versions
@@ -15,10 +15,10 @@ cur_dir = Path(__file__).parent
 
 
 def test_load_flow_from_empty_yaml():
-    with open(cur_dir / 'yaml' / 'dummy-flow.yml') as fp:
+    with open(cur_dir / 'yaml' / 'dummy-flow.yml', encoding='utf-8') as fp:
         JAML.load(fp)
 
-    with open(cur_dir / 'yaml' / 'dummy-flow.yml') as fp:
+    with open(cur_dir / 'yaml' / 'dummy-flow.yml', encoding='utf-8') as fp:
         Flow.load_config(fp)
 
 
@@ -72,15 +72,15 @@ def test_load_modify_dump_load(tmpdir, yaml_file):
     # assert vars inside `with`
     assert f._kwargs['name'] == 'abc'
     assert f.port == 12345
-    assert f.protocol == GatewayProtocolType.HTTP
+    assert f.protocol == ProtocolType.HTTP
     # assert executor args
     assert f._deployment_nodes['custom1'].args.uses == 'jinahub://CustomExecutor1'
     assert f._deployment_nodes['custom2'].args.uses == 'CustomExecutor2'
-    assert int(f._deployment_nodes['custom2'].args.port) == 23456
+    assert f._deployment_nodes['custom2'].args.port == [23456]
 
     # change args inside the gateway configuration
     f.port = 12346
-    f.protocol = GatewayProtocolType.WEBSOCKET
+    f.protocol = ProtocolType.WEBSOCKET
     # change executor args
     f._deployment_nodes['custom2'].args.port = 23457
 
@@ -95,8 +95,8 @@ def test_load_modify_dump_load(tmpdir, yaml_file):
     assert f1._deployment_nodes['custom2'].args.uses == 'CustomExecutor2'
     # assert args modified in code
     assert f1.port == 12346
-    assert f1.protocol == GatewayProtocolType.WEBSOCKET
-    assert int(f1._deployment_nodes['custom2'].args.port) == 23457
+    assert f1.protocol == ProtocolType.WEBSOCKET
+    assert f1._deployment_nodes['custom2'].args.port == [23457]
 
 
 def test_dump_load_build(monkeypatch):
@@ -117,22 +117,31 @@ def test_dump_load_build(monkeypatch):
         - name: executor3
           uses: docker://exec
           shards: 2
-    '''
+          grpc_server_options: 
+            'grpc.max_send_message_length': -1
+          grpc_channel_options: 
+            'grpc.keepalive_time_ms': 9999
+            '''
     ).build()
 
     f1: Flow = Flow.load_config(JAML.dump(f)).build()
     # these were passed by the user
     assert f.port == f1.port
     assert f.protocol == f1.protocol
-    assert int(f['executor1'].args.port) == int(f1['executor1'].args.port)
+    assert f['executor1'].args.port == f1['executor1'].args.port
     assert f['executor2'].args.host == f1['executor2'].args.host
+    assert f['executor3'].args.grpc_server_options == {
+        'grpc.max_send_message_length': -1
+    }
+    assert f['executor3'].args.grpc_channel_options == {'grpc.keepalive_time_ms': 9999}
+
     # this was set during `load_config`
-    assert int(f['executor2'].args.port) == int(f1['executor2'].args.port)
+    assert f['executor2'].args.port == f1['executor2'].args.port
 
     monkeypatch.setenv('JINA_FULL_CLI', 'true')
     f2: Flow = Flow.load_config(JAML.dump(f)).build()
     # these were passed by the user
-    assert int(f.port) == int(f2.port)
+    assert f.port == f2.port
     # validate gateway args (set during build)
     assert f['gateway'].args.port == f2['gateway'].args.port
 
@@ -140,18 +149,18 @@ def test_dump_load_build(monkeypatch):
 def test_load_flow_with_port():
     f = Flow.load_config('yaml/test-flow-port.yml')
     with f:
-        assert int(f.port) == 12345
+        assert f.port == 12345
 
 
 def test_load_flow_from_cli():
     a = set_flow_parser().parse_args(['--uses', 'yaml/test-flow-port.yml'])
     f = Flow.load_config(a.uses)
     with f:
-        assert int(f.port) == 12345
+        assert f.port == 12345
 
 
 def test_load_flow_from_yaml():
-    with open(cur_dir.parent.parent.parent / 'yaml' / 'test-flow.yml') as fp:
+    with open(cur_dir.parent.parent.parent / 'yaml' / 'test-flow.yml', encoding='utf-8') as fp:
         _ = Flow.load_config(fp)
 
 
@@ -164,7 +173,7 @@ def test_flow_yaml_dump(tmpdir):
 
 def test_flow_yaml_from_string():
     f1 = Flow.load_config('yaml/flow-v1.0-syntax.yml')
-    with open(str(cur_dir / 'yaml' / 'flow-v1.0-syntax.yml')) as fp:
+    with open(str(cur_dir / 'yaml' / 'flow-v1.0-syntax.yml'), encoding='utf-8') as fp:
         str_yaml = fp.read()
         assert isinstance(str_yaml, str)
         f2 = Flow.load_config(str_yaml)
@@ -189,17 +198,17 @@ def test_flow_uses_from_dict():
 
 
 def test_flow_yaml_override_with_protocol():
-    from marie.enums import GatewayProtocolType
+    from marie.enums import ProtocolType
 
     path = os.path.join(
         cur_dir.parent.parent.parent, 'yaml/examples/faiss/flow-index.yml'
     )
     f1 = Flow.load_config(path)
-    assert f1.protocol == GatewayProtocolType.GRPC
+    assert f1.protocol == ProtocolType.GRPC
     f2 = Flow.load_config(path, uses_with={'protocol': 'http'})
-    assert f2.protocol == GatewayProtocolType.HTTP
+    assert f2.protocol == ProtocolType.HTTP
     f3 = Flow.load_config(path, uses_with={'protocol': 'websocket'})
-    assert f3.protocol == GatewayProtocolType.WEBSOCKET
+    assert f3.protocol == ProtocolType.WEBSOCKET
 
 
 @pytest.mark.parametrize(
@@ -213,5 +222,5 @@ def test_load_flow_with_gateway(yaml_file):
     )
     with flow:
         # protocol and port are overridden by the gateway configuration
-        assert flow.protocol == GatewayProtocolType.HTTP
+        assert flow.protocol == ProtocolType.HTTP
         assert flow.port == 12344

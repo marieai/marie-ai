@@ -11,14 +11,16 @@ from docarray import Document, DocumentArray
 from pytest import FixtureRequest
 
 from marie import Client, Executor, Flow, dynamic_batching, requests
-from marie.constants import __cache_path__
 from marie.clients.request import request_generator
+from marie.constants import __cache_path__
 from marie.excepts import RuntimeFailToStart
 from marie.helper import random_port
+from marie.serve.executors.decorators import write
 from marie.serve.executors.metas import get_default_metas
-from marie.serve.networking import GrpcConnectionPool
+from marie.serve.networking.utils import send_request_async
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from marie.serve.runtimes.worker import WorkerRuntime
+from marie.serve.runtimes.servers import BaseServer
+from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from tests.helper import _generate_pod_args
 
 
@@ -54,7 +56,7 @@ def served_exec(request: FixtureRequest, exposed_port):
 
     e = threading.Event()
 
-    kwargs = {'port_expose': exposed_port, 'stop_event': e}
+    kwargs = {'port': exposed_port, 'stop_event': e}
     enable_dynamic_batching = request.param
     if enable_dynamic_batching:
         kwargs['uses_dynamic_batching'] = {
@@ -75,9 +77,7 @@ def served_exec(request: FixtureRequest, exposed_port):
     t.join()
 
 
-@pytest.mark.parametrize(
-    'uses', ['jinaai://jina-ai/DummyHubExecutor']
-)
+@pytest.mark.parametrize('uses', ['jinaai://jina-ai/DummyHubExecutor'])
 def test_executor_load_from_hub(uses):
     exec = Executor.from_hub(uses, uses_metas={'name': 'hello123'})
     da = DocumentArray([Document()])
@@ -100,7 +100,7 @@ def test_executor_with_pymodule_path():
             '''
         jtype: BaseExecutor
         py_modules:
-            - jina.no_valide.executor
+            - marie.no_valide.executor
         '''
         )
 
@@ -306,7 +306,7 @@ def test_workspace_not_exists(tmpdir):
             super().__init__(*args, **kwargs)
 
         def do(self, *args, **kwargs):
-            with open(os.path.join(self.workspace, 'text.txt'), 'w') as f:
+            with open(os.path.join(self.workspace, 'text.txt'), 'w', encoding='utf-8') as f:
                 f.write('here!')
 
     e = MyExec(metas={'workspace': tmpdir})
@@ -452,11 +452,11 @@ def test_to_k8s_yaml(tmpdir, exec_type, uses):
         executor_type=exec_type,
     )
 
-    with open(os.path.join(tmpdir, 'executor0', 'executor0.yml')) as f:
+    with open(os.path.join(tmpdir, 'executor0', 'executor0.yml'), encoding='utf-8') as f:
         exec_yaml = list(yaml.safe_load_all(f))[-1]
         assert exec_yaml['spec']['template']['spec']['containers'][0][
             'image'
-        ].startswith('jinahub/')
+        ].startswith('registry')
 
     if exec_type == Executor.StandaloneExecutorType.SHARED:
         assert set(os.listdir(tmpdir)) == {
@@ -468,7 +468,7 @@ def test_to_k8s_yaml(tmpdir, exec_type, uses):
             'gateway',
         }
 
-        with open(os.path.join(tmpdir, 'gateway', 'gateway.yml')) as f:
+        with open(os.path.join(tmpdir, 'gateway', 'gateway.yml'), encoding='utf-8') as f:
             gatewayyaml = list(yaml.safe_load_all(f))[-1]
             assert (
                 gatewayyaml['spec']['template']['spec']['containers'][0]['ports'][0][
@@ -499,9 +499,9 @@ def test_to_docker_compose_yaml(tmpdir, exec_type, uses):
         executor_type=exec_type,
     )
 
-    with open(compose_file) as f:
+    with open(compose_file, encoding='utf-8') as f:
         services = list(yaml.safe_load_all(f))[0]['services']
-        assert services['executor0']['image'].startswith('jinahub/')
+        assert services['executor0']['image'].startswith('registry')
 
         if exec_type == Executor.StandaloneExecutorType.SHARED:
             assert len(services) == 1
@@ -534,7 +534,7 @@ async def test_blocking_sync_exec():
     cancel_event = multiprocessing.Event()
 
     def start_runtime(args, cancel_event):
-        with WorkerRuntime(args, cancel_event=cancel_event) as runtime:
+        with AsyncNewLoopRuntime(args, cancel_event=cancel_event, req_handler_cls=WorkerRequestHandler) as runtime:
             runtime.run_forever()
 
     runtime_thread = Process(
@@ -544,9 +544,9 @@ async def test_blocking_sync_exec():
     )
     runtime_thread.start()
 
-    assert AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'{args.host}:{args.port}',
+        ctrl_address=f'{args.host}:{args.port[0]}',
         ready_or_shutdown_event=Event(),
     )
 
@@ -555,9 +555,9 @@ async def test_blocking_sync_exec():
     for i in range(REQUEST_COUNT):
         send_tasks.append(
             asyncio.create_task(
-                GrpcConnectionPool.send_request_async(
+                send_request_async(
                     _create_test_data_message(),
-                    target=f'{args.host}:{args.port}',
+                    target=f'{args.host}:{args.port[0]}',
                     timeout=3.0,
                 )
             )
@@ -592,14 +592,14 @@ def test_executors_inheritance_binding():
         pass
 
     assert set(A().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
-    assert A().requests['/index'] == A.a
-    assert A().requests['/default'] == A.default_a
+    assert A().requests['/index'].fn == A.a
+    assert A().requests['/default'].fn == A.default_a
     assert set(B().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
-    assert B().requests['/index'] == B.b
-    assert B().requests['/default'] == A.default_a
+    assert B().requests['/index'].fn == B.b
+    assert B().requests['/default'].fn == A.default_a
     assert set(C().requests.keys()) == {'/index', '/default', '_jina_dry_run_'}
-    assert C().requests['/index'] == B.b
-    assert C().requests['/default'] == A.default_a
+    assert C().requests['/index'].fn == B.b
+    assert C().requests['/default'].fn == A.default_a
 
 
 @pytest.mark.parametrize(
@@ -664,3 +664,39 @@ def test_combined_decorators(inputs, expected_values):
 
     exec = MyExecutor2()
     assert exec.dynamic_batching['foo'] == expected_values
+
+
+def test_write_decorator():
+    class WriteExecutor(Executor):
+        @write
+        @requests(on='/delete')
+        def delete(self, **kwargs):
+            pass
+
+        @requests(on='/bar')
+        @write
+        def bar(self, **kwargs):
+            pass
+
+        @requests(on='/index')
+        @write()
+        def index(self, **kwargs):
+            pass
+
+        @write()
+        @requests(on='/update')
+        def update(self, **kwargs):
+            pass
+
+
+
+        @requests(on='/search')
+        def search(self, **kwargs):
+            pass
+
+        @requests
+        def foo(self, **kwargs):
+            pass
+
+    exec = WriteExecutor()
+    assert set(exec.write_endpoints) == {'/index', '/update', '/delete', '/bar'}

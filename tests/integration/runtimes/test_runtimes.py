@@ -4,21 +4,26 @@ import multiprocessing
 import threading
 import time
 from collections import defaultdict
+from functools import partial
 
 import grpc
 import pytest
 
+import marie
 from marie import Client, Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.enums import PollingType
+from marie.helper import random_port
 from marie.parsers import set_gateway_parser
 from marie.proto import jina_pb2_grpc
-from marie.serve.networking import GrpcConnectionPool
+from marie.serve.helper import get_default_grpc_options
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from marie.serve.runtimes.gateway import GatewayRuntime
-from marie.serve.runtimes.head import HeadRuntime
-from marie.serve.runtimes.worker import WorkerRuntime
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
+from marie.serve.runtimes.head.request_handling import HeaderRequestHandler
+from marie.serve.runtimes.servers import BaseServer
+from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from tests.helper import _generate_pod_args
+from tests.unit.serve.runtimes.test_helper import _custom_grpc_options
 
 
 @pytest.mark.asyncio
@@ -53,19 +58,19 @@ async def test_runtimes_trivial_topology(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{head_port}',
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{worker_port}',
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -128,7 +133,7 @@ async def test_runtimes_flow_topology(
             uses_before_port, uses_before_process = await _create_worker(
                 pod, port_generator, type='uses_before'
             )
-            AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+            BaseServer.wait_for_ready_or_shutdown(
                 timeout=5.0,
                 ready_or_shutdown_event=threading.Event(),
                 ctrl_address=f'127.0.0.1:{uses_before_port}',
@@ -138,7 +143,7 @@ async def test_runtimes_flow_topology(
             uses_after_port, uses_after_process = await _create_worker(
                 pod, port_generator, type='uses_after'
             )
-            AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+            BaseServer.wait_for_ready_or_shutdown(
                 timeout=5.0,
                 ready_or_shutdown_event=threading.Event(),
                 ctrl_address=f'127.0.0.1:{uses_after_port}',
@@ -147,7 +152,7 @@ async def test_runtimes_flow_topology(
 
         # create worker
         worker_port, worker_process = await _create_worker(pod, port_generator)
-        AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+        BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ready_or_shutdown_event=threading.Event(),
             ctrl_address=f'127.0.0.1:{worker_port}',
@@ -188,7 +193,7 @@ async def test_runtimes_flow_topology(
 
     await asyncio.sleep(0.1)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -261,7 +266,7 @@ async def test_runtimes_shards(polling, port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -334,7 +339,7 @@ async def test_runtimes_replicas(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -423,7 +428,7 @@ async def test_runtimes_with_executor(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -478,7 +483,7 @@ async def test_runtimes_gateway_worker_direct_connection(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -543,7 +548,7 @@ async def test_runtimes_with_replicas_advance_faster(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -613,19 +618,19 @@ async def test_runtimes_gateway_to_gateway(port_generator):
 
     await asyncio.sleep(1.0)
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{external_gateway_port}',
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{worker_port}',
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
         ctrl_address=f'0.0.0.0:{port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -685,11 +690,11 @@ async def _create_worker(pod, port_generator, type='worker', executor=None):
 
 def _create_worker_runtime(port, name='', executor=None):
     args = _generate_pod_args()
-    args.port = port
+    args.port = [port]
     args.name = name
     if executor:
         args.uses = executor
-    with WorkerRuntime(args) as runtime:
+    with AsyncNewLoopRuntime(args, req_handler_cls=WorkerRequestHandler) as runtime:
         runtime.run_forever()
 
 
@@ -703,7 +708,7 @@ def _create_head_runtime(
     retries=-1,
 ):
     args = _generate_pod_args()
-    args.port = port
+    args.port = [port]
     args.name = name
     args.retries = retries
     args.polling = PollingType.ANY if polling == 'ANY' else PollingType.ALL
@@ -713,14 +718,19 @@ def _create_head_runtime(
         args.uses_after_address = uses_after
     args.connection_list = json.dumps(connection_list_dict)
 
-    with HeadRuntime(args) as runtime:
+    with AsyncNewLoopRuntime(args, req_handler_cls=HeaderRequestHandler) as runtime:
         runtime.run_forever()
 
 
 def _create_gateway_runtime(
-    graph_description, pod_addresses, port, protocol='grpc', retries=-1
+    graph_description,
+    pod_addresses,
+    port,
+    protocol='grpc',
+    retries=-1,
+    log_config='default',
 ):
-    with GatewayRuntime(
+    with AsyncNewLoopRuntime(
         set_gateway_parser().parse_args(
             [
                 '--graph-description',
@@ -733,8 +743,11 @@ def _create_gateway_runtime(
                 str(retries),
                 '--protocol',
                 protocol,
+                '--log-config',
+                log_config,
             ]
-        )
+        ),
+        req_handler_cls=GatewayRequestHandler,
     ) as runtime:
         runtime.run_forever()
 
@@ -778,7 +791,7 @@ async def test_head_runtime_with_offline_shards(port_generator):
     )
     head_process.start()
 
-    AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+    BaseServer.wait_for_ready_or_shutdown(
         timeout=1.0,
         ctrl_address=f'0.0.0.0:{head_port}',
         ready_or_shutdown_event=multiprocessing.Event(),
@@ -786,7 +799,7 @@ async def test_head_runtime_with_offline_shards(port_generator):
 
     with grpc.insecure_channel(
         f'0.0.0.0:{head_port}',
-        options=GrpcConnectionPool.get_default_grpc_options(),
+        options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         _, call = stub.process_single_data.with_call(
@@ -821,7 +834,7 @@ def test_runtime_slow_processing_readiness(port_generator):
     )
     try:
         worker_process.start()
-        AsyncNewLoopRuntime.wait_for_ready_or_shutdown(
+        BaseServer.wait_for_ready_or_shutdown(
             timeout=5.0,
             ctrl_address=f'0.0.0.0:{worker_port}',
             ready_or_shutdown_event=multiprocessing.Event(),
@@ -830,7 +843,7 @@ def test_runtime_slow_processing_readiness(port_generator):
         def _send_messages():
             with grpc.insecure_channel(
                 f'0.0.0.0:{worker_port}',
-                options=GrpcConnectionPool.get_default_grpc_options(),
+                options=get_default_grpc_options(),
             ) as channel:
                 stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
                 resp, _ = stub.process_single_data.with_call(
@@ -844,7 +857,7 @@ def test_runtime_slow_processing_readiness(port_generator):
         send_message_process.start()
 
         for _ in range(50):
-            is_ready = WorkerRuntime.is_ready(f'0.0.0.0:{worker_port}')
+            is_ready = BaseServer.is_ready(f'0.0.0.0:{worker_port}')
             assert is_ready
             time.sleep(0.5)
     except Exception:
@@ -856,3 +869,75 @@ def test_runtime_slow_processing_readiness(port_generator):
         send_message_process.join()
         assert worker_process.exitcode == 0
         assert send_message_process.exitcode == 0
+
+
+@pytest.mark.parametrize('runtime', ['gateway', 'head', 'worker'])
+def test_grpc_server_and_channel_args(monkeypatch, mocker, runtime):
+    call_recording_mock = mocker.Mock()
+
+    monkeypatch.setattr(
+        marie.serve.networking.utils,
+        'get_server_side_grpc_options',
+        partial(_custom_grpc_options, call_recording_mock),
+    )
+    monkeypatch.setattr(
+        marie.serve.runtimes.servers.grpc,
+        'get_server_side_grpc_options',
+        partial(_custom_grpc_options, call_recording_mock),
+    )
+
+    if runtime == 'gateway':
+        deployment0_port = random_port()
+        with AsyncNewLoopRuntime(
+            set_gateway_parser().parse_args(
+                [
+                    '--graph-description',
+                    '{"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}',
+                    '--deployments-addresses',
+                    '{"deployment0": ["0.0.0.0:' + f'{deployment0_port}' + '"]}',
+                    '--grpc-server-options',
+                    '{"grpc.max_send_message_length": 10000}',
+                    '--grpc-channel-options',
+                    '{"grpc.keepalive_time_ms": 9999}',
+                ]
+            ),
+            req_handler_cls=GatewayRequestHandler,
+        ):
+            pass
+
+        # there should be at least two calls:
+        # 1 when creating the grpc server
+        # 2 when creating the connection to the deployment0
+        assert call_recording_mock.call_count >= 2
+    elif runtime == 'head':
+        args = _generate_pod_args()
+        args.polling = PollingType.ANY
+        connection_list_dict = {0: [f'fake_ip:8080']}
+        args.connection_list = json.dumps(connection_list_dict)
+        args.grpc_server_options = {"grpc.max_send_message_length": 10000}
+        args.grpc_channel_options = {"grpc.keepalive_time_ms": 9999}
+
+        with AsyncNewLoopRuntime(
+            args,
+            req_handler_cls=HeaderRequestHandler,
+        ):
+            pass
+
+        # there should be at least two calls:
+        # 1 when creating the grpc server
+        # 2 when creating the connection to the fake deployment
+        assert call_recording_mock.call_count >= 2
+    else:
+        args = _generate_pod_args()
+        args.grpc_server_options = {"grpc.max_send_message_length": 10000}
+        args.grpc_channel_options = {"grpc.keepalive_time_ms": 9999}
+
+        with AsyncNewLoopRuntime(
+            args,
+            req_handler_cls=WorkerRequestHandler,
+        ):
+            pass
+
+        # there should be one call:
+        # 1 when creating the grpc server
+        assert call_recording_mock.call_count == 1

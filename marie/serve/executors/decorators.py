@@ -113,8 +113,8 @@ def write(
 
     .. code-block:: python
 
-        from jina import Deployment, Executor, requests
-        from jina.serve.executors.decorators import write
+        from marie import Deployment, Executor, requests
+        from marie.serve.executors.decorators import write
         from docarray import DocList
         from docarray.documents import TextDoc
 
@@ -197,6 +197,7 @@ def write(
             owner._write_methods.append(self.fn.__name__)
 
         def __set_name__(self, owner, name):
+            _init_requests_by_class(owner)
             if self._requests_decorator:
                 self._requests_decorator._inject_owner_attrs(owner, name, None, None)
             self._inject_owner_attrs(owner, name)

@@ -4,7 +4,8 @@ from grpc_reflection.v1alpha import reflection
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from marie import Gateway, __default_host__
+from marie.constants import __default_host__
+from marie import Gateway
 from marie.proto import jina_pb2, jina_pb2_grpc
 
 
@@ -40,9 +41,13 @@ class MultiProtocolGateway(Gateway):
         jina_pb2_grpc.add_JinaRPCServicer_to_server(
             self.streamer._streamer, self.grpc_server
         )
+        jina_pb2_grpc.add_JinaSingleDataRequestRPCServicer_to_server(
+            self.streamer._streamer, self.grpc_server
+        )
 
         service_names = (
             jina_pb2.DESCRIPTOR.services_by_name['JinaRPC'].full_name,
+            jina_pb2.DESCRIPTOR.services_by_name['JinaSingleDataRequestRPC'].full_name,
             reflection.SERVICE_NAME,
         )
         # Mark all services as healthy.

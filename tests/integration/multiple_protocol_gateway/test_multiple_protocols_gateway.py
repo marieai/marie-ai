@@ -7,7 +7,7 @@ from docarray import Document
 
 from marie import Client, Flow
 from marie.helper import random_port
-from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.servers import BaseServer
 from tests.integration.multiple_protocol_gateway.gateway.multiprotocol_gateway import (
     MultiProtocolGateway,
 )
@@ -50,4 +50,4 @@ def test_multiple_protocols_gateway(multi_port_gateway_docker_image_built, uses,
         grpc_client.post('/', inputs=Document(), stream=use_stream)
         resp = requests.get(f'http://localhost:{http_port}').json()
         assert resp['protocol'] == 'http'
-        assert AsyncNewLoopRuntime.is_ready(f'localhost:{grpc_port}')
+        assert BaseServer.is_ready(f'localhost:{grpc_port}')

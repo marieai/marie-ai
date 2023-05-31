@@ -9,14 +9,27 @@ from marie.serve.networking import GrpcConnectionPool
 
 @pytest.mark.parametrize('protocol', ['http', 'grpc'])
 @pytest.mark.parametrize('flow_port', [1234, None])
-def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
+@pytest.mark.parametrize('gateway_replicas', [1, 2])
+def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port, gateway_replicas):
     flow_kwargs = {'name': 'test-flow', 'protocol': protocol}
+    gateway_kwargs = {'protocol': protocol}
     if flow_port:
         flow_kwargs['port'] = flow_port
+        gateway_kwargs['port'] = flow_port
+    gateway_kwargs['replicas'] = gateway_replicas
+
     flow = (
-        Flow(**flow_kwargs)
-        .add(name='executor0', uses_with={'param': 0})
-        .add(name='executor1', shards=2, uses_with={'param': 0})
+        Flow(**flow_kwargs).config_gateway(**gateway_kwargs)
+        .add(name='executor0', uses_with={'param': 0}, timeout_ready=60000)
+        .add(
+            name='executor1',
+            shards=2,
+            uses_with={'param': 0},
+            env_from_secret={
+                'SECRET_USERNAME': {'name': 'mysecret', 'key': 'username'},
+                'SECRET_PASSWORD': {'name': 'mysecret', 'key': 'password'},
+            },
+        )
         .add(
             name='executor2',
             uses_before='docker://image',
@@ -66,7 +79,7 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
     for pod_name in set(os.listdir(dump_path)):
         file_set = set(os.listdir(os.path.join(dump_path, pod_name)))
         for file in file_set:
-            with open(os.path.join(dump_path, pod_name, file)) as f:
+            with open(os.path.join(dump_path, pod_name, file), encoding='utf-8') as f:
                 yml_document_all = list(yaml.safe_load_all(f))
             yaml_dicts_per_deployment[file[:-4]] = yml_document_all
 
@@ -84,7 +97,7 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
     assert gateway_objects[2]['kind'] == 'Deployment'
     assert gateway_objects[2]['metadata']['namespace'] == namespace
     assert gateway_objects[2]['metadata']['name'] == 'gateway'
-    assert gateway_objects[2]['spec']['replicas'] == 1
+    assert gateway_objects[2]['spec']['replicas'] == gateway_replicas
     gateway_args = gateway_objects[2]['spec']['template']['spec']['containers'][0][
         'args'
     ]
@@ -99,15 +112,12 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
     assert '--graph-description' in gateway_args
     assert (
         gateway_args[gateway_args.index('--graph-description') + 1]
-        == '{"executor0": ["executor1"], "start-gateway": ["executor0"], "executor1":'
-        ' ["executor2"], "executor2": ["end-gateway"]}'
+        == '{"executor0": ["executor1"], "start-gateway": ["executor0"], "executor1": ["executor2"], "executor2": ["end-gateway"]}'
     )
     assert '--deployments-addresses' in gateway_args
     assert (
         gateway_args[gateway_args.index('--deployments-addresses') + 1]
-        == '{"executor0": ["grpc://executor0.test-flow-ns.svc:8080"], "executor1":'
-        ' ["grpc://executor1-head.test-flow-ns.svc:8080"], "executor2":'
-        ' ["grpc://executor2-head.test-flow-ns.svc:8080"]}'
+        == '{"executor0": ["grpc://executor0.test-flow-ns.svc:8080"], "executor1": ["grpc://executor1-head.test-flow-ns.svc:8080"], "executor2": ["grpc://executor2-head.test-flow-ns.svc:8080"]}'
     )
     if protocol == 'http':
         assert '--protocol' in gateway_args
@@ -143,6 +153,13 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
     assert executor0_objects[2]['metadata']['namespace'] == namespace
     assert executor0_objects[2]['metadata']['name'] == 'executor0'
     assert executor0_objects[2]['spec']['replicas'] == 1
+
+    executor0_startup_probe = executor0_objects[2]['spec']['template']['spec'][
+        'containers'
+    ][0]['startupProbe']
+    assert executor0_startup_probe['failureThreshold'] == 12
+    assert executor0_startup_probe['periodSeconds'] == 5
+
     executor0_args = executor0_objects[2]['spec']['template']['spec']['containers'][0][
         'args'
     ]
@@ -228,6 +245,14 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
             'name': 'K8S_POD_NAME',
             'valueFrom': {'fieldRef': {'fieldPath': 'metadata.name'}},
         },
+        {
+            'name': 'SECRET_USERNAME',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'username'}},
+        },
+        {
+            'name': 'SECRET_PASSWORD',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'password'}},
+        },
     ]
 
     executor1_shard0_objects = yaml_dicts_per_deployment['executor1-0']
@@ -282,6 +307,14 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
             'name': 'K8S_POD_NAME',
             'valueFrom': {'fieldRef': {'fieldPath': 'metadata.name'}},
         },
+        {
+            'name': 'SECRET_USERNAME',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'username'}},
+        },
+        {
+            'name': 'SECRET_PASSWORD',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'password'}},
+        },
     ]
 
     executor1_shard1_objects = yaml_dicts_per_deployment['executor1-1']
@@ -334,6 +367,14 @@ def test_flow_to_k8s_yaml(tmpdir, protocol, flow_port):
         {
             'name': 'K8S_POD_NAME',
             'valueFrom': {'fieldRef': {'fieldPath': 'metadata.name'}},
+        },
+        {
+            'name': 'SECRET_USERNAME',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'username'}},
+        },
+        {
+            'name': 'SECRET_PASSWORD',
+            'valueFrom': {'secretKeyRef': {'name': 'mysecret', 'key': 'password'}},
         },
     ]
 
@@ -542,7 +583,7 @@ def test_flow_to_k8s_yaml_external_pod(tmpdir, has_external):
     for pod_name in set(os.listdir(dump_path)):
         file_set = set(os.listdir(os.path.join(dump_path, pod_name)))
         for file in file_set:
-            with open(os.path.join(dump_path, pod_name, file)) as f:
+            with open(os.path.join(dump_path, pod_name, file), encoding='utf-8') as f:
                 yml_document_all = list(yaml.safe_load_all(f))
             yaml_dicts_per_deployment[file[:-4]] = yml_document_all
 
@@ -565,25 +606,27 @@ def test_flow_to_k8s_yaml_external_pod(tmpdir, has_external):
         assert '--deployments-addresses' in gateway_args
         assert (
             gateway_args[gateway_args.index('--deployments-addresses') + 1]
-            == '{"executor0": ["grpc://executor0.test-flow-ns.svc:8080"],'
-            ' "external_executor":'
-            ' ["grpc://external-executor.test-flow-ns.svc:8080"]}'
+            == '{"executor0": ["grpc://executor0.test-flow-ns.svc:8080"], "external_executor": ["grpc://external-executor.test-flow-ns.svc:8080"]}'
         )
 
 
 def test_raise_exception_invalid_executor(tmpdir):
-    from jina.excepts import NoContainerizedError
+    from marie.excepts import NoContainerizedError
 
     with pytest.raises(NoContainerizedError):
         f = Flow().add(uses='A')
         f.to_kubernetes_yaml(str(tmpdir))
 
 
-def test_flow_to_k8s_yaml_sandbox(tmpdir):
+@pytest.mark.parametrize(
+    'uses',
+    [
+        f'jinaai+sandbox://jina-ai/DummyHubExecutor',
+    ],
+)
+def test_flow_to_k8s_yaml_sandbox(tmpdir, uses):
 
-    flow = Flow(name='test-flow', port=8080).add(
-        uses=f'jinahub+sandbox://DummyHubExecutor'
-    )
+    flow = Flow(name='test-flow', port=8080).add(uses=uses)
 
     dump_path = os.path.join(str(tmpdir), 'test_flow_k8s')
 
@@ -599,7 +642,7 @@ def test_flow_to_k8s_yaml_sandbox(tmpdir):
     for pod_name in set(os.listdir(dump_path)):
         file_set = set(os.listdir(os.path.join(dump_path, pod_name)))
         for file in file_set:
-            with open(os.path.join(dump_path, pod_name, file)) as f:
+            with open(os.path.join(dump_path, pod_name, file), encoding='utf-8') as f:
                 yml_document_all = list(yaml.safe_load_all(f))
             yaml_dicts_per_deployment[file[:-4]] = yml_document_all
 

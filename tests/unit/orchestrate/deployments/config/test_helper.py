@@ -4,8 +4,13 @@ import os
 import pytest
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
+
 from marie import __version__
-from marie.orchestrate.deployments.config.helper import get_base_executor_version, get_image_name, to_compatible_name
+from marie.orchestrate.deployments.config.helper import (
+    get_base_executor_version,
+    get_image_name,
+    to_compatible_name,
+)
 
 
 @pytest.mark.parametrize('is_master', (True, False))
@@ -37,20 +42,21 @@ def test_to_compatible_name():
     assert to_compatible_name('executor/hey-ha_HO') == 'executor-hey-ha-ho'
 
 
-def test_get_image_name(mocker, monkeypatch):
+@pytest.mark.parametrize('uses', ['jinaai://jina-ai/DummyExecutor'])
+def test_get_image_name(mocker, monkeypatch, uses):
     mock = mocker.Mock()
 
     def _mock_fetch(
         name,
-        tag,
-        image_required=True,
-        rebuild_image=True,
-        *,
-        secret=None,
-        force=False,
+        *args,
+        **kwargs,
     ):
-        mock(name=name, rebuild_image=rebuild_image)
-
+        mock(
+            name=name,
+            rebuild_image=kwargs.get(
+                'rebuild_image', args[2] if len(args) >= 3 else True
+            ),
+        )
         return (
             HubExecutor(
                 uuid='hello',
@@ -66,11 +72,9 @@ def test_get_image_name(mocker, monkeypatch):
 
     monkeypatch.setattr(HubIO, 'fetch_meta', _mock_fetch)
 
-    uses = 'jinahub://DummyExecutor'
-
     image_name = get_image_name(uses)
 
-    assert image_name == 'jinahub/DummyExecutor'
+    assert image_name in {'jinahub/DummyExecutor', 'jinahub/jina-ai/DummyExecutor'}
 
     _, mock_kwargs = mock.call_args_list[0]
     assert mock_kwargs['rebuild_image'] is True  # default value must be True

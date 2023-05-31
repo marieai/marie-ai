@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from jina.orchestrate.deployments import Deployment
+from marie.orchestrate.deployments import Deployment
 
 
 @pytest.fixture()
