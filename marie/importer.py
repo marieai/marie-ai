@@ -11,7 +11,7 @@ IMPORTED = SimpleNamespace()
 IMPORTED.executors = False
 IMPORTED.schema_executors = {}
 
-
+# GB:MOD
 class ImportExtensions:
     """
     A context manager for wrapping extension import and fallback. It guides the user to pip install correct package by looking up extra-requirements.txt.

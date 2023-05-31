@@ -1313,25 +1313,16 @@ def run_async(func, *args, **kwargs):
     if loop and loop.is_running():
         # eventloop already exist
         # running inside Jupyter
-        if is_jupyter():
-            thread = _RunThread()
-            thread.start()
-            thread.join()
-            try:
-                return thread.result
-            except AttributeError:
-                from marie.excepts import BadClient
+        thread = _RunThread()
+        thread.start()
+        thread.join()
+        try:
+            return thread.result
+        except AttributeError:
+            from marie.excepts import BadClient
 
-                raise BadClient(
-                    'something wrong when running the eventloop, result can not be retrieved'
-                )
-        else:
-
-            raise RuntimeError(
-                'you have an eventloop running but not using Jupyter/ipython, '
-                'this may mean you are using Jina with other integration? if so, then you '
-                'may want to use Client/Flow(asyncio=True). If not, then '
-                'please report this issue here: https://github.com/jina-ai/jina'
+            raise BadClient(
+                'something wrong when running the eventloop, result can not be retrieved'
             )
     else:
         return asyncio.run(func(*args, **kwargs))
@@ -1636,59 +1627,17 @@ def _single_port_free(host: str, port: int) -> bool:
             return True
 
 
-def is_port_free(host: str, port: Union[int, List[int]]) -> bool:
+def is_port_free(host: Union[str, List[str]], port: Union[int, List[int]]) -> bool:
     if isinstance(port, list):
-        return all([_single_port_free(host, _p) for _p in port])
+        if isinstance(host, str):
+            return all([_single_port_free(host, _p) for _p in port])
+        else:
+            return all([all([_single_port_free(_h, _p) for _p in port]) for _h in host])
     else:
-        return _single_port_free(host, port)
-
-
-def _parse_ports(port: str) -> Union[int, List]:
-    """Parse port
-
-    EXAMPLE USAGE
-
-    .. code-block:: python
-
-
-        _parse_port('8000')
-        8000
-
-        _parse_port('8001,8002,8005')
-        [80001, 8002, 8005]
-
-    :param port: the string to parse
-    :return: the port or the iterable ports
-    """
-    try:
-        port = int(port)
-    except ValueError as e:
-        if ',' in port:
-            port = [int(port_) for port_ in port.split(',')]
-        elif not isinstance(port, list):
-            raise e
-    return port
-
-
-def _parse_hosts(host: str) -> Union[str, List[str]]:
-    """Parse port
-
-    EXAMPLE USAGE
-
-    .. code-block:: python
-
-
-        _parse_hosts('localhost')
-        'localhost'
-
-        _parse_port('localhost,91.198.174.192')
-        ['localhost', '91.198.174.192']
-
-    :param host: the string to parse
-    :return: the host or the iterable of hosts
-    """
-    hosts = host.split(',')
-    return hosts[0] if len(hosts) == 1 else hosts
+        if isinstance(host, str):
+            return _single_port_free(host, port)
+        else:
+            return all([_single_port_free(_h, port) for _h in host])
 
 
 def send_telemetry_event(event: str, obj_cls_name: Any, **kwargs) -> None:

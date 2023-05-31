@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
 
 from contextlib import nullcontext
 
-
+# GB:MOD
 def _get_summary_time_context_or_null(
     summary_metric: Optional['Summary'],
 ) -> Union[nullcontext, 'Timer']:

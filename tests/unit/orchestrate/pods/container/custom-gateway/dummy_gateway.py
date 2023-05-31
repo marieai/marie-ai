@@ -1,10 +1,10 @@
 from typing import Optional
 
 from docarray import Document, DocumentArray
-from marie import Gateway, __default_host__
-from marie.clients.request import request_generator
 from pydantic import BaseModel
 from uvicorn import Config, Server
+
+from marie import Gateway
 
 
 class DummyResponseModel(BaseModel):
@@ -40,6 +40,13 @@ class DummyGateway(Gateway):
                 'arg1': self.arg1,
                 'arg2': self.arg2,
                 'arg3': self.arg3,
+            }
+
+        @app.get(path='/runtime_info')
+        def _get_info():
+            return {
+                'ports': self.ports,
+                'protocols': self.protocols,
             }
 
         @app.get(

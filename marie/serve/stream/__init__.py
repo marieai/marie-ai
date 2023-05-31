@@ -62,6 +62,31 @@ class RequestStreamer:
         self._iterate_sync_in_thread = iterate_sync_in_thread
         self.total_num_floating_tasks_alive = 0
 
+    async def _get_endpoints_input_output_models(self, topology_graph, connection_pool):
+        """
+        Return a Dictionary with endpoints as keys and values as a dictionary of input and output schemas and names
+        taken from the endpoints proto endpoint of Executors
+
+        :param topology_graph: The topology graph from which the models need to be removed
+        :param connection_pool: The connection pool to be used
+        :return: a Dictionary with endpoints as keys and values as a dictionary of input and output schemas and names taken from the endpoints proto endpoint of Executors
+        """
+        # The logic should be to get the response of all the endpoints protos schemas from all the nodes. Then do a
+        # logic that for every endpoint fom every Executor computes what is the input and output schema seen by the
+        # Flow.
+        # create loop and get from topology_graph
+        _endpoints_models_map = {}
+        endpoints = await topology_graph._get_all_endpoints(
+            connection_pool, retry_forever=True
+        )
+
+        for endp in endpoints:
+            for origin_node in topology_graph.origin_nodes:
+                _endpoints_models_map[endp] = origin_node._get_leaf_input_output_model(
+                    previous_input=None, previous_output=None, endpoint=endp
+                )[0]
+        return _endpoints_models_map
+
     async def stream(
         self,
         request_iterator,

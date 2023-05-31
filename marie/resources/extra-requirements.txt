@@ -84,7 +84,7 @@ strawberry-graphql>=0.96.0: cicd,devel
 
 
 watchfiles>=0.18.0:           devel
-
+urllib3<2.0.0:                core
 transformers:                 standard,core
 anyconfig:                    standard,core
 

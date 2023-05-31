@@ -181,9 +181,10 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         :param kwargs: extra keyword arguments
         :return: True if status is ready else False.
         """
-        from marie.enums import ProtocolType
+
         from marie.serve.runtimes.servers.grpc import GRPCServer
         from marie.serve.runtimes.servers.http import FastAPIBaseServer
+        from marie.enums import ProtocolType
 
         if protocol is None or protocol == ProtocolType.GRPC or protocol == 'grpc':
             res = GRPCServer.is_ready(ctrl_address)

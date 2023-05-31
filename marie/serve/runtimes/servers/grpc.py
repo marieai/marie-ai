@@ -9,6 +9,7 @@ from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.helper import get_server_side_grpc_options
 from marie.serve.networking.utils import send_health_check_async, send_health_check_sync
 from marie.serve.runtimes.servers import BaseServer
+from marie._docarray import docarray_v2
 
 
 class GRPCServer(BaseServer):
@@ -38,6 +39,15 @@ class GRPCServer(BaseServer):
         """
         setup GRPC server
         """
+        if docarray_v2:
+            from marie.serve.runtimes.gateway.request_handling import (
+                GatewayRequestHandler,
+            )
+
+            if isinstance(self._request_handler, GatewayRequestHandler):
+                await self._request_handler.streamer._get_endpoints_input_output_models()
+                self._request_handler.streamer._validate_flow_docarray_compatibility()
+
         self.server = grpc.aio.server(
             options=get_server_side_grpc_options(self.grpc_server_options),
             interceptors=self.grpc_tracing_server_interceptors,

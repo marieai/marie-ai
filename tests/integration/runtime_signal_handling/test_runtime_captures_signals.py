@@ -8,7 +8,7 @@ import pytest
 from marie import Document, DocumentArray, Executor, requests
 from marie.clients.request import request_generator
 from marie.parsers import set_gateway_parser
-from marie.serve.networking import GrpcConnectionPool
+from marie.serve.networking.utils import send_request_sync
 from marie_cli.api import executor_native, gateway
 from tests.helper import _generate_pod_args
 
@@ -26,7 +26,7 @@ class DummyExecutor(Executor):
 
     def close(self):
         super().close()
-        with open(f'{self.dir}/test.txt', 'w') as fp:
+        with open(f'{self.dir}/test.txt', 'w', encoding='utf-8') as fp:
             fp.write(f'proper close;{self.request_count}')
 
 
@@ -58,15 +58,13 @@ def test_executor_runtimes(signal, tmpdir):
     process.start()
     time.sleep(0.5)
 
-    GrpcConnectionPool.send_request_sync(
-        _create_test_data_message(), target=f'{args.host}:{args.port}'
-    )
+    send_request_sync(_create_test_data_message(), target=f'{args.host}:{args.port[0]}')
 
     time.sleep(0.1)
 
     os.kill(process.pid, signal)
     process.join()
-    with open(f'{tmpdir}/test.txt', 'r') as fp:
+    with open(f'{tmpdir}/test.txt', 'r', encoding='utf-8') as fp:
         output = fp.read()
     split = output.split(';')
     assert split[0] == 'proper close'

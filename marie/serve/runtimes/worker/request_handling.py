@@ -41,7 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie.logging.logger import MarieLogger
     from marie.types.request import Request
 
-
+# GB:MOD
 class WorkerRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
 
@@ -170,7 +170,7 @@ class WorkerRequestHandler:
         request_models_map = self._executor._get_endpoint_models_dict()
 
         def call_handle(request):
-            return self.handle([request], None)
+            return self.process_single_data(request, None)
 
         return get_fastapi_app(
             request_models_map=request_models_map, caller=call_handle, **kwargs
@@ -792,9 +792,29 @@ class WorkerRequestHandler:
         endpoints_proto.endpoints.extend(list(self._executor.requests.keys()))
         endpoints_proto.write_endpoints.extend(list(self._executor.write_endpoints))
         schemas = self._executor._get_endpoint_models_dict()
-        for endpoint_name, inner_dict in schemas.items():
-            inner_dict['input']['model'] = inner_dict['input']['model'].schema()
-            inner_dict['output']['model'] = inner_dict['output']['model'].schema()
+        if docarray_v2:
+            from docarray.documents.legacy import LegacyDocument
+            from marie.serve.runtimes.helper import _create_aux_model_doc_list_to_list
+
+            legacy_doc_schema = LegacyDocument.schema()
+            for endpoint_name, inner_dict in schemas.items():
+                if inner_dict['input']['model'].schema() == legacy_doc_schema:
+                    inner_dict['input']['model'] = legacy_doc_schema
+                else:
+                    inner_dict['input']['model'] = _create_aux_model_doc_list_to_list(
+                        inner_dict['input']['model']
+                    ).schema()
+
+                if inner_dict['output']['model'].schema() == legacy_doc_schema:
+                    inner_dict['output']['model'] = legacy_doc_schema
+                else:
+                    inner_dict['output']['model'] = _create_aux_model_doc_list_to_list(
+                        inner_dict['output']['model']
+                    ).schema()
+        else:
+            for endpoint_name, inner_dict in schemas.items():
+                inner_dict['input']['model'] = inner_dict['input']['model'].schema()
+                inner_dict['output']['model'] = inner_dict['output']['model'].schema()
 
         json_format.ParseDict(schemas, endpoints_proto.schemas)
         return endpoints_proto
@@ -830,9 +850,13 @@ class WorkerRequestHandler:
                 if self.logger.debug_enabled:
                     self._log_data_request(requests[0])
 
-                tracing_context = self._extract_tracing_context(
-                    context.invocation_metadata()
-                )
+                if context is not None:
+                    tracing_context = self._extract_tracing_context(
+                        context.invocation_metadata()
+                    )
+                else:
+                    tracing_context = None
+
                 result = await self.handle(
                     requests=requests, tracing_context=tracing_context
                 )
@@ -853,7 +877,8 @@ class WorkerRequestHandler:
                 )
 
                 requests[0].add_exception(ex, self._executor)
-                context.set_trailing_metadata((('is-error', 'true'),))
+                if context is not None:
+                    context.set_trailing_metadata((('is-error', 'true'),))
                 if self._failed_requests_metrics:
                     self._failed_requests_metrics.inc()
                 if self._failed_requests_counter:

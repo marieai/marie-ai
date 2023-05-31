@@ -3,9 +3,13 @@ from typing import Dict, List, Tuple
 import pytest
 from opentelemetry.metrics import Meter
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, Metric
+from opentelemetry.sdk.metrics.export import (
+    HistogramDataPoint,
+    InMemoryMetricReader,
+    Metric,
+)
 
-from marie.serve.networking import _NetworkingHistograms
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 
 
 @pytest.fixture
@@ -56,7 +60,7 @@ def test_recording_methods(metrics_setup: Tuple[InMemoryMetricReader, Meter]):
         metric_reader.get_metrics_data().resource_metrics[0].scope_metrics[0].metrics
     )
     data_points_sums: Dict[str, HistogramDataPoint] = {
-        hist.name: next(hist.data.data_points).sum for hist in histogram_metrics
+        hist.name: next(iter(hist.data.data_points)).sum for hist in histogram_metrics
     }
     assert data_points_sums == {
         'request_time': 10,

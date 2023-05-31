@@ -272,7 +272,7 @@ def _get_gateway_class(protocol, works_as_load_balancer=False):
         ProtocolType.HTTP: HTTPGateway,
     }
     if protocol == ProtocolType.HTTP and works_as_load_balancer:
-        from jina.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
+        from marie.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
 
         return LoadBalancerGateway
     else:
@@ -299,7 +299,7 @@ def _set_gateway_uses(args: 'argparse.Namespace', gateway_load_balancer: bool = 
 
             args.uses = CompositeGateway.__name__
         elif gateway_load_balancer:
-            from jina.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
+            from marie.serve.runtimes.gateway.load_balancer import LoadBalancerGateway
 
             args.uses = LoadBalancerGateway.__name__
 

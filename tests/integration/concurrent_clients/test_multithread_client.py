@@ -18,8 +18,9 @@ def flow_run(flow, stop_event):
         flow.block(stop_event)
 
 
-def client_post(doc, client):
+def client_post(doc, port, client):
     result = client.post(on='/', inputs=doc)[0]
+    print(f'doc.id {doc.id} vs result.id {result.id}')
     return result
 
 
@@ -40,7 +41,7 @@ def test_multithread_client(capsys):
             tasks = []
             for i in range(1000):
                 doc = Document(id=f'{i}', text='hello world')
-                task = pool.submit(client_post, doc, c)
+                task = pool.submit(client_post, doc, port, c)
                 tasks.append(task)
 
             for i,task in enumerate(tasks):

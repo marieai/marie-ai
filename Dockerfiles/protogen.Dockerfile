@@ -14,11 +14,11 @@ RUN wget https://github.com/protocolbuffers/protobuf/releases/download/v3.19.1/p
     mkdir -p cmake/build && cd cmake/build && cmake ../.. && make -j12
 
 WORKDIR /
-ADD jina ./jina/
+ADD marie ./marie/
 
-WORKDIR /jina/proto
+WORKDIR /marie/proto
 
-ENTRYPOINT ["bash", "./build-proto.sh", "/builder/grpc/cmake/build/grpc_python_plugin"]
+ENTRYPOINT ["bash", "./build-proto.sh", "/builder/grpc/cmake/build/grpc_python_plugin", "pb2"]
 
 
 

@@ -2,6 +2,7 @@ import itertools
 import os.path
 
 import pytest
+import requests as req
 from docarray import Document, DocumentArray
 from marie import Client, Executor, Flow, requests
 from marie.helper import random_port
@@ -108,7 +109,7 @@ def test_flow_multiprotocol_yaml():
 
 
 def test_flow_multiprotocol_ports_protocols_mismatch():
-    flow = Flow().config_gateway(port=[random_port()], protocol=['grpc', 'http'])
+    flow = Flow().config_gateway(port=[random_port(), random_port()], protocol=['grpc', 'http', 'websocket'])
     with pytest.raises(ValueError) as err_info:
         with flow:
             pass
@@ -117,3 +118,35 @@ def test_flow_multiprotocol_ports_protocols_mismatch():
         'You need to specify as much protocols as ports if you want to use a jina built-in gateway'
         in err_info.value.args[0]
     )
+
+
+def test_flow_multiprotocol_with_monitoring():
+    port_monitoring = random_port()
+    ports = [random_port(), random_port(), random_port()]
+    protocols = PROTOCOLS
+    flow = Flow().config_gateway(
+        port=ports, protocol=protocols, monitoring=True, port_monitoring=port_monitoring
+    )
+
+    with flow:
+        for port, protocol in zip(ports, protocols):
+            client = Client(port=port, protocol=protocol)
+            client.post('/', inputs=[Document()])
+
+        resp = req.get(f'http://localhost:{port_monitoring}/')
+        assert resp.status_code == 200
+        assert (
+            'jina_successful_requests_total{runtime_name="gateway/rep-0"} 3.0'
+            in str(resp.content)
+        )
+
+
+def test_flow_multiprotocol_with_tracing():
+    ports = [random_port(), random_port(), random_port()]
+    protocols = PROTOCOLS
+    flow = Flow().config_gateway(port=ports, protocol=protocols, tracing=True)
+
+    with flow:
+        for port, protocol in zip(ports, protocols):
+            client = Client(port=port, protocol=protocol)
+            client.post('/', inputs=[Document()])

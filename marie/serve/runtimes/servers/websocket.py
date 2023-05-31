@@ -5,6 +5,8 @@ from typing import Optional
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.servers import BaseServer
 
+from marie._docarray import docarray_v2
+
 
 class WebSocketServer(BaseServer):
     """WebSocket Server implementation"""
@@ -38,6 +40,14 @@ class WebSocketServer(BaseServer):
         """
         Setup WebSocket Server
         """
+        if docarray_v2:
+            from marie.serve.runtimes.gateway.request_handling import (
+                GatewayRequestHandler,
+            )
+
+            if isinstance(self._request_handler, GatewayRequestHandler):
+                await self._request_handler.streamer._get_endpoints_input_output_models()
+                self._request_handler.streamer._validate_flow_docarray_compatibility()
         self.app = self._request_handler._websocket_fastapi_default_app(
             tracing=self.tracing, tracer_provider=self.tracer_provider
         )
