@@ -34,6 +34,13 @@
               - utility
               # See https://github.com/NVIDIA/nvidia-container-runtime#supported-driver-capabilities
               # for a list of capabilities supported by the nvidia driver
+        
+        log_driver: local
+        log_options:
+          max-size: 100m
+          max-file: 10
+                  
+
         env:
           MARIE_DEFAULT_MOUNT: "/etc/marie"
           MARIE_LOG_CONFIG: docker

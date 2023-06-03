@@ -9,6 +9,22 @@ from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
 from tests.core.test_utils import async_wait_for_condition_async_predicate, async_delay
 
+import multiprocessing
+import time
+from dataclasses import dataclass
+
+import pytest
+
+from marie import Document, DocumentArray, Executor, requests, Deployment
+from marie.excepts import ExecutorError
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.servers import BaseServer
+from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+from marie.types.request import Request
+from marie.types.request.data import DataRequest
+from tests.helper import _generate_pod_args
+
 
 async def check_job_succeeded(job_manager, job_id):
     data = await job_manager.get_job_info(job_id)
@@ -154,7 +170,147 @@ async def test_simultaneous_with_same_id(job_manager):
     )
 
 
+class StreamerTestExecutor(Executor):
+    @requests
+    def foo(self, docs, parameters, **kwargs):
+        text_to_add = parameters.get('text_to_add', 'default ')
+        for doc in docs:
+            doc.text += text_to_add
+
+
+def _create_worker_runtime(port, uses, name=''):
+    args = _generate_pod_args()
+    args.port = [port]
+    args.name = name
+    args.uses = uses
+    with AsyncNewLoopRuntime(args, req_handler_cls=WorkerRequestHandler) as runtime:
+        runtime.run_forever()
+
+
+def _setup(pod0_port, pod1_port):
+    pod0_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(pod0_port, 'StreamerTestExecutor')
+    )
+    pod0_process.start()
+
+    pod1_process = multiprocessing.Process(
+        target=_create_worker_runtime, args=(pod1_port, 'StreamerTestExecutor')
+    )
+    pod1_process.start()
+
+    assert BaseServer.wait_for_ready_or_shutdown(
+        timeout=5.0,
+        ctrl_address=f'0.0.0.0:{pod0_port}',
+        ready_or_shutdown_event=multiprocessing.Event(),
+    )
+    assert BaseServer.wait_for_ready_or_shutdown(
+        timeout=5.0,
+        ctrl_address=f'0.0.0.0:{pod1_port}',
+        ready_or_shutdown_event=multiprocessing.Event(),
+    )
+    return pod0_process, pod1_process
+
+
+@pytest.mark.parametrize(
+    'parameters, target_executor, expected_text',
+    [  # (None, None, 'default default '),
+        ({'pod0__text_to_add': 'param_pod0 '}, None, 'param_pod0 default '),
+        (None, 'pod1', 'default '),
+        ({'pod0__text_to_add': 'param_pod0 '}, 'pod0', 'param_pod0 '),
+    ],
+)
+@pytest.mark.parametrize('results_in_order', [False, True])
+@pytest.mark.asyncio
+async def test_gateway_job_manager(
+        port_generator, parameters, target_executor, expected_text, results_in_order
+):
+    pod0_port = port_generator()
+    pod1_port = port_generator()
+    pod0_process, pod1_process = _setup(pod0_port, pod1_port)
+    graph_description = {
+        "start-gateway": ["pod0"],
+        "pod0": ["pod1"],
+        "pod1": ["end-gateway"],
+    }
+    pod_addresses = {"pod0": [f"0.0.0.0:{pod0_port}"], "pod1": [f"0.0.0.0:{pod1_port}"]}
+    # send requests to the gateway
+    gateway_streamer = GatewayStreamer(
+        graph_representation=graph_description, executor_addresses=pod_addresses
+    )
+
+    try:
+        input_da = DocumentArray.empty(60)
+        resp = DocumentArray.empty(0)
+        num_resp = 0
+        async for r in gateway_streamer.stream_docs(
+                docs=input_da,
+                request_size=10,
+                parameters=parameters,
+                target_executor=target_executor,
+                results_in_order=results_in_order,
+        ):
+            num_resp += 1
+            resp.extend(r)
+
+        assert num_resp == 6
+        assert len(resp) == 60
+        for doc in resp:
+            assert doc.text == expected_text
+
+        request = DataRequest()
+        request.data.docs = DocumentArray.empty(60)
+        unary_response = await gateway_streamer.process_single_data(request=request)
+        assert len(unary_response.docs) == 60
+
+    except Exception:
+        assert False
+    finally:  # clean up runtimes
+        pod0_process.terminate()
+        pod1_process.terminate()
+        pod0_process.join()
+        pod1_process.join()
+        await gateway_streamer.close()
+
+
+@pytest.mark.asyncio
+async def test_deployment_job_manager():
+    class PIDExecutor(Executor):
+
+        @requests
+        def foo(self, docs, **kwargs):
+            import os
+            for doc in docs:
+                # print(f"{os.getpid()} : {doc.id}")
+                doc.tags['pid'] = os.getpid()
+
+    # dep = Deployment(uses=PIDExecutor, include_gateway=True, shards=1, replicas=3)
+    dep = Deployment(uses=PIDExecutor, include_gateway=False, replicas=4)
+
+    # dep.to_docker_compose_yaml('/tmp/marieai/docker-compose.yml')
+
+    # create a graph from the deployment
+    graph_description = {}
+    pod_addresses = {}
+
+    gateway_streamer = GatewayStreamer(
+        graph_representation=graph_description, executor_addresses=pod_addresses
+    )
+
+    request = DataRequest()
+    request.data.docs = DocumentArray.empty(5)
+    unary_response = await gateway_streamer.process_single_data(request=request)
+
+    print(unary_response)
+    # assert len(unary_response.docs) == 60
+    with dep:
+        docs = dep.post(on='/', inputs=DocumentArray.empty(20), request_size=1)
+
+        dep.block()
+
+    returned_pids = set([doc.tags['pid'] for doc in docs])
+    print(returned_pids)
+    assert len(returned_pids) == 1
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main(["-v", __file__]))
-
-# pip install pytest-asyncio

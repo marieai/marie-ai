@@ -6,7 +6,6 @@ from uuid_extensions import uuid7, uuid7str
 
 from marie._core.utils import run_background_task
 from marie.logging.logger import MarieLogger
-from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie_server.job.common import JobInfo, JobStatus, JobInfoStorageClient
 from marie_server.storage.storage_client import StorageArea
 from marie_server.job.scheduling_strategies import (

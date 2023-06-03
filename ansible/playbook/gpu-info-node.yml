@@ -10,4 +10,3 @@
     register: out
     become_method: sudo
   - debug: var=out.stdout_lines
-
