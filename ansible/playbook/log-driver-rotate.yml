@@ -1,0 +1,64 @@
+---
+- name: Set up docker logging driver to local with rotate
+  hosts: ml.cluster
+  gather_facts: false
+
+  vars:
+    DAEMON_FILE: /etc/docker/daemon.json
+
+  tasks:
+    - name: check if docker daemon file exists
+      stat:
+        path: "{{ DAEMON_FILE }}"
+      register: config_stats
+
+    - block:
+        - name: read the docker daemon file
+          slurp:
+            src: "{{ DAEMON_FILE }}"
+          register: daemon_config
+
+        - name: get docker daemon config
+          set_fact:
+            docker_config: "{{ daemon_config.content | b64decode | from_json }}"
+
+        - name: append log-driver and log-opts
+          set_fact:
+            docker_config: "{{ docker_config | default([]) | combine({ item.key : item.value }) }}"
+          with_items:
+            - { key: "log-driver", value: "local" }
+            - { key: "log-opts", value: { "max-size": "100m", "max-file": "10"} }
+
+        - name: write to docker daemon file
+          copy:
+            content: "{{ docker_config | to_nice_json }}"
+            dest: "{{ DAEMON_FILE }}"
+            
+          become_user: root # we need to be root 
+          become: yes
+          become_method: sudo
+    
+      when: config_stats.stat.exists == true
+    
+    - name: create the docker daemon file
+      copy:
+        dest: "{{ DAEMON_FILE }}"
+        content: |
+            {
+                "log-driver": "local",
+                "log-opts": {
+                    "max-size": "100m",
+                    "max-file": "10"
+                }
+            }
+      when: config_stats.stat.exists == false
+
+    - name: restart docker daemon
+      systemd:
+        state: restarted
+        daemon_reload: yes
+        name: docker
+      
+      become_user: root # we need to be root 
+      become: yes
+      become_method: sudo        

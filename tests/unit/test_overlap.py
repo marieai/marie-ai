@@ -36,7 +36,7 @@ def test_overlap_002():
     print(f"bboxes B : =============> {len(bboxes)}")
     # merge boxes with iou > 0.1 as they are likely to be the same box
     bboxes = merge_boxes(bboxes, 0.08)
-    t = timeit.timeit(lambda: merge_boxes(bboxes, 0.08), number=100) / 100
+    t = timeit.timeit(lambda: merge_boxes(bboxes, 0.08), number=1000) / 100
 
     print(f"t = {t}")
 
