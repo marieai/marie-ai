@@ -1,28 +1,23 @@
 import asyncio
+import multiprocessing
 import sys
+import time
 
 import pytest
 
+from marie import DocumentArray, Executor, requests, Deployment
+from marie.enums import PollingType
+from marie.parsers import set_deployment_parser
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+from marie.serve.runtimes.servers import BaseServer
+from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+from marie.types.request.data import DataRequest
 from marie_server.job.common import JobStatus
 from marie_server.job.job_manager import JobManager
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
 from tests.core.test_utils import async_wait_for_condition_async_predicate, async_delay
-
-import multiprocessing
-import time
-from dataclasses import dataclass
-
-import pytest
-
-from marie import Document, DocumentArray, Executor, requests, Deployment
-from marie.excepts import ExecutorError
-from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from marie.serve.runtimes.servers import BaseServer
-from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.serve.runtimes.gateway.streamer import GatewayStreamer
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
 from tests.helper import _generate_pod_args
 
 
@@ -272,44 +267,98 @@ async def test_gateway_job_manager(
         await gateway_streamer.close()
 
 
+def _create_regular_deployment(
+        port,
+        name='',
+        executor=None,
+        noblock_on_start=True,
+        polling=PollingType.ANY,
+        shards=None,
+        replicas=None,
+):
+    args = set_deployment_parser().parse_args(['--port', str(port)])
+
+    args.name = name
+    if shards:
+        args.shards = shards
+    if replicas:
+        args.replicas = replicas
+    args.polling = polling
+    return Deployment(args, include_gateway=False)
+
+
 @pytest.mark.asyncio
-async def test_deployment_job_manager():
+async def test_deployment_job_manager(port_generator):
     class PIDExecutor(Executor):
 
         @requests
         def foo(self, docs, **kwargs):
             import os
             for doc in docs:
-                # print(f"{os.getpid()} : {doc.id}")
+                time.sleep(1)
+                print(f"{os.getpid()} : {doc.id}")
+                doc.text += f'return foo {os.getpid()}'
                 doc.tags['pid'] = os.getpid()
 
+    # create a single worker pod
+
     # dep = Deployment(uses=PIDExecutor, include_gateway=True, shards=1, replicas=3)
-    dep = Deployment(uses=PIDExecutor, include_gateway=False, replicas=4)
+    # dep = Deployment(uses=PIDExecutor, include_gateway=False, noblock_on_start=False, replicas=4)
 
-    # dep.to_docker_compose_yaml('/tmp/marieai/docker-compose.yml')
-
-    # create a graph from the deployment
-    graph_description = {}
-    pod_addresses = {}
-
-    gateway_streamer = GatewayStreamer(
-        graph_representation=graph_description, executor_addresses=pod_addresses
+    deployment_port = port_generator()
+    port = port_generator()
+    graph_description = (
+        '{"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}'
     )
+    deployments_addresses = f'{{"deployment0": ["0.0.0.0:{deployment_port}"]}}'
 
-    request = DataRequest()
-    request.data.docs = DocumentArray.empty(5)
-    unary_response = await gateway_streamer.process_single_data(request=request)
+    deployments_metadata = '{"deployment0": {"key": "value"}}'
 
-    print(unary_response)
-    # assert len(unary_response.docs) == 60
-    with dep:
-        docs = dep.post(on='/', inputs=DocumentArray.empty(20), request_size=1)
+    # create a single worker pod
+    worker_deployment = _create_regular_deployment(deployment_port, 'worker', executor=PIDExecutor,
+                                                   noblock_on_start=False, shards=None, replicas=4)
 
-        dep.block()
+    # dep.start()
+    with worker_deployment:
+        # create a graph from the deployment
+        hosts = worker_deployment.hosts
+        ports = worker_deployment.ports
+        pod_addresses = {}
 
-    returned_pids = set([doc.tags['pid'] for doc in docs])
-    print(returned_pids)
-    assert len(returned_pids) == 1
+        for i, k in enumerate(zip(hosts, ports)):
+            host, port = k
+            pod_addresses[f"pod{i}"] = [f"{host}:{port}"]
+
+        print(pod_addresses)
+        g = worker_deployment._get_connection_list_for_single_executor()
+        print(g)
+
+        graph_description = {}
+        # pod_addresses = {}
+
+        graph_description = {
+            "start-gateway": ["pod0"],
+            "pod0": ["end-gateway"],
+        }
+        # pod_addresses = {"pod0": [f"0.0.0.0:{pod_port}"]}
+        # send requests to the gateway
+
+        gateway_streamer = GatewayStreamer(
+            graph_representation=graph_description, executor_addresses=pod_addresses
+        )
+
+        for i in range(2):
+            print(f"sending request : {i}")
+            request = DataRequest()
+            request.data.docs = DocumentArray.empty(5)
+            response = await gateway_streamer.process_single_data(request=request)
+            print(response)
+            print(response.docs)
+
+            assert len(response.docs) == 5
+            for doc in response.docs:
+                print(doc.tags)
+                # assert doc.text.startswith('return foo')
 
 
 if __name__ == "__main__":
