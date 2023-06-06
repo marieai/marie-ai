@@ -570,6 +570,9 @@ class TopologyGraph:
     ):
         self.logger = logger or MarieLogger(self.__class__.__name__)
         num_parts_per_node = defaultdict(int)
+
+        print("graph_representation--------------")
+        print(graph_representation)
         if 'start-gateway' in graph_representation:
             origin_node_names = graph_representation['start-gateway']
         else:

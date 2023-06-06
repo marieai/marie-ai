@@ -1,6 +1,8 @@
 import asyncio
+import json
 import multiprocessing
 import sys
+import threading
 import time
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from marie import DocumentArray, Executor, requests, Deployment
 from marie.enums import PollingType
 from marie.parsers import set_deployment_parser
+from marie.serve.networking import GrpcConnectionPool, _ReplicaList
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
@@ -276,89 +279,84 @@ def _create_regular_deployment(
         shards=None,
         replicas=None,
 ):
-    args = set_deployment_parser().parse_args(['--port', str(port)])
+    # return Deployment(uses=executor, include_gateway=False, noblock_on_start=noblock_on_start, replicas=replicas,
+    #                   shards=shards)
 
+    args = set_deployment_parser().parse_args(['--port', str(port)])
     args.name = name
     if shards:
         args.shards = shards
     if replicas:
         args.replicas = replicas
     args.polling = polling
+    args.uses = executor
+    args.noblock_on_start = noblock_on_start
+
     return Deployment(args, include_gateway=False)
 
 
 @pytest.mark.asyncio
-async def test_deployment_job_manager(port_generator):
+async def test_deployment_streamer(port_generator):
     class PIDExecutor(Executor):
 
         @requests
         def foo(self, docs, **kwargs):
             import os
             for doc in docs:
-                time.sleep(1)
+                time.sleep(1.1)
                 print(f"{os.getpid()} : {doc.id}")
                 doc.text += f'return foo {os.getpid()}'
                 doc.tags['pid'] = os.getpid()
 
     # create a single worker pod
-
-    # dep = Deployment(uses=PIDExecutor, include_gateway=True, shards=1, replicas=3)
-    # dep = Deployment(uses=PIDExecutor, include_gateway=False, noblock_on_start=False, replicas=4)
-
     deployment_port = port_generator()
     port = port_generator()
-    graph_description = (
-        '{"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}'
+    graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
+
+    replica_count = 4
+    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=PIDExecutor.__name__,
+                                            noblock_on_start=False, replicas=replica_count, shards=None)
+    deployment.start()
+
+    connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
+    deployments_addresses = {"deployment0": connections}
+    deployments_metadata = {"deployment0": {"key": "value"}}
+
+    gateway_streamer = GatewayStreamer(
+        graph_representation=graph_description, executor_addresses=deployments_addresses,
+        deployments_metadata=deployments_metadata
     )
-    deployments_addresses = f'{{"deployment0": ["0.0.0.0:{deployment_port}"]}}'
 
-    deployments_metadata = '{"deployment0": {"key": "value"}}'
+    stop_event = threading.Event()
+    await gateway_streamer.warmup(stop_event=stop_event)
 
-    # create a single worker pod
-    worker_deployment = _create_regular_deployment(deployment_port, 'worker', executor=PIDExecutor,
-                                                   noblock_on_start=False, shards=None, replicas=4)
+    pool: GrpcConnectionPool = gateway_streamer._connection_pool
+    replicas: _ReplicaList = pool._connections.get_replicas("deployment0", head=True)
+    replica_connections = replicas.get_all_connections()
+    assert len(replica_connections) == replica_count
 
-    # dep.start()
-    with worker_deployment:
-        # create a graph from the deployment
-        hosts = worker_deployment.hosts
-        ports = worker_deployment.ports
-        pod_addresses = {}
+    pids = {}
 
-        for i, k in enumerate(zip(hosts, ports)):
-            host, port = k
-            pod_addresses[f"pod{i}"] = [f"{host}:{port}"]
+    for i in range(12):
+        print("--" * 10)
+        print(f"sending request : {i}")
+        request = DataRequest()
+        request.data.docs = DocumentArray.empty(1)
+        response = await gateway_streamer.process_single_data(request=request)
 
-        print(pod_addresses)
-        g = worker_deployment._get_connection_list_for_single_executor()
-        print(g)
+        assert len(response.docs) == 1
+        for doc in response.docs:
+            pid = int(doc.tags['pid'])
+            print(pid)
+            if pid not in pids:
+                pids[pid] = 0
+            pids[pid] += 1
 
-        graph_description = {}
-        # pod_addresses = {}
+    print("pids")
+    print(pids)
 
-        graph_description = {
-            "start-gateway": ["pod0"],
-            "pod0": ["end-gateway"],
-        }
-        # pod_addresses = {"pod0": [f"0.0.0.0:{pod_port}"]}
-        # send requests to the gateway
-
-        gateway_streamer = GatewayStreamer(
-            graph_representation=graph_description, executor_addresses=pod_addresses
-        )
-
-        for i in range(2):
-            print(f"sending request : {i}")
-            request = DataRequest()
-            request.data.docs = DocumentArray.empty(5)
-            response = await gateway_streamer.process_single_data(request=request)
-            print(response)
-            print(response.docs)
-
-            assert len(response.docs) == 5
-            for doc in response.docs:
-                print(doc.tags)
-                # assert doc.text.startswith('return foo')
+    deployment.close()
+    await gateway_streamer.close()
 
 
 if __name__ == "__main__":

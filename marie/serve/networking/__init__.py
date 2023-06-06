@@ -440,6 +440,7 @@ class GrpcConnectionPool:
                     if len(tried_addresses) >= num_replicas:
                         break
                 tried_addresses.add(current_connection.address)
+                connections.mark_inuse(current_connection.address)
                 try:
                     return await current_connection.send_requests(
                         requests=requests,
@@ -462,6 +463,9 @@ class GrpcConnectionPool:
                         return error
                 except Exception as e:
                     return e
+                finally:
+                    if current_connection:
+                        connections.mark_free(current_connection.address)
 
         return asyncio.create_task(task_wrapper())
 
