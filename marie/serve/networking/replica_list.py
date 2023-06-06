@@ -48,6 +48,7 @@ class _ReplicaList:
         # a set containing all the ConnectionStubs that will be created using add_connection
         # this set is not updated in reset_connection and remove_connection
         self._warmup_stubs = set()
+        self.active_counter = {}
 
     async def reset_connection(self, address: str, deployment_name: str):
         """
@@ -214,3 +215,21 @@ class _ReplicaList:
         :returns: Set of stubs. The set doesn't remove any items once added.
         """
         return self._warmup_stubs
+
+    def mark_inuse(self, address: str) -> None:
+        # keep count of how many times this connection is checked out
+        self.active_counter[address] = self.active_counter.get(address, 0) + 1
+        print(f'active_counter {self.active_counter}')
+
+    def mark_free(self, address: str) -> None:
+        print(f'mark_free {address}')
+        # keep count of how many times this connection is checked out
+        self.active_counter[address] = self.active_counter.get(address, 0) - 1
+        print(f'active_counter {self.active_counter}')
+
+    def get_active_count(self, address: str) -> int:
+        return self.active_counter.get(address, 0)
+
+    @property
+    def active_counter_(self):
+        return self.active_counter
