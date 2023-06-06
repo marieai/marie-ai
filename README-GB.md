@@ -420,7 +420,6 @@ sudo apt install nvidia-driver-525 -f
 https://github.com/autogluon/autogluon/
 
 
-
 ## TensorRT Notes
 
 # https://developer.nvidia.com/blog/end-to-end-ai-for-nvidia-based-pcs-cuda-and-tensorrt-execution-providers-in-onnx-runtime/
@@ -445,3 +444,6 @@ https://github.com/autogluon/autogluon/
 # https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-tar
 # python3 -m pip install --upgrade tensorrt
 # pip install --ugrade onnx-tensorrt
+
+# Load-balancer
+https://www.educative.io/answers/what-is-the-least-connections-load-balancing-technique
