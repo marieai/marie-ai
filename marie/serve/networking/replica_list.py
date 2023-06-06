@@ -216,16 +216,21 @@ class _ReplicaList:
         """
         return self._warmup_stubs
 
-    def mark_inuse(self, address: str) -> None:
-        # keep count of how many times this connection is checked out
+    def mark_inuse(self, address: str) -> int:
+        """
+        Mark connection with address as in use
+        :param address: Address of the connection
+        """
         self.active_counter[address] = self.active_counter.get(address, 0) + 1
-        print(f'active_counter {self.active_counter}')
+        return self.active_counter[address]
 
-    def mark_free(self, address: str) -> None:
-        print(f'mark_free {address}')
-        # keep count of how many times this connection is checked out
+    def mark_free(self, address: str) -> int:
+        """
+        Mark connection with address as free
+        :param address: Address of the connection
+        """
         self.active_counter[address] = self.active_counter.get(address, 0) - 1
-        print(f'active_counter {self.active_counter}')
+        return self.active_counter[address]
 
     def get_active_count(self, address: str) -> int:
         return self.active_counter.get(address, 0)
