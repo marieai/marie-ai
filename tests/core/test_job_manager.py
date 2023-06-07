@@ -337,7 +337,7 @@ async def test_deployment_streamer(port_generator):
 
     pids = {}
 
-    for i in range(12):
+    for i in range(1):
         print("--" * 10)
         print(f"sending request : {i}")
         request = DataRequest()

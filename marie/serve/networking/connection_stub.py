@@ -212,6 +212,9 @@ class _ConnectionStubs:
         )
         return await call_result
 
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.address})'
+
 
 def create_async_channel_stub(
     address,
