@@ -44,7 +44,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
         t = threading.Thread(target=_run, daemon=True)
         t.start()
 
-    def _create_table(self):
+    def _create_table(self, table_name: str) -> None:
+        """Create the table if it doesn't exist."""
+        print("creating table : ", table_name)
+
         self._execute_sql_gracefully(
             f"""
              CREATE TABLE IF NOT EXISTS  queue (

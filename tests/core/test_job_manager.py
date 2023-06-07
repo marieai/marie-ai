@@ -1,16 +1,20 @@
 import asyncio
 import json
 import multiprocessing
+import os
+import random
 import sys
 import threading
 import time
 
 import pytest
+from docarray import Document
 
 from marie import DocumentArray, Executor, requests, Deployment
 from marie.enums import PollingType
 from marie.parsers import set_deployment_parser
 from marie.serve.networking import GrpcConnectionPool, _ReplicaList
+from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
@@ -295,26 +299,32 @@ def _create_regular_deployment(
     return Deployment(args, include_gateway=False)
 
 
+class FastSlowPIDExecutor(Executor):
+    @requests
+    def encode(self, docs, **kwargs):
+        assert len(docs) == 1
+        doc = docs[0]
+        r = 0
+        if doc.text == 'slow':
+            # random sleep between 0.1 and 0.5
+            # time.sleep(.5)
+            r = random.random() / 2 + 0.1
+            # time.sleep(random.random() / 2 + 0.1)
+            time.sleep(r)
+
+        print(f"{os.getpid()} : {doc.id}  >> {doc.text} : {r}")
+        doc.text += f'return encode {os.getpid()}'
+        doc.tags['pid'] = os.getpid()
+
+
 @pytest.mark.asyncio
 async def test_deployment_streamer(port_generator):
-    class PIDExecutor(Executor):
-
-        @requests
-        def foo(self, docs, **kwargs):
-            import os
-            for doc in docs:
-                time.sleep(1.1)
-                print(f"{os.getpid()} : {doc.id}")
-                doc.text += f'return foo {os.getpid()}'
-                doc.tags['pid'] = os.getpid()
-
-    # create a single worker pod
     deployment_port = port_generator()
     port = port_generator()
     graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
 
     replica_count = 4
-    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=PIDExecutor.__name__,
+    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
                                             noblock_on_start=False, replicas=replica_count, shards=None)
     deployment.start()
 
@@ -324,33 +334,58 @@ async def test_deployment_streamer(port_generator):
 
     gateway_streamer = GatewayStreamer(
         graph_representation=graph_description, executor_addresses=deployments_addresses,
-        deployments_metadata=deployments_metadata
+        deployments_metadata=deployments_metadata,
+        load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+        # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
     )
-
+    # LC : 32.9
     stop_event = threading.Event()
     await gateway_streamer.warmup(stop_event=stop_event)
-
-    pool: GrpcConnectionPool = gateway_streamer._connection_pool
-    replicas: _ReplicaList = pool._connections.get_replicas("deployment0", head=True)
-    replica_connections = replicas.get_all_connections()
-    assert len(replica_connections) == replica_count
-
     pids = {}
 
-    for i in range(1):
+    tasks = []
+    for i in range(25):
         print("--" * 10)
         print(f"sending request : {i}")
         request = DataRequest()
-        request.data.docs = DocumentArray.empty(1)
-        response = await gateway_streamer.process_single_data(request=request)
+        # request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
+        request.data.docs = DocumentArray([Document(text='slow')])
+        response = gateway_streamer.process_single_data(request=request)
+        tasks.append(response)
+        time.sleep(.2)
+        # time.sleep(random.random() / 4 + 0.1)
 
+    futures = await asyncio.gather(*tasks)
+
+    for response in futures:
         assert len(response.docs) == 1
         for doc in response.docs:
             pid = int(doc.tags['pid'])
-            print(pid)
             if pid not in pids:
                 pids[pid] = 0
             pids[pid] += 1
+
+    total = 0
+    for pid in pids:
+        total += pids[pid]
+
+    print("pids total : ", total)
+
+    if False:
+        for i in range(4):
+            print("--" * 10)
+            print(f"sending request : {i}")
+            request = DataRequest()
+            request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
+            response = await gateway_streamer.process_single_data(request=request)
+
+            assert len(response.docs) == 1
+            for doc in response.docs:
+                pid = int(doc.tags['pid'])
+                print(pid)
+                if pid not in pids:
+                    pids[pid] = 0
+                pids[pid] += 1
 
     print("pids")
     print(pids)

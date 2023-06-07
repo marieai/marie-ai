@@ -18,6 +18,7 @@ def replica_list(logger, metrics):
         load_balancer_type='least_connection',
     )
 
+
 def test_add_connection(replica_list):
     replica_list.add_connection('executor0', 'executor-0')
     assert replica_list.has_connections()
@@ -75,3 +76,60 @@ async def test_get_next_connection_counter(replica_list):
     assert replica_list.get_load_balancer().get_active_count('executor0') == 3
     assert replica_list.get_load_balancer().get_active_count('executor1') == 2
 
+
+@pytest.mark.asyncio
+async def test_get_next_connection_002(replica_list):
+    replica_list.add_connection('executor0', 'dep-0')
+    replica_list.add_connection('executor1', 'dep-0')
+    load_balancer = replica_list.get_load_balancer()
+
+    # setup load balancer workload
+    load_balancer.incr_usage('executor0')
+    load_balancer.incr_usage('executor0')
+    load_balancer.incr_usage('executor0')
+
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+    load_balancer.incr_usage('executor1')
+
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+    load_balancer.incr_usage('executor1')
+    load_balancer.incr_usage('executor1')
+    load_balancer.incr_usage('executor1')
+
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    load_balancer.incr_usage('executor0')
+
+    assert replica_list.get_load_balancer().get_active_count('executor0') == 4
+    assert replica_list.get_load_balancer().get_active_count('executor1') == 4
+
+
+@pytest.mark.asyncio
+async def test_get_next_connection_round_robin(replica_list):
+    replica_list.add_connection('executor0', 'dep-0')
+    replica_list.add_connection('executor1', 'dep-0')
+    load_balancer = replica_list.get_load_balancer()
+
+    # test internal round robin counter
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+
+    # increment usage for executor1 and get next connection
+    load_balancer.incr_usage('executor1')
+
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+
+    # decrement usage for executor1 and get next connection in round robin
+    load_balancer.decr_usage('executor1')
+
+    assert load_balancer.get_active_count('executor1') == 0
+    assert load_balancer.get_active_count('executor0') == 0
+
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor1'
+    assert (await replica_list.get_next_connection()).address == 'executor0'
+    assert (await replica_list.get_next_connection()).address == 'executor1'

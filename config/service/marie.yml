@@ -141,10 +141,25 @@ executors:
         py_modules:
           - marie.executor.text
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 4
 #    replicas: ${{ CONTEXT.gpu_device_count }}
     env :
       CUDA_VISIBLE_DEVICES: RR
+
+
+  - name: extract_xyz
+    uses:
+      jtype: TextExtractionExecutorMock
+      metas:
+        py_modules:
+          - marie.executor.text
+    timeout_ready: 3000000
+    replicas: 4
+#    replicas: ${{ CONTEXT.gpu_device_count }}
+    env :
+      CUDA_VISIBLE_DEVICES: RR
+
+
 
 #  - name: ner_t
 #    uses:
