@@ -482,7 +482,7 @@ def test_external_flow_with_grpc_metadata():
             grpc_metadata={'authorization': 'invalid'},
         )
         with f:
-            with pytest.raises(jina.excepts.BadServerFlow) as error_info:
+            with pytest.raises(marie.excepts.BadServerFlow) as error_info:
                 response = f.post(on='/', inputs=d, target_executor='external_executor')
             assert 'Invalid key' in str(error_info.value)
             # assert response[0].text == 'external'

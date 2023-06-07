@@ -65,6 +65,7 @@ class GatewayStreamer:
         aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
         tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
         grpc_channel_options: Optional[list] = None,
+        load_balancer_type: Optional[str] = 'round_robin',
     ):
         """
         :param graph_representation: A dictionary describing the topology of the Deployments. 2 special nodes are expected, the name `start-gateway` and `end-gateway` to
@@ -86,6 +87,7 @@ class GatewayStreamer:
         :param aio_tracing_client_interceptors: Optional list of aio grpc tracing server interceptors.
         :param tracing_client_interceptor: Optional gprc tracing server interceptor.
         :param grpc_channel_options: Optional gprc channel options.
+        :param load_balancer_type: Optional load balancer type. Default is round robin.
         """
         self.logger = logger or MarieLogger(self.__class__.__name__)
         self.topology_graph = TopologyGraph(
@@ -112,6 +114,7 @@ class GatewayStreamer:
             aio_tracing_client_interceptors,
             tracing_client_interceptor,
             grpc_channel_options,
+            load_balancer_type,
         )
         request_handler = AsyncRequestResponseHandler(
             metrics_registry, meter, runtime_name, logger
@@ -138,6 +141,7 @@ class GatewayStreamer:
         aio_tracing_client_interceptors,
         tracing_client_interceptor,
         grpc_channel_options=None,
+        load_balancer_type='round_robin',
     ):
         # add the connections needed
         connection_pool = GrpcConnectionPool(
@@ -149,6 +153,7 @@ class GatewayStreamer:
             aio_tracing_client_interceptors=aio_tracing_client_interceptors,
             tracing_client_interceptor=tracing_client_interceptor,
             channel_options=grpc_channel_options,
+            load_balancer_type=load_balancer_type,
         )
         for deployment_name, addresses in deployments_addresses.items():
             for address in addresses:

@@ -47,13 +47,15 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         """
         ...
 
-    @abc.abstractmethod
     def update_connections(self, connections):
         """
         Rebalance the connections.
         :param connections: List of connections to be used for load balancing.
         """
-        ...
+        self._connections = connections
+        for connection in self._connections:
+            if connection.address not in self.active_counter:
+                self.active_counter[connection.address] = 0
 
     @staticmethod
     def get_load_balancer(
@@ -97,7 +99,11 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         Increment connection with address as in use
         :param address: Address of the connection
         """
+        self._logger.debug("Incrementing usage for address", address)
         self.active_counter[address] = self.active_counter.get(address, 0) + 1
+
+        self._logger.debug(f'incr_usage: self.active_counter: {self.active_counter}')
+
         return self.active_counter[address]
 
     def decr_usage(self, address: str) -> int:
@@ -105,9 +111,15 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         Decrement connection with address as not in use
         :param address: Address of the connection
         """
-        self.active_counter[address] = self.active_counter.get(address, 0) - 1
+        self._logger.debug("Decrementing usage for address", address)
+        self.active_counter[address] = max(0, self.active_counter.get(address, 0) - 1)
+
+        self._logger.debug(f'decr_usage: self.active_counter: {self.active_counter}')
         return self.active_counter[address]
 
     def get_active_count(self, address: str) -> int:
         """Get the number of active requests for a given address"""
         return self.active_counter.get(address, 0)
+
+    def get_active_counter(self):
+        return self.active_counter

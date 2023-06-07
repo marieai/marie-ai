@@ -48,11 +48,11 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
         logger.warning("decoder_pretrained is null, defaulting to download ")
         decoder_pretrained = None
     else:
-        decoder_pretrained = f"file://{decoder_pretrained}"
+        decoder_pretrained = f"{decoder_pretrained}"
+        # decoder_pretrained = f"file://{decoder_pretrained}"
 
     # FileNotFoundError: [Errno 2] No such file or directory when using decoder_pretrained
-    decoder_pretrained = None
-
+    # decoder_pretrained = None
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={

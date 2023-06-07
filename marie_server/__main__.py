@@ -177,14 +177,13 @@ def __main__(
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
-        # include_gateway=False,
+        include_gateway=False,
         # noblock_on_start=True,
     )
 
     marie.helper.extend_rest_interface = extend_rest_interface
     filter_endpoint()
 
-    print("Loading flow")
     with f:
         setup_server(config)
         f.block()

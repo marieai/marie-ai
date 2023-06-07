@@ -322,7 +322,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 description='Time spent when calling the executor request method',
             )
             self._histogram_buffer = {
-                'jina_process_request_seconds': self._process_request_histogram
+                'marie_process_request_seconds': self._process_request_histogram
             }
         else:
             self._process_request_histogram = None

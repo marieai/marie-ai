@@ -59,6 +59,7 @@ class GrpcConnectionPool:
         aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
         tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
         channel_options: Optional[list] = None,
+        load_balancer_type: Optional[str] = 'round_robin',
     ):
         self._logger = logger or MarieLogger(self.__class__.__name__)
         self.channel_options = channel_options
@@ -142,6 +143,7 @@ class GrpcConnectionPool:
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors,
             tracing_client_interceptor=self.tracing_client_interceptor,
             channel_options=self.channel_options,
+            load_balancer_type=load_balancer_type,
         )
         self._deployment_address_map = {}
 

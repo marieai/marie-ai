@@ -20,10 +20,14 @@ class RoundRobinLoadBalancer(LoadBalancer):
         :param num_retries: how many retries should be performed when all connections are currently unavailable
         :returns: A connection from the pool
         """
+        print(f'round_robin_balancer.py: self._connections: {self._connections}')
         try:
             connection = None
             for i in range(len(self._connections)):
                 internal_rr_counter = (self._rr_counter + i) % len(self._connections)
+                print(
+                    f'round_robin_balancer.py: internal_rr_counter: {internal_rr_counter}'
+                )
                 connection = self._connections[internal_rr_counter]
                 # connection is None if it is currently being reset. In that case, try different connection
                 if connection is not None:
@@ -49,7 +53,7 @@ class RoundRobinLoadBalancer(LoadBalancer):
 
     def update_connections(self, connections: list):
         """Rebalance the connections."""
-        self._connections = connections
+        super().update_connections(connections)
         self._rr_counter = (
             self._rr_counter % (len(self._connections) - 1)
             if (len(self._connections) - 1)

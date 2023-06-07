@@ -26,6 +26,7 @@ class _ConnectionPoolMap:
         aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
         tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
         channel_options: Optional[list] = None,
+        load_balancer_type: Optional[str] = 'round_robin',
     ):
         self._logger = logger
         # this maps deployments to shards or heads
@@ -41,6 +42,7 @@ class _ConnectionPoolMap:
         self.aio_tracing_client_interceptors = aio_tracing_client_interceptors
         self.tracing_client_interceptor = tracing_client_interceptor
         self.channel_options = channel_options
+        self.load_balancer_type = load_balancer_type
 
     def add_replica(self, deployment: str, shard_id: int, address: str):
         self._add_connection(deployment, shard_id, address, 'shards')
@@ -144,6 +146,7 @@ class _ConnectionPoolMap:
                 tracing_client_interceptor=self.tracing_client_interceptor,
                 deployment_name=deployment,
                 channel_options=self.channel_options,
+                load_balancer_type=self.load_balancer_type,
             )
             self._deployments[deployment][type][entity_id] = connection_list
 
