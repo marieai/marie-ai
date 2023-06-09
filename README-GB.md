@@ -351,10 +351,15 @@ https://huggingface.co/spaces/rajistics/receipt_extractor/blob/main/app.py
 https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/inference_handler.py
 https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
 
-https://github.com/ray-project/ray
-https://github.com/deepset-ai/haystack/tree/main
-https://github.com/qurator-spk/eynollah
-dagster
+
+GOOD CODE REFERENCES:
+RAY https://github.com/ray-project/ray
+HAYSTACK https://github.com/deepset-ai/haystack/tree/main
+QURATOR https://github.com/qurator-spk/eynollah
+DAGSTER dagster
+
+https://hevodata.com/signup/?step=email
+
 
 
 https://www.marktechpost.com/2022/11/01/a-new-mlops-system-called-alaas-active-learning-as-a-service-adopts-the-philosophy-of-machine-learning-as-service-and-implements-a-server-client-architecture/
