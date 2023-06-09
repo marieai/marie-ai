@@ -326,24 +326,26 @@ async def test_deployment_streamer(port_generator):
     replica_count = 4
     deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
                                             noblock_on_start=False, replicas=replica_count, shards=None)
-    deployment.start()
 
     connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
     deployments_addresses = {"deployment0": connections}
     deployments_metadata = {"deployment0": {"key": "value"}}
 
+    # manually start the deployment
     gateway_streamer = GatewayStreamer(
         graph_representation=graph_description, executor_addresses=deployments_addresses,
         deployments_metadata=deployments_metadata,
         load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
         # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
     )
-    # LC : 32.9
+
+    deployment.start()
+
     stop_event = threading.Event()
     await gateway_streamer.warmup(stop_event=stop_event)
     pids = {}
-
     tasks = []
+
     for i in range(25):
         print("--" * 10)
         print(f"sending request : {i}")
@@ -352,7 +354,7 @@ async def test_deployment_streamer(port_generator):
         request.data.docs = DocumentArray([Document(text='slow')])
         response = gateway_streamer.process_single_data(request=request)
         tasks.append(response)
-        time.sleep(.2)
+        # time.sleep(.2)
         # time.sleep(random.random() / 4 + 0.1)
 
     futures = await asyncio.gather(*tasks)

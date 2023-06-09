@@ -257,6 +257,7 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
     with Flow().config_gateway(uses=MyGateway, protocol='http').add(uses=FirstExec, name='executor0').add(
             uses=SecondExec, name='executor1', replicas=n_replicas, shards=n_shards
     ) as flow:
+
         import requests
         r = requests.get(f'http://localhost:{flow.port}/endpoint?text=meow')
 
@@ -264,3 +265,5 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
         assert set(r.json()['result']) == set([f'meow {i} Second(parameters={str(PARAMETERS)})' for i in range(N_DOCS)])
         # Make sure we are sending to all replicas and shards
         assert len(r.json()['pids']) == n_replicas * n_shards
+        flow.block()
+

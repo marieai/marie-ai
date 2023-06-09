@@ -1,0 +1,24 @@
+---
+- name: Marie-AI - Status Node
+  hosts: ml.cluster
+  gather_facts: false
+
+  vars:
+    stack_name: "dev"
+
+  tasks:
+    - name: Get infos on container
+      docker_container_info:
+        name: "marieai-{{ stack_name }}-server"
+      register: result
+
+    - name: Does container exist?
+      debug:
+        msg: "The container {{ 'exists' if result.exists else 'does not exist' }}"
+
+    - name: Print information about container
+      debug:
+        var: result.container.State.Running
+      when: result.exists
+
+
