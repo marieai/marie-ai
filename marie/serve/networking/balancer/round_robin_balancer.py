@@ -20,12 +20,14 @@ class RoundRobinLoadBalancer(LoadBalancer):
         :param num_retries: how many retries should be performed when all connections are currently unavailable
         :returns: A connection from the pool
         """
-        print(f'round_robin_balancer.py: self._connections: {self._connections}')
+        self._logger.debug(
+            f'round_robin_balancer.py: self._connections: {self._connections}'
+        )
         try:
             connection = None
             for i in range(len(self._connections)):
                 internal_rr_counter = (self._rr_counter + i) % len(self._connections)
-                print(
+                self._logger.debug(
                     f'round_robin_balancer.py: internal_rr_counter: {internal_rr_counter}'
                 )
                 connection = self._connections[internal_rr_counter]
