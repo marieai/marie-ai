@@ -216,10 +216,7 @@ class StorageManager:
         Returns:
             handler (PathHandler)
         """
-        print("handler_path : ", path)
-        print("StorageManager._PATH_HANDLERS.keys() : ", StorageManager._PATH_HANDLERS.keys())
         for p in StorageManager._PATH_HANDLERS.keys():
-            print("p : ", p)
             if path.startswith(p):
                 return StorageManager._PATH_HANDLERS[p]
         return StorageManager._NATIVE_PATH_HANDLER

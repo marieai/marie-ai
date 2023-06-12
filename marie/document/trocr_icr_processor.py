@@ -1,6 +1,7 @@
 import math
 import os
 import time
+import traceback
 import typing
 from typing import Any, Dict, List, Tuple
 
@@ -305,5 +306,6 @@ class TrOcrIcrProcessor(IcrProcessor):
                 )
             logger.info("ICR Time elapsed: %s" % (time.time() - start))
         except Exception as ex:
+            print(traceback.format_exc())
             raise ex
         return results

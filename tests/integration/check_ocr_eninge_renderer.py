@@ -74,11 +74,8 @@ if __name__ == "__main__":
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175190423.tif"
-    img_path = "/home/gbugaj/tmp/4007/176073139.tif"
-    img_path = "/tmp/s3/incoming"
-    # img_path = "/tmp/s3/incoming/PID_89_6334_0_177354975.tif"
-    # img_path = "/home/greg/tmp/s3-data/PID_1012_7808_0_177192249.tif" # failed assertion
+    img_path = "~tmp/4007/176073139.tif"
+    img_path = "/tmp/form-segmentation/8186b2882f4f83bd5ed0a338e6e1be4c/179575453_8_8186b2882f4f83bd5ed0a338e6e1be4c.png"
 
     # frames = [crop_to_content(frame, True) for frame in frames]
 

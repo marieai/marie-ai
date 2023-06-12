@@ -40,8 +40,12 @@ class MemoryDataset(Dataset):
                 image = (image * 255).astype(np.uint8)
                 img = Image.fromarray(image)
 
-            image = cv2.cvtColor(image, code=cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(image)
+            try:
+                # Convert color to RGB
+                image = cv2.cvtColor(image, code=cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(image)
+            except Exception as e:
+                raise e
 
         if self.opt.rgb:
             img = img.convert("RGB")  # for color image
