@@ -25,10 +25,12 @@ def setup_storage():
 
 
 if __name__ == "__main__":
-    setup_storage()
+    # setup_storage()
 
     img_path = (
-        "~/tmp/4007/176081094.tif"
+        "~/tmp/179575453.tif"
+        # "~/tmp/blank.png"
+        # "~/tmp/4007/176081094.tif"
     )
 
     # # Register VFS handlers
@@ -38,7 +40,7 @@ if __name__ == "__main__":
     # process_workflow(src_file)
 
     img_path = os.path.expanduser(img_path)
-    StorageManager.mkdir("s3://marie")
+    # StorageManager.mkdir("s3://marie")
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -47,7 +49,7 @@ if __name__ == "__main__":
     filename, prefix, suffix = split_filename(img_path)
 
     s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
-    StorageManager.write(img_path, s3_path, overwrite=True)
+    # StorageManager.write(img_path, s3_path, overwrite=True)
 
     # resave PDF as tiff
     # merge_tiff_frames(frames, f"{img_path}.merged.tif")
