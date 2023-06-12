@@ -48,9 +48,10 @@ def setup_toast_events(toast_config: Dict[str, Any]):
 
 def setup_storage(storage_config: Dict[str, Any]):
     """Setup the storage handler"""
-    if "s3" in storage_config:
-        handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
 
+    if "s3" in storage_config:
+        logger.info("Setting up storage handler for S3")
+        handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
         StorageManager.register_handler(handler=handler)
         StorageManager.ensure_connection("s3://")
         StorageManager.mkdir("s3://marie")
