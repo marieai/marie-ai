@@ -95,7 +95,6 @@ def main(
     env: Optional[Dict[str, str]] = None,
     env_file: Optional[str] = None,
 ):
-    print("main*****************")
     __main__(yml_config, env, env_file)
 
 
@@ -184,9 +183,9 @@ def __main__(
 
     marie.helper.extend_rest_interface = extend_rest_interface
     filter_endpoint()
+    setup_server(config)
 
     with f:
-        setup_server(config)
         f.block()
 
 

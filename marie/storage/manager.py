@@ -216,7 +216,10 @@ class StorageManager:
         Returns:
             handler (PathHandler)
         """
+        print("handler_path : ", path)
+        print("StorageManager._PATH_HANDLERS.keys() : ", StorageManager._PATH_HANDLERS.keys())
         for p in StorageManager._PATH_HANDLERS.keys():
+            print("p : ", p)
             if path.startswith(p):
                 return StorageManager._PATH_HANDLERS[p]
         return StorageManager._NATIVE_PATH_HANDLER
@@ -595,10 +598,6 @@ class StorageManager:
         :param allow_native:  If True, the native path handler will be considered as a valid handler
         :return:  True if there is a PathHandler that can handle the given URI
         """
-
-        print("can_handle", path)
-        print("cls._PATH_HANDLERS", cls._PATH_HANDLERS)
-        print("cls._NATIVE_PATH_HANDLER", cls._NATIVE_PATH_HANDLER)
 
         handler = StorageManager.__get_path_handler(path)
         if handler == StorageManager._NATIVE_PATH_HANDLER and not allow_native:
