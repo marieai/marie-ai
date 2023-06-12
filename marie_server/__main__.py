@@ -190,8 +190,8 @@ def __main__(
 
 
 def setup_server(config: Dict[str, Any]) -> None:
-    # setup_toast_events(config.get("toast", {}))
-    # setup_storage(config.get("storage", {}))
+    setup_toast_events(config.get("toast", {}))
+    setup_storage(config.get("storage", {}))
     setup_scheduler(config.get("scheduler", {}))
 
 
