@@ -596,8 +596,7 @@ class StorageManager:
         :return:  True if there is a PathHandler that can handle the given URI
         """
 
-        print("path", path)
-        print("allow_native", allow_native)
+        print("can_handle", path)
         print("cls._PATH_HANDLERS", cls._PATH_HANDLERS)
         print("cls._NATIVE_PATH_HANDLER", cls._NATIVE_PATH_HANDLER)
 
