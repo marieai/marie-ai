@@ -71,7 +71,7 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -115,7 +115,7 @@ def lines_from_bboxes(image, bboxes):
         bboxes: Bounding boxes for image (xmin,ymin,xmax,ymax)
 
     Returns:
-        lines_bboxes: Bounding boxes for the lines in (x,y,w,h)
+        lines_bboxes: Bounding boxes for the lines in (x,y,w,h) format
     """
 
     if False:
@@ -196,10 +196,10 @@ class BoxProcessorUlimDit(BoxProcessor):
     """DiT for Text Detection"""
 
     def __init__(
-        self,
-        work_dir: str = "/tmp/boxes",
-        models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
-        cuda: bool = False,
+            self,
+            work_dir: str = "/tmp/boxes",
+            models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
+            cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
@@ -257,10 +257,21 @@ class BoxProcessorUlimDit(BoxProcessor):
             if boxes is None or len(boxes) == 0:
                 return [], [], [], [], []
 
-            # convert boxes to xywh
             bboxes = _convert_boxes(boxes)
+            # for each box check if it has a height and width are in range of (0..2], if so remove it
+            # this is a workaround for a bug in the model where it predicts a box with height and width of fraction of a pixel
+            len_a = len(bboxes)
+            min_height = 2
+            min_width = 2
+            # bboxes are in (xmin,ymin,xmax,ymax) format
+            bboxes = [box for box in bboxes if box[2] - box[0] > min_height]
+            bboxes = [box for box in bboxes if box[3] - box[1] > min_width]
+
+            len_b = len(bboxes)
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
+            if len_a != len_b:
+                self.logger.debug(f"Removed boxes : {len_a - len_b}")
 
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
@@ -268,7 +279,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             lines = lines_from_bboxes(image, bboxes)
 
             return bboxes, classes, scores, lines, classes
-
         except Exception as e:
             raise e
 
@@ -288,7 +298,7 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def extract_bounding_boxes(
-        self, _id, key, img, psm=PSMode.SPARSE
+            self, _id, key, img, psm=PSMode.SPARSE
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -370,9 +380,10 @@ class BoxProcessorUlimDit(BoxProcessor):
                 h = y1 - y0
                 box_adj = [x0, y0, w, h]
 
+                # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
+                    snippet = img[y0: y0 + h, x0: x0 + w:]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)
