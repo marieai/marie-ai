@@ -28,7 +28,7 @@ if __name__ == "__main__":
     # setup_storage()
 
     img_path = (
-        "~/tmp/179575453.tif"
+        "/home/gbugaj/dev/ldt-document-dump/cache/179575453.tif"
         # "~/tmp/blank.png"
         # "~/tmp/4007/176081094.tif"
     )
@@ -47,14 +47,13 @@ if __name__ == "__main__":
 
     frames = frames_from_file(img_path)
     filename, prefix, suffix = split_filename(img_path)
+    pipeline = ExtractPipeline()
 
-    s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
+    # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
-
     # resave PDF as tiff
     # merge_tiff_frames(frames, f"{img_path}.merged.tif")
 
     if True:
-        pipeline = ExtractPipeline()
         with TimeContext(f"### ExtractPipeline info"):
             results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames)

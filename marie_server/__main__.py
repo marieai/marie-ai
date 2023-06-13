@@ -121,6 +121,9 @@ def __main__(
     if False:
         import shutil
 
+        # os.environ['COLUMNS'] = "211"
+        # os.environ['LINES'] = "50"
+
         print(f"shutil.which('python') = {shutil.which('python')}")
         print(shutil.get_terminal_size())
 
@@ -140,6 +143,7 @@ def __main__(
 
     PYTHONPATH = os.environ.get("PYTHONPATH", "")
 
+    logger.info(f"Debugging information:")
     logger.info(f"__model_path__ = {__model_path__}")
     logger.info(f"__config_dir__ = {__config_dir__}")
     logger.info(f"__marie_home__ = {__marie_home__}")
