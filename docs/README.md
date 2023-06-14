@@ -6,7 +6,7 @@
 ```
 $ nvm install $(cat .nvmrc)
 $ nvm use
-$ npm install --global yarn
+$ npm install --location=global yarn
 ```
 
 ```

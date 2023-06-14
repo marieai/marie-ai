@@ -42,17 +42,16 @@ from typing import Dict
 import transformers
 
 from marie.conf.helper import storage_provider_config, load_yaml
-from marie.executor import NerExtractionExecutor
+from marie.executor.ner import NerExtractionExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
 from marie.logging.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.image_utils import hash_file, hash_bytes
 from marie.utils.json import store_json_object
+from marie.constants import __model_path__, __config_dir__
 from marie import (
     Document,
     DocumentArray,
-    __model_path__,
-    __config_dir__,
 )
 
 
