@@ -1,4 +1,5 @@
 import asyncio
+import curses
 import inspect
 import os
 import sys
@@ -30,6 +31,7 @@ from rich.traceback import install
 from marie_server.rest_extension import extend_rest_interface
 
 torch.set_float32_matmul_precision("high")
+DEFAULT_TERM_COLUMNS = 120
 
 
 def setup_toast_events(toast_config: Dict[str, Any]):
@@ -90,6 +92,23 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
 
 
+def columns():
+    """Returns the number of columns available for displaying the output."""
+    if 'COLUMNS' in os.environ:
+        return int(os.environ['COLUMNS'])
+
+    if not sys.stdout.isatty():
+        return DEFAULT_TERM_COLUMNS
+
+    try:
+        tput_columns = os.popen('tput cols', 'r').read().rstrip()
+        os.environ['COLUMNS'] = str(int(tput_columns))
+
+        return int(tput_columns)
+    except:
+        return DEFAULT_TERM_COLUMNS
+
+
 def main(
     yml_config: str,
     env: Optional[Dict[str, str]] = None,
@@ -118,15 +137,16 @@ def __main__(
 
         is_latest_version(github_repo="marie-ai")
 
-    if False:
+    if True:
         import shutil
 
         # os.environ['COLUMNS'] = "211"
         # os.environ['LINES'] = "50"
-
         print(f"shutil.which('python') = {shutil.which('python')}")
         print(shutil.get_terminal_size())
+        print(columns())
 
+        print(shutil.get_terminal_size())
         import logging
         import shutil
         from rich.logging import RichHandler
@@ -140,6 +160,8 @@ def __main__(
         logging.info('test')
         logging.debug('test')
         Console().print(shutil.get_terminal_size())
+
+        sys.exit(1)
 
     PYTHONPATH = os.environ.get("PYTHONPATH", "")
 
