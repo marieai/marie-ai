@@ -8,6 +8,8 @@ import numpy as np
 
 from marie.utils.overlap import find_overlap_vertical
 
+from marie.logging.predefined import default_logger
+
 
 def find_line_number(lines, box):
     """Get line index for specific box
@@ -29,10 +31,9 @@ def find_line_number(lines, box):
                 line_number = index + 1
 
     if line_number == -1:
-        msg = f"Invalid line number : -1, this looks like a bug/vertical line : {box}"
-        print(msg)
-        # raise Exception(msg)
-        # find the closest line
+        default_logger.info(
+            f"Invalid line number : -1, this looks like a bug/vertical line : {box}"
+        )
         min_y = 100000
         for i, line in enumerate(lines):
             line_y = line[1] + line[3]
@@ -41,9 +42,7 @@ def find_line_number(lines, box):
             if dy < min_y:
                 line_number = i + 1
                 min_y = dy
-
-        print(f"Adjusted closest line_number = {line_number}")
-
+        default_logger.info(f"Adjusted closest line_number = {line_number}")
     return line_number
 
 
@@ -64,7 +63,7 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
         visited[idx] = True
         box = bboxes[idx]
         overlaps, indexes, scores = find_overlap_vertical(box, bboxes)
-        # print(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+        # default_logger.debug(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
 
         # now we check each overlap against each other
         # for each item that overlaps our box check to make sure that the ray back is valid
@@ -72,7 +71,6 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
         idx_to_merge = [idx]
 
         for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
-            # print(f"\t\t{k} -> {score} : {index} : {overlap}")
             if visited[index] or score < min_iou:
                 continue
             bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes)
@@ -87,11 +85,11 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
                     ):
                         c_h = bboxes[bi_index][3]
                         if c_h < s_h:
-                            print(f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}")
+                            default_logger.debug(
+                                f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}"
+                            )
                         # print(f"\t\t\t\t{k} -> {s_h}   === {c_h} ")
         lines.append(idx_to_merge)
-        # print("*************")
-        # print(f"idxs = {len(idx_to_merge)}")
 
     lines_bboxes = []
 
