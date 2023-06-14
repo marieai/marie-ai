@@ -17,11 +17,11 @@ import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
 from multiprocessing import Pool
-import rstr
+# import rstr
 import cv2
 import numpy as np
-from faker import Faker
-from faker.providers import BaseProvider
+# from faker import Faker
+# from faker.providers import BaseProvider
 from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
@@ -37,7 +37,7 @@ from marie.utils.utils import ensure_exists
 # https://guillaumejaume.github.io/FUNSD/description/
 
 logger = logging.getLogger(__name__)
-
+_tmp_path = "/tmp/marie"
 # setup data aug
 
 
@@ -215,8 +215,8 @@ def extract_icr(image, boxp, icrp):
     checksum = m.hexdigest()
 
     print(f"checksum = {checksum}")
-    json_file = f"/tmp/marie/{checksum}.json"
-    ensure_exists("/tmp/marie")
+    json_file = f"{_tmp_path}/{checksum}.json"
+    ensure_exists(f"{_tmp_path}")
 
     if os.path.exists(json_file):
         json_data = from_json_file(json_file)
@@ -234,7 +234,7 @@ def extract_icr(image, boxp, icrp):
     if boxes is None or len(boxes) == 0:
         print(f"Empty boxes for : {checksum}")
         if True:
-            file_path = os.path.join("/tmp/snippet", f"empty_boxes-{checksum}.png")
+            file_path = os.path.join(f"{_tmp_path}/snippet", f"empty_boxes-{checksum}.png")
             cv2.imwrite(file_path, image)
 
         h = image.shape[0]
@@ -263,8 +263,8 @@ def extract_icr(image, boxp, icrp):
 
 
 def decorate_funsd(src_dir: str, debug_fragments=False):
-    work_dir_boxes = ensure_exists("/tmp/boxes")
-    work_dir_icr = ensure_exists("/tmp/icr")
+    work_dir_boxes = ensure_exists(f"{_tmp_path}/boxes")
+    work_dir_icr = ensure_exists(f"{_tmp_path}/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
 
     logger.info("⏳ Decorating examples from = %s", src_dir)
@@ -314,7 +314,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             print(f"line_number = {line_number}")
             # export cropped region
             if debug_fragments:
-                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
+                file_path = os.path.join(f"{_tmp_path}/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr(snippet, boxp, icrp)
@@ -328,10 +328,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             ):
                 print(f"No results for : {guid}-{i}")
                 continue
-
-            # if debug_fragments:
-            #     file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
-            #     cv2.imwrite(file_path, snippet)
 
             words = []
             text = ""
@@ -375,7 +371,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             index = i + 1
 
         if debug_fragments:
-            file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
+            file_path = os.path.join(f"{_tmp_path}/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
         # masked boxes will be same as the original ones
@@ -553,7 +549,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
     resized, target_size = __scale_height(image, 1000)
-    resized.save(f"/tmp/snippet/resized_{filename}.png")
+    resized.save(f"{_tmp_path}/snippet/resized_{filename}.png")
 
     # print(f"orig_size, target_size   = {orig_size} : {target_size}")
     orig_w, orig_h = orig_size
@@ -1048,7 +1044,7 @@ def extract_args(args=None) -> object:
 
     visualize_parser.add_argument(
         "--dir-output",
-        default="/tmp/visualize",
+        default=f"{_tmp_path}/visualize",
         type=str,
         help="Destination directory",
     )
@@ -1074,7 +1070,7 @@ def extract_args(args=None) -> object:
 
     split_parser.add_argument(
         "--dir-output",
-        default="/tmp/split",
+        default=f"{_tmp_path}/split",
         type=str,
         help="Destination directory",
     )
