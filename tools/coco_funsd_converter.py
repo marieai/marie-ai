@@ -278,7 +278,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
 
     boxp = BoxProcessorUlimDit(
         work_dir=work_dir_boxes,
-        models_dir="./model_zoo/unilm/dit/text_detection",
+        # models_dir="./model_zoo/unilm/dit/text_detection",
         cuda=True,
     )
 
@@ -286,25 +286,13 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        # if guid == 5:
-        #     break
+        print(file)
+        if guid == 5:  # TODO: remove box issue solved
+            break
 
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
-
-        found = False
-        requires_one = {"paragraph", "greeting", "question"}
-
-        for i, item in enumerate(data["form"]):
-            label = item["label"]
-            if label in requires_one:
-                found = True
-                break
-
-        if not found:
-            print(f"Skipping document : {guid} : {file}")
-            continue
 
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
@@ -341,9 +329,9 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 print(f"No results for : {guid}-{i}")
                 continue
 
-            if debug_fragments:
-                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
-                cv2.imwrite(file_path, snippet)
+            # if debug_fragments:
+            #     file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
+            #     cv2.imwrite(file_path, snippet)
 
             words = []
             text = ""
@@ -768,7 +756,7 @@ def default_decorate(args: object):
     # This should be our dataset folder
     mode = args.mode
     src_dir = os.path.join(args.dir, f"{mode}")
-    decorate_funsd(src_dir, debug_fragments=False)
+    decorate_funsd(src_dir, debug_fragments=True)
 
 
 def default_augment(args: object):
@@ -903,9 +891,9 @@ def default_all_steps(args: object):
     args_4["suffix"] = "-augmented"
 
     # execute each step
-    default_convert(Namespace(**args_1))
-    # default_decorate(Namespace(**args_2))
-    # default_augment(Namespace(**args_3))
+    # default_convert(Namespace(**args_1))
+    default_decorate(Namespace(**args_2))
+    default_augment(Namespace(**args_3))
     default_rescale(Namespace(**args_4))
 
 
