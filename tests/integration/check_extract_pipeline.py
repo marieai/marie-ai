@@ -28,7 +28,9 @@ if __name__ == "__main__":
     # setup_storage()
 
     img_path = (
-        "/home/gbugaj/dev/ldt-document-dump/cache/179575453.tif"
+        # "/home/gbugaj/dev/ldt-document-dump/cache/179575453.tif"
+        # "/home/gbugaj/tmp/eob-issues/158954482_0.png"
+        "/home/gbugaj/datasets/EMPTY-BOXES/empty_boxes-d73a26926f6e4313b7d410202892f2b5c19b39649218d55d09386939eb65b818.png"
         # "~/tmp/blank.png"
         # "~/tmp/4007/176081094.tif"
     )

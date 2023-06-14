@@ -65,7 +65,7 @@ async def job_manager(tmp_path):
                       "default_table": "kv_store_a", "max_pool_size": 5,
                       "max_connections": 5}
 
-    storage = PostgreSQLKV(config=storage_config, reset=True)
+    # storage = PostgreSQLKV(config=storage_config, reset=True)
     yield JobManager(storage)
 
 
@@ -318,14 +318,14 @@ class FastSlowPIDExecutor(Executor):
 
 
 @pytest.mark.asyncio
-async def test_deployment_streamer(port_generator):
+async def test_deployment_gateway_streamer(port_generator):
     deployment_port = port_generator()
-    port = port_generator()
     graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
 
     replica_count = 4
     deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
                                             noblock_on_start=False, replicas=replica_count, shards=None)
+    deployment.start()
 
     connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
     deployments_addresses = {"deployment0": connections}
@@ -335,20 +335,19 @@ async def test_deployment_streamer(port_generator):
     gateway_streamer = GatewayStreamer(
         graph_representation=graph_description, executor_addresses=deployments_addresses,
         deployments_metadata=deployments_metadata,
-        load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+        load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
         # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
     )
-
-    deployment.start()
 
     stop_event = threading.Event()
     await gateway_streamer.warmup(stop_event=stop_event)
     pids = {}
     tasks = []
+    iter_count = 10
 
-    for i in range(25):
+    for i in range(iter_count):
         print("--" * 10)
-        print(f"sending request : {i}")
+        print(f"scheduling request : {i}")
         request = DataRequest()
         # request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
         request.data.docs = DocumentArray([Document(text='slow')])
@@ -372,6 +371,7 @@ async def test_deployment_streamer(port_generator):
         total += pids[pid]
 
     print("pids total : ", total)
+    assert total == iter_count
 
     if False:
         for i in range(4):
@@ -394,6 +394,71 @@ async def test_deployment_streamer(port_generator):
 
     deployment.close()
     await gateway_streamer.close()
+
+
+@pytest.mark.asyncio
+async def test_deployment_with_job_manager(port_generator, job_manager):
+    deployment_port = port_generator()
+    graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
+
+    replica_count = 4
+    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
+                                            noblock_on_start=False, replicas=replica_count, shards=None)
+    deployment.start()
+
+    connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
+    deployments_addresses = {"deployment0": connections}
+    deployments_metadata = {"deployment0": {"key": "value"}}
+
+    # manually start the deployment
+    gateway_streamer = GatewayStreamer(
+        graph_representation=graph_description, executor_addresses=deployments_addresses,
+        deployments_metadata=deployments_metadata,
+        load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
+        # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+    )
+
+    stop_event = threading.Event()
+    await gateway_streamer.warmup(stop_event=stop_event)
+
+
+    pids = {}
+    if False:
+        pids = {}
+        tasks = []
+        iter_count = 10
+
+        for i in range(iter_count):
+            print("--" * 10)
+            print(f"scheduling request : {i}")
+            request = DataRequest()
+            # request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
+            request.data.docs = DocumentArray([Document(text='slow')])
+            response = gateway_streamer.process_single_data(request=request)
+            tasks.append(response)
+            # time.sleep(.2)
+            # time.sleep(random.random() / 4 + 0.1)
+
+        futures = await asyncio.gather(*tasks)
+
+        for response in futures:
+            assert len(response.docs) == 1
+            for doc in response.docs:
+                pid = int(doc.tags['pid'])
+                if pid not in pids:
+                    pids[pid] = 0
+                pids[pid] += 1
+
+        total = 0
+        for pid in pids:
+            total += pids[pid]
+
+        print("pids total : ", total)
+        assert total == iter_count
+
+    deployment.close()
+    await gateway_streamer.close()
+
 
 
 if __name__ == "__main__":
