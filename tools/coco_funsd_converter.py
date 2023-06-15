@@ -85,6 +85,20 @@ def __convert_coco_to_funsd(
     print(f"annotations : {annotations_filename}")
     print(f"strip_file_name_path : {strip_file_name_path}")
 
+    ##### VALIDATE CONFIG #####
+    if "question_answer_map" not in config:
+        raise Exception(f"Expected key missing from config : question_answer_map")
+    if "id_map" not in config:
+        raise Exception(f"Expected key missing from config : id_map")
+    if "link_map" not in config:
+        raise Exception(f"Expected key missing from config : link_map")
+
+    # Expected group mapping that will get translated into specific linking
+    # If this validation fails we will stop processing  and report.
+    question_answer_map = config["question_answer_map"]
+    id_map = config["id_map"]
+    link_map = config["link_map"]
+
     data = from_json_file(annotations_filename)
     categories = data["categories"]
     images = data["images"]
@@ -275,10 +289,10 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    if False:
-        boxp = BoxProcessorCraft(
-            work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
-        )
+    # if False:
+    #     boxp = BoxProcessorCraft(
+    #         work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    #     )
 
     boxp = BoxProcessorUlimDit(
         work_dir=work_dir_boxes,
@@ -472,6 +486,216 @@ def load_image_pil(image_path):
     image = Image.open(image_path).convert("RGB")
     w, h = image.size
     return image, (w, h)
+
+# @Timer(text="Aug in {:.4f} seconds")
+def __augment_decorated_process(
+    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
+):
+    Faker.seed(0)
+    output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
+    output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
+
+    ann_dir = os.path.join(src_dir, "annotations")
+    img_dir = os.path.join(src_dir, "images")
+
+    # file_path = os.path.join(ann_dir, file)
+    file = file_path.split("/")[-1]
+    print(f"File: {file_path}")
+
+    try:
+        with open(file_path, "r", encoding="utf8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise e
+
+    image_path = os.path.join(img_dir, file)
+    image_path = image_path.replace("json", "png")
+    filename = image_path.split("/")[-1].split(".")[0]
+
+    for k in range(0, count):
+        print(f"Iter : {guid} , {k} of {count} ; {filename} ")
+        font_face = np.random.choice(
+            [
+                "FreeSansOblique.ttf",
+                # "FreeSansBold.ttf",
+                "FreeSans.ttf",
+                "OpenSans-Light.ttf",
+                "FreeMono.ttf",
+                "vpscourt.ttf",
+            ]
+        )
+        font_path = os.path.join("./assets/fonts", font_face)
+
+        data_copy = dict()
+        data_copy["form"] = []
+
+        masked_fields = [
+            "member_number_answer",
+            "pan_answer",
+            "member_name_answer",
+            "patient_name_answer",
+            "dos_answer",
+            "check_amt_answer",
+            "paid_amt_answer",
+            "billed_amt_answer",
+            "birthdate_answer",
+            "check_number_answer",
+            "claim_number_answer",
+            "letter_date",
+            "phone",
+            "url",
+            "date",
+            "money",
+            "provider_answer",
+            "identifier",
+            "address",
+        ]
+
+        image_masked, size = load_image_pil(image_path)
+        draw = ImageDraw.Draw(image_masked)
+
+        for i, item in enumerate(data["form"]):
+            label = item["label"]
+            if label == "other" or label not in masked_fields:
+                data_copy["form"].append(item)
+                continue
+
+            # pan_answer  dos_answer member_number_answer
+            # format : x0,y0,x1,y1
+            box = np.array(item["box"]).astype(np.int32)
+            x0, y0, x1, y1 = box
+            w = x1 - x0
+            h = y1 - y0
+            xoffset = 5
+            yoffset = 0
+
+            # Generate text inside image
+            font_size, label_text, segments_lines, line_heights = generate_text(
+                label, w, h, font_path
+            )
+
+            assert len(line_heights) != 0
+            font = get_cached_font(font_path, font_size)
+
+            # x0, y0, x1, y1 = xy
+            # Yellow with outline for debug
+            # draw.rectangle(
+            #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+            # )
+
+            # clear region
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+
+            dup_item = item  # copy.copy(item)
+            dup_item["text"] = label_text
+            dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+            dup_item["words"] = []
+            dup_item["linking"] = []
+            words = []
+
+            total_text_height = 0
+            for th in line_heights:
+                total_text_height += th
+
+            space = h - total_text_height
+            line_offset = 0
+            baseline_spacing = max(4, space // len(line_heights))
+
+            for line_idx, segments in enumerate(segments_lines):
+                for seg in segments:
+                    seg_text = seg["text"]
+                    sx0, sy0, sx1, sy1 = seg["box"]
+                    sw = sx1 - sx0
+                    sh = sy1 - sy0
+                    adj_box = [
+                        x0 + sx0,
+                        y0 + line_offset,
+                        x0 + sx0 + sw,
+                        y0 + sh + line_offset,
+                    ]
+                    word = {"text": seg_text, "box": adj_box}
+                    words.append(word)
+                    # debug box
+                    # draw.rectangle(
+                    #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+                    #     outline="#FF0000",
+                    #     width=1,
+                    # )
+                line_offset += line_heights[line_idx] + baseline_spacing
+
+            dup_item["words"] = words
+
+            line_offset = 0
+
+            for line_idx, text_line in enumerate(label_text.split("\n")):
+                draw.text(
+                    (x0 + xoffset, y0 + line_offset),
+                    text=text_line,
+                    fill="#000000",
+                    font=font,
+                    stroke_fill=1,
+                )
+                line_offset += line_heights[line_idx] + baseline_spacing
+            data_copy["form"].append(dup_item)
+
+        # Save items
+        out_name_prefix = f"{filename}_{guid}_{k}"
+
+        json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
+        dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
+
+        # print(f'Writing : {json_path}')
+        with open(json_path, "w") as json_file:
+            json.dump(
+                data_copy,
+                json_file,
+                # sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=2,
+                cls=NumpyEncoder,
+            )
+
+        # saving in JPG format as it is substantially faster than PNG
+        # image_masked.save(
+        #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+        # )  # 100 disables compression
+        #
+        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+        image_masked.save(dst_img_path, compress_level=2)
+
+        del draw
+
+
+def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
+    ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+
+    # if False:
+    #     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+    #         file_path = os.path.join(ann_dir, file)
+    #         __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
+
+    aug_args = []
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        file_path = os.path.join(ann_dir, file)
+        __args = (guid, count, file_path, src_dir, dest_dir)
+        aug_args.append(__args)
+
+    start = time.time()
+    print("\nPool Executor:")
+    print("Time elapsed: %s" % (time.time() - start))
+
+    pool = Pool(processes=int(mp.cpu_count() * 0.95))
+    pool_results = pool.starmap(__augment_decorated_process, aug_args)
+
+    pool.close()
+    pool.join()
+
+    print("Time elapsed[submitted]: %s" % (time.time() - start))
+    for r in pool_results:
+        print("Time elapsed[result]: %s  , %s" % (time.time() - start, r))
+    print("Time elapsed[all]: %s" % (time.time() - start))
+
 
 
 def visualize_funsd(src_dir: str, dst_dir: str, config: dict):
@@ -780,7 +1004,7 @@ def default_augment(args: object):
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
 
-    # augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
+    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
 
 
 def default_rescale(args: object):
