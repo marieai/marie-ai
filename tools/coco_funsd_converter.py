@@ -36,8 +36,12 @@ from marie.utils.utils import ensure_exists
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
 
+from rich.logging import RichHandler
+
+logging.basicConfig(level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)])
 logger = logging.getLogger(__name__)
 _tmp_path = "/tmp/marie"
+
 # setup data aug
 
 
@@ -216,7 +220,7 @@ def extract_icr(image, boxp, icrp):
 
     print(f"checksum = {checksum}")
     json_file = f"{_tmp_path}/{checksum}.json"
-    ensure_exists(f"{_tmp_path}")
+    ensure_exists(f"{_tmp_path}/")
 
     if os.path.exists(json_file):
         json_data = from_json_file(json_file)
@@ -234,7 +238,7 @@ def extract_icr(image, boxp, icrp):
     if boxes is None or len(boxes) == 0:
         print(f"Empty boxes for : {checksum}")
         if True:
-            file_path = os.path.join(f"{_tmp_path}/snippet", f"empty_boxes-{checksum}.png")
+            file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"empty_boxes-{checksum}.png")
             cv2.imwrite(file_path, image)
 
         h = image.shape[0]
@@ -287,8 +291,8 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
         print(file)
-        if guid == 5:  # TODO: remove box issue solved
-            break
+        # if guid == 5:  # TODO: remove box issue solved
+        #     break
 
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
@@ -314,7 +318,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             print(f"line_number = {line_number}")
             # export cropped region
             if debug_fragments:
-                file_path = os.path.join(f"{_tmp_path}/snippet", f"{guid}-snippet_{i}.png")
+                file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr(snippet, boxp, icrp)
@@ -371,7 +375,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             index = i + 1
 
         if debug_fragments:
-            file_path = os.path.join(f"{_tmp_path}/snippet", f"{guid}-masked.png")
+            file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
         # masked boxes will be same as the original ones
@@ -549,7 +553,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
     resized, target_size = __scale_height(image, 1000)
-    resized.save(f"{_tmp_path}/snippet/resized_{filename}.png")
+    resized.save(ensure_exists(f"{_tmp_path}/snippet")+"/resized_{filename}.png")
 
     # print(f"orig_size, target_size   = {orig_size} : {target_size}")
     orig_w, orig_h = orig_size
@@ -752,7 +756,7 @@ def default_decorate(args: object):
     # This should be our dataset folder
     mode = args.mode
     src_dir = os.path.join(args.dir, f"{mode}")
-    decorate_funsd(src_dir, debug_fragments=True)
+    decorate_funsd(src_dir, debug_fragments=False)
 
 
 def default_augment(args: object):
@@ -887,10 +891,10 @@ def default_all_steps(args: object):
     args_4["suffix"] = "-augmented"
 
     # execute each step
-    # default_convert(Namespace(**args_1))
+    default_convert(Namespace(**args_1))
     default_decorate(Namespace(**args_2))
-    default_augment(Namespace(**args_3))
-    default_rescale(Namespace(**args_4))
+    # default_augment(Namespace(**args_3))
+    # default_rescale(Namespace(**args_4))
 
 
 def default_split(args: object):
@@ -1150,5 +1154,5 @@ if __name__ == "__main__":
     print("-" * 120)
     print(args)
     print("-" * 120)
-
+    # logger.setLevel(logging.DEBUG)
     args.func(args)
