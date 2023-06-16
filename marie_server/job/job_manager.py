@@ -7,6 +7,7 @@ from uuid_extensions import uuid7, uuid7str
 from marie._core.utils import run_background_task
 from marie.logging.logger import MarieLogger
 from marie_server.job.common import JobInfo, JobStatus, JobInfoStorageClient
+from marie_server.job.job_distributor import JobDistributor
 from marie_server.storage.storage_client import StorageArea
 from marie_server.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
@@ -42,9 +43,11 @@ class JobSupervisor:
         self,
         job_id: str,
         job_info_client: JobInfoStorageClient,
+        job_distributor: JobDistributor,
     ):
         self._job_id = job_id
         self._job_info_client = job_info_client
+        self._job_distributor = job_distributor
 
     def ping(self):
         """Used to check the health of the actor/executor/deployment."""
@@ -95,9 +98,12 @@ class JobSupervisor:
             },
         )
 
-        #  GatewayStreamer should be started here
-        # streamer = GatewayStreamer.get_streamer()
-        # streamer.stream(self._job_id)
+        response = await self._job_distributor.submit_job(curr_info)
+        # format the response
+        print("Response: ", response)
+        print("Response type: ", type(response))
+        print("Response data: ", response.data)
+        print("Response status: ", response.status)
 
 
 class JobManager:
@@ -110,8 +116,10 @@ class JobManager:
     def __init__(
         self,
         storage: StorageArea,
+        job_distributor: JobDistributor,
     ):
-        self.logger = MarieLogger("JobManager")
+        self.logger = MarieLogger(self.__class__.__name__)
+        self._job_distributor = job_distributor
         # self._log_client = JobLogStorageClient()
         self.monitored_jobs = set()
         self._job_info_client = JobInfoStorageClient(storage)
@@ -243,7 +251,9 @@ class JobManager:
                 )
 
             supervisor = JobSupervisor(
-                job_id=submission_id, job_info_client=self._job_info_client
+                job_id=submission_id,
+                job_info_client=self._job_info_client,
+                job_distributor=self._job_distributor,
             )
             await supervisor.run(_start_signal_actor=_start_signal_actor)
 

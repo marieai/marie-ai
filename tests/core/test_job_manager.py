@@ -13,6 +13,7 @@ from docarray import Document
 from marie import DocumentArray, Executor, requests, Deployment
 from marie.enums import PollingType
 from marie.parsers import set_deployment_parser
+from marie.proto import jina_pb2
 from marie.serve.networking import GrpcConnectionPool, _ReplicaList
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
@@ -20,7 +21,8 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types.request.data import DataRequest
-from marie_server.job.common import JobStatus
+from marie_server.job.common import JobStatus, JobInfo
+from marie_server.job.job_distributor import JobDistributor
 from marie_server.job.job_manager import JobManager
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
@@ -66,7 +68,7 @@ async def job_manager(tmp_path):
                       "max_connections": 5}
 
     # storage = PostgreSQLKV(config=storage_config, reset=True)
-    yield JobManager(storage)
+    yield JobManager(storage=storage, job_distributor=NoopJobDistributor())
 
 
 @pytest.mark.asyncio
@@ -316,6 +318,20 @@ class FastSlowPIDExecutor(Executor):
         doc.text += f'return encode {os.getpid()}'
         doc.tags['pid'] = os.getpid()
 
+
+class NoopJobDistributor(JobDistributor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def submit_job(self, job_info: JobInfo) -> DataRequest:
+        print(f'NoopJobDistributor: {job_info}')
+        if job_info.status != JobStatus.PENDING:
+            raise Exception('Job status is not PENDING')
+
+        r = DataRequest()
+        r.status.code = jina_pb2.StatusProto.ERROR
+
+        return r
 
 @pytest.mark.asyncio
 async def test_deployment_gateway_streamer(port_generator):
