@@ -74,7 +74,7 @@ def __convert_coco_to_funsd(
     output_path: str,
     annotations_filename: str,
     config: object,
-    strip_file_name_path: bool,
+    strip_file_path: bool,
 ) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
@@ -83,15 +83,22 @@ def __convert_coco_to_funsd(
     print(f"src_dir     : {src_dir}")
     print(f"output_path : {output_path}")
     print(f"annotations : {annotations_filename}")
-    print(f"strip_file_name_path : {strip_file_name_path}")
+    print(f"strip_file_path : {strip_file_path}")
 
-    ##### VALIDATE CONFIG #####
+    # ### VALIDATE CONFIG ### #
     if "question_answer_map" not in config:
-        raise Exception(f"Expected key missing from config : question_answer_map")
+        raise Exception("Expected key missing from config : question_answer_map")
     if "id_map" not in config:
-        raise Exception(f"Expected key missing from config : id_map")
+        raise Exception("Expected key missing from config : id_map")
     if "link_map" not in config:
-        raise Exception(f"Expected key missing from config : link_map")
+        raise Exception("Expected key missing from config : link_map")
+
+    data = from_json_file(annotations_filename)
+
+    # CONFIG <-> COCO Consistency
+    unknown_categories = [name for name in data["categories"] if not(name in config["link_map"])]
+    if len(unknown_categories) > 0:
+        raise Exception(f"COCO file has categories not found in your config: {unknown_categories}")
 
     # Expected group mapping that will get translated into specific linking
     # If this validation fails we will stop processing  and report.
@@ -99,41 +106,33 @@ def __convert_coco_to_funsd(
     id_map = config["id_map"]
     link_map = config["link_map"]
 
-    data = from_json_file(annotations_filename)
-    categories = data["categories"]
-    images = data["images"]
-    annotations = data["annotations"]
+    cat_by_id = {int(category["id"]): category["name"] for category in data["categories"]}
     images_by_id = {}
+    for image in data["images"]:
+        images_by_id[image["id"]] = image["file_name"].split("/")[-1] if strip_file_path else image["file_name"]
 
-    for img in images:
-        if strip_file_name_path:
-            file_name = img["file_name"]
-            img["file_name"] = file_name.split("/")[-1]
-        images_by_id[int(img["id"])] = img
-
-    cat_id_name = {}
-    cat_name_id = {}
-
-    for category in categories:
-        cat_id_name[category["id"]] = category["name"]
-        cat_name_id[category["name"]] = category["id"]
-
-    ano_groups = {}
+    annotations_by_image = {}
     # Group annotations by image_id as their key
-    for ano in annotations:
-        if ano["image_id"] not in ano_groups:
-            ano_groups[ano["image_id"]] = []
-        ano_groups[ano["image_id"]].append(ano)
+    for annotation in data["annotations"]:
+        if annotation["image_id"] not in annotations_by_image:
+            annotations_by_image[annotation["image_id"]] = []
+        annotations_by_image[annotation["image_id"]].append(annotation)
 
     errors = []
 
-    for group_id in ano_groups:
-        grouping = ano_groups[group_id]
+    for image_id, annotations in annotations_by_image.items():
+        # group_id = image_id
+        # grouping = annotations
+
+        # Validate that each annotation has associated question/answer pair
+        file_name = images_by_id[image_id]["file_name"]
+        filename = file_name.split("/")[-1].split(".")[0]
+        # TODO: Validate we do not need the blow comment.
+        # validate that we don't have duplicate question/answer mappings
+
+        # if we have any missing mapping we will abort and fix the labeling data before continuing
 
         # start conversion
-        img_data = images_by_id[group_id]
-        file_name = img_data["file_name"]
-        filename = file_name.split("/")[-1].split(".")[0]
         src_img_path = os.path.join(src_dir, "images", file_name)
         src_img, size = load_image(src_img_path)
 
@@ -489,182 +488,182 @@ def load_image_pil(image_path):
 
 # @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(
-    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str
-):
-    Faker.seed(0)
-    output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
-    output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
-
-    ann_dir = os.path.join(src_dir, "annotations")
-    img_dir = os.path.join(src_dir, "images")
-
-    # file_path = os.path.join(ann_dir, file)
-    file = file_path.split("/")[-1]
-    print(f"File: {file_path}")
-
-    try:
-        with open(file_path, "r", encoding="utf8") as f:
-            data = json.load(f)
-    except Exception as e:
-        raise e
-
-    image_path = os.path.join(img_dir, file)
-    image_path = image_path.replace("json", "png")
-    filename = image_path.split("/")[-1].split(".")[0]
-
-    for k in range(0, count):
-        print(f"Iter : {guid} , {k} of {count} ; {filename} ")
-        font_face = np.random.choice(
-            [
-                "FreeSansOblique.ttf",
-                # "FreeSansBold.ttf",
-                "FreeSans.ttf",
-                "OpenSans-Light.ttf",
-                "FreeMono.ttf",
-                "vpscourt.ttf",
-            ]
-        )
-        font_path = os.path.join("./assets/fonts", font_face)
-
-        data_copy = dict()
-        data_copy["form"] = []
-
-        masked_fields = [
-            "member_number_answer",
-            "pan_answer",
-            "member_name_answer",
-            "patient_name_answer",
-            "dos_answer",
-            "check_amt_answer",
-            "paid_amt_answer",
-            "billed_amt_answer",
-            "birthdate_answer",
-            "check_number_answer",
-            "claim_number_answer",
-            "letter_date",
-            "phone",
-            "url",
-            "date",
-            "money",
-            "provider_answer",
-            "identifier",
-            "address",
-        ]
-
-        image_masked, size = load_image_pil(image_path)
-        draw = ImageDraw.Draw(image_masked)
-
-        for i, item in enumerate(data["form"]):
-            label = item["label"]
-            if label == "other" or label not in masked_fields:
-                data_copy["form"].append(item)
-                continue
-
-            # pan_answer  dos_answer member_number_answer
-            # format : x0,y0,x1,y1
-            box = np.array(item["box"]).astype(np.int32)
-            x0, y0, x1, y1 = box
-            w = x1 - x0
-            h = y1 - y0
-            xoffset = 5
-            yoffset = 0
-
-            # Generate text inside image
-            font_size, label_text, segments_lines, line_heights = generate_text(
-                label, w, h, font_path
-            )
-
-            assert len(line_heights) != 0
-            font = get_cached_font(font_path, font_size)
-
-            # x0, y0, x1, y1 = xy
-            # Yellow with outline for debug
-            # draw.rectangle(
-            #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
-            # )
-
-            # clear region
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
-
-            dup_item = item  # copy.copy(item)
-            dup_item["text"] = label_text
-            dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
-            dup_item["words"] = []
-            dup_item["linking"] = []
-            words = []
-
-            total_text_height = 0
-            for th in line_heights:
-                total_text_height += th
-
-            space = h - total_text_height
-            line_offset = 0
-            baseline_spacing = max(4, space // len(line_heights))
-
-            for line_idx, segments in enumerate(segments_lines):
-                for seg in segments:
-                    seg_text = seg["text"]
-                    sx0, sy0, sx1, sy1 = seg["box"]
-                    sw = sx1 - sx0
-                    sh = sy1 - sy0
-                    adj_box = [
-                        x0 + sx0,
-                        y0 + line_offset,
-                        x0 + sx0 + sw,
-                        y0 + sh + line_offset,
-                    ]
-                    word = {"text": seg_text, "box": adj_box}
-                    words.append(word)
-                    # debug box
-                    # draw.rectangle(
-                    #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
-                    #     outline="#FF0000",
-                    #     width=1,
-                    # )
-                line_offset += line_heights[line_idx] + baseline_spacing
-
-            dup_item["words"] = words
-
-            line_offset = 0
-
-            for line_idx, text_line in enumerate(label_text.split("\n")):
-                draw.text(
-                    (x0 + xoffset, y0 + line_offset),
-                    text=text_line,
-                    fill="#000000",
-                    font=font,
-                    stroke_fill=1,
-                )
-                line_offset += line_heights[line_idx] + baseline_spacing
-            data_copy["form"].append(dup_item)
-
-        # Save items
-        out_name_prefix = f"{filename}_{guid}_{k}"
-
-        json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
-        dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
-
-        # print(f'Writing : {json_path}')
-        with open(json_path, "w") as json_file:
-            json.dump(
-                data_copy,
-                json_file,
-                # sort_keys=True,
-                separators=(",", ": "),
-                ensure_ascii=False,
-                indent=2,
-                cls=NumpyEncoder,
-            )
-
-        # saving in JPG format as it is substantially faster than PNG
-        # image_masked.save(
-        #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
-        # )  # 100 disables compression
-        #
-        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
-        image_masked.save(dst_img_path, compress_level=2)
-
-        del draw
+    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
+    pass
+    # Faker.seed(0)
+    # output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
+    # output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
+    #
+    # ann_dir = os.path.join(src_dir, "annotations")
+    # img_dir = os.path.join(src_dir, "images")
+    #
+    # # file_path = os.path.join(ann_dir, file)
+    # file = file_path.split("/")[-1]
+    # print(f"File: {file_path}")
+    #
+    # try:
+    #     with open(file_path, "r", encoding="utf8") as f:
+    #         data = json.load(f)
+    # except Exception as e:
+    #     raise e
+    #
+    # image_path = os.path.join(img_dir, file)
+    # image_path = image_path.replace("json", "png")
+    # filename = image_path.split("/")[-1].split(".")[0]
+    #
+    # for k in range(0, count):
+    #     print(f"Iter : {guid} , {k} of {count} ; {filename} ")
+    #     font_face = np.random.choice(
+    #         [
+    #             "FreeSansOblique.ttf",
+    #             # "FreeSansBold.ttf",
+    #             "FreeSans.ttf",
+    #             "OpenSans-Light.ttf",
+    #             "FreeMono.ttf",
+    #             "vpscourt.ttf",
+    #         ]
+    #     )
+    #     font_path = os.path.join("./assets/fonts", font_face)
+    #
+    #     data_copy = dict()
+    #     data_copy["form"] = []
+    #
+    #     masked_fields = [
+    #         "member_number_answer",
+    #         "pan_answer",
+    #         "member_name_answer",
+    #         "patient_name_answer",
+    #         "dos_answer",
+    #         "check_amt_answer",
+    #         "paid_amt_answer",
+    #         "billed_amt_answer",
+    #         "birthdate_answer",
+    #         "check_number_answer",
+    #         "claim_number_answer",
+    #         "letter_date",
+    #         "phone",
+    #         "url",
+    #         "date",
+    #         "money",
+    #         "provider_answer",
+    #         "identifier",
+    #         "address",
+    #     ]
+    #
+    #     image_masked, size = load_image_pil(image_path)
+    #     draw = ImageDraw.Draw(image_masked)
+    #
+    #     for i, item in enumerate(data["form"]):
+    #         label = item["label"]
+    #         if label == "other" or label not in masked_fields:
+    #             data_copy["form"].append(item)
+    #             continue
+    #
+    #         # pan_answer  dos_answer member_number_answer
+    #         # format : x0,y0,x1,y1
+    #         box = np.array(item["box"]).astype(np.int32)
+    #         x0, y0, x1, y1 = box
+    #         w = x1 - x0
+    #         h = y1 - y0
+    #         xoffset = 5
+    #         yoffset = 0
+    #
+    #         # Generate text inside image
+    #         font_size, label_text, segments_lines, line_heights = generate_text(
+    #             label, w, h, font_path
+    #         )
+    #
+    #         assert len(line_heights) != 0
+    #         font = get_cached_font(font_path, font_size)
+    #
+    #         # x0, y0, x1, y1 = xy
+    #         # Yellow with outline for debug
+    #         # draw.rectangle(
+    #         #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+    #         # )
+    #
+    #         # clear region
+    #         draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+    #
+    #         dup_item = item  # copy.copy(item)
+    #         dup_item["text"] = label_text
+    #         dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+    #         dup_item["words"] = []
+    #         dup_item["linking"] = []
+    #         words = []
+    #
+    #         total_text_height = 0
+    #         for th in line_heights:
+    #             total_text_height += th
+    #
+    #         space = h - total_text_height
+    #         line_offset = 0
+    #         baseline_spacing = max(4, space // len(line_heights))
+    #
+    #         for line_idx, segments in enumerate(segments_lines):
+    #             for seg in segments:
+    #                 seg_text = seg["text"]
+    #                 sx0, sy0, sx1, sy1 = seg["box"]
+    #                 sw = sx1 - sx0
+    #                 sh = sy1 - sy0
+    #                 adj_box = [
+    #                     x0 + sx0,
+    #                     y0 + line_offset,
+    #                     x0 + sx0 + sw,
+    #                     y0 + sh + line_offset,
+    #                 ]
+    #                 word = {"text": seg_text, "box": adj_box}
+    #                 words.append(word)
+    #                 # debug box
+    #                 # draw.rectangle(
+    #                 #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+    #                 #     outline="#FF0000",
+    #                 #     width=1,
+    #                 # )
+    #             line_offset += line_heights[line_idx] + baseline_spacing
+    #
+    #         dup_item["words"] = words
+    #
+    #         line_offset = 0
+    #
+    #         for line_idx, text_line in enumerate(label_text.split("\n")):
+    #             draw.text(
+    #                 (x0 + xoffset, y0 + line_offset),
+    #                 text=text_line,
+    #                 fill="#000000",
+    #                 font=font,
+    #                 stroke_fill=1,
+    #             )
+    #             line_offset += line_heights[line_idx] + baseline_spacing
+    #         data_copy["form"].append(dup_item)
+    #
+    #     # Save items
+    #     out_name_prefix = f"{filename}_{guid}_{k}"
+    #
+    #     json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
+    #     dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
+    #
+    #     # print(f'Writing : {json_path}')
+    #     with open(json_path, "w") as json_file:
+    #         json.dump(
+    #             data_copy,
+    #             json_file,
+    #             # sort_keys=True,
+    #             separators=(",", ": "),
+    #             ensure_ascii=False,
+    #             indent=2,
+    #             cls=NumpyEncoder,
+    #         )
+    #
+    #     # saving in JPG format as it is substantially faster than PNG
+    #     # image_masked.save(
+    #     #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+    #     # )  # 100 disables compression
+    #     #
+    #     # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+    #     image_masked.save(dst_img_path, compress_level=2)
+    #
+    #     del draw
 
 
 def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
