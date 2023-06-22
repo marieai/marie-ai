@@ -59,51 +59,19 @@ if __name__ == "__main__":
     import faulthandler
     faulthandler.enable()
 
-
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "./assets/psm/word/0001.png"
-    img_path = "./assets/english/Scanned_documents/Picture_029.tif"
-    # img_path = './assets/english/Scanned_documents/t2.tif'
-    img_path = "./assets/english/Scanned_documents/Picture_010.tif"
-    # img_path = "./assets/english/Lines/002.png"
-    # img_path = './assets/english/Lines/001.png'
-    # img_path = './assets/english/Lines/003.png'
-    # img_path = './assets/english/Lines/005.png'
-    # img_path = './assets/english/Lines/004.png'
+    img_path = './assets/english/Lines/004.png'
 
-    img_path = "/home/greg/dataset/medprov/PID/150300431/clean/PID_576_7188_0_150300431_page_0005.tif"
-    # img_path = "/opt/grapnel/burst/150459314_2_cleaned.tiff"
-    # img_path = "/home/gbugaj/data/rms-asp/149495857/clean/PID_576_7188_0_149495857_page_0003.tif"
-    # img_path = (
-    #     "/home/gbugaj/Downloads/task_training-01-2022_04_26_14_31_23-coco/images/corr-indexing/train/152606114_2.png"
-    # )
-    # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/cache/152606114.tif"
-    # img_path = "/home/gbugaj/dev/corr-routing/corr-document-dump/extracted/152613029_3.png"
-    img_path = "/home/gbugaj/dataset/rms-asp/149512505/PID_1038_7836_0_149512505/PID_1038_7836_0_149512505_page_0002.tif"
-    # img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152606114_2.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152608859_1.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612214_2.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152612898_6.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/dataset/training_data/images/152611418_2.png"
-    # img_path = "/home/gbugaj/dataset/private/icr-lines/002.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658533_2.png"
-    img_path = "/home/gbugaj/dataset/private/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658545_2.png"
-
-    img_path = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658618_6.png"
-    img_path = "/home/greg/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658618_6.png"
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/clean/PID_1956_9362_0_161970410_page_0004.tif"
-    img_path = "/home/gbugaj/tmp/marie-cleaner/161970410/clean/PID_1956_9362_0_161970410_page_0006.tif"
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
 
     if True:
         key = img_path.split("/")[-1]
         image = cv2.imread(img_path)
-        # image = __scale_width(src_img, 2000, 1000)
-        # cv2.imwrite("/tmp/resized-2048.png", image)
+
         box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
         icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
 

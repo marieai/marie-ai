@@ -29,9 +29,6 @@ def interface():
         filename = image_src.name
         frames = frames_from_file(filename)
 
-        print("image_to_gallery", image_src)
-        print("image_to_gallery", len(frames))
-
         return frames
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):

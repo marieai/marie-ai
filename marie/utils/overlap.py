@@ -41,7 +41,7 @@ def find_overlap(box, data, overlap_ratio=0.75):
     return overlaps, indexes
 
 
-def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = True):
+def find_overlap_vertical(box, data):
     """Find overlap between a box and a data set
     expected box format in [x, y, w, h]
     """
@@ -58,9 +58,7 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
     x, y, w, h = box
     y1min = y
     y1max = y + h
-    # TODO, this needs to be configurable
-    dyr = h * overlap_ratio
-    # print(f'dyr = {dyr}')
+
     for i, bb in enumerate(data):
         _x, _y, _w, _h = bb
         y2min = _y
@@ -106,7 +104,6 @@ def find_overlap_vertical(box, data, overlap_ratio=0.75, bidirectional: bool = T
                 0.0,
             )
             # print(f"intersection_area  [{h} , {_h}]: {intersection_area} : {dr}  > iou = {iou}")
-
             scores.append(iou)
             overlaps.append(bb)
             indexes.append(i)

@@ -117,8 +117,9 @@ def lines_from_bboxes(image, bboxes):
     Returns:
         lines_bboxes: Bounding boxes for the lines in (x,y,w,h) format
     """
+    enable_visualization = True
 
-    if False:
+    if enable_visualization:
         viz_img = visualize_bboxes(image, bboxes)
         viz_img.save(
             os.path.join("/tmp/fragments", f"line_refiner_initial.png"), format="PNG"
@@ -129,13 +130,14 @@ def lines_from_bboxes(image, bboxes):
     for box in bboxes:
         x1, y1, x2, y2 = box.astype(np.int32)
         w = x2 - x1
-        h = (y2 - y1) // 2
-        y1_adj = y1 + h // 2
+        q = (y2 - y1) // 8
+        h = (y2 - y1) // 2 + q
+        y1_adj = y1 + h // 2 - q
         cv2.rectangle(overlay, (x1, y1_adj), (x1 + w, y1_adj + h), (0, 0, 0), -1)
 
     ret, link_score = cv2.threshold(overlay, 0, 255, cv2.THRESH_BINARY)
 
-    if False:
+    if enable_visualization:
         cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.PNG"), overlay)
         cv2.imwrite(
             os.path.join("/tmp/fragments", f"overlay_refiner-link_score.PNG"),
@@ -143,8 +145,11 @@ def lines_from_bboxes(image, bboxes):
         )
 
     # Create structure element for extracting horizontal lines through morphology operations
+    # select the horizontal size based on the image width  3000 -> 160 1000 -> 80 500 -> 40
+
     cols = link_score.shape[1]
-    horizontal_size = cols // 30
+    horizontal_size = cols // 160
+    horizontal_size = min(horizontal_size, cols // 2)
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
@@ -152,7 +157,7 @@ def lines_from_bboxes(image, bboxes):
     horizontal = cv2.erode(horizontal, horizontal_struct)
     horizontal = cv2.dilate(horizontal, horizontal_struct)
 
-    if False:
+    if enable_visualization:
         cv2.imwrite("/tmp/fragments/horizontal.jpg", horizontal)
 
     if False:
@@ -183,7 +188,7 @@ def lines_from_bboxes(image, bboxes):
     # the format now will be in xywh
     lines_bboxes = line_merge(binary_mask, line_bboxes)
 
-    if False:
+    if enable_visualization:
         viz_img = visualize_bboxes(image, lines_bboxes, format="xywh")
         viz_img.save(
             os.path.join("/tmp/fragments", f"line_refiner-final.png"), format="PNG"
@@ -273,6 +278,18 @@ class BoxProcessorUlimDit(BoxProcessor):
             if len_a != len_b:
                 self.logger.debug(f"Removed boxes : {len_a - len_b}")
 
+            # FIXME : This is a hack
+            # TODO : Update the model to correctly predict the orientation of the text and assign the correct class
+            # remove vertical boxes
+            bb = []
+            for box in bboxes:
+                h = box[2] - box[0]
+                w = box[3] - box[1]
+                rat = w / h
+                if rat < 2.5:
+                    bb.append(box)
+
+            bboxes = np.array(bb)
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
             bboxes = bboxes[ind]

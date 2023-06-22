@@ -216,7 +216,7 @@ class TrOcrIcrProcessor(IcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 1
+        beam = 5
         (
             self.model,
             self.cfg,
@@ -249,7 +249,7 @@ class TrOcrIcrProcessor(IcrProcessor):
             # batch_size = int(free_memory / 3e9 * 64)
             batch_size = int(free_memory / 8e9 * 32)  # ~100 @ 24GB
         logger.debug(f"Free memory : {free_memory}, batch_size : {batch_size}")
-        batch_size = 256
+        # batch_size = 256
         result = self.__recognize_from_fragments(src_images, batch_size, **kwargs)
         logger.debug("Fragments time : %s" % (time.time() - start))
         return result
