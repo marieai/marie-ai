@@ -21,7 +21,7 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
-executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
+executor = None  # NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
 
 
@@ -61,7 +61,9 @@ def process_dir_pdf(image_dir: str):
             # read fraes from pdf
             frames = frames_from_file(img_path)
             print(len(frames))
-            merge_tiff_frames(frames, "/tmp/pdf_2_tif/{}.tif".format(name))
+            merge_tiff_frames(
+                frames, "/home/gbugaj/tmp/corr-routing/finished/V20/{}.tif".format(name)
+            )
         except Exception as e:
             print(e)
             # raise e
@@ -69,6 +71,8 @@ def process_dir_pdf(image_dir: str):
 
 if __name__ == "__main__":
     ensure_exists("/tmp/pdf_2_tif")
-    ensure_exists("/tmp/pdf_2_tif/ner")
+
+    process_dir_pdf("/home/gbugaj/tmp/corr-routing/finished/V20_LARGE")
+
     # process_dir("/opt/shares/_hold/ENSEMBLE/SAMPLE/PRODUCTION/PDF")
-    process_dir_ner("/tmp/pdf_2_tif")
+    # process_dir_ner("/tmp/pdf_2_tif")

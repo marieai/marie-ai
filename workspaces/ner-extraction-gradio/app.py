@@ -5,8 +5,8 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
-executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
-# executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
+# executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
+executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner")
 
 
 def process_image(image):

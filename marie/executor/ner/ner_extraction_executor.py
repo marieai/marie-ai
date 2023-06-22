@@ -95,7 +95,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
             raise FileNotFoundError(
                 "Expected config 'marie.json' not found in model directory"
             )
-
+        self.logger.info(f"NER loading from : {config_path}")
         self.init_configuration = load_json_file(config_path)
 
         self.debug_visuals = self.init_configuration["debug"]["visualize"]["enabled"]

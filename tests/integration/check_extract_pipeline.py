@@ -30,7 +30,7 @@ if __name__ == "__main__":
     img_path = (
         # "/home/gbugaj/dev/ldt-document-dump/cache/179575453.tif"
         # "/home/gbugaj/tmp/eob-issues/158954482_0.png"
-        "/home/gbugaj/datasets/EMPTY-BOXES/empty_boxes-d73a26926f6e4313b7d410202892f2b5c19b39649218d55d09386939eb65b818.png"
+        "/home/gbugaj/tmp/analysis/PID_1956_9362_0_177978797/300DPI/PID_1956_9362_0_177978797.tif"
         # "~/tmp/blank.png"
         # "~/tmp/4007/176081094.tif"
     )
@@ -48,6 +48,7 @@ if __name__ == "__main__":
         raise Exception(f"File not found : {img_path}")
 
     frames = frames_from_file(img_path)
+    frames = [frames[1]]
     filename, prefix, suffix = split_filename(img_path)
     pipeline = ExtractPipeline()
 

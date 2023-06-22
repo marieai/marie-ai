@@ -16,8 +16,10 @@ from marie.utils.draw_truetype import determine_font_size
 
 logger = default_logger
 
+
 # https://github.com/JonathanLink/PDFLayoutTextStripper
 # https://github.com/JonathanLink/PDFLayoutTextStripper/blob/master/src/main/java/io/github/jonathanlink/PDFLayoutTextStripper.java
+# https://grtcalculator.com/math/
 
 
 class PdfRenderer(ResultRenderer):
@@ -85,6 +87,23 @@ class PdfRenderer(ResultRenderer):
                     box = word["box"]
                     text = word["text"]
                     x, y, w, h = box
+                    if len(text) == 0:
+                        logger.warning(f"Empty text: {text} for box: {box}")
+                        continue
+
+                    rat = w / h
+                    cpl = len(text)
+                    average_char_width = w / cpl
+                    mu = 2.27
+                    min_content_width = cpl * mu
+                    # print(f"ratio = {rat} : {box} : {text}   >> {average_char_width} , {min_content_width}")
+                    # basic check for vertical text
+                    if len(text) > 2:
+                        if rat < 0.4:  # and min_content_width < w:
+                            text = "".join([c + "\n" for c in text])
+                            print(f"Vertical text: \n{text}")
+                            continue
+
                     # PDF rendering transformation
                     # x and y define the lower left corner of the image, so we need to perform some transformations
                     left_pad = 5  # By observation
@@ -93,7 +112,6 @@ class PdfRenderer(ResultRenderer):
                     lh = h
 
                     # Find baseline for the word
-                    rat = h / w
                     if wid in word2line:
                         line = word2line[wid]
                         line_bbox = line["bbox"]
@@ -106,9 +124,6 @@ class PdfRenderer(ResultRenderer):
                     # this is a hack to get the font size and text for vertical text
                     # this needs to be done in text detection and recognition
                     font_size = determine_font_size(lh)
-                    if rat > 4.0:
-                        font_size = 14
-
                     # print(f"font_size = {font_size}  : {box} :{rat} : {text}")
                     # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
 

@@ -105,7 +105,7 @@ ARG no_proxy="${no_proxy}"
 ARG socks_proxy
 ARG TZ="Etc/UTC"
 
-ENV TERM=xterm \
+ENV TERM=xterm-256color \
     http_proxy=${http_proxy}   \
     https_proxy=${https_proxy} \
     no_proxy=${no_proxy} \
