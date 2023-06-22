@@ -68,6 +68,27 @@ def load_image(image_path):
     h, w = image.shape[0], image.shape[1]
     return image, (w, h)
 
+def __validate_qa_balance(category_counts: dict, link_map: dict, id_to_name: dict) -> dict:
+    """ Validate the question/answer balance given a set of categories with their total
+        presence in a set of annotations.
+        :param category_counts: a dict of {str label: number of occurrences}
+        :param link_map: {str label: [category id, category id]} for all QA pairs.
+                         {str label: [-1]} for all non-QA categories.
+        :param id_to_name: {category id: str label}
+    """
+    category_imbalance = {}
+    for category, count in category_counts.items():
+        q_a_link = link_map[category]
+        if len(q_a_link) <= 1: # Not a question/answer pair
+            continue
+        question_id, answer_id = q_a_link[0], q_a_link[1]
+        question, answer = id_to_name[question_id], id_to_name[answer_id]
+        question_count, answer_count = category_counts[question], category_counts[answer]
+
+        if question_count != answer_count:
+            category_imbalance[(question, answer)] = (question_count, answer_count)
+
+    return category_imbalance
 
 def __convert_coco_to_funsd(
     src_dir: str,
@@ -85,7 +106,7 @@ def __convert_coco_to_funsd(
     print(f"annotations : {annotations_filename}")
     print(f"strip_file_path : {strip_file_path}")
 
-    # ### VALIDATE CONFIG ### #
+    # VALIDATE CONFIG Contents
     if "question_answer_map" not in config:
         raise Exception("Expected key missing from config : question_answer_map")
     if "id_map" not in config:
@@ -93,83 +114,108 @@ def __convert_coco_to_funsd(
     if "link_map" not in config:
         raise Exception("Expected key missing from config : link_map")
 
-    data = from_json_file(annotations_filename)
+    link_map = config["link_map"]
+    name_to_config_id = config["id_map"]
+    config_id_to_name = {_id: name for name, _id in name_to_config_id.items()}
+
+    coco = from_json_file(annotations_filename)
 
     # CONFIG <-> COCO Consistency
-    unknown_categories = [name for name in data["categories"] if not(name in config["link_map"])]
+    unknown_categories = [category["name"] for category in coco["categories"] if not (category["name"] in config["link_map"])]
     if len(unknown_categories) > 0:
         raise Exception(f"COCO file has categories not found in your config: {unknown_categories}")
 
-    # Expected group mapping that will get translated into specific linking
-    # If this validation fails we will stop processing  and report.
-    question_answer_map = config["question_answer_map"]
-    id_map = config["id_map"]
-    link_map = config["link_map"]
-
-    cat_by_id = {int(category["id"]): category["name"] for category in data["categories"]}
+    # Initialize Image based contexts
+    annotations_by_image = {}
     images_by_id = {}
-    for image in data["images"]:
+    for image in coco["images"]:
+        annotations_by_image[image["id"]] = []
         images_by_id[image["id"]] = image["file_name"].split("/")[-1] if strip_file_path else image["file_name"]
 
-    annotations_by_image = {}
-    # Group annotations by image_id as their key
-    for annotation in data["annotations"]:
-        if annotation["image_id"] not in annotations_by_image:
-            annotations_by_image[annotation["image_id"]] = []
+    # Initialize Category based contexts
+    cat_by_id = {}
+    category_counts = {}
+    duplicate_categories = []
+    for category in coco["categories"]:
+        # Identify duplicate categories mappings
+        if category["name"] in category_counts:
+            duplicate_categories.append(category["name"])
+        category_counts[category["name"]] = 0
+        cat_by_id[int(category["id"])] = category["name"]
+
+    # VALIDATE that we don't have duplicate categories mappings
+    if len(duplicate_categories) > 0:
+        raise Exception(f"COCO file has duplicate categories: {duplicate_categories}")
+
+    annotation_category_counts = category_counts.copy()
+    for annotation in coco["annotations"]:
+        # Group annotations by image_id as their key
         annotations_by_image[annotation["image_id"]].append(annotation)
+        # Calculate Category counts over all annotations
+        annotation_category_counts[cat_by_id[annotation["category_id"]]] += 1
 
-    errors = []
+    # VALIDATE question/answer balance in annotations
+    category_imbalance = __validate_qa_balance(annotation_category_counts, link_map, config_id_to_name)
 
-    for image_id, annotations in annotations_by_image.items():
-        # group_id = image_id
-        # grouping = annotations
+    if len(category_imbalance) > 0:
+        print(f"WARNING: {len(category_imbalance)} Question/Answer pairs have an imbalanced number of annotations!")
+        print("Proceeding to Identify individual offenders image offenders.")
+        # Identify question/answer imbalance by file
+        images_with_cat_imbalance = {}
+        for image_id, annotations in annotations_by_image.items():
+            image_category_counts = category_counts.copy()
+            for annotation in annotations:
+                image_category_counts[cat_by_id[annotation["category_id"]]] += 1
+            imbalance = __validate_qa_balance(image_category_counts, link_map, config_id_to_name)
+            if len(imbalance) > 0:
+                images_with_cat_imbalance[image_id] = imbalance
+        print(f"Number of Offenders: {len(images_with_cat_imbalance)}")
+        # print(f"Offenders Details: {images_with_cat_imbalance}")
 
-        # Validate that each annotation has associated question/answer pair
-        file_name = images_by_id[image_id]["file_name"]
-        filename = file_name.split("/")[-1].split(".")[0]
-        # TODO: Validate we do not need the blow comment.
-        # validate that we don't have duplicate question/answer mappings
+    # Cleanup Validation variables
+    del annotation_category_counts
+    del category_imbalance
+    del category_counts
 
-        # if we have any missing mapping we will abort and fix the labeling data before continuing
+    # Start Conversion
+    for image_id, image_annotations in annotations_by_image.items():
+
+        filename = images_by_id[image_id].split("/")[-1].split(".")[0]
 
         # start conversion
-        src_img_path = os.path.join(src_dir, "images", file_name)
-        src_img, size = load_image(src_img_path)
+        src_img_path = os.path.join(src_dir, "images", filename)
 
         form_dict = {"form": []}
-
-        for ano in grouping:
-            category_id = ano["category_id"]
+        gen_ids = random.sample(range(0, 10000000), len(image_annotations))
+        for annotation in image_annotations:
             # Convert form XYWH -> xmin,ymin,xmax,ymax
-            bbox = [int(x) for x in ano["bbox"]]
+            bbox = [int(x) for x in annotation["bbox"]]
             bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-            category_name = cat_id_name[category_id]
+
+            gen_id = gen_ids.pop()
+            category_name = cat_by_id[annotation["category_id"]]
             label = category_name
 
-            gen_id = random.randint(0, 10000000)
-            item = {
+            form_dict["form"].append({
                 "id": gen_id,
                 "text": "POPULATE_VIA_ICR",
                 "box": bbox,
+                "linking": [link_map[category_name]],
                 "label": label,
                 "words": [
                     {"text": "POPULATE_VIA_ICR_WORD", "box": [0, 0, 0, 0]},
                 ],
-            }
+            })
 
-            form_dict["form"].append(item)
-
-        os.makedirs(os.path.join(output_path, "annotations_tmp"), exist_ok=True)
-        os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
+        ensure_exists(os.path.join(output_path, "annotations_tmp"))
+        ensure_exists(os.path.join(output_path, "images"))
 
         json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
+        with open(json_path, "w") as json_file:
+            json.dump(form_dict, json_file, indent=4)
 
-        if True:
-            with open(json_path, "w") as json_file:
-                json.dump(form_dict, json_file, indent=4)
-
-            shutil.copyfile(src_img_path, dst_img_path)
+        shutil.copyfile(f"{src_img_path}.png", dst_img_path)
 
 
 def convert_coco_to_funsd(
@@ -194,32 +240,11 @@ def convert_coco_to_funsd(
         except Exception as e:
             raise e
 
-
-def normalize_bbox(bbox, size):
-    return [
-        int(1000 * bbox[0] / size[0]),
-        int(1000 * bbox[1] / size[1]),
-        int(1000 * bbox[2] / size[0]),
-        int(1000 * bbox[3] / size[1]),
-    ]
-
-
-import io
-
-from PIL import Image
-
-
-def from_json_file(filename):
-    with io.open(filename, "r", encoding="utf-8") as json_file:
-        data = json.load(json_file)
-        return data
-
-
-def image_to_byte_array(image: Image) -> bytes:
-    imgByteArr = io.BytesIO()
-    image.save(imgByteArr, format=image.format)
-    imgByteArr = imgByteArr.getvalue()
-    return imgByteArr
+# def image_to_byte_array(image: Image) -> bytes:
+#     imgByteArr = io.BytesIO()
+#     image.save(imgByteArr, format=image.format)
+#     imgByteArr = imgByteArr.getvalue()
+#     return imgByteArr
 
 
 def extract_icr(image, boxp, icrp):
@@ -1115,7 +1140,7 @@ def default_all_steps(args: object):
 
     # execute each step
     default_convert(Namespace(**args_1))
-    default_decorate(Namespace(**args_2))
+    # default_decorate(Namespace(**args_2))
     # default_augment(Namespace(**args_3))
     # default_rescale(Namespace(**args_4))
 
