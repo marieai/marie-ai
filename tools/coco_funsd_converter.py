@@ -17,11 +17,11 @@ import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
 from multiprocessing import Pool
-import rstr
+# import rstr
 import cv2
 import numpy as np
-from faker import Faker
-from faker.providers import BaseProvider
+# from faker import Faker
+# from faker.providers import BaseProvider
 from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
@@ -36,7 +36,11 @@ from marie.utils.utils import ensure_exists
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
 
+from rich.logging import RichHandler
+
+logging.basicConfig(level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)])
 logger = logging.getLogger(__name__)
+_tmp_path = "/tmp/marie"
 
 # setup data aug
 
@@ -64,13 +68,34 @@ def load_image(image_path):
     h, w = image.shape[0], image.shape[1]
     return image, (w, h)
 
+def __validate_qa_balance(category_counts: dict, link_map: dict, id_to_name: dict) -> dict:
+    """ Validate the question/answer balance given a set of categories with their total
+        presence in a set of annotations.
+        :param category_counts: a dict of {str label: number of occurrences}
+        :param link_map: {str label: [category id, category id]} for all QA pairs.
+                         {str label: [-1]} for all non-QA categories.
+        :param id_to_name: {category id: str label}
+    """
+    category_imbalance = {}
+    for category, count in category_counts.items():
+        q_a_link = link_map[category]
+        if len(q_a_link) <= 1: # Not a question/answer pair
+            continue
+        question_id, answer_id = q_a_link[0], q_a_link[1]
+        question, answer = id_to_name[question_id], id_to_name[answer_id]
+        question_count, answer_count = category_counts[question], category_counts[answer]
+
+        if question_count != answer_count:
+            category_imbalance[(question, answer)] = (question_count, answer_count)
+
+    return category_imbalance
 
 def __convert_coco_to_funsd(
     src_dir: str,
     output_path: str,
     annotations_filename: str,
     config: object,
-    strip_file_name_path: bool,
+    strip_file_path: bool,
 ) -> None:
     """
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
@@ -79,80 +104,118 @@ def __convert_coco_to_funsd(
     print(f"src_dir     : {src_dir}")
     print(f"output_path : {output_path}")
     print(f"annotations : {annotations_filename}")
-    print(f"strip_file_name_path : {strip_file_name_path}")
+    print(f"strip_file_path : {strip_file_path}")
 
-    data = from_json_file(annotations_filename)
-    categories = data["categories"]
-    images = data["images"]
-    annotations = data["annotations"]
+    # VALIDATE CONFIG Contents
+    if "question_answer_map" not in config:
+        raise Exception("Expected key missing from config : question_answer_map")
+    if "id_map" not in config:
+        raise Exception("Expected key missing from config : id_map")
+    if "link_map" not in config:
+        raise Exception("Expected key missing from config : link_map")
+
+    link_map = config["link_map"]
+    name_to_config_id = config["id_map"]
+    config_id_to_name = {_id: name for name, _id in name_to_config_id.items()}
+
+    coco = from_json_file(annotations_filename)
+
+    # CONFIG <-> COCO Consistency
+    unknown_categories = [category["name"] for category in coco["categories"] if not (category["name"] in config["link_map"])]
+    if len(unknown_categories) > 0:
+        raise Exception(f"COCO file has categories not found in your config: {unknown_categories}")
+
+    # Initialize Image based contexts
+    annotations_by_image = {}
     images_by_id = {}
+    for image in coco["images"]:
+        annotations_by_image[image["id"]] = []
+        images_by_id[image["id"]] = image["file_name"].split("/")[-1] if strip_file_path else image["file_name"]
 
-    for img in images:
-        if strip_file_name_path:
-            file_name = img["file_name"]
-            img["file_name"] = file_name.split("/")[-1]
-        images_by_id[int(img["id"])] = img
+    # Initialize Category based contexts
+    cat_by_id = {}
+    category_counts = {}
+    duplicate_categories = []
+    for category in coco["categories"]:
+        # Identify duplicate categories mappings
+        if category["name"] in category_counts:
+            duplicate_categories.append(category["name"])
+        category_counts[category["name"]] = 0
+        cat_by_id[int(category["id"])] = category["name"]
 
-    cat_id_name = {}
-    cat_name_id = {}
+    # VALIDATE that we don't have duplicate categories mappings
+    if len(duplicate_categories) > 0:
+        raise Exception(f"COCO file has duplicate categories: {duplicate_categories}")
 
-    for category in categories:
-        cat_id_name[category["id"]] = category["name"]
-        cat_name_id[category["name"]] = category["id"]
+    annotation_category_counts = category_counts.copy()
+    for annotation in coco["annotations"]:
+        # Group annotations by image_id as their key
+        annotations_by_image[annotation["image_id"]].append(annotation)
+        # Calculate Category counts over all annotations
+        annotation_category_counts[cat_by_id[annotation["category_id"]]] += 1
 
-    ano_groups = {}
-    # Group annotations by image_id as their key
-    for ano in annotations:
-        if ano["image_id"] not in ano_groups:
-            ano_groups[ano["image_id"]] = []
-        ano_groups[ano["image_id"]].append(ano)
+    # VALIDATE question/answer balance in annotations
+    category_imbalance = __validate_qa_balance(annotation_category_counts, link_map, config_id_to_name)
 
-    errors = []
+    if len(category_imbalance) > 0:
+        print(f"WARNING: {len(category_imbalance)} Question/Answer pairs have an imbalanced number of annotations!")
+        print("Proceeding to Identify individual offenders image offenders.")
+        # Identify question/answer imbalance by file
+        images_with_cat_imbalance = {}
+        for image_id, annotations in annotations_by_image.items():
+            image_category_counts = category_counts.copy()
+            for annotation in annotations:
+                image_category_counts[cat_by_id[annotation["category_id"]]] += 1
+            imbalance = __validate_qa_balance(image_category_counts, link_map, config_id_to_name)
+            if len(imbalance) > 0:
+                images_with_cat_imbalance[image_id] = imbalance
+        print(f"Number of Offenders: {len(images_with_cat_imbalance)}")
+        # print(f"Offenders Details: {images_with_cat_imbalance}")
 
-    for group_id in ano_groups:
-        grouping = ano_groups[group_id]
+    # Cleanup Validation variables
+    del annotation_category_counts
+    del category_imbalance
+    del category_counts
+
+    # Start Conversion
+    for image_id, image_annotations in annotations_by_image.items():
+
+        filename = images_by_id[image_id].split("/")[-1].split(".")[0]
 
         # start conversion
-        img_data = images_by_id[group_id]
-        file_name = img_data["file_name"]
-        filename = file_name.split("/")[-1].split(".")[0]
-        src_img_path = os.path.join(src_dir, "images", file_name)
-        src_img, size = load_image(src_img_path)
+        src_img_path = os.path.join(src_dir, "images", filename)
 
         form_dict = {"form": []}
-
-        for ano in grouping:
-            category_id = ano["category_id"]
+        gen_ids = random.sample(range(0, 10000000), len(image_annotations))
+        for annotation in image_annotations:
             # Convert form XYWH -> xmin,ymin,xmax,ymax
-            bbox = [int(x) for x in ano["bbox"]]
+            bbox = [int(x) for x in annotation["bbox"]]
             bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-            category_name = cat_id_name[category_id]
+
+            gen_id = gen_ids.pop()
+            category_name = cat_by_id[annotation["category_id"]]
             label = category_name
 
-            gen_id = random.randint(0, 10000000)
-            item = {
+            form_dict["form"].append({
                 "id": gen_id,
                 "text": "POPULATE_VIA_ICR",
                 "box": bbox,
+                "linking": [link_map[category_name]],
                 "label": label,
                 "words": [
                     {"text": "POPULATE_VIA_ICR_WORD", "box": [0, 0, 0, 0]},
                 ],
-            }
+            })
 
-            form_dict["form"].append(item)
-
-        os.makedirs(os.path.join(output_path, "annotations_tmp"), exist_ok=True)
-        os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
+        ensure_exists(os.path.join(output_path, "annotations_tmp"))
+        ensure_exists(os.path.join(output_path, "images"))
 
         json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
+        with open(json_path, "w") as json_file:
+            json.dump(form_dict, json_file, indent=4)
 
-        if True:
-            with open(json_path, "w") as json_file:
-                json.dump(form_dict, json_file, indent=4)
-
-            shutil.copyfile(src_img_path, dst_img_path)
+        shutil.copyfile(f"{src_img_path}.png", dst_img_path)
 
 
 def convert_coco_to_funsd(
@@ -177,32 +240,11 @@ def convert_coco_to_funsd(
         except Exception as e:
             raise e
 
-
-def normalize_bbox(bbox, size):
-    return [
-        int(1000 * bbox[0] / size[0]),
-        int(1000 * bbox[1] / size[1]),
-        int(1000 * bbox[2] / size[0]),
-        int(1000 * bbox[3] / size[1]),
-    ]
-
-
-import io
-
-from PIL import Image
-
-
-def from_json_file(filename):
-    with io.open(filename, "r", encoding="utf-8") as json_file:
-        data = json.load(json_file)
-        return data
-
-
-def image_to_byte_array(image: Image) -> bytes:
-    imgByteArr = io.BytesIO()
-    image.save(imgByteArr, format=image.format)
-    imgByteArr = imgByteArr.getvalue()
-    return imgByteArr
+# def image_to_byte_array(image: Image) -> bytes:
+#     imgByteArr = io.BytesIO()
+#     image.save(imgByteArr, format=image.format)
+#     imgByteArr = imgByteArr.getvalue()
+#     return imgByteArr
 
 
 def extract_icr(image, boxp, icrp):
@@ -215,8 +257,8 @@ def extract_icr(image, boxp, icrp):
     checksum = m.hexdigest()
 
     print(f"checksum = {checksum}")
-    json_file = f"/tmp/marie/{checksum}.json"
-    ensure_exists("/tmp/marie")
+    json_file = f"{_tmp_path}/{checksum}.json"
+    ensure_exists(f"{_tmp_path}/")
 
     if os.path.exists(json_file):
         json_data = from_json_file(json_file)
@@ -234,7 +276,7 @@ def extract_icr(image, boxp, icrp):
     if boxes is None or len(boxes) == 0:
         print(f"Empty boxes for : {checksum}")
         if True:
-            file_path = os.path.join("/tmp/snippet", f"empty_boxes-{checksum}.png")
+            file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"empty_boxes-{checksum}.png")
             cv2.imwrite(file_path, image)
 
         h = image.shape[0]
@@ -263,22 +305,22 @@ def extract_icr(image, boxp, icrp):
 
 
 def decorate_funsd(src_dir: str, debug_fragments=False):
-    work_dir_boxes = ensure_exists("/tmp/boxes")
-    work_dir_icr = ensure_exists("/tmp/icr")
+    work_dir_boxes = ensure_exists(f"{_tmp_path}/boxes")
+    work_dir_icr = ensure_exists(f"{_tmp_path}/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
 
     logger.info("⏳ Decorating examples from = %s", src_dir)
     ann_dir = os.path.join(src_dir, "annotations_tmp")
     img_dir = os.path.join(src_dir, "images")
 
-    if False:
-        boxp = BoxProcessorCraft(
-            work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
-        )
+    # if False:
+    #     boxp = BoxProcessorCraft(
+    #         work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    #     )
 
     boxp = BoxProcessorUlimDit(
         work_dir=work_dir_boxes,
-        models_dir="./model_zoo/unilm/dit/text_detection",
+        # models_dir="./model_zoo/unilm/dit/text_detection",
         cuda=True,
     )
 
@@ -286,25 +328,13 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        # if guid == 5:
+        print(file)
+        # if guid == 5:  # TODO: remove box issue solved
         #     break
 
         file_path = os.path.join(ann_dir, file)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
-
-        found = False
-        requires_one = {"paragraph", "greeting", "question"}
-
-        for i, item in enumerate(data["form"]):
-            label = item["label"]
-            if label in requires_one:
-                found = True
-                break
-
-        if not found:
-            print(f"Skipping document : {guid} : {file}")
-            continue
 
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
@@ -326,7 +356,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             print(f"line_number = {line_number}")
             # export cropped region
             if debug_fragments:
-                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
+                file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr(snippet, boxp, icrp)
@@ -340,10 +370,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             ):
                 print(f"No results for : {guid}-{i}")
                 continue
-
-            if debug_fragments:
-                file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
-                cv2.imwrite(file_path, snippet)
 
             words = []
             text = ""
@@ -387,7 +413,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             index = i + 1
 
         if debug_fragments:
-            file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
+            file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
 
         # masked boxes will be same as the original ones
@@ -485,6 +511,216 @@ def load_image_pil(image_path):
     w, h = image.size
     return image, (w, h)
 
+# @Timer(text="Aug in {:.4f} seconds")
+def __augment_decorated_process(
+    guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
+    pass
+    # Faker.seed(0)
+    # output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
+    # output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
+    #
+    # ann_dir = os.path.join(src_dir, "annotations")
+    # img_dir = os.path.join(src_dir, "images")
+    #
+    # # file_path = os.path.join(ann_dir, file)
+    # file = file_path.split("/")[-1]
+    # print(f"File: {file_path}")
+    #
+    # try:
+    #     with open(file_path, "r", encoding="utf8") as f:
+    #         data = json.load(f)
+    # except Exception as e:
+    #     raise e
+    #
+    # image_path = os.path.join(img_dir, file)
+    # image_path = image_path.replace("json", "png")
+    # filename = image_path.split("/")[-1].split(".")[0]
+    #
+    # for k in range(0, count):
+    #     print(f"Iter : {guid} , {k} of {count} ; {filename} ")
+    #     font_face = np.random.choice(
+    #         [
+    #             "FreeSansOblique.ttf",
+    #             # "FreeSansBold.ttf",
+    #             "FreeSans.ttf",
+    #             "OpenSans-Light.ttf",
+    #             "FreeMono.ttf",
+    #             "vpscourt.ttf",
+    #         ]
+    #     )
+    #     font_path = os.path.join("./assets/fonts", font_face)
+    #
+    #     data_copy = dict()
+    #     data_copy["form"] = []
+    #
+    #     masked_fields = [
+    #         "member_number_answer",
+    #         "pan_answer",
+    #         "member_name_answer",
+    #         "patient_name_answer",
+    #         "dos_answer",
+    #         "check_amt_answer",
+    #         "paid_amt_answer",
+    #         "billed_amt_answer",
+    #         "birthdate_answer",
+    #         "check_number_answer",
+    #         "claim_number_answer",
+    #         "letter_date",
+    #         "phone",
+    #         "url",
+    #         "date",
+    #         "money",
+    #         "provider_answer",
+    #         "identifier",
+    #         "address",
+    #     ]
+    #
+    #     image_masked, size = load_image_pil(image_path)
+    #     draw = ImageDraw.Draw(image_masked)
+    #
+    #     for i, item in enumerate(data["form"]):
+    #         label = item["label"]
+    #         if label == "other" or label not in masked_fields:
+    #             data_copy["form"].append(item)
+    #             continue
+    #
+    #         # pan_answer  dos_answer member_number_answer
+    #         # format : x0,y0,x1,y1
+    #         box = np.array(item["box"]).astype(np.int32)
+    #         x0, y0, x1, y1 = box
+    #         w = x1 - x0
+    #         h = y1 - y0
+    #         xoffset = 5
+    #         yoffset = 0
+    #
+    #         # Generate text inside image
+    #         font_size, label_text, segments_lines, line_heights = generate_text(
+    #             label, w, h, font_path
+    #         )
+    #
+    #         assert len(line_heights) != 0
+    #         font = get_cached_font(font_path, font_size)
+    #
+    #         # x0, y0, x1, y1 = xy
+    #         # Yellow with outline for debug
+    #         # draw.rectangle(
+    #         #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+    #         # )
+    #
+    #         # clear region
+    #         draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+    #
+    #         dup_item = item  # copy.copy(item)
+    #         dup_item["text"] = label_text
+    #         dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+    #         dup_item["words"] = []
+    #         dup_item["linking"] = []
+    #         words = []
+    #
+    #         total_text_height = 0
+    #         for th in line_heights:
+    #             total_text_height += th
+    #
+    #         space = h - total_text_height
+    #         line_offset = 0
+    #         baseline_spacing = max(4, space // len(line_heights))
+    #
+    #         for line_idx, segments in enumerate(segments_lines):
+    #             for seg in segments:
+    #                 seg_text = seg["text"]
+    #                 sx0, sy0, sx1, sy1 = seg["box"]
+    #                 sw = sx1 - sx0
+    #                 sh = sy1 - sy0
+    #                 adj_box = [
+    #                     x0 + sx0,
+    #                     y0 + line_offset,
+    #                     x0 + sx0 + sw,
+    #                     y0 + sh + line_offset,
+    #                 ]
+    #                 word = {"text": seg_text, "box": adj_box}
+    #                 words.append(word)
+    #                 # debug box
+    #                 # draw.rectangle(
+    #                 #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+    #                 #     outline="#FF0000",
+    #                 #     width=1,
+    #                 # )
+    #             line_offset += line_heights[line_idx] + baseline_spacing
+    #
+    #         dup_item["words"] = words
+    #
+    #         line_offset = 0
+    #
+    #         for line_idx, text_line in enumerate(label_text.split("\n")):
+    #             draw.text(
+    #                 (x0 + xoffset, y0 + line_offset),
+    #                 text=text_line,
+    #                 fill="#000000",
+    #                 font=font,
+    #                 stroke_fill=1,
+    #             )
+    #             line_offset += line_heights[line_idx] + baseline_spacing
+    #         data_copy["form"].append(dup_item)
+    #
+    #     # Save items
+    #     out_name_prefix = f"{filename}_{guid}_{k}"
+    #
+    #     json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
+    #     dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
+    #
+    #     # print(f'Writing : {json_path}')
+    #     with open(json_path, "w") as json_file:
+    #         json.dump(
+    #             data_copy,
+    #             json_file,
+    #             # sort_keys=True,
+    #             separators=(",", ": "),
+    #             ensure_ascii=False,
+    #             indent=2,
+    #             cls=NumpyEncoder,
+    #         )
+    #
+    #     # saving in JPG format as it is substantially faster than PNG
+    #     # image_masked.save(
+    #     #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+    #     # )  # 100 disables compression
+    #     #
+    #     # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+    #     image_masked.save(dst_img_path, compress_level=2)
+    #
+    #     del draw
+
+
+def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
+    ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+
+    # if False:
+    #     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+    #         file_path = os.path.join(ann_dir, file)
+    #         __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
+
+    aug_args = []
+    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+        file_path = os.path.join(ann_dir, file)
+        __args = (guid, count, file_path, src_dir, dest_dir)
+        aug_args.append(__args)
+
+    start = time.time()
+    print("\nPool Executor:")
+    print("Time elapsed: %s" % (time.time() - start))
+
+    pool = Pool(processes=int(mp.cpu_count() * 0.95))
+    pool_results = pool.starmap(__augment_decorated_process, aug_args)
+
+    pool.close()
+    pool.join()
+
+    print("Time elapsed[submitted]: %s" % (time.time() - start))
+    for r in pool_results:
+        print("Time elapsed[result]: %s  , %s" % (time.time() - start, r))
+    print("Time elapsed[all]: %s" % (time.time() - start))
+
+
 
 def visualize_funsd(src_dir: str, dst_dir: str, config: dict):
     ann_dir = os.path.join(src_dir, "annotations")
@@ -565,7 +801,7 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
     filename = src_image_path.split("/")[-1].split(".")[0]
     image, orig_size = load_image_pil(src_image_path)
     resized, target_size = __scale_height(image, 1000)
-    resized.save(f"/tmp/snippet/resized_{filename}.png")
+    resized.save(ensure_exists(f"{_tmp_path}/snippet")+"/resized_{filename}.png")
 
     # print(f"orig_size, target_size   = {orig_size} : {target_size}")
     orig_w, orig_h = orig_size
@@ -792,7 +1028,7 @@ def default_augment(args: object):
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
 
-    # augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
+    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
 
 
 def default_rescale(args: object):
@@ -906,7 +1142,7 @@ def default_all_steps(args: object):
     default_convert(Namespace(**args_1))
     # default_decorate(Namespace(**args_2))
     # default_augment(Namespace(**args_3))
-    default_rescale(Namespace(**args_4))
+    # default_rescale(Namespace(**args_4))
 
 
 def default_split(args: object):
@@ -1060,7 +1296,7 @@ def extract_args(args=None) -> object:
 
     visualize_parser.add_argument(
         "--dir-output",
-        default="/tmp/visualize",
+        default=f"{_tmp_path}/visualize",
         type=str,
         help="Destination directory",
     )
@@ -1086,7 +1322,7 @@ def extract_args(args=None) -> object:
 
     split_parser.add_argument(
         "--dir-output",
-        default="/tmp/split",
+        default=f"{_tmp_path}/split",
         type=str,
         help="Destination directory",
     )
@@ -1166,5 +1402,5 @@ if __name__ == "__main__":
     print("-" * 120)
     print(args)
     print("-" * 120)
-
+    # logger.setLevel(logging.DEBUG)
     args.func(args)
