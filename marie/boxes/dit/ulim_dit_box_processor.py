@@ -260,6 +260,7 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             # check if boxes are empty, which means no boxes were detected(blank image)
             if boxes is None or len(boxes) == 0:
+                self.logger.debug(f"No boxes predicted.")
                 return [], [], [], [], []
 
             bboxes = _convert_boxes(boxes)
@@ -273,10 +274,14 @@ class BoxProcessorUlimDit(BoxProcessor):
             bboxes = [box for box in bboxes if box[3] - box[1] > min_width]
 
             len_b = len(bboxes)
+            if len_a != len_b:
+                self.logger.debug(f"Removed predicted boxes that did not meet size minimum requirements: {len_a - len_b}")
+            if len_b == 0:
+                self.logger.debug(f"No boxes found within requirements")
+                return [], [], [], [], []
+              
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
-            if len_a != len_b:
-                self.logger.debug(f"Removed boxes : {len_a - len_b}")
 
             # FIXME : This is a hack
             # TODO : Update the model to correctly predict the orientation of the text and assign the correct class
