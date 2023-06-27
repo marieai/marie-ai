@@ -109,8 +109,8 @@ class IcrProcessor(BaseHandler):
 
         try:
             shape = img.shape
-            debug_dir = ensure_exists(os.path.join("/tmp/icr", _id))
-            debug_all_dir = ensure_exists(os.path.join("/tmp/icr", "fields", key))
+            debug_dir = ensure_exists(os.path.join(self.work_dir, _id))
+            debug_all_dir = ensure_exists(os.path.join(self.work_dir, "fields", key))
 
             if draw_debug_overlay:
                 pil_overlay = Image.new(
