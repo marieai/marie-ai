@@ -121,13 +121,11 @@ class PdfRenderer(ResultRenderer):
                         py0 = img_h - ly - lh * 0.80
                         # py0 = img_h - y # + (h / 2)
 
-                    # this is a hack to get the font size and text for vertical text
                     # this needs to be done in text detection and recognition
                     font_size = determine_font_size(lh)
                     # print(f"font_size = {font_size}  : {box} :{rat} : {text}")
                     # ['Courier', 'Courier-Bold', 'Courier-BoldOblique', 'Courier-Oblique', 'Helvetica', 'Helvetica-Bold', 'Helvetica-BoldOblique', 'Helvetica-Oblique', 'Symbol', 'Times-Bold', 'Times-BoldItalic', 'Times-Italic', 'Times-Roman', 'ZapfDingbats']
-
-                    can.setFont("Courier", font_size)
+                    can.setFont("Helvetica", font_size)
                     can.setFontSize(font_size)
                     can.drawString(px0 + left_pad, py0, text)
 

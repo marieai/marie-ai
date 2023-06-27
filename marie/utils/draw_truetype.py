@@ -54,5 +54,8 @@ def determine_font_size(line_height: int) -> int:
     https://medium.com/@zkareemz/golden-ratio-62b3b6d4282a
     """
     #  line-height = font-size * 1.42857
-    font_size = int(line_height / 1.618)
-    return font_size
+    # font_size = int(line_height / 1.618)
+
+    # this parameters work well with courier font
+    font_size = int((line_height // 2) * 1.3)
+    return int(font_size)

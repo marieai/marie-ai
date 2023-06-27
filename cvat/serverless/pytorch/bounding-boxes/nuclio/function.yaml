@@ -26,7 +26,8 @@ spec:
     - volume:
         name: marie-config
         hostPath:
-          path: /home/gbugaj/dev/marieai/marie-ai
+#          path: /home/gbugaj/dev/marieai/marie-ai
+          path: /mnt/data/marie-ai
       volumeMount:
         name: marie-config
         mountPath: /etc/marie
