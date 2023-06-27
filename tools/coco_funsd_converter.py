@@ -212,7 +212,8 @@ def convert_coco_to_funsd(
         src_dir: str, output_path: str, config: object, strip_file_name_path: bool
 ) -> None:
     """
-    Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
+    Convert CVAT annotated COCO 1.0 dataset into FUNSD compatible format for finetuning models.
+    source: "FUNSD: A Dataset for Form Understanding in Noisy Scanned Documents" https://arxiv.org/pdf/1905.13538.pdf
     """
     # instances_default.json
     items = glob.glob(os.path.join(src_dir, "annotations/*.json"))
@@ -238,7 +239,7 @@ def convert_coco_to_funsd(
 #     return imgByteArr
 
 
-def extract_icr(image, boxp, icrp):
+def extract_icr(image, boxp, icrp, debug_fragments: bool = False):
     """
     """
     if not isinstance(image, np.ndarray):
@@ -249,26 +250,25 @@ def extract_icr(image, boxp, icrp):
     m.update(msg_bytes)
     checksum = m.hexdigest()
 
+    ensure_exists(f"{_tmp_path}/icr-extract")
     print(f"checksum = {checksum}")
-    json_file = f"{_tmp_path}/{checksum}.json"
-    ensure_exists(f"{_tmp_path}/")
+    json_file = f"{_tmp_path}/icr-extract/{checksum}.json"
 
+    # Have we extracted this image before?
     if os.path.exists(json_file):
-        json_data = from_json_file(json_file)
         print(f"From JSONFILE : {json_file}")
-        boxes = json_data["boxes"]
-        result = json_data["result"]
-        return boxes, result
+        json_data = from_json_file(json_file)
+        return json_data["boxes"], json_data["result"]
 
+    # Extract with
     key = checksum
     boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
-        key, "field", image, PSMode.SPARSE
-    )
+        key, "field", image, PSMode.SPARSE)
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
         print(f"Empty boxes for : {checksum}")
-        if True:
+        if debug_fragments:
             file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"empty_boxes-{checksum}.png")
             cv2.imwrite(file_path, image)
 
@@ -279,8 +279,7 @@ def extract_icr(image, boxp, icrp):
         lines = [1]
 
     result, overlay_image = icrp.recognize(
-        key, "test", image, boxes, img_fragments, lines
-    )
+        key, "test", image, boxes, img_fragments, lines)
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -307,18 +306,15 @@ def load_image(image_path):
 
 
 def __decorate_funsd(
-        file_path: str, output_ann_dir: str, img_dir: str,
+        data: dict, filename: str, output_ann_dir: str, img_dir: str,
         boxp: BoxProcessorUlimDit, icrp: TrOcrIcrProcessor, debug_fragments: bool = False
 ) -> None:
     """ Decorate an individual image based on a FUNSD format file
     """
-    with open(file_path, "r", encoding="utf8") as f:
-        data = json.load(f)
-
-    filename = file_path.split("/")[-1]
-    image_path = os.path.join(img_dir, filename)
-    image_path = image_path.replace("json", "png")
+    image_path = os.path.join(img_dir, filename+).replace("json", "png")
     image, size = load_image(image_path)
+
+    print(f"Extracting bounding boxes for {filename}")
     # line_numbers : line number associated with bounding box
     # lines : raw line boxes that can be used for further processing
     _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
@@ -334,13 +330,13 @@ def __decorate_funsd(
         line_number = find_line_number(line_bboxes, [x0, y0, x1 - x0, y1 - y0])
 
         # each snippet could be on multiple lines
-        print(f"\tline_number = {line_number}")
+        print(f"line_number = {line_number}")
         # export cropped region
         if debug_fragments:
             file_path = os.path.join(f"{_tmp_path}/snippet", f"{filename}-snippet_{_id}.png")
             cv2.imwrite(file_path, snippet)
 
-        boxes, results = extract_icr(snippet, boxp, icrp)
+        boxes, results = extract_icr(snippet, boxp, icrp, debug_fragments)
         results.pop("meta", None)
 
         if (
@@ -349,7 +345,7 @@ def __decorate_funsd(
             or results["lines"] is None
             or len(results["lines"]) == 0
         ):
-            print(f"\t*No results for : {filename}-{_id}")
+            print(f"*No results in {filename} for id:{_id}")
             continue
 
         words = []
@@ -365,8 +361,8 @@ def __decorate_funsd(
         item["words"] = words
         item["text"] = text
         item["line_number"] = line_number
-        print("\t-------------------------------")
-        print(f"\tid: {_id}, Label: {item['label']}, text: {text}")
+        print("-------------------------------")
+        print(f"id: {_id}, Label: {item['label']}, text: {text}")
 
     # create masked image for OTHER label
     image_masked = image.copy()
@@ -394,53 +390,40 @@ def __decorate_funsd(
             "text": word["text"],
             "box": word_box,
             "line_number": line_number,
-            "linking": [],
+            "linking": [],              # TODO: Not in use.
             "label": "other",
             "words": {"text": word["text"], "box": word_box},
         }
 
         data["form"].append(item)
-    # *********TODO: START HERE MONDAY ***********************
-    # need to reorder items, so they are sorted in proper order Y then X
-    lines_unsorted = []
-    for i, item in enumerate(data["form"]):
-        lines_unsorted.append(item["line_number"])
 
-    lines_unsorted = np.array(lines_unsorted)
-    unique_line_ids = sorted(np.unique(lines_unsorted))
-    data_form_sorted = []
+    # Find all annotations by line number
+    items_by_line = {}
+    for item in data["form"]:
+        if item["line_number"] not in items_by_line:
+            items_by_line[item["line_number"]] = []
+        items_by_line[item["line_number"]].append(item)
+
+    # Order by line number
+    unique_line_numbers = list(items_by_line.keys())
+    unique_line_numbers.sort()
+    items_by_line = {line: np.array(items_by_line[line]) for line in unique_line_numbers}
+
     word_index = 0
+    data_form_sorted = []
+    # Order annotations by X value (left to right) per line
+    for line_number, items_on_line in items_by_line.items():
+        boxes_on_line = np.array([item["box"] for item in items_on_line])
+        items_on_line = items_on_line[np.argsort(boxes_on_line[:, 0])]
 
-    for i, line_numer in enumerate(unique_line_ids):
-        # print(f'line_numer =>  {line_numer}')
-        item_pics = []
-        box_picks = []
-
-        for j, item in enumerate(data["form"]):
-            word_line_number = item["line_number"]
-            if line_numer == word_line_number:
-                item_pics.append(item)
-                box_picks.append(item["box"])
-
-        item_pics = np.array(item_pics)
-        box_picks = np.array(box_picks)
-
-        indices = np.argsort(box_picks[:, 0])
-        item_pics = item_pics[indices]
-
-        for k, item in enumerate(item_pics):
+        for item in items_on_line:
             item["word_index"] = word_index
             data_form_sorted.append(item)
             word_index += 1
 
-    data["form"] = []
-
-    for i, item in enumerate(data_form_sorted):
-        data["form"].append(item)
-        # print(f"\t=>  {item}")
+    data["form"] = data_form_sorted
 
     json_path = os.path.join(output_ann_dir, filename)
-    print(json_path)
     with open(json_path, "w") as json_file:
         json.dump(
             data,
@@ -460,6 +443,7 @@ def decorate_funsd(src_dir: str, debug_fragments: bool = False) -> None:
     work_dir_boxes = ensure_exists(f"{_tmp_path}/boxes")
     work_dir_icr = ensure_exists(f"{_tmp_path}/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+    debug_fragments = True
     if debug_fragments:
         ensure_exists(f"{_tmp_path}/snippet")
 
@@ -478,14 +462,20 @@ def decorate_funsd(src_dir: str, debug_fragments: bool = False) -> None:
     if len(items) == 0:
         raise Exception(f"No annotations to process in : {ann_dir}")
 
-    max_files = 0
-    for FUNSD_file_path in items:
+    max_files = 1  # TODO: remove after debug
+    for i, FUNSD_file_path in enumerate(items):
+        if i >= max_files:  # TODO: remove after debug
+            break           # "
+        print("*" * 60)
+        filename = FUNSD_file_path.split('/')[-1]
+        print(f"Processing annotation : {filename}")
         try:
-            print(f"Processing annotation : {FUNSD_file_path.split('/')[-1]}")
-            max_files += 1  # TODO: remove after debug
-            if max_files == 5:  # "
-                break  # "
-            __decorate_funsd(FUNSD_file_path, output_ann_dir, img_dir, boxp, icrp, debug_fragments)
+            with open(FUNSD_file_path, "r", encoding="utf8") as f:
+                data = json.load(f)
+            if len(data["form"]) == 0:
+                print(f"File: {filename}, has no annotations. Skipping decorate.")
+                continue
+            __decorate_funsd(data, filename, output_ann_dir, img_dir, boxp, icrp, debug_fragments)
         except Exception as e:
             raise e
 
@@ -1134,9 +1124,9 @@ def default_all_steps(args: object):
     args_4["suffix"] = "-augmented"
 
     # execute each step
-    default_convert(Namespace(**args_1))
+    # default_convert(Namespace(**args_1))
     default_decorate(Namespace(**args_2))
-    default_augment(Namespace(**args_3))
+    # default_augment(Namespace(**args_3))
     # default_rescale(Namespace(**args_4))
 
 
