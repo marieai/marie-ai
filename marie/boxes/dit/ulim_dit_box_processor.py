@@ -363,7 +363,7 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             prediction_result = dict()
             prediction_result["bboxes"] = bboxes
-            prediction_result["polys"] = bboxes
+            prediction_result["polys"] = polys
             prediction_result["scores"] = scores
             prediction_result["heatmap"] = None
 
