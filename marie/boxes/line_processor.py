@@ -110,19 +110,19 @@ def line_merge(image, bboxes) -> List[Any]:
         _w = 0
 
     enable_visualization = True
-    # iou_scores = [0.6, 0.5, 0.4, 0.3]
-    iou_scores = [0.8, 0.7, 0.6, 0.5, 0.4, 0.35]
-    merged_bboxes = copy.deepcopy(bboxes)
+    iou_scores = [0.8, 0.7, 0.6, 0.5, 0.4, 0.37, 0.35]
     no_change_count = 0
+    min_change_count = 2
+
+    merged_bboxes = copy.deepcopy(bboxes)
     for i in range(0, len(iou_scores)):
         # overlay = copy.deepcopy(image)
         size_before_merge = len(merged_bboxes)
         merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i])
         size_after_merge = len(merged_bboxes)
-        # print(f"CHANGE : {iou_scores[i]} : {size_before_merge} -> {size_after_merge}")
         if size_before_merge == size_after_merge:
             no_change_count += 1
-            if no_change_count > 2:
+            if no_change_count > min_change_count:
                 logger.debug(f"NO CHANGE : {iou_scores[i]}")
                 break
 
