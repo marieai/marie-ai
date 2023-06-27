@@ -311,7 +311,7 @@ def __decorate_funsd(
 ) -> None:
     """ Decorate an individual image based on a FUNSD format file
     """
-    image_path = os.path.join(img_dir, filename+).replace("json", "png")
+    image_path = os.path.join(img_dir, filename+".png")
     image, size = load_image(image_path)
 
     print(f"Extracting bounding boxes for {filename}")
@@ -423,7 +423,7 @@ def __decorate_funsd(
 
     data["form"] = data_form_sorted
 
-    json_path = os.path.join(output_ann_dir, filename)
+    json_path = os.path.join(output_ann_dir, filename+".json")
     with open(json_path, "w") as json_file:
         json.dump(
             data,
@@ -475,7 +475,7 @@ def decorate_funsd(src_dir: str, debug_fragments: bool = False) -> None:
             if len(data["form"]) == 0:
                 print(f"File: {filename}, has no annotations. Skipping decorate.")
                 continue
-            __decorate_funsd(data, filename, output_ann_dir, img_dir, boxp, icrp, debug_fragments)
+            __decorate_funsd(data, filename[:-5], output_ann_dir, img_dir, boxp, icrp, debug_fragments)
         except Exception as e:
             raise e
 
@@ -1124,7 +1124,7 @@ def default_all_steps(args: object):
     args_4["suffix"] = "-augmented"
 
     # execute each step
-    # default_convert(Namespace(**args_1))
+    default_convert(Namespace(**args_1))
     default_decorate(Namespace(**args_2))
     # default_augment(Namespace(**args_3))
     # default_rescale(Namespace(**args_4))
