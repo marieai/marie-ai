@@ -9,15 +9,33 @@ box = BoxProcessorUlimDit(
     cuda=True,
 )
 
+sel_bbox_optimization = False
+sel_content_aware = False
+
+
+def update_content_aware(value):
+    global sel_content_aware
+    sel_content_aware = value
+
+
+def update_bbox_optimzation(value):
+    global sel_bbox_optimization
+    sel_bbox_optimization = value
+
 
 def process_image(image):
-    (
-        boxes,
-        fragments,
-        lines,
-        _,
-        lines_bboxes,
-    ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
+    print("Processing image")
+    print(f"Content Aware: {sel_content_aware}")
+    print(f"BBox Optimization: {sel_bbox_optimization}")
+
+    (boxes, fragments, lines, _, lines_bboxes,) = box.extract_bounding_boxes(
+        "gradio",
+        "field",
+        image,
+        PSMode.SPARSE,
+        sel_content_aware,
+        sel_bbox_optimization,
+    )
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
@@ -32,8 +50,34 @@ def interface():
 
     with gr.Blocks() as iface:
         gr.Markdown(article)
+
         with gr.Row():
-            src = gr.Image(type="pil", source="upload")
+            with gr.Column():
+                src = gr.Image(type="pil", source="upload")
+            with gr.Column():
+                chk_apply_bbox_optimization = gr.Checkbox(
+                    label="Bounding Box optimization",
+                    default=True,
+                    interactive=True,
+                )
+
+                chk_apply_bbox_optimization.change(
+                    lambda x: update_bbox_optimzation(x),
+                    inputs=[chk_apply_bbox_optimization],
+                    outputs=[],
+                )
+
+                chk_apply_content_aware = gr.Checkbox(
+                    label="Content aware transformation",
+                    default=True,
+                    interactive=True,
+                )
+
+                chk_apply_content_aware.change(
+                    lambda x: update_content_aware(x),
+                    inputs=[chk_apply_content_aware],
+                    outputs=[],
+                )
 
         with gr.Row():
             btn_reset = gr.Button("Clear")
