@@ -148,8 +148,13 @@ def lines_from_bboxes(image, bboxes):
     # select the horizontal size based on the image width  3000 -> 160 1000 -> 80 500 -> 40
 
     cols = link_score.shape[1]
-    horizontal_size = cols // 160
-    horizontal_size = min(horizontal_size, cols // 2)
+    half_cols = cols // 2
+    stride = cols // min(160, cols)
+    horizontal_size = stride if stride > 1 else half_cols
+
+    print(f"cols: {cols}")
+    print(f"half_cols: {half_cols}")
+    print(f"horizontal_size: {horizontal_size}")
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
