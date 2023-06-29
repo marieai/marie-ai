@@ -202,7 +202,7 @@ def lines_from_bboxes(image, bboxes):
     return lines_bboxes
 
 
-def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarray, np.ndarray]:
+def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
     No content is defined as first non background(white) pixel.
@@ -218,6 +218,8 @@ def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarr
     # Transform source image to gray if it is not already
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    # with content aware we will apply more aggressive crop method to remove the background
+    # there is a trade off here, we will lose some content but we will also remove the background
     if content_aware:
         # apply division normalization to preprocess the image
         blur = cv2.GaussianBlur(gray, (5, 5), sigmaX=0, sigmaY=0)

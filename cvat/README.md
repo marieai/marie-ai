@@ -100,3 +100,4 @@ nuctl create project cvat
 ## References
 https://github.com/opencv/cvat/blob/develop/site/content/en/docs/faq.md?plain=1
 https://opencv.github.io/cvat/docs/manual/advanced/serverless-tutorial/
+https://stephencowchau.medium.com/journey-using-cvat-semi-automatic-annotation-with-a-partially-trained-model-to-tag-additional-8057c76bcee2
