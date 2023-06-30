@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+from rich.logging import RichHandler
 import multiprocessing as mp
 import os
 import random
@@ -36,8 +37,7 @@ from marie.utils.utils import ensure_exists
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
 
-from rich.logging import RichHandler
-
+# Globals
 logging.basicConfig(level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)])
 logger = logging.getLogger(__name__)
 _tmp_path = "/tmp/marie"
@@ -239,7 +239,7 @@ def convert_coco_to_funsd(
 #     return imgByteArr
 
 
-def extract_icr(image, boxp, icrp, debug_fragments: bool = False):
+def extract_icr(image, label:str, boxp, icrp, debug_fragments: bool = False):
     """
     """
     if not isinstance(image, np.ndarray):
@@ -250,9 +250,9 @@ def extract_icr(image, boxp, icrp, debug_fragments: bool = False):
     m.update(msg_bytes)
     checksum = m.hexdigest()
 
-    ensure_exists(f"{_tmp_path}/icr-extract")
+    ensure_exists(f"{_tmp_path}/icr")
     print(f"checksum = {checksum}")
-    json_file = f"{_tmp_path}/icr-extract/{checksum}.json"
+    json_file = f"{_tmp_path}/icr/{checksum}/{checksum}.json"
 
     # Have we extracted this image before?
     if os.path.exists(json_file):
@@ -260,16 +260,19 @@ def extract_icr(image, boxp, icrp, debug_fragments: bool = False):
         json_data = from_json_file(json_file)
         return json_data["boxes"], json_data["result"]
 
-    # Extract with
+    # TODO: Model needs to be trained to Extract sub-boxes from snippets
+    # # Extract sub-boxes
     key = checksum
-    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
-        key, "field", image, PSMode.SPARSE)
+    # boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
+    #     key, "field", image, PSMode.SPARSE)
+    # NOTE: For now we assume there are no internal boxes to be discovered
+    boxes, img_fragments, lines = [], [], [1]
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
-        print(f"Empty boxes for : {checksum}")
+        print(f"No internal boxes for : {checksum}")
         if debug_fragments:
-            file_path = os.path.join(ensure_exists(f"{_tmp_path}/snippet"), f"empty_boxes-{checksum}.png")
+            file_path = os.path.join(ensure_exists(f"{_tmp_path}/icr/{checksum}/"), f"{checksum}.png")
             cv2.imwrite(file_path, image)
 
         h = image.shape[0]
@@ -279,7 +282,7 @@ def extract_icr(image, boxp, icrp, debug_fragments: bool = False):
         lines = [1]
 
     result, overlay_image = icrp.recognize(
-        key, "test", image, boxes, img_fragments, lines)
+        key, label, image, boxes, img_fragments, lines)
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -309,12 +312,12 @@ def __decorate_funsd(
         data: dict, filename: str, output_ann_dir: str, img_dir: str,
         boxp: BoxProcessorUlimDit, icrp: TrOcrIcrProcessor, debug_fragments: bool = False
 ) -> None:
-    """ Decorate an individual image based on a FUNSD format file
+    """ 'Decorate' a FUNSD file with ICR extracted text from the corresponding image
     """
     image_path = os.path.join(img_dir, filename+".png")
     image, size = load_image(image_path)
 
-    print(f"Extracting bounding boxes for {filename}")
+    print(f"Extracting line numbers with Box Processor for {filename}")
     # line_numbers : line number associated with bounding box
     # lines : raw line boxes that can be used for further processing
     _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
@@ -336,7 +339,7 @@ def __decorate_funsd(
             file_path = os.path.join(f"{_tmp_path}/snippet", f"{filename}-snippet_{_id}.png")
             cv2.imwrite(file_path, snippet)
 
-        boxes, results = extract_icr(snippet, boxp, icrp, debug_fragments)
+        boxes, results = extract_icr(snippet, item["label"], boxp, icrp, debug_fragments)
         results.pop("meta", None)
 
         if (
@@ -376,7 +379,7 @@ def __decorate_funsd(
         cv2.imwrite(file_path, image_masked)
 
     # masked boxes will be same as the original ones
-    boxes_masked, results_masked = extract_icr(image_masked, boxp, icrp)
+    boxes_masked, results_masked = extract_icr(image_masked, "other", boxp, icrp)
 
     print("-------- MASKED ----------")
     current_max_index = data["form"][-1]["id"]
@@ -436,14 +439,12 @@ def __decorate_funsd(
         )
 
 
-def decorate_funsd(src_dir: str, debug_fragments: bool = False) -> None:
-    """
-    'Decorate' FUNSD annotation files with ICR-ed contents from the source images.
-    """
+def decorate_funsd(src_dir: str, overwrite: bool = False, debug_fragments: bool = False) -> None:
+    """'Decorate' FUNSD annotation files with ICR-ed contents from the source images."""
     work_dir_boxes = ensure_exists(f"{_tmp_path}/boxes")
     work_dir_icr = ensure_exists(f"{_tmp_path}/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
-    debug_fragments = True
+    # debug_fragments = True
     if debug_fragments:
         ensure_exists(f"{_tmp_path}/snippet")
 
@@ -462,14 +463,15 @@ def decorate_funsd(src_dir: str, debug_fragments: bool = False) -> None:
     if len(items) == 0:
         raise Exception(f"No annotations to process in : {ann_dir}")
 
-    max_files = 1  # TODO: remove after debug
     for i, FUNSD_file_path in enumerate(items):
-        if i >= max_files:  # TODO: remove after debug
-            break           # "
         print("*" * 60)
         filename = FUNSD_file_path.split('/')[-1]
         print(f"Processing annotation : {filename}")
         try:
+            if os.path.isfile(os.path.join(output_ann_dir, filename)) and not overwrite:
+                print(f"File {filename} already decorated and Overwrite is disabled. Continuing to next file.")
+                continue
+
             with open(FUNSD_file_path, "r", encoding="utf8") as f:
                 data = json.load(f)
             if len(data["form"]) == 0:
