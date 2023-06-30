@@ -148,8 +148,13 @@ def lines_from_bboxes(image, bboxes):
     # select the horizontal size based on the image width  3000 -> 160 1000 -> 80 500 -> 40
 
     cols = link_score.shape[1]
-    horizontal_size = cols // 160
-    horizontal_size = min(horizontal_size, cols // 2)
+    half_cols = cols // 2
+    stride = cols // min(160, cols)
+    horizontal_size = stride if stride > 1 else half_cols
+
+    print(f"cols: {cols}")
+    print(f"half_cols: {half_cols}")
+    print(f"horizontal_size: {horizontal_size}")
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
@@ -197,7 +202,7 @@ def lines_from_bboxes(image, bboxes):
     return lines_bboxes
 
 
-def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarray, np.ndarray]:
+def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
     No content is defined as first non background(white) pixel.
@@ -213,8 +218,8 @@ def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarr
     # Transform source image to gray if it is not already
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    content_aware = False
-    
+    # with content aware we will apply more aggressive crop method to remove the background
+    # there is a trade off here, we will lose some content but we will also remove the background
     if content_aware:
         # apply division normalization to preprocess the image
         blur = cv2.GaussianBlur(gray, (5, 5), sigmaX=0, sigmaY=0)

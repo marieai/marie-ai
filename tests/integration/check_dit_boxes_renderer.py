@@ -12,14 +12,13 @@ def process_image(image):
         models_dir="../../model_zoo/unilm/dit/text_detection",
         cuda=True,
     )
-
     (
         boxes,
         fragments,
         lines,
         _,
         lines_bboxes,
-    ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
+    ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE, bbox_optimization=True, bbox_context_aware=True)
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
@@ -35,6 +34,7 @@ if __name__ == "__main__":
 
     img_path = "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
     img_path = "~/tmp/PID_576_7188_0_150300411_4.tif"
+    img_path = "/home/gbugaj/tmp/demo/159581778_3.png"
 
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
