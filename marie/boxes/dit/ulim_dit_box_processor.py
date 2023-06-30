@@ -213,6 +213,8 @@ def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarr
     # Transform source image to gray if it is not already
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    content_aware = False
+    
     if content_aware:
         # apply division normalization to preprocess the image
         blur = cv2.GaussianBlur(gray, (5, 5), sigmaX=0, sigmaY=0)
@@ -231,6 +233,10 @@ def crop_to_content_box(frame: np.ndarray, content_aware=True) -> Tuple[np.ndarr
 
     min_x_pad = 1
     min_y_pad = 1
+    # cv2.imwrite("/tmp/fragments/crop_to_content_box.jpg", op_frame)
+    if len(indices[0]) == 0:
+        # no content found, return the whole image
+        return [0, 0, 0, 0], frame
 
     # indices are in y,X format
     if content_aware:
