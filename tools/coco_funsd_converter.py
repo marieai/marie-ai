@@ -21,8 +21,8 @@ from multiprocessing import Pool
 # import rstr
 import cv2
 import numpy as np
-# from faker import Faker
-# from faker.providers import BaseProvider
+from faker import Faker
+from faker.providers import BaseProvider
 from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 _tmp_path = "/tmp/marie"
 
 # setup data aug
-
+fake = Faker()
+fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 
 def from_json_file(filename):
     with io.open(filename, "r", encoding="utf-8") as json_file:
@@ -494,6 +495,182 @@ def generate_pan(num_char):
     return prefix
 
 
+@lru_cache(maxsize=20)
+def get_cached_font(font_path, font_size):
+    # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
+    return ImageFont.truetype(font_path, font_size)
+
+
+def generate_text(label, width, height, font_path):
+    """generate text for specific label"""
+    pass
+    # avg_line_height = 40
+    # est_line_count = max(1, height // avg_line_height)
+    # height = min(height, 50)
+    # font_size = int(height * 1)
+    #
+    # # Generate text inside image
+    # font = get_cached_font(font_path, font_size)
+    # img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    # draw = ImageDraw.Draw(img)
+    # space_w, _ = draw.textsize(" ", font=font)
+    #
+    # dec = 2
+    # index = 0
+    # label_text = ""
+    #
+    # # ADD Generation for following
+    # # member_number_answer
+    # # pan_answer
+    # # member_name_answer
+    # # patient_name_answer
+    # # dos_answer
+    # # check_amt_answer
+    # # paid_amt_answer
+    # # billed_amt_answer
+    # # birthdate_answer
+    # # check_number_answer
+    # # claim_number_answer
+    # # letter_date
+    # # phone X
+    # # url X
+    #
+    # while True:
+    #     if index > 5:
+    #         font_size = font_size - dec
+    #         font = get_cached_font(font_path, font_size)
+    #         index = 0
+    #         space_w, _ = draw.textsize(" ", font=font)
+    #
+    #     if (
+    #         label == "dos_answer"
+    #         or label == "birthdate_answer"
+    #         or label == "letter_date"
+    #         or label == "date"
+    #     ):
+    #         # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
+    #         patterns = [
+    #             "%Y%m%d",
+    #             "%Y-%m-%d",
+    #             "%Y/%m/%d",
+    #             "%d/%m/%Y",
+    #             "%m/%d/%Y",
+    #             "%d.%m.%Y",
+    #             "%d %B %Y",
+    #             "%b %d, %Y",
+    #         ]
+    #
+    #         # make composite DOS
+    #         # date-date
+    #         # date thought date
+    #         # date to date
+    #
+    #         if label == "dos_answer":
+    #             if np.random.choice([0, 1], p=[0.3, 0.7]):
+    #                 pattern = random.choice(patterns)
+    #                 sel_reg = random.choice(["-", " - ", " ", " to ", " thought "])
+    #                 d1 = fake.date(pattern=pattern)
+    #                 d2 = fake.date(pattern=pattern)
+    #                 label_text = f"{d1}{sel_reg}{d2}"
+    #             else:
+    #                 label_text = fake.date(pattern=random.choice(patterns))
+    #         elif (
+    #             label == "birthdate_answer" or label == "letter_date" or label == "date"
+    #         ):
+    #             label_text = fake.date(pattern=random.choice(patterns))
+    #
+    #     if label == "pan_answer":
+    #         label_text = fake.member_id()
+    #     if label == "member_number_answer":
+    #         label_text = fake.member_id()
+    #     if label == "claim_number_answer":
+    #         label_text = fake.member_id()
+    #
+    #     if (
+    #         label == "member_name_answer"
+    #         or label == "patient_name_answer"
+    #         or label == "provider_answer"
+    #     ):
+    #         label_text = fake_names_only.name()
+    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
+    #             label_text = label_text.upper()
+    #
+    #     if label == "phone":
+    #         label_text = fake_names_only.phone_number()
+    #
+    #     if label == "identifier":
+    #         N = random.choice([4, 6, 8, 10, 12])
+    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
+    #             label_text = "".join(random.choices(string.digits, k=N))
+    #         else:
+    #             label_text = "".join(random.choices(string.ascii_letters, k=N))
+    #
+    #     if label == "url":
+    #         label_text = fake.domain_name()
+    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
+    #             label_text = fake.company_email()
+    #
+    #     if (
+    #         label == "check_amt_answer"
+    #         or label == "paid_amt_answer"
+    #         or label == "billed_amt_answer"
+    #         or label == "money"
+    #     ):
+    #         label_text = fake.pricetag()
+    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
+    #             label_text = label_text.replace("$", "")
+    #
+    #     if label == "address":
+    #         if est_line_count == 1:
+    #             label_text = fake.address().replace("\n", " ")
+    #         elif est_line_count == 2:
+    #             label_text = fake.address()
+    #         else:
+    #             label_text = f"{fake.company()}\n{fake.address()}"
+    #
+    #     lines = label_text.split("\n")
+    #     line_segments = []
+    #     line_heights = [0 for _ in lines]
+    #     text_width = 0
+    #
+    #     for k, local_text in enumerate(lines):
+    #         segments = []
+    #         # partition data into boxes splitting on blank spaces
+    #         text_chunks = local_text.split(" ")
+    #         _text_width, text_height = draw.textsize(local_text, font=font)
+    #         line_heights[k] = text_height
+    #
+    #         if _text_width > text_width:
+    #             text_width = _text_width
+    #
+    #         start_x = 0
+    #         padding_x = space_w // 2
+    #
+    #         if len(text_chunks) == 1:
+    #             box = [start_x, 0, width, text_height]
+    #             segments.append({"text": local_text, "box": box})
+    #         else:
+    #             for i, chunk in enumerate(text_chunks):
+    #                 chunk_width, chunk_height = draw.textsize(chunk, font=font)
+    #                 # x0, y0, x1, y1
+    #                 end_x = min(start_x + chunk_width + padding_x, width)
+    #                 box = [start_x, 0, end_x, text_height]
+    #                 segments.append({"text": chunk, "box": box})
+    #                 start_x += chunk_width
+    #                 if i < len(text_chunks):
+    #                     start_x += space_w
+    #
+    #         line_segments.append(segments)
+    #     if text_width < width:
+    #         # print(
+    #         #     f"GEN [{label}, {font_size}, {est_line_count} : {text_height} :  {round(rat, 2)}] : {width} , {height} :  [{text_width}, {text_height} ] >   {label_text}"
+    #         # )
+    #         break
+    #     index = index + 1
+    #
+    # return font_size, label_text, line_segments, line_heights
+
+
 def load_image_pil(image_path):
     image = Image.open(image_path).convert("RGB")
     w, h = image.size
@@ -502,196 +679,353 @@ def load_image_pil(image_path):
 
 # @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(
-        guid: int, count: int, file_path: str, src_dir: str, dest_dir: str):
-    pass
-    # Faker.seed(0)
-    # output_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
-    # output_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
-    #
-    # ann_dir = os.path.join(src_dir, "annotations")
-    # img_dir = os.path.join(src_dir, "images")
-    #
-    # # file_path = os.path.join(ann_dir, file)
-    # file = file_path.split("/")[-1]
-    # print(f"File: {file_path}")
-    #
-    # try:
-    #     with open(file_path, "r", encoding="utf8") as f:
-    #         data = json.load(f)
-    # except Exception as e:
-    #     raise e
-    #
-    # image_path = os.path.join(img_dir, file)
-    # image_path = image_path.replace("json", "png")
-    # filename = image_path.split("/")[-1].split(".")[0]
-    #
-    # for k in range(0, count):
-    #     print(f"Iter : {guid} , {k} of {count} ; {filename} ")
-    #     font_face = np.random.choice(
-    #         [
-    #             "FreeSansOblique.ttf",
-    #             # "FreeSansBold.ttf",
-    #             "FreeSans.ttf",
-    #             "OpenSans-Light.ttf",
-    #             "FreeMono.ttf",
-    #             "vpscourt.ttf",
-    #         ]
-    #     )
-    #     font_path = os.path.join("./assets/fonts", font_face)
-    #
-    #     data_copy = dict()
-    #     data_copy["form"] = []
-    #
-    #     masked_fields = [
-    #         "member_number_answer",
-    #         "pan_answer",
-    #         "member_name_answer",
-    #         "patient_name_answer",
-    #         "dos_answer",
-    #         "check_amt_answer",
-    #         "paid_amt_answer",
-    #         "billed_amt_answer",
-    #         "birthdate_answer",
-    #         "check_number_answer",
-    #         "claim_number_answer",
-    #         "letter_date",
-    #         "phone",
-    #         "url",
-    #         "date",
-    #         "money",
-    #         "provider_answer",
-    #         "identifier",
-    #         "address",
-    #     ]
-    #
-    #     image_masked, size = load_image_pil(image_path)
-    #     draw = ImageDraw.Draw(image_masked)
-    #
-    #     for i, item in enumerate(data["form"]):
-    #         label = item["label"]
-    #         if label == "other" or label not in masked_fields:
-    #             data_copy["form"].append(item)
-    #             continue
-    #
-    #         # pan_answer  dos_answer member_number_answer
-    #         # format : x0,y0,x1,y1
-    #         box = np.array(item["box"]).astype(np.int32)
-    #         x0, y0, x1, y1 = box
-    #         w = x1 - x0
-    #         h = y1 - y0
-    #         xoffset = 5
-    #         yoffset = 0
-    #
-    #         # Generate text inside image
-    #         font_size, label_text, segments_lines, line_heights = generate_text(
-    #             label, w, h, font_path
-    #         )
-    #
-    #         assert len(line_heights) != 0
-    #         font = get_cached_font(font_path, font_size)
-    #
-    #         # x0, y0, x1, y1 = xy
-    #         # Yellow with outline for debug
-    #         # draw.rectangle(
-    #         #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
-    #         # )
-    #
-    #         # clear region
-    #         draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
-    #
-    #         dup_item = item  # copy.copy(item)
-    #         dup_item["text"] = label_text
-    #         dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
-    #         dup_item["words"] = []
-    #         dup_item["linking"] = []
-    #         words = []
-    #
-    #         total_text_height = 0
-    #         for th in line_heights:
-    #             total_text_height += th
-    #
-    #         space = h - total_text_height
-    #         line_offset = 0
-    #         baseline_spacing = max(4, space // len(line_heights))
-    #
-    #         for line_idx, segments in enumerate(segments_lines):
-    #             for seg in segments:
-    #                 seg_text = seg["text"]
-    #                 sx0, sy0, sx1, sy1 = seg["box"]
-    #                 sw = sx1 - sx0
-    #                 sh = sy1 - sy0
-    #                 adj_box = [
-    #                     x0 + sx0,
-    #                     y0 + line_offset,
-    #                     x0 + sx0 + sw,
-    #                     y0 + sh + line_offset,
-    #                 ]
-    #                 word = {"text": seg_text, "box": adj_box}
-    #                 words.append(word)
-    #                 # debug box
-    #                 # draw.rectangle(
-    #                 #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
-    #                 #     outline="#FF0000",
-    #                 #     width=1,
-    #                 # )
-    #             line_offset += line_heights[line_idx] + baseline_spacing
-    #
-    #         dup_item["words"] = words
-    #
-    #         line_offset = 0
-    #
-    #         for line_idx, text_line in enumerate(label_text.split("\n")):
-    #             draw.text(
-    #                 (x0 + xoffset, y0 + line_offset),
-    #                 text=text_line,
-    #                 fill="#000000",
-    #                 font=font,
-    #                 stroke_fill=1,
-    #             )
-    #             line_offset += line_heights[line_idx] + baseline_spacing
-    #         data_copy["form"].append(dup_item)
-    #
-    #     # Save items
-    #     out_name_prefix = f"{filename}_{guid}_{k}"
-    #
-    #     json_path = os.path.join(output_aug_annotations_dir, f"{out_name_prefix}.json")
-    #     dst_img_path = os.path.join(output_aug_images_dir, f"{out_name_prefix}.png")
-    #
-    #     # print(f'Writing : {json_path}')
-    #     with open(json_path, "w") as json_file:
-    #         json.dump(
-    #             data_copy,
-    #             json_file,
-    #             # sort_keys=True,
-    #             separators=(",", ": "),
-    #             ensure_ascii=False,
-    #             indent=2,
-    #             cls=NumpyEncoder,
-    #         )
-    #
-    #     # saving in JPG format as it is substantially faster than PNG
-    #     # image_masked.save(
-    #     #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
-    #     # )  # 100 disables compression
-    #     #
-    #     # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
-    #     image_masked.save(dst_img_path, compress_level=2)
-    #
-    #     del draw
+        guid: int, count: int,
+        file_path: str, image_path: str,
+        dest_annotation_dir: str, dest_image_dir: str,
+        mask_config: dict
+) -> None:
+    """ Generate a number of new FUNSD annotation files and images for a given FUNSD annotation file and
+        corresponding image that augment and mask the fields given in the mask_config.
+
+        :param count: number of augmentations
+        :param file_path: path to source FUNSD annotation JSON file
+        :param image_path: path to source image PNG file
+        :param dest_annotation_dir: path to output location for augmented annotations files
+        :param dest_image_dir: path to output location for augmented image files
+        :param mask_config: A dictionary for how and what fields to augment
+            {
+                'prefixes': ['str list of potential prefixes to labels', ...],
+                'fonts':    ['str list of font file names', ...],
+                'masks':    {
+                                'type of data to be masked': ['list of fields', ...],
+                                ...,
+                            }
+            }
+    """
+    Faker.seed(0)
+    filename = file_path.split("/")[-1].split(".")[0]
+    prefixes = mask_config['prefixes']
+    fonts = mask_config['fonts']
+    print(f"File: {file_path}")
+    with open(file_path, "r", encoding="utf8") as f:
+        data = json.load(f)
+
+    # Subset of annotations we don't intend to mask
+    data_constant = {"form": []}
+    for i in range(len(data["form"])):
+        item = data["form"][i]
+        label = item["label"][2:] if prefixes is not None else item["label"]
+        if label not in mask_config['masks']:
+            # Remove annotations we don't intend to mask from 'data'
+            data_constant["form"].append(data["form"].pop(i))
+
+    for k in range(count):
+        print(f"Iter : {guid} , {k} of {count} ; {filename} ")
+        font_face = np.random.choice(fonts)
+        font_path = os.path.join("./assets/fonts", font_face)
+
+        data_copy = {"form": []}
+
+        image_masked, size = load_image_pil(image_path)
+        draw = ImageDraw.Draw(image_masked)
+
+        for item in data["form"]:
+            label = item["label"][2:] if prefixes is not None else item["label"]
+
+            # box format : x0,y0,x1,y1
+            x0, y0, x1, y1 = np.array(item["box"]).astype(np.int32)
+            w = x1 - x0
+            h = y1 - y0
+            xoffset = 5
+            yoffset = 0
+
+            # Generate and store
+            font_size, label_text, segments_lines, line_heights = 0, "", [], []
+            for type, mask_field in mask_config['mask_by_type']:
+                # TODO: Generate Name
+                # TODO: Generate Money
+                # TODO: Generate Numeric
+                # TODO: Generate Alpha-numeric
+
+                # Generate text inside image
+                font_size, label_text, segments_lines, line_heights = generate_text(
+                    label, w, h, font_path
+                )
+
+            assert len(line_heights) != 0
+        #     font = get_cached_font(font_path, font_size)
+        #
+        #     # x0, y0, x1, y1 = xy
+        #     # Yellow with outline for debug
+        #     # draw.rectangle(
+        #     #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+        #     # )
+        #
+        #     # clear region
+        #     draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+        #
+        #     dup_item = item  # copy.copy(item)
+        #     dup_item["text"] = label_text
+        #     dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
+        #     dup_item["words"] = []
+        #     dup_item["linking"] = []
+        #     words = []
+        #
+        #     total_text_height = 0
+        #     for th in line_heights:
+        #         total_text_height += th
+        #
+        #     space = h - total_text_height
+        #     line_offset = 0
+        #     baseline_spacing = max(4, space // len(line_heights))
+        #
+        #     for line_idx, segments in enumerate(segments_lines):
+        #         for seg in segments:
+        #             seg_text = seg["text"]
+        #             sx0, sy0, sx1, sy1 = seg["box"]
+        #             sw = sx1 - sx0
+        #             sh = sy1 - sy0
+        #             adj_box = [
+        #                 x0 + sx0,
+        #                 y0 + line_offset,
+        #                 x0 + sx0 + sw,
+        #                 y0 + sh + line_offset,
+        #             ]
+        #             word = {"text": seg_text, "box": adj_box}
+        #             words.append(word)
+        #             # debug box
+        #             # draw.rectangle(
+        #             #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+        #             #     outline="#FF0000",
+        #             #     width=1,
+        #             # )
+        #         line_offset += line_heights[line_idx] + baseline_spacing
+        #
+        #     dup_item["words"] = words
+        #
+        #     line_offset = 0
+        #
+        #     for line_idx, text_line in enumerate(label_text.split("\n")):
+        #         draw.text(
+        #             (x0 + xoffset, y0 + line_offset),
+        #             text=text_line,
+        #             fill="#000000",
+        #             font=font,
+        #             stroke_fill=1,
+        #         )
+        #         line_offset += line_heights[line_idx] + baseline_spacing
+        #     data_copy["form"].append(dup_item)
+        #
+        # # Save items
+        # out_name_prefix = f"{filename}_{guid}_{k}"
+        #
+        # json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
+        # dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
+        #
+        # print(f'Writing : {json_path}')
+        # with open(json_path, "w") as json_file:
+        #     json.dump(
+        #         data_copy,
+        #         json_file,
+        #         # sort_keys=True,
+        #         separators=(",", ": "),
+        #         ensure_ascii=False,
+        #         indent=2,
+        #         cls=NumpyEncoder,
+        #     )
+        #
+        # # saving in JPG format as it is substantially faster than PNG
+        # # image_masked.save(
+        # #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+        # # )  # 100 disables compression
+        # #
+        # # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+        # image_masked.save(dst_img_path, compress_level=2)
+        #
+        # del draw
 
 
 def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
-    ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
 
-    # if False:
-    #     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
-    #         file_path = os.path.join(ann_dir, file)
-    #         __augment_decorated_process(guid, count, file_path, src_dir, dest_dir)
+    mask_config = {
+        'prefixes': {'r.', 'd.', 's.', 'g.'},  # Implicit location of field on the image
+        'fonts': [
+            "FreeSansOblique.ttf",
+            "FreeSans.ttf",
+            "OpenSans-Light.ttf",
+            "FreeMono.ttf",
+            "vpscourt.ttf",
+        ],
+        'masks': [
+            'allowed_amount_answer',
+            'allowed_amount_total_answer',
+            'billed_amount_answer',
+            'billed_amount_total_answer',
+            'check_amount_answer',
+            'check_number_answer',
+            'cob_answer',
+            'cob_total_answer',
+            'coinsurance_answer',
+            'coinsurance_total_answer',
+            'copay_answer',
+            'copay_total_answer',
+            'deductible_answer',
+            'deductible_total_answer',
+            'disallowed_answer',
+            'disallowed_total_answer',
+            'discount_answer',
+            'discount_total_answer',
+            'drg_amount_answer',
+            'drg_amount_total_answer',
+            "higher_allowable_answer",
+            'ineligible_amount_member_answer',
+            'interest_answer',
+            'interest_total_answer',
+            'medicare_allowed_answer',
+            'medicare_paid_answer',
+            'mem_liability_answer',
+            'mem_liabilty_total_answer',
+            'money_answer',
+            'other_adjustment_answer',
+            'over_rnc_answer',
+            'over_rnc_total_answer',
+            'overpayments_recovery_answer',
+            'paid_amount_answer',
+            'paid_amount_total_answer',
+            'partial_denial_answer',
+            'patient_responsibility_answer',
+            'patient_responsibility_total_answer',
+            'plan_coverage_answer',
+            'prepaid_answer',
+            'prepaid_total_answer',
+            'withholding_answer',
+            'withholding_total_answer',
+            'writeoff_answer',
+            'writeoff_total_answer'
+            "member_name_answer",
+            "patient_name_answer",
+            "provider_answer",
+            "check_date_answer",
+            "begin_date_of_service_answer",  # NOTE: Short date
+            "end_date_of_service_answer",
+            "birthdate_answer",
+            "date"                           # TODO: Verify this field is needed
+            "claim_number_answer",
+            "member_number_answer",
+            "patient_account_number_answer",
+            "line_number_answer",
+            "quantity_answer",
+            "tooth_number_answer",
+            "remark_code_answer",
+            "code_answer",
+            "code_modifier_answer",
+            "procedure_code_answer",
+            "remark_code_answer",
+            "mem_liability_code_answer",
+            "non-chargeable_amount_code_answer",
+            "payment_code_answer",
+            "procedure_code_answer",
+            "procedure_code_modifier_answer",
+            "remark_code_answer",
+            "revenue_code_answer",
+            "tooth_surface_answer",
+        ],
+        'masks_by_type': {
+            'money': [
+                'allowed_amount_answer',
+                'allowed_amount_total_answer',
+                'billed_amount_answer',
+                'billed_amount_total_answer',
+                'check_amount_answer',
+                'check_number_answer',
+                'cob_answer',
+                'cob_total_answer',
+                'coinsurance_answer',
+                'coinsurance_total_answer',
+                'copay_answer',
+                'copay_total_answer',
+                'deductible_answer',
+                'deductible_total_answer',
+                'disallowed_answer',
+                'disallowed_total_answer',
+                'discount_answer',
+                'discount_total_answer',
+                'drg_amount_answer',
+                'drg_amount_total_answer',
+                "higher_allowable_answer",
+                'ineligible_amount_member_answer',
+                'interest_answer',
+                'interest_total_answer',
+                'medicare_allowed_answer',
+                'medicare_paid_answer',
+                'mem_liability_answer',
+                'mem_liabilty_total_answer',
+                'money_answer',
+                'other_adjustment_answer',
+                'over_rnc_answer',
+                'over_rnc_total_answer',
+                'overpayments_recovery_answer',
+                'paid_amount_answer',
+                'paid_amount_total_answer',
+                'partial_denial_answer',
+                'patient_responsibility_answer',
+                'patient_responsibility_total_answer',
+                'plan_coverage_answer',
+                'prepaid_answer',
+                'prepaid_total_answer',
+                'withholding_answer',
+                'withholding_total_answer',
+                'writeoff_answer',
+                'writeoff_total_answer'
+            ],
+            'name': [
+                "member_name_answer",
+                "patient_name_answer",
+                "provider_answer",
+            ],
+            'date': [
+                "check_date_answer",
+                "begin_date_of_service_answer",  # NOTE: Short date
+                "end_date_of_service_answer",
+                "birthdate_answer",
+                "date"  # TODO: Verify this field is needed
+            ],
+            'numeric': [
+                "claim_number_answer",
+                "member_number_answer",
+                "patient_account_number_answer",
+                "line_number_answer",
+                "quantity_answer",
+                "tooth_number_answer",
+            ],
+            'alpha-numeric': [
+                "remark_code_answer",
+                "code_answer",
+                "code_modifier_answer",
+                "procedure_code_answer",
+                "remark_code_answer",
+                "mem_liability_code_answer",
+                "non-chargeable_amount_code_answer",
+                "payment_code_answer",
+                "procedure_code_answer",
+                "procedure_code_modifier_answer",
+                "remark_code_answer",
+                "revenue_code_answer",
+                "tooth_surface_answer",
+            ],
+        },
+    }
+
+    ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+    img_dir = ensure_exists(os.path.join(src_dir, "images"))
+    dest_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
+    dest_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
 
     aug_args = []
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         file_path = os.path.join(ann_dir, file)
-        __args = (guid, count, file_path, src_dir, dest_dir)
+        img_path = os.path.join(img_dir, file.replace("json", "png"))
+        __args = (guid, count, file_path, img_path, dest_aug_annotations_dir, dest_aug_images_dir, mask_config)
         aug_args.append(__args)
 
     start = time.time()
@@ -1126,7 +1460,7 @@ def default_all_steps(args: object):
     args_4["suffix"] = "-augmented"
 
     # execute each step
-    default_convert(Namespace(**args_1))
+    # default_convert(Namespace(**args_1))
     default_decorate(Namespace(**args_2))
     # default_augment(Namespace(**args_3))
     # default_rescale(Namespace(**args_4))
