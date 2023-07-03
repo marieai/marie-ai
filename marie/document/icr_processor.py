@@ -163,7 +163,7 @@ class IcrProcessor(BaseHandler):
 
                 if conf_label < 0.5:
                     logger.warning(f"Low text confidence {conf_label} for {txt_label}")
-                    continue
+                    # continue
 
                 payload = {
                     "id": i,
