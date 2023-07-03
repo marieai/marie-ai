@@ -20,8 +20,12 @@ from transformers import (
     AdamW,
 )
 
-dataset_path = (
-    "/home/greg/datasets/private/data-hipa/medical_page_classification/output/images"
+dataset_path = os.path.expanduser(
+    "~/datasets/private/data-hipa/medical_page_classification/output/images"
+)
+
+dataset_path = os.path.expanduser(
+    "~/datasets/private/medical_page_classification/output/images"
 )
 
 labels = [
