@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 _tmp_path = "/tmp/marie"
 
 # setup data aug
-fake = Faker()
+fake = Faker("en_US")
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
 
 def from_json_file(filename):
@@ -396,7 +396,7 @@ def __decorate_funsd(
             "line_number": line_number,
             "linking": [],              # TODO: Not in use.
             "label": "other",
-            "words": {"text": word["text"], "box": word_box},
+            "words": [{"text": word["text"], "box": word_box}],
         }
 
         data["form"].append(item)
@@ -501,174 +501,114 @@ def get_cached_font(font_path, font_size):
     return ImageFont.truetype(font_path, font_size)
 
 
-def generate_text(label, width, height, font_path):
-    """generate text for specific label"""
-    pass
-    # avg_line_height = 40
-    # est_line_count = max(1, height // avg_line_height)
-    # height = min(height, 50)
-    # font_size = int(height * 1)
-    #
-    # # Generate text inside image
-    # font = get_cached_font(font_path, font_size)
-    # img = Image.new("RGB", (width, height), color=(255, 255, 255))
-    # draw = ImageDraw.Draw(img)
-    # space_w, _ = draw.textsize(" ", font=font)
-    #
-    # dec = 2
-    # index = 0
-    # label_text = ""
-    #
-    # # ADD Generation for following
-    # # member_number_answer
-    # # pan_answer
-    # # member_name_answer
-    # # patient_name_answer
-    # # dos_answer
-    # # check_amt_answer
-    # # paid_amt_answer
-    # # billed_amt_answer
-    # # birthdate_answer
-    # # check_number_answer
-    # # claim_number_answer
-    # # letter_date
-    # # phone X
-    # # url X
-    #
-    # while True:
-    #     if index > 5:
-    #         font_size = font_size - dec
-    #         font = get_cached_font(font_path, font_size)
-    #         index = 0
-    #         space_w, _ = draw.textsize(" ", font=font)
-    #
-    #     if (
-    #         label == "dos_answer"
-    #         or label == "birthdate_answer"
-    #         or label == "letter_date"
-    #         or label == "date"
-    #     ):
-    #         # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
-    #         patterns = [
-    #             "%Y%m%d",
-    #             "%Y-%m-%d",
-    #             "%Y/%m/%d",
-    #             "%d/%m/%Y",
-    #             "%m/%d/%Y",
-    #             "%d.%m.%Y",
-    #             "%d %B %Y",
-    #             "%b %d, %Y",
-    #         ]
-    #
-    #         # make composite DOS
-    #         # date-date
-    #         # date thought date
-    #         # date to date
-    #
-    #         if label == "dos_answer":
-    #             if np.random.choice([0, 1], p=[0.3, 0.7]):
-    #                 pattern = random.choice(patterns)
-    #                 sel_reg = random.choice(["-", " - ", " ", " to ", " thought "])
-    #                 d1 = fake.date(pattern=pattern)
-    #                 d2 = fake.date(pattern=pattern)
-    #                 label_text = f"{d1}{sel_reg}{d2}"
-    #             else:
-    #                 label_text = fake.date(pattern=random.choice(patterns))
-    #         elif (
-    #             label == "birthdate_answer" or label == "letter_date" or label == "date"
-    #         ):
-    #             label_text = fake.date(pattern=random.choice(patterns))
-    #
-    #     if label == "pan_answer":
-    #         label_text = fake.member_id()
-    #     if label == "member_number_answer":
-    #         label_text = fake.member_id()
-    #     if label == "claim_number_answer":
-    #         label_text = fake.member_id()
-    #
-    #     if (
-    #         label == "member_name_answer"
-    #         or label == "patient_name_answer"
-    #         or label == "provider_answer"
-    #     ):
-    #         label_text = fake_names_only.name()
-    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
-    #             label_text = label_text.upper()
-    #
-    #     if label == "phone":
-    #         label_text = fake_names_only.phone_number()
-    #
-    #     if label == "identifier":
-    #         N = random.choice([4, 6, 8, 10, 12])
-    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
-    #             label_text = "".join(random.choices(string.digits, k=N))
-    #         else:
-    #             label_text = "".join(random.choices(string.ascii_letters, k=N))
-    #
-    #     if label == "url":
-    #         label_text = fake.domain_name()
-    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
-    #             label_text = fake.company_email()
-    #
-    #     if (
-    #         label == "check_amt_answer"
-    #         or label == "paid_amt_answer"
-    #         or label == "billed_amt_answer"
-    #         or label == "money"
-    #     ):
-    #         label_text = fake.pricetag()
-    #         if np.random.choice([0, 1], p=[0.5, 0.5]):
-    #             label_text = label_text.replace("$", "")
-    #
-    #     if label == "address":
-    #         if est_line_count == 1:
-    #             label_text = fake.address().replace("\n", " ")
-    #         elif est_line_count == 2:
-    #             label_text = fake.address()
-    #         else:
-    #             label_text = f"{fake.company()}\n{fake.address()}"
-    #
-    #     lines = label_text.split("\n")
-    #     line_segments = []
-    #     line_heights = [0 for _ in lines]
-    #     text_width = 0
-    #
-    #     for k, local_text in enumerate(lines):
-    #         segments = []
-    #         # partition data into boxes splitting on blank spaces
-    #         text_chunks = local_text.split(" ")
-    #         _text_width, text_height = draw.textsize(local_text, font=font)
-    #         line_heights[k] = text_height
-    #
-    #         if _text_width > text_width:
-    #             text_width = _text_width
-    #
-    #         start_x = 0
-    #         padding_x = space_w // 2
-    #
-    #         if len(text_chunks) == 1:
-    #             box = [start_x, 0, width, text_height]
-    #             segments.append({"text": local_text, "box": box})
-    #         else:
-    #             for i, chunk in enumerate(text_chunks):
-    #                 chunk_width, chunk_height = draw.textsize(chunk, font=font)
-    #                 # x0, y0, x1, y1
-    #                 end_x = min(start_x + chunk_width + padding_x, width)
-    #                 box = [start_x, 0, end_x, text_height]
-    #                 segments.append({"text": chunk, "box": box})
-    #                 start_x += chunk_width
-    #                 if i < len(text_chunks):
-    #                     start_x += space_w
-    #
-    #         line_segments.append(segments)
-    #     if text_width < width:
-    #         # print(
-    #         #     f"GEN [{label}, {font_size}, {est_line_count} : {text_height} :  {round(rat, 2)}] : {width} , {height} :  [{text_width}, {text_height} ] >   {label_text}"
-    #         # )
-    #         break
-    #     index = index + 1
-    #
-    # return font_size, label_text, line_segments, line_heights
+def generate_date() -> str:
+    # https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
+    patterns = [
+        "%Y%m%d",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d.%m.%Y",
+        "%d %B %Y",
+        "%b %d, %Y",
+    ]
+    return fake.date(pattern=random.choice(patterns))
+
+
+def generate_money() -> str:
+    label_text = fake.pricetag()
+    if np.random.choice([0, 1], p=[0.5, 0.5]):
+        label_text = label_text.replace("$", "")
+    return label_text
+
+
+def generate_name(original: str) -> str:
+    split = original.split(" ")
+    name = [fake_names_only.first_name()]
+    if len(split) > 1:
+        name += [fake_names_only.last_name() for _ in range(1, len(split))]
+    return ' '.join(name)
+
+
+def generate_address() -> str:
+    return fake.address()
+
+
+def generate_alpha_numeric(original: str, alpha: bool = True, numeric: bool = True) -> str:
+    return fake.password(length=len(original), digits=numeric, upper_case=alpha,
+                         special_chars=False,  lower_case=False)
+
+
+def generate_text(original: str, mask_type: str) -> str:
+    """Generate text for specific type of label"""
+    if mask_type == "money":
+        return generate_money()
+    elif mask_type == "date":
+        return generate_date()
+    elif mask_type == "name":
+        return generate_name(original)
+    elif mask_type == "address":
+        return generate_address()
+    elif mask_type == "numeric":
+        return generate_alpha_numeric(original, alpha=False)
+    else:  # Alpha-Numeric
+        return generate_alpha_numeric(original)
+
+
+def generate_annotation_data(text: str, width: int, height: int, font_path: str, dec: int = 2):
+    """ Generate FUNSD annotations from a given text, using a given font, in a given area.
+
+    :param text: any string with standard '\n' newline boundaries (if applicable)
+    :param width: max pixel width of area.
+    :param height: max pixel height of area.
+    :param font_path: Path to font used for size reference.
+    :param dec: font point decrement rate
+
+    :return: 'words' field annotation, line hieghts, and font size(pt)
+    """
+
+    lines = text.splitlines()
+    line_count = len(lines)
+    # TODO: PROPERLY CALCULATE HERE
+    font_size = int((height / line_count) * 0.75)  # 72pt/96px = 0.75 point to pixel ratio
+    font = get_cached_font(font_path, font_size)
+    # Reference image area to calculate font size values
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    space_w, _ = draw.textsize(" ", font=font)
+
+    # Calculate FUNSD format annotations
+    index = 0
+    text_height = 0
+    word_annotations = []
+
+    while index < len(lines):
+        text_width, text_height = draw.textsize(lines[index], font=font)
+        # Can this line be contained?
+        if text_width > width:  # If not reduce the size of the font and start over
+            font_size = font_size - dec
+            font = get_cached_font(font_path, font_size)
+            space_w, _ = draw.textsize(" ", font=font)
+            word_annotations = []
+            index = 0
+            continue
+
+        start_x = 0
+        start_y = min(index * text_height, height)
+        padding = space_w // 2
+        words = lines[index].split(" ")
+        for word in words:
+            word_width, _ = draw.textsize(word, font=font)
+            end_x = min(start_x + word_width + padding, width)
+            box = [start_x, start_y, end_x, start_y+text_height]  # x0, y0, x1, y1
+            word_annotations.append({"text": word, "box": box})
+            start_x += word_width + space_w
+        index += 1
+
+    line_heights = [text_height for _ in lines]
+
+    return word_annotations, line_heights, font_size
 
 
 def load_image_pil(image_path):
@@ -694,15 +634,14 @@ def __augment_decorated_process(
         :param dest_image_dir: path to output location for augmented image files
         :param mask_config: A dictionary for how and what fields to augment
             {
-                'prefixes': ['str list of potential prefixes to labels', ...],
-                'fonts':    ['str list of font file names', ...],
-                'masks':    {
-                                'type of data to be masked': ['list of fields', ...],
-                                ...,
-                            }
+                'prefixes':         ['prefix to labels', ... ],
+                'fonts':            ['font file name', ... ],
+                'masks_by_type':    {'type': ['annotation label(no prefix)', ... ], ... }
             }
     """
+
     Faker.seed(0)
+
     filename = file_path.split("/")[-1].split(".")[0]
     prefixes = mask_config['prefixes']
     fonts = mask_config['fonts']
@@ -715,134 +654,135 @@ def __augment_decorated_process(
     for i in range(len(data["form"])):
         item = data["form"][i]
         label = item["label"][2:] if prefixes is not None else item["label"]
-        if label not in mask_config['masks']:
-            # Remove annotations we don't intend to mask from 'data'
+        # Add mask type to annotation item
+        for mask_type in mask_config['masks_by_type']:
+            if label in mask_config['masks_by_type'][mask_type]:
+                data["form"][i]['mask_type'] = mask_type
+                break
+        # Remove annotations we don't intend to mask from 'data'
+        if 'mask_type' not in data["form"][i]:
             data_constant["form"].append(data["form"].pop(i))
+
 
     for k in range(count):
         print(f"Iter : {guid} , {k} of {count} ; {filename} ")
         font_face = np.random.choice(fonts)
         font_path = os.path.join("./assets/fonts", font_face)
 
-        data_copy = {"form": []}
+        data_aug = {"form": []}
 
         image_masked, size = load_image_pil(image_path)
         draw = ImageDraw.Draw(image_masked)
 
         for item in data["form"]:
-            label = item["label"][2:] if prefixes is not None else item["label"]
-
             # box format : x0,y0,x1,y1
             x0, y0, x1, y1 = np.array(item["box"]).astype(np.int32)
             w = x1 - x0
             h = y1 - y0
             xoffset = 5
             yoffset = 0
+            aug_text = generate_text(item['text'], item['mask_type'])
+            words_annotations, line_heights, font_size = generate_annotation_data(aug_text, w, h, font_path)
 
-            # Generate and store
-            font_size, label_text, segments_lines, line_heights = 0, "", [], []
-            for type, mask_field in mask_config['mask_by_type']:
-                # TODO: Generate Name
-                # TODO: Generate Money
-                # TODO: Generate Numeric
-                # TODO: Generate Alpha-numeric
-
-                # Generate text inside image
-                font_size, label_text, segments_lines, line_heights = generate_text(
-                    label, w, h, font_path
-                )
+            # Generate text inside image
+            # font_size, label_text, segments_lines, line_heights = generate_text(
+            #     label, w, h, font_path
+            # )
 
             assert len(line_heights) != 0
-        #     font = get_cached_font(font_path, font_size)
+            font = get_cached_font(font_path, font_size)
+
+            # x0, y0, x1, y1 = xy
+            # Yellow with outline for debug
+            # draw.rectangle(
+            #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+            # )
+
+            # clear region
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+
+            dup_item = {
+                'id': item['id'],
+                "text": aug_text,
+                "words": words_annotations,
+                "line_number": item['line_number'],
+                "word_index": item['word_index'],
+                "linking": [],
+            }
+            # words = []
+            # TODO: CALCULATE HEIGHT IN THE generate_annotation_data(...) FUNCTION
+            # total_text_height = 0
+            # for th in line_heights:
+            #     total_text_height += th
+            #
+            # space = h - total_text_height
+            # line_offset = 0
+            # baseline_spacing = max(4, space // len(line_heights))
+            #
+            # for line_idx, segments in enumerate(segments_lines):
+            #     for seg in segments:
+            #         seg_text = seg["text"]
+            #         sx0, sy0, sx1, sy1 = seg["box"]
+            #         sw = sx1 - sx0
+            #         sh = sy1 - sy0
+            #         adj_box = [
+            #             x0 + sx0,
+            #             y0 + line_offset,
+            #             x0 + sx0 + sw,
+            #             y0 + sh + line_offset,
+            #         ]
+            #         word = {"text": seg_text, "box": adj_box}
+            #         words.append(word)
+            #         # debug box
+            #         # draw.rectangle(
+            #         #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
+            #         #     outline="#FF0000",
+            #         #     width=1,
+            #         # )
+            #     line_offset += line_heights[line_idx] + baseline_spacing
+            #
+            # dup_item["words"] = words
+            #
+            line_offset = 0
+
+            for line_idx, text_line in enumerate(aug_text.split("\n")):
+                draw.text(
+                    (x0 + xoffset, y0 + line_offset),
+                    text=text_line,
+                    fill="#000000",
+                    font=font,
+                    stroke_fill=1,
+                )
+                line_offset += line_heights[line_idx] + baseline_spacing
+            data_copy["form"].append(dup_item)
+
+        # Save items
+        out_name_prefix = f"{filename}_{guid}_{k}"
+
+        json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
+        dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
+
+        print(f'Writing : {json_path}')
+        with open(json_path, "w") as json_file:
+            json.dump(
+                data_copy,
+                json_file,
+                # sort_keys=True,
+                separators=(",", ": "),
+                ensure_ascii=False,
+                indent=2,
+                cls=NumpyEncoder,
+            )
+
+        # saving in JPG format as it is substantially faster than PNG
+        # image_masked.save(
+        #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
+        # )  # 100 disables compression
         #
-        #     # x0, y0, x1, y1 = xy
-        #     # Yellow with outline for debug
-        #     # draw.rectangle(
-        #     #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
-        #     # )
-        #
-        #     # clear region
-        #     draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
-        #
-        #     dup_item = item  # copy.copy(item)
-        #     dup_item["text"] = label_text
-        #     dup_item["id"] = str(uuid.uuid4())  # random.randint(50000, 250000)
-        #     dup_item["words"] = []
-        #     dup_item["linking"] = []
-        #     words = []
-        #
-        #     total_text_height = 0
-        #     for th in line_heights:
-        #         total_text_height += th
-        #
-        #     space = h - total_text_height
-        #     line_offset = 0
-        #     baseline_spacing = max(4, space // len(line_heights))
-        #
-        #     for line_idx, segments in enumerate(segments_lines):
-        #         for seg in segments:
-        #             seg_text = seg["text"]
-        #             sx0, sy0, sx1, sy1 = seg["box"]
-        #             sw = sx1 - sx0
-        #             sh = sy1 - sy0
-        #             adj_box = [
-        #                 x0 + sx0,
-        #                 y0 + line_offset,
-        #                 x0 + sx0 + sw,
-        #                 y0 + sh + line_offset,
-        #             ]
-        #             word = {"text": seg_text, "box": adj_box}
-        #             words.append(word)
-        #             # debug box
-        #             # draw.rectangle(
-        #             #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
-        #             #     outline="#FF0000",
-        #             #     width=1,
-        #             # )
-        #         line_offset += line_heights[line_idx] + baseline_spacing
-        #
-        #     dup_item["words"] = words
-        #
-        #     line_offset = 0
-        #
-        #     for line_idx, text_line in enumerate(label_text.split("\n")):
-        #         draw.text(
-        #             (x0 + xoffset, y0 + line_offset),
-        #             text=text_line,
-        #             fill="#000000",
-        #             font=font,
-        #             stroke_fill=1,
-        #         )
-        #         line_offset += line_heights[line_idx] + baseline_spacing
-        #     data_copy["form"].append(dup_item)
-        #
-        # # Save items
-        # out_name_prefix = f"{filename}_{guid}_{k}"
-        #
-        # json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
-        # dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
-        #
-        # print(f'Writing : {json_path}')
-        # with open(json_path, "w") as json_file:
-        #     json.dump(
-        #         data_copy,
-        #         json_file,
-        #         # sort_keys=True,
-        #         separators=(",", ": "),
-        #         ensure_ascii=False,
-        #         indent=2,
-        #         cls=NumpyEncoder,
-        #     )
-        #
-        # # saving in JPG format as it is substantially faster than PNG
-        # # image_masked.save(
-        # #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
-        # # )  # 100 disables compression
-        # #
-        # # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
-        # image_masked.save(dst_img_path, compress_level=2)
-        #
-        # del draw
+        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
+        image_masked.save(dst_img_path, compress_level=2)
+
+        del draw
 
 
 def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
@@ -856,81 +796,8 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
             "FreeMono.ttf",
             "vpscourt.ttf",
         ],
-        'masks': [
-            'allowed_amount_answer',
-            'allowed_amount_total_answer',
-            'billed_amount_answer',
-            'billed_amount_total_answer',
-            'check_amount_answer',
-            'check_number_answer',
-            'cob_answer',
-            'cob_total_answer',
-            'coinsurance_answer',
-            'coinsurance_total_answer',
-            'copay_answer',
-            'copay_total_answer',
-            'deductible_answer',
-            'deductible_total_answer',
-            'disallowed_answer',
-            'disallowed_total_answer',
-            'discount_answer',
-            'discount_total_answer',
-            'drg_amount_answer',
-            'drg_amount_total_answer',
-            "higher_allowable_answer",
-            'ineligible_amount_member_answer',
-            'interest_answer',
-            'interest_total_answer',
-            'medicare_allowed_answer',
-            'medicare_paid_answer',
-            'mem_liability_answer',
-            'mem_liabilty_total_answer',
-            'money_answer',
-            'other_adjustment_answer',
-            'over_rnc_answer',
-            'over_rnc_total_answer',
-            'overpayments_recovery_answer',
-            'paid_amount_answer',
-            'paid_amount_total_answer',
-            'partial_denial_answer',
-            'patient_responsibility_answer',
-            'patient_responsibility_total_answer',
-            'plan_coverage_answer',
-            'prepaid_answer',
-            'prepaid_total_answer',
-            'withholding_answer',
-            'withholding_total_answer',
-            'writeoff_answer',
-            'writeoff_total_answer'
-            "member_name_answer",
-            "patient_name_answer",
-            "provider_answer",
-            "check_date_answer",
-            "begin_date_of_service_answer",  # NOTE: Short date
-            "end_date_of_service_answer",
-            "birthdate_answer",
-            "date"                           # TODO: Verify this field is needed
-            "claim_number_answer",
-            "member_number_answer",
-            "patient_account_number_answer",
-            "line_number_answer",
-            "quantity_answer",
-            "tooth_number_answer",
-            "remark_code_answer",
-            "code_answer",
-            "code_modifier_answer",
-            "procedure_code_answer",
-            "remark_code_answer",
-            "mem_liability_code_answer",
-            "non-chargeable_amount_code_answer",
-            "payment_code_answer",
-            "procedure_code_answer",
-            "procedure_code_modifier_answer",
-            "remark_code_answer",
-            "revenue_code_answer",
-            "tooth_surface_answer",
-        ],
         'masks_by_type': {
+            'address': ['address',],
             'money': [
                 'allowed_amount_answer',
                 'allowed_amount_total_answer',
@@ -960,6 +827,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
                 'medicare_paid_answer',
                 'mem_liability_answer',
                 'mem_liabilty_total_answer',
+                'money',
                 'money_answer',
                 'other_adjustment_answer',
                 'over_rnc_answer',
@@ -973,10 +841,11 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
                 'plan_coverage_answer',
                 'prepaid_answer',
                 'prepaid_total_answer',
+                'total',
                 'withholding_answer',
                 'withholding_total_answer',
                 'writeoff_answer',
-                'writeoff_total_answer'
+                'writeoff_total_answer',
             ],
             'name': [
                 "member_name_answer",
@@ -988,10 +857,12 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
                 "begin_date_of_service_answer",  # NOTE: Short date
                 "end_date_of_service_answer",
                 "birthdate_answer",
-                "date"  # TODO: Verify this field is needed
+                "date",                          # TODO: Verify this field is needed
+                "letter_date",
             ],
             'numeric': [
                 "claim_number_answer",
+                "document_control_number",
                 "member_number_answer",
                 "patient_account_number_answer",
                 "line_number_answer",
