@@ -33,6 +33,7 @@ from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.timer import Timer
 from marie.utils.utils import ensure_exists
+from marie.constants import __root_dir__
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/
@@ -483,18 +484,6 @@ def decorate_funsd(src_dir: str, overwrite: bool = False, debug_fragments: bool 
             raise e
 
 
-def generate_pan(num_char):
-    import string
-
-    letters = string.ascii_letters.lower()
-    if np.random.choice([0, 1], p=[0.5, 0.5]):
-        letters = string.digits
-    if np.random.choice([0, 1], p=[0.5, 0.5]):
-        letters = letters.upper()
-    prefix = "".join(random.choice(letters) for i in range(num_char))
-    return prefix
-
-
 @lru_cache(maxsize=20)
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
@@ -516,8 +505,14 @@ def generate_date() -> str:
     return fake.date(pattern=random.choice(patterns))
 
 
-def generate_money() -> str:
-    label_text = fake.pricetag()
+def generate_money(num_digits: int, decimal_place_buffer: int = 2) -> str:
+    max_value = ["9"] * (num_digits + decimal_place_buffer)
+    max_value = int(''.join(max_value))
+    while True:
+        label_text = fake.pricetag()
+        generated_value = float(label_text.replace("$", "").replace(',', ''))
+        if max_value >= generated_value:
+            break
     if np.random.choice([0, 1], p=[0.5, 0.5]):
         label_text = label_text.replace("$", "")
     return label_text
@@ -543,17 +538,21 @@ def generate_alpha_numeric(original: str, alpha: bool = True, numeric: bool = Tr
 def generate_text(original: str, mask_type: str) -> str:
     """Generate text for specific type of label"""
     if mask_type == "money":
-        return generate_money()
+        money = original.replace("$", "").replace(',', '')
+        place_value = len(money.split('.')[0])
+        return generate_money(place_value)
     elif mask_type == "date":
         return generate_date()
     elif mask_type == "name":
         return generate_name(original)
     elif mask_type == "address":
         return generate_address()
-    elif mask_type == "numeric":
-        return generate_alpha_numeric(original, alpha=False)
     else:  # Alpha-Numeric
-        return generate_alpha_numeric(original)
+        alpha = original.isalpha()
+        numeric = original.isnumeric()
+        if not alpha and not numeric:
+            alpha = numeric = True
+        return generate_alpha_numeric(original, alpha, numeric)
 
 
 def generate_annotation_data(text: str, width: int, height: int, font_path: str, dec: int = 2):
@@ -565,37 +564,43 @@ def generate_annotation_data(text: str, width: int, height: int, font_path: str,
     :param font_path: Path to font used for size reference.
     :param dec: font point decrement rate
 
-    :return: 'words' field annotation, line hieghts, and font size(pt)
+    :return: 'words' field annotation, line coordinates relative, and font size(pt)
     """
 
-    lines = text.splitlines()
-    line_count = len(lines)
-    # TODO: PROPERLY CALCULATE HERE
-    font_size = int((height / line_count) * 0.75)  # 72pt/96px = 0.75 point to pixel ratio
-    font = get_cached_font(font_path, font_size)
     # Reference image area to calculate font size values
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    space_w, _ = draw.textsize(" ", font=font)
+
+    lines = text.splitlines()
+    line_count = len(lines)
+    font_size = int((height / line_count) * 0.75)  # 72pt/96px = 0.75 point to pixel ratio
+    font = get_cached_font(font_path, font_size)
+
+    space_w, line_height = draw.textsize(" ", font=font)
+    line_spacing = max(4, (height-line_height*line_count) // line_count - 1)
 
     # Calculate FUNSD format annotations
     index = 0
     text_height = 0
     word_annotations = []
 
-    while index < len(lines):
+    while index < line_count:
         text_width, text_height = draw.textsize(lines[index], font=font)
-        # Can this line be contained?
-        if text_width > width:  # If not reduce the size of the font and start over
-            font_size = font_size - dec
+        # Can the text be contained?
+        if text_width > width or (text_height+line_spacing) * line_count - line_spacing > height:
+            # If not reduce the size of the font and start over
+            font_size -= dec
+            # assert font_size <= 0, f"Text cannot fit in the given area.\nText: {text}\nDimensions: {width}x{height}"
             font = get_cached_font(font_path, font_size)
-            space_w, _ = draw.textsize(" ", font=font)
+            space_w, line_height = draw.textsize(" ", font=font)
+            assert line_height != 0, f"Text cannot fit in the given area.\nText: {text}\nDimensions: {width}x{height}"
+            line_spacing = max(4, (height-line_height*line_count) // line_count - 1)
             word_annotations = []
             index = 0
             continue
 
         start_x = 0
-        start_y = min(index * text_height, height)
+        start_y = index * (text_height + line_spacing)
         padding = space_w // 2
         words = lines[index].split(" ")
         for word in words:
@@ -606,9 +611,9 @@ def generate_annotation_data(text: str, width: int, height: int, font_path: str,
             start_x += word_width + space_w
         index += 1
 
-    line_heights = [text_height for _ in lines]
+    line_coordinates = [np.array([0, (text_height+line_spacing) * i]) for i in range(line_count)]
 
-    return word_annotations, line_heights, font_size
+    return word_annotations, line_coordinates, font_size
 
 
 def load_image_pil(image_path):
@@ -619,8 +624,7 @@ def load_image_pil(image_path):
 
 # @Timer(text="Aug in {:.4f} seconds")
 def __augment_decorated_process(
-        guid: int, count: int,
-        file_path: str, image_path: str,
+        count: int, file_path: str, image_path: str, font_dir: str,
         dest_annotation_dir: str, dest_image_dir: str,
         mask_config: dict
 ) -> None:
@@ -651,7 +655,8 @@ def __augment_decorated_process(
 
     # Subset of annotations we don't intend to mask
     data_constant = {"form": []}
-    for i in range(len(data["form"])):
+    i = 0
+    while i < len(data["form"]):
         item = data["form"][i]
         label = item["label"][2:] if prefixes is not None else item["label"]
         # Add mask type to annotation item
@@ -662,34 +667,27 @@ def __augment_decorated_process(
         # Remove annotations we don't intend to mask from 'data'
         if 'mask_type' not in data["form"][i]:
             data_constant["form"].append(data["form"].pop(i))
+        else:
+            i += 1
 
 
     for k in range(count):
-        print(f"Iter : {guid} , {k} of {count} ; {filename} ")
+        print(f"Augmentation : {k+1} of {count} ; {filename} ")
         font_face = np.random.choice(fonts)
-        font_path = os.path.join("./assets/fonts", font_face)
-
-        data_aug = {"form": []}
-
+        font_path = os.path.join(font_dir, font_face)
         image_masked, size = load_image_pil(image_path)
         draw = ImageDraw.Draw(image_masked)
 
+        data_aug = {"form": []}
         for item in data["form"]:
             # box format : x0,y0,x1,y1
             x0, y0, x1, y1 = np.array(item["box"]).astype(np.int32)
             w = x1 - x0
             h = y1 - y0
-            xoffset = 5
-            yoffset = 0
+
             aug_text = generate_text(item['text'], item['mask_type'])
-            words_annotations, line_heights, font_size = generate_annotation_data(aug_text, w, h, font_path)
+            words_annotations, line_coordinates, font_size = generate_annotation_data(aug_text, w, h, font_path)
 
-            # Generate text inside image
-            # font_size, label_text, segments_lines, line_heights = generate_text(
-            #     label, w, h, font_path
-            # )
-
-            assert len(line_heights) != 0
             font = get_cached_font(font_path, font_size)
 
             # x0, y0, x1, y1 = xy
@@ -701,63 +699,27 @@ def __augment_decorated_process(
             # clear region
             draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
-            dup_item = {
+            x0_y0 = np.array([x0, y0])
+            for i, text_line in enumerate(aug_text.splitlines()):
+                draw.text(
+                    x0_y0 + line_coordinates[i],
+                    text=text_line,
+                    fill="#000000",
+                    font=font,
+                    stroke_fill=1,
+                )
+            data_aug["form"].append({
                 'id': item['id'],
                 "text": aug_text,
                 "words": words_annotations,
                 "line_number": item['line_number'],
                 "word_index": item['word_index'],
                 "linking": [],
-            }
-            # words = []
-            # TODO: CALCULATE HEIGHT IN THE generate_annotation_data(...) FUNCTION
-            # total_text_height = 0
-            # for th in line_heights:
-            #     total_text_height += th
-            #
-            # space = h - total_text_height
-            # line_offset = 0
-            # baseline_spacing = max(4, space // len(line_heights))
-            #
-            # for line_idx, segments in enumerate(segments_lines):
-            #     for seg in segments:
-            #         seg_text = seg["text"]
-            #         sx0, sy0, sx1, sy1 = seg["box"]
-            #         sw = sx1 - sx0
-            #         sh = sy1 - sy0
-            #         adj_box = [
-            #             x0 + sx0,
-            #             y0 + line_offset,
-            #             x0 + sx0 + sw,
-            #             y0 + sh + line_offset,
-            #         ]
-            #         word = {"text": seg_text, "box": adj_box}
-            #         words.append(word)
-            #         # debug box
-            #         # draw.rectangle(
-            #         #     ((adj_box[0], adj_box[1]), (adj_box[2], adj_box[3])),
-            #         #     outline="#FF0000",
-            #         #     width=1,
-            #         # )
-            #     line_offset += line_heights[line_idx] + baseline_spacing
-            #
-            # dup_item["words"] = words
-            #
-            line_offset = 0
+            })
 
-            for line_idx, text_line in enumerate(aug_text.split("\n")):
-                draw.text(
-                    (x0 + xoffset, y0 + line_offset),
-                    text=text_line,
-                    fill="#000000",
-                    font=font,
-                    stroke_fill=1,
-                )
-                line_offset += line_heights[line_idx] + baseline_spacing
-            data_copy["form"].append(dup_item)
-
+        data_aug["form"] += data_constant["form"]
         # Save items
-        out_name_prefix = f"{filename}_{guid}_{k}"
+        out_name_prefix = f"{k}_{filename}"
 
         json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
@@ -765,7 +727,7 @@ def __augment_decorated_process(
         print(f'Writing : {json_path}')
         with open(json_path, "w") as json_file:
             json.dump(
-                data_copy,
+                data_aug,
                 json_file,
                 # sort_keys=True,
                 separators=(",", ": "),
@@ -774,18 +736,12 @@ def __augment_decorated_process(
                 cls=NumpyEncoder,
             )
 
-        # saving in JPG format as it is substantially faster than PNG
-        # image_masked.save(
-        #     os.path.join("/tmp/snippet", f"{out_name_prefix}.jpg"), quality=100
-        # )  # 100 disables compression
-        #
-        # image_masked.save(os.path.join("/tmp/snippet", f"{out_name_prefix}.png"), compress_level=1)
         image_masked.save(dst_img_path, compress_level=2)
 
         del draw
 
 
-def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
+def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str, font_dir: str):
 
     mask_config = {
         'prefixes': {'r.', 'd.', 's.', 'g.'},  # Implicit location of field on the image
@@ -797,7 +753,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
             "vpscourt.ttf",
         ],
         'masks_by_type': {
-            'address': ['address',],
+            'address': ['address', ],
             'money': [
                 'allowed_amount_answer',
                 'allowed_amount_total_answer',
@@ -854,13 +810,14 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
             ],
             'date': [
                 "check_date_answer",
-                "begin_date_of_service_answer",  # NOTE: Short date
+                "begin_date_of_service_answer",  # NOTE: potentially a Short date
                 "end_date_of_service_answer",
                 "birthdate_answer",
-                "date",                          # TODO: Verify this field is needed
+                "date",
                 "letter_date",
             ],
-            'numeric': [
+            'alpha-numeric': [
+                # Just numeric
                 "claim_number_answer",
                 "document_control_number",
                 "member_number_answer",
@@ -868,8 +825,7 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
                 "line_number_answer",
                 "quantity_answer",
                 "tooth_number_answer",
-            ],
-            'alpha-numeric': [
+                # could be Alpha, Numeric, or Alpha-numeric
                 "remark_code_answer",
                 "code_answer",
                 "code_modifier_answer",
@@ -889,14 +845,15 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str):
 
     ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
     img_dir = ensure_exists(os.path.join(src_dir, "images"))
+    font_dir= ensure_exists(font_dir)
     dest_aug_annotations_dir = ensure_exists(os.path.join(dest_dir, "annotations"))
     dest_aug_images_dir = ensure_exists(os.path.join(dest_dir, "images"))
 
     aug_args = []
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+    for guid, file in enumerate(os.listdir(ann_dir)):
         file_path = os.path.join(ann_dir, file)
         img_path = os.path.join(img_dir, file.replace("json", "png"))
-        __args = (guid, count, file_path, img_path, dest_aug_annotations_dir, dest_aug_images_dir, mask_config)
+        __args = (count, file_path, img_path, font_dir, dest_aug_annotations_dir, dest_aug_images_dir, mask_config)
         aug_args.append(__args)
 
     start = time.time()
@@ -1214,13 +1171,15 @@ def default_augment(args: object):
         if args.dir_output != "./augmented"
         else os.path.abspath(os.path.join(root_dir, f"{mode}-augmented"))
     )
+    # TODO: add font directory path to arg-parser and update README usage.
+    font_dir = os.path.join(__root_dir__, "../assets/fonts")
 
     print(f"mode      = {mode}")
     print(f"aug_count = {aug_count}")
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
-
-    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir)
+    print(f"font_dir  = {font_dir}")
+    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir, font_dir=font_dir)
 
 
 def default_rescale(args: object):
@@ -1332,8 +1291,8 @@ def default_all_steps(args: object):
 
     # execute each step
     # default_convert(Namespace(**args_1))
-    default_decorate(Namespace(**args_2))
-    # default_augment(Namespace(**args_3))
+    # default_decorate(Namespace(**args_2))
+    default_augment(Namespace(**args_3))
     # default_rescale(Namespace(**args_4))
 
 
