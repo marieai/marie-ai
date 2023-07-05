@@ -102,6 +102,15 @@ def default_decorate(args: object):
 
                         dst_file = os.path.join(dst_folder, f"{filename}.json")
                         print(f"dst_file = {dst_file}")
+                        if os.path.isfile(dst_file):
+                            print(f"File already exists: {dst_file}")
+                            try:
+                                with open(dst_file) as f:
+                                    json.load(f)
+                                print(f"File is valid json: {dst_file}")
+                                continue
+                            except Exception as e:
+                                print(f"File is not valid json: {dst_file}")
 
                         frames = frames_from_file(file_path)
                         results = ocr_engine.extract(
