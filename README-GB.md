@@ -454,5 +454,6 @@ https://github.com/autogluon/autogluon/
 https://www.educative.io/answers/what-is-the-least-connections-load-balancing-technique
 
 # LayoutLMV3
+https://github.com/Ritvik19/Implemented-Data-Science/blob/main/LayoutLMv2-Document-Classification.ipynb
 https://github.com/ahmedrasheed3995/DocumentClassification
 https://www.mlexpert.io/machine-learning/tutorials/document-classification-with-layoutlmv3#easyocr
