@@ -1,10 +1,10 @@
+import logging
 import os
 
 import torch
 from PIL import Image
 
-# from datasets import Dataset
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import torchvision.transforms as T
 import io
 import json
@@ -23,6 +23,27 @@ def scale_bounding_box(
         int(box[2] * width_scale),
         int(box[3] * height_scale),
     ]
+
+
+def load_image(image_path):
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(image_path)
+
+    image = Image.open(image_path).convert("RGB")
+    w, h = image.size
+    return image, (w, h)
+
+
+def normalize_bbox(bbox, size):
+    return [
+        int(1000 * bbox[0] / size[0]),
+        int(1000 * bbox[1] / size[1]),
+        int(1000 * bbox[2] / size[0]),
+        int(1000 * bbox[3] / size[1]),
+    ]
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentClassificationDataset(Dataset):
@@ -48,11 +69,27 @@ class DocumentClassificationDataset(Dataset):
         # print(f"label2idx: {self.label2idx}")
         # print("-------------------")
 
+        # validate that all images have an annotation file
+        image_paths_valid = []
+        for image_path in self.image_paths:
+            annotation_path = image_path.replace('images', 'annotations').replace(
+                '.png', '.json'
+            )
+            if not os.path.exists(annotation_path):
+                print(
+                    f"Missing annotation file for {annotation_path} for image {image_path}"
+                )
+
+            else:
+                image_paths_valid.append(image_path)
+
+        self.image_paths = image_paths_valid
+
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, item):
-        print(f"Loading item {item} of {len(self.image_paths)}")
+        # print(f"Loading item {item} of {len(self.image_paths)}")
         image_path = self.image_paths[item]
         annotation_path = image_path.replace('images', 'annotations').replace(
             '.png', '.json'
@@ -70,7 +107,9 @@ class DocumentClassificationDataset(Dataset):
             ocr_results = json.load(json_file)
 
         self.scale_bounding_box = True
+
         with Image.open(image_path).convert("RGB") as image:
+            size = image.size
             width, height = image.size
             width_scale = 1000 / width
             height_scale = 1000 / height
@@ -79,13 +118,12 @@ class DocumentClassificationDataset(Dataset):
                 raise ValueError(
                     f"Expected 1 page in annotation file {annotation_path} for image {image_path}, "
                 )
-
-            for result in ocr_results[0]["words"]:
-                bbox = (
-                    scale_bounding_box(result['box'], width_scale, height_scale)
-                    if self.scale_bounding_boxes
-                    else result['box']
-                )
+            for w in ocr_results[0]["words"]:
+                if self.scale_bounding_box:
+                    bbox = normalize_bbox(w['box'], size)
+                    bbox = scale_bounding_box(w['box'], width_scale, height_scale)
+                else:
+                    bbox = w['box']
 
                 # The `bbox` coordinate values should be within 0-1000 range.
                 assert all(
@@ -93,7 +131,7 @@ class DocumentClassificationDataset(Dataset):
                 ), f"Invalid bbox coordinates {bbox} for image {image_path}"
 
                 boxes.append(bbox)
-                words.append(result['text'])
+                words.append(w['text'])
 
             assert len(boxes) == len(words)
             encoding = self.processor(
@@ -106,14 +144,14 @@ class DocumentClassificationDataset(Dataset):
                 return_tensors="pt",
             )
 
-            print(
-                f"""
-            input_ids:  {list(encoding["input_ids"].squeeze().shape)}
-            word boxes: {list(encoding["bbox"].squeeze().shape)}
-            image data: {list(encoding["pixel_values"].squeeze().shape)}
-            image size: {image.size}
-            """
-            )
+            # print(
+            #     f"""
+            # input_ids:  {list(encoding["input_ids"].squeeze().shape)}
+            # word boxes: {list(encoding["bbox"].squeeze().shape)}
+            # image data: {list(encoding["pixel_values"].squeeze().shape)}
+            # image size: {image.size}
+            # """
+            # )
 
             # image_data = encoding["pixel_values"][0]
             # transform = T.ToPILImage()
