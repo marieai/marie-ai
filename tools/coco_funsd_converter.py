@@ -234,13 +234,6 @@ def convert_coco_to_funsd(
             raise e
 
 
-# def image_to_byte_array(image: Image) -> bytes:
-#     imgByteArr = io.BytesIO()
-#     image.save(imgByteArr, format=image.format)
-#     imgByteArr = imgByteArr.getvalue()
-#     return imgByteArr
-
-
 def extract_icr(image, label:str, boxp, icrp, debug_fragments: bool = False):
     """
     """
@@ -323,8 +316,8 @@ def __decorate_funsd(
     # line_numbers : line number associated with bounding box
     # lines : raw line boxes that can be used for further processing
     _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
-        filename, "lines", image, PSMode.MULTI_LINE
-    )
+        filename, "lines", image, PSMode.SPARSE
+    ) # TODO: Need to investigate speed issue
 
     for item in data["form"]:
         # Boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
@@ -505,7 +498,9 @@ def generate_date() -> str:
     return fake.date(pattern=random.choice(patterns))
 
 
-def generate_money(num_digits: int, decimal_place_buffer: int = 2) -> str:
+def generate_money(num_digits: int, decimal_place_buffer: int = 2,
+                   neg_prob: float = 0.2, sign_prob: float = 0.5, dec_only_prob: float = 0.2) -> str:
+    # Ensure fake value is within a number of decimal places from the source number of digits
     max_value = ["9"] * (num_digits + decimal_place_buffer)
     max_value = int(''.join(max_value))
     while True:
@@ -513,7 +508,15 @@ def generate_money(num_digits: int, decimal_place_buffer: int = 2) -> str:
         generated_value = float(label_text.replace("$", "").replace(',', ''))
         if max_value >= generated_value:
             break
-    if np.random.choice([0, 1], p=[0.5, 0.5]):
+    # Only decimal probability
+    if np.random.choice([0, 1], p=[1-dec_only_prob, dec_only_prob]):
+        label_text = f".{label_text.split('.')[-1]}"
+    # Negative value probability
+    if np.random.choice([0, 1], p=[1-neg_prob, neg_prob]):
+        neg_type = np.random.choice([0, 1], p=[0.5, 0.5])
+        label_text = f"-{label_text}" if neg_type else f"({label_text.replace('$', '')})"
+    # contains $ probability
+    if np.random.choice([0, 1], p=[1-sign_prob, sign_prob]):
         label_text = label_text.replace("$", "")
     return label_text
 
@@ -670,6 +673,9 @@ def __augment_decorated_process(
         else:
             i += 1
 
+    if len(data["form"]) == 0:
+        print(f"SKIPPING File: {filename}. It has no fields that need masking from the config.")
+        return None
 
     for k in range(count):
         print(f"Augmentation : {k+1} of {count} ; {filename} ")
@@ -690,14 +696,13 @@ def __augment_decorated_process(
 
             font = get_cached_font(font_path, font_size)
 
-            # x0, y0, x1, y1 = xy
-            # Yellow with outline for debug
+            # clear region
+            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
+
+            # Yellow boxes with outline for debug
             # draw.rectangle(
             #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
             # )
-
-            # clear region
-            draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
             x0_y0 = np.array([x0, y0])
             for i, text_line in enumerate(aug_text.splitlines()):
@@ -744,14 +749,8 @@ def __augment_decorated_process(
 def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str, font_dir: str):
 
     mask_config = {
-        'prefixes': {'r.', 'd.', 's.', 'g.'},  # Implicit location of field on the image
-        'fonts': [
-            "FreeSansOblique.ttf",
-            "FreeSans.ttf",
-            "OpenSans-Light.ttf",
-            "FreeMono.ttf",
-            "vpscourt.ttf",
-        ],
+        'prefixes': ['r.', 'd.', 's.', 'g.'],  # Implicit location of field on the image
+        'fonts': [font for font in os.listdir(font_dir) if font[-3:] in ("ttf", "otf")],
         'masks_by_type': {
             'address': ['address', ],
             'money': [
@@ -858,10 +857,9 @@ def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str, font_d
 
     start = time.time()
     print("\nPool Executor:")
-    print("Time elapsed: %s" % (time.time() - start))
-
     pool = Pool(processes=int(mp.cpu_count() * 0.95))
     pool_results = pool.starmap(__augment_decorated_process, aug_args)
+    print("Time elapsed: %s" % (time.time() - start))
 
     pool.close()
     pool.join()
@@ -1291,8 +1289,11 @@ def default_all_steps(args: object):
 
     # execute each step
     # default_convert(Namespace(**args_1))
+
     # default_decorate(Namespace(**args_2))
+
     default_augment(Namespace(**args_3))
+
     # default_rescale(Namespace(**args_4))
 
 
