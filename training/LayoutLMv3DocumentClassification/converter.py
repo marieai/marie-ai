@@ -1,46 +1,17 @@
 import argparse
-import concurrent.futures
-import distutils.util
-import glob
-import hashlib
-import io
 import json
 import logging
-import multiprocessing as mp
 import os
-import random
-import shutil
-import string
 import sys
-import time
-import uuid
-from concurrent.futures.thread import ThreadPoolExecutor
-from functools import lru_cache
-from multiprocessing import Pool
-import rstr
-import cv2
-import numpy as np
-from faker import Faker
-from faker.providers import BaseProvider
-from PIL import Image, ImageDraw, ImageFont
 
-from marie.boxes import BoxProcessorUlimDit
-from marie.boxes.box_processor import PSMode
-from marie.boxes.craft_box_processor import BoxProcessorCraft
-from marie.boxes.line_processor import find_line_number
-from marie.document.trocr_icr_processor import TrOcrIcrProcessor
-from marie.numpyencoder import NumpyEncoder
-from marie.timer import Timer
-from marie.utils.utils import ensure_exists
-
-from marie.ocr import CoordinateFormat, DefaultOcrEngine
-from marie.utils.json import store_json_object, load_json_file
-
-from marie.logging.profile import TimeContext
-from marie.ocr.extract_pipeline import ExtractPipeline, split_filename, s3_asset_path
-from marie.utils.docs import frames_from_file
 import torch
+from PIL import Image
 
+from marie.boxes.box_processor import PSMode
+from marie.ocr import CoordinateFormat, DefaultOcrEngine
+from marie.utils.docs import frames_from_file
+from marie.utils.json import store_json_object
+from marie.utils.utils import ensure_exists
 
 logger = logging.getLogger(__name__)
 
@@ -86,20 +57,14 @@ def default_decorate(args: object):
                 if os.path.isfile(file_path):
                     try:
                         print(f"file_path = {file_path}")
-
                         image, orig_size = load_image_pil(file_path)
-
-                        print(f"image.size = {image.size}")
-
                         # save the image
                         dst_folder = os.path.join(dst_dir, folder)
-                        print(f"dst_folder = {dst_folder}")
+                        # print(f"dst_folder = {dst_folder}")
                         ensure_exists(dst_folder)
 
                         # save the image in PNG format
                         filename, file_extension = os.path.splitext(file)
-                        print(f"file_extension = {file_extension}")
-
                         dst_file = os.path.join(dst_folder, f"{filename}.json")
                         print(f"dst_file = {dst_file}")
                         if os.path.isfile(dst_file):
@@ -146,23 +111,21 @@ def default_rescale(args: object):
                 print(f"file = {file}")
                 file_path = os.path.join(folder_path, file)
                 print(f"file_path = {file_path}")
-
                 if os.path.isfile(file_path):
                     print(f"file_path = {file_path}")
 
                     image, orig_size = load_image_pil(file_path)
-                    resized, target_size = __scale_height(image, 1000)
 
-                    print(f"image.size = {image.size}")
+                    # NO SCALE NEEDED
+                    # resized, target_size = __scale_height(image, 1000)
+                    resized = image
 
                     # save the image
                     dst_folder = os.path.join(dst_dir, folder)
-                    print(f"dst_folder = {dst_folder}")
                     ensure_exists(dst_folder)
 
                     # save the image in PNG format
                     filename, file_extension = os.path.splitext(file)
-                    print(f"file_extension = {file_extension}")
 
                     dst_file = os.path.join(dst_folder, f"{filename}.png")
                     print(f"dst_file = {dst_file}")
