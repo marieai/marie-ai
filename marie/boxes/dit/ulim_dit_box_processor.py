@@ -364,8 +364,8 @@ class BoxProcessorUlimDit(BoxProcessor):
                     h = y1 - y0
                     snippet = image[y0: y0 + h, x0: x0 + w:]
                     offset, cropped = crop_to_content_box(snippet, content_aware=bbox_context_aware)
-                    cv2.imwrite(f"/tmp/fragments/snippet_{i}.png", snippet)
-                    cv2.imwrite(f"/tmp/fragments/snippet_{i}_cropped.png", cropped)
+                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}.png", snippet)
+                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}_cropped.png", cropped)
                     adj_box = [box[0] + offset[0], box[1] + offset[1], box[2] - (offset[2] - offset[0]),
                                box[3] - (offset[3] - offset[1])]
 
@@ -384,6 +384,11 @@ class BoxProcessorUlimDit(BoxProcessor):
                     bb.append(box)
 
             bboxes = np.array(bb)
+
+            if len(bboxes) == 0:
+                self.logger.debug(f"No boxes predicted.")
+                return [], [], [], [], []
+
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
             bboxes = bboxes[ind]
