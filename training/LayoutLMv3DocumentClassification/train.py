@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from fsspec.core import url_to_fs
 
 import pandas as pd
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torchmetrics import Accuracy
@@ -35,34 +37,35 @@ dataset_path = os.path.expanduser(
     "~/datasets/private/data-hipa/medical_page_classification/output/images"
 )
 
-dataset_path = os.path.expanduser(
+dataset_pathX = os.path.expanduser(
     "~/datasets/private/medical_page_classification/output/images"
 )
 
-images = []
-labels_unique = []
 labels = []
+df_labels = []
+df_images = []
 
 for label in sorted(os.listdir(dataset_path)):
-    labels_unique.append(label)
+    labels.append(label)
     for image in os.listdir(os.path.join(dataset_path, label)):
-        images.append(os.path.join(dataset_path, label, image))
-        labels.append(label)
+        df_images.append(os.path.join(dataset_path, label, image))
+        df_labels.append(label)
 
-idx2label = {idx: label for idx, label in enumerate(labels_unique)}
-label2idx = {label: idx for idx, label in enumerate(labels_unique)}
+idx2label = {idx: label for idx, label in enumerate(labels)}
+label2idx = {label: idx for idx, label in enumerate(labels)}
 
 print(labels)
 print(idx2label)
 print(label2idx)
 
-data = pd.DataFrame({'image_path': images, 'label': labels})
+data = pd.DataFrame({'image_path': df_images, 'label': df_labels})
 
-print(len(images))
 print(len(labels))
+print(len(df_images))
+print(len(df_labels))
 
 model_name_or_path = "microsoft/layoutlmv3-base"
-model_name_or_path = "microsoft/layoutlmv3-large"
+# model_name_or_path = "microsoft/layoutlmv3-large"
 
 feature_extractor = LayoutLMv3ImageProcessor(
     apply_ocr=False, do_resize=True, resample=Image.LANCZOS
@@ -80,15 +83,31 @@ print(f"{len(train_data)} training examples, {len(valid_data)} validation exampl
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-train_dataset = DocumentClassificationDataset(
-    False, train_data, labels_unique, processor
-)
-test_dataset = DocumentClassificationDataset(
-    False, valid_data, labels_unique, processor
-)
+train_dataset = DocumentClassificationDataset(False, train_data, labels, processor)
+test_dataset = DocumentClassificationDataset(False, valid_data, labels, processor)
 # multiprocessing.cpu_count() //
 train_data_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
 test_data_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
+
+
+class HfModelCheckpoint(ModelCheckpoint):
+    def _save_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
+        super()._save_checkpoint(trainer, filepath)
+        print("Saving model checkpoint to Huggingface model...")
+        hf_save_dir = filepath + ".dir"
+        if trainer.is_global_zero:
+            trainer.lightning_module.model.save_pretrained(hf_save_dir)
+            trainer.lightning_module.tokenizer.save_pretrained(hf_save_dir)
+
+    # https://github.com/Lightning-AI/lightning/pull/16067
+    def _remove_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
+        super()._remove_checkpoint(trainer, filepath)
+        print("Removing model checkpoint from Huggingface model...")
+        hf_save_dir = filepath + ".dir"
+        if trainer.is_global_zero:
+            fs, _ = url_to_fs(hf_save_dir)
+            if fs.exists(hf_save_dir):
+                fs.rm(hf_save_dir, recursive=True)
 
 
 class ModelModule(pl.LightningModule):
@@ -104,7 +123,7 @@ class ModelModule(pl.LightningModule):
             input_size=224,
             hidden_dropout_prob=0.2,
             attention_probs_dropout_prob=0.2,
-            has_relative_attention_bias=False,
+            has_relative_attention_bias=True,
         )
 
         self.model = LayoutLMv3ForSequenceClassification.from_pretrained(
@@ -112,6 +131,7 @@ class ModelModule(pl.LightningModule):
             # num_labels=n_classes,
             config=config,
         )
+        self.tokenizer = LayoutLMv3Tokenizer.from_pretrained(model_name_or_path)
 
         self.model.config.id2label = {k: v for k, v in enumerate(classes)}
         self.model.config.label2id = {v: k for k, v in enumerate(classes)}
@@ -166,7 +186,8 @@ class ModelModule(pl.LightningModule):
 
 def train():
     model_module = ModelModule(classes=labels)
-    model_checkpoint = ModelCheckpoint(
+
+    model_checkpoint = HfModelCheckpoint(
         filename="{epoch}-{step}-{val_loss:.4f}",
         save_last=True,
         save_top_k=3,
@@ -240,26 +261,44 @@ def predict_document_image(
 
 def inference():
     # load ckpt for inference
-    model_name_or_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=21-step=9702-val_loss=0.1855.ckpt"
-    model = ModelModule.load_from_checkpoint(model_name_or_path)
-
-    return
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/last.ckpt.dir"
+    # model = ModelModule.load_from_checkpoint(model_checkpoint_path, classes=labels)
+    # return
 
     # load model
     device = "cpu"  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=21-step=9702-val_loss=0.1855.ckpt"
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
     )
     model = model.eval().to(device)
 
-    labels = []
+    print(model.config.id2label)
+    labels_collected = []
     predictions = []
-    test_images = []
 
-    for image_path in tqdm(test_images):
-        labels.append(image_path.parent.name)
+    for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
+        label, image_path = df
+        annotation_path = image_path.replace('images', 'annotations').replace(
+            '.png', '.json'
+        )
+        if not os.path.exists(annotation_path):
+            print(
+                f"Missing annotation file for {annotation_path} for image {image_path}"
+            )
+            continue
+
+        labels_collected.append(label)
         predictions.append(predict_document_image(image_path, model, processor))
+
+        if len(labels_collected) > 20:
+            break
+        # break
+
+    print(
+        classification_report(
+            labels_collected, predictions, target_names=labels_collected, labels=labels
+        )
+    )
 
 
 if __name__ == "__main__":

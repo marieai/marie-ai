@@ -41,7 +41,7 @@ def process_image(image):
 
 def interface():
     article = """
-         # Bounding Boxes and ICR         
+         # Document Classification     
         """
     # [Dit: For textbox detection and  TROCR: Transformer-based OCR and ICR]
 
