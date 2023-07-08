@@ -3,15 +3,21 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import torch.nn.functional as F
 
 from PIL import Image, ImageDraw, ImageFont
 from fsspec.core import url_to_fs
-
+import torch.nn.functional as F
 import pandas as pd
 import pytorch_lightning as pl
 import torch
+from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from sklearn.metrics import classification_report
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+)
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torchmetrics import Accuracy
@@ -37,57 +43,69 @@ dataset_path = os.path.expanduser(
     "~/datasets/private/data-hipa/medical_page_classification/output/images"
 )
 
-dataset_pathX = os.path.expanduser(
+dataset_path = os.path.expanduser(
     "~/datasets/private/medical_page_classification/output/images"
 )
 
-labels = []
-df_labels = []
-df_images = []
 
-for label in sorted(os.listdir(dataset_path)):
-    labels.append(label)
-    for image in os.listdir(os.path.join(dataset_path, label)):
-        df_images.append(os.path.join(dataset_path, label, image))
-        df_labels.append(label)
+def load_data():
+    labels = []
+    df_labels = []
+    df_images = []
 
-idx2label = {idx: label for idx, label in enumerate(labels)}
-label2idx = {label: idx for idx, label in enumerate(labels)}
+    for label in sorted(os.listdir(dataset_path)):
+        labels.append(label)
+        for image in os.listdir(os.path.join(dataset_path, label)):
+            df_images.append(os.path.join(dataset_path, label, image))
+            df_labels.append(label)
 
-print(labels)
-print(idx2label)
-print(label2idx)
+    idx2label = {idx: label for idx, label in enumerate(labels)}
+    label2idx = {label: idx for idx, label in enumerate(labels)}
 
-data = pd.DataFrame({'image_path': df_images, 'label': df_labels})
+    print(labels)
+    print(idx2label)
+    print(label2idx)
 
-print(len(labels))
-print(len(df_images))
-print(len(df_labels))
+    data = pd.DataFrame({'image_path': df_images, 'label': df_labels})
+    return data, labels, idx2label, label2idx
+
 
 model_name_or_path = "microsoft/layoutlmv3-base"
+
+
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
-feature_extractor = LayoutLMv3ImageProcessor(
-    apply_ocr=False, do_resize=True, resample=Image.LANCZOS
-)
-tokenizer = LayoutLMv3Tokenizer.from_pretrained(model_name_or_path)
-processor = LayoutLMv3Processor(feature_extractor, tokenizer)
 
-train_data, valid_data = train_test_split(
-    data, test_size=0.2, random_state=42, stratify=data["label"]
-)
+def create_processor():
+    feature_extractor = LayoutLMv3ImageProcessor(
+        apply_ocr=False, do_resize=True, resample=Image.LANCZOS
+    )
+    tokenizer = LayoutLMv3Tokenizer.from_pretrained(model_name_or_path)
+    processor = LayoutLMv3Processor(feature_extractor, tokenizer)
+    return processor
 
-train_data = train_data.reset_index(drop=True)
-valid_data = valid_data.reset_index(drop=True)
-print(f"{len(train_data)} training examples, {len(valid_data)} validation examples")
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def create_split_data(data):
+    train_data, test_data = train_test_split(
+        data, test_size=0.2, random_state=42, stratify=data["label"]
+    )
 
-train_dataset = DocumentClassificationDataset(False, train_data, labels, processor)
-test_dataset = DocumentClassificationDataset(False, valid_data, labels, processor)
-# multiprocessing.cpu_count() //
-train_data_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-test_data_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=2)
+    train_data = train_data.reset_index(drop=True)
+    test_data = test_data.reset_index(drop=True)
+    valid_data = test_data  # TODO : need to have proper validation dataset
+
+    print(f"{len(train_data)} training examples, {len(test_data)} test examples")
+    return train_data, test_data, valid_data
+
+
+def create_dataset(data, labels, processor):
+    train_data, test_data, valid_data = create_split_data(data)
+
+    train_dataset = DocumentClassificationDataset(False, train_data, labels, processor)
+    test_dataset = DocumentClassificationDataset(False, valid_data, labels, processor)
+    validation_dataset = test_dataset  # TODO : need to have proper validation dataset
+
+    return train_dataset, test_dataset, validation_dataset
 
 
 class HfModelCheckpoint(ModelCheckpoint):
@@ -117,12 +135,12 @@ class ModelModule(pl.LightningModule):
 
         config = AutoConfig.from_pretrained(
             model_name_or_path,
-            num_labels=len(labels),
+            num_labels=n_classes,
             finetuning_task="document-classification",
             cache_dir="/mnt/data/cache",
             input_size=224,
-            hidden_dropout_prob=0.2,
-            attention_probs_dropout_prob=0.2,
+            hidden_dropout_prob=0.1,
+            attention_probs_dropout_prob=0.1,
             has_relative_attention_bias=True,
         )
 
@@ -185,8 +203,22 @@ class ModelModule(pl.LightningModule):
 
 
 def train():
-    model_module = ModelModule(classes=labels)
+    # prepare data
+    data, labels, idx2label, label2idx = load_data()
+    processor = create_processor()
 
+    train_dataset, test_dataset, valid_dataset = create_dataset(
+        data, labels, processor=processor
+    )
+    train_data_loader = DataLoader(
+        train_dataset, batch_size=4, shuffle=True, num_workers=4
+    )
+    test_data_loader = DataLoader(
+        test_dataset, batch_size=1, shuffle=False, num_workers=2
+    )
+
+    # train
+    model_module = ModelModule(classes=labels)
     model_checkpoint = HfModelCheckpoint(
         filename="{epoch}-{step}-{val_loss:.4f}",
         save_last=True,
@@ -203,7 +235,7 @@ def train():
         accelerator="gpu",
         precision=16,
         devices=1,
-        max_epochs=25,
+        max_epochs=10,
         callbacks=[model_checkpoint],
     )
 
@@ -216,7 +248,6 @@ def predict_document_image(
     processor: LayoutLMv3Processor,
     device: str = "cpu",
 ):
-
     annotation_path = (
         str(image_path).replace('images', 'annotations').replace('.png', '.json')
     )
@@ -255,26 +286,31 @@ def predict_document_image(
             pixel_values=encoding["pixel_values"].to(device),
         )
 
-    predicted_class = output.logits.argmax()
-    return model.config.id2label[predicted_class.item()]
+    logits = output.logits
+    predicted_class = logits.argmax()
+    probabilities = F.softmax(logits, dim=-1).flatten().tolist()
+
+    return model.config.id2label[predicted_class.item()], probabilities
 
 
 def inference():
     # load ckpt for inference
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/last.ckpt.dir"
-    # model = ModelModule.load_from_checkpoint(model_checkpoint_path, classes=labels)
-    # return
+    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_1/checkpoints/epoch=9-step=8810-val_loss=0.1862.ckpt.dir"
+    data, labels, idx2label, label2idx = load_data()
+    processor = create_processor()
+    train_data, test_data, valid_data = create_split_data(data)
 
     # load model
-    device = "cpu"  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
     )
     model = model.eval().to(device)
 
     print(model.config.id2label)
-    labels_collected = []
-    predictions = []
+    true_labels = []
+    pred_labels = []
 
     for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
         label, image_path = df
@@ -287,18 +323,35 @@ def inference():
             )
             continue
 
-        labels_collected.append(label)
-        predictions.append(predict_document_image(image_path, model, processor))
-
-        if len(labels_collected) > 20:
-            break
-        # break
-
-    print(
-        classification_report(
-            labels_collected, predictions, target_names=labels_collected, labels=labels
+        predicted_label, probabilities = predict_document_image(
+            image_path, model, processor
         )
-    )
+
+        print(
+            f"Expected / predicted label: {label} , {predicted_label} with probabilities: {probabilities}"
+        )
+
+        true_labels.append(label)
+        pred_labels.append(predicted_label)
+
+        if len(true_labels) > 50:
+            break
+
+    print("Classification report")
+    print(labels)
+    print(true_labels)
+    print(pred_labels)
+
+    print(classification_report(true_labels, pred_labels, labels=labels))
+
+    cm = confusion_matrix(true_labels, pred_labels, labels=labels)
+    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+
+    cm_display.plot()
+    cm_display.ax_.set_xticklabels(labels, rotation=45)
+    cm_display.figure_.set_size_inches(16, 8)
+
+    plt.show()
 
 
 if __name__ == "__main__":

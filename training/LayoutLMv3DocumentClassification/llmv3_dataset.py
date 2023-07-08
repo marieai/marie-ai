@@ -5,7 +5,6 @@ import torch
 from PIL import Image
 
 from torch.utils.data import Dataset
-import torchvision.transforms as T
 import io
 import json
 from typing import Any, List
@@ -51,7 +50,7 @@ class DocumentClassificationDataset(Dataset):
         self,
         scale_bounding_boxes: bool,
         pd_data: DataFrame,
-        classes,
+        classes: List[str],
         processor: LayoutLMv3Processor,
     ):
         super().__init__()
