@@ -67,7 +67,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        # super(NerExtractionExecutor, self).__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -217,79 +216,135 @@ class NerExtractionExecutor(Executor, StorageMixin):
             f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
         )
 
-        width, height = image.size
-        # Encode the image
-        encoding = processor(
-            # fmt: off
-            image,
-            words,
-            boxes=boxes,
-            truncation=True,
-            return_offsets_mapping=True,
-            padding="max_length",
-            return_tensors="pt"
-            # fmt: on
-        )
-        offset_mapping = encoding.pop("offset_mapping")
+        # partition the words and boxes into batches of 512 tokens with 128 stride
+        # stride is the number of tokens to move forward
 
-        # Debug tensor info
-        if self.debug_visuals:
-            # img_tensor = encoded_inputs["image"] # v2
-            img_tensor = encoding["pixel_values"]  # v3
-            img = Image.fromarray(
-                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+        for word, box in zip(words, boxes):
+            logger.info(f"Word : {box} : {word} ")
+
+        partitions = []
+        stride = 64
+        partition_count = len(words) // stride
+        max_len = len(words)
+
+        logger.info(f"Words: {len(words)}")
+        logger.info(f"Stride: {stride}")
+        logger.info(f"Partition count: {partition_count}")
+
+        for i in range(0, partition_count):
+            partition_boxes = boxes[i * stride : min((i + 1) * stride, max_len)]
+            partition_words = words[i * stride : min((i + 1) * stride, max_len)]
+            partition_indices = [
+                k for k in range(i * stride, min((i + 1) * stride, max_len))
+            ]
+            partitions.append((partition_words, partition_boxes, partition_indices))
+
+        logger.info(f"Number of partitions: {len(partitions)}")
+
+        # for each partition, run inference
+        for partition_words, partition_boxes, partition_indices in partitions:
+            logger.info(f"Partition words: {len(partition_words)}")
+            logger.info(f"Partition boxes: {len(partition_boxes)}")
+            logger.info(f"Partition indices: {len(partition_indices)}")
+
+            width, height = image.size
+            # Encode the image
+            encoding = processor(
+                # fmt: off
+                image,
+                words,
+                boxes=boxes,
+                truncation=True,
+                return_offsets_mapping=True,
+                # return_overflowing_tokens=True,
+                padding="max_length",
+                return_tensors="pt",
+                max_length=512,
+                # stride=128,
+                # fmt: on
             )
-            # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
 
-        # ensure proper device placement
-        for ek, ev in encoding.items():
-            encoding[ek] = ev.to(device)
+            offset_mapping = encoding.pop("offset_mapping")
+            # overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping') # return_overflowing_tokens=True
 
-        # Perform forward pass
-        with torch.no_grad():
-            outputs = model(**encoding)
-            # Get the predictions and probabilities
-            probs = (
-                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
-            )
-            _predictions = outputs.logits.argmax(-1).squeeze().tolist()
-            _token_boxes = encoding.bbox.squeeze().tolist()
-            normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+            print("shape of encoding after")
+            for k, v in encoding.items():
+                print(k, v.shape)
 
-        # TODO : Filer the results
-        # Filter the predictions and bounding boxes based on a threshold
-        # predictions = _filter(_predictions, probs, threshold)
-        # token_boxes = _filter(_token_boxes, probs, threshold)
-        predictions = _predictions
-        token_boxes = _token_boxes
+            # Debug tensor info
+            if self.debug_visuals:
+                # img_tensor = encoded_inputs["image"] # v2
+                img_tensor = encoding["pixel_values"]
+                img = Image.fromarray(
+                    (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+                )
+                # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
 
-        # Only keep non-subword predictions
-        is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
-        true_predictions = [
-            id2label[pred]
-            for idx, pred in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+            # ensure proper device placement
+            for ek, ev in encoding.items():
+                encoding[ek] = ev.to(device)
 
-        true_boxes = [
-            unnormalize_box(box, width, height)
-            for idx, box in enumerate(token_boxes)
-            if not is_subword[idx]
-        ]
+            # Perform forward pass
+            with torch.inference_mode():
+                outputs = model(**encoding)
+                # Get the predictions and probabilities
+                probs = (
+                    nn.softmax(outputs.logits.squeeze(), dim=1)
+                    .max(dim=1)
+                    .values.tolist()
+                )
+                _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+                _token_boxes = encoding.bbox.squeeze().tolist()
+                normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
 
-        true_scores = [
-            round(normalized_logits[idx][val], 6)
-            for idx, val in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+            # TODO : Filer the results
+            # Filter the predictions and bounding boxes based on a threshold
+            # predictions = _filter(_predictions, probs, threshold)
+            # token_boxes = _filter(_token_boxes, probs, threshold)
+            predictions = _predictions
+            token_boxes = _token_boxes
 
-        assert len(true_predictions) == len(true_boxes) == len(true_scores)
+            print("predictions")
+            print(len(predictions))
 
-        predictions = [true_predictions]
-        boxes = [true_boxes]
-        scores = [true_scores]
+            print(predictions)
+            print("token_boxes")
+            print(token_boxes)
+            # Only keep non-subword predictions
+            is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+            true_predictions = [
+                id2label[pred]
+                for idx, pred in enumerate(predictions)
+                # if not is_subword[idx]
+            ]
 
-        return predictions, boxes, scores
+            print(f"true_predictions : {len(true_predictions)}")
+
+            true_boxes = [
+                unnormalize_box(box, width, height)
+                for idx, box in enumerate(token_boxes)
+                #   if not is_subword[idx]
+            ]
+
+            true_scores = [
+                round(normalized_logits[idx][val], 6)
+                for idx, val in enumerate(predictions)
+                # if not is_subword[idx]
+            ]
+
+            assert len(true_predictions) == len(true_boxes) == len(true_scores)
+
+            out_predictions = [true_predictions]
+            out_boxes = [true_boxes]
+            out_scores = [true_scores]
+
+            return out_predictions, out_boxes, out_scores
+
+        out_predictions = []
+        out_boxes = []
+        out_scores = []
+
+        return out_predictions, out_boxes, out_scores
 
     def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
@@ -675,7 +730,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         :return:
         """
 
-        if frames is None:
+        if frames is None or len(frames) == 0:
             self.logger.warning(f"Frames are empty")
             return
 
@@ -719,6 +774,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         if "error" in ocr_results:
             return False, frames, [], [], ocr_results, file_hash
+
+        self.debug_visuals = True
+        self.debug_visuals_icr = True
 
         if self.debug_visuals and self.debug_visuals_icr:
             visualize_icr(frames, ocr_results, file_hash)
