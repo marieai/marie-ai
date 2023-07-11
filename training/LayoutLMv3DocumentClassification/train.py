@@ -43,7 +43,7 @@ dataset_path = os.path.expanduser(
     "~/datasets/private/data-hipa/medical_page_classification/output/images"
 )
 
-dataset_path = os.path.expanduser(
+dataset_pathXX = os.path.expanduser(
     "~/datasets/private/medical_page_classification/output/images"
 )
 
@@ -71,8 +71,6 @@ def load_data():
 
 
 model_name_or_path = "microsoft/layoutlmv3-base"
-
-
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
 
@@ -211,10 +209,10 @@ def train():
         data, labels, processor=processor
     )
     train_data_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=4
+        train_dataset, batch_size=12, shuffle=True, num_workers=12
     )
     test_data_loader = DataLoader(
-        test_dataset, batch_size=1, shuffle=False, num_workers=2
+        test_dataset, batch_size=4, shuffle=False, num_workers=4
     )
 
     # train
@@ -235,18 +233,23 @@ def train():
         accelerator="gpu",
         precision=16,
         devices=1,
-        max_epochs=10,
+        max_epochs=50,
         callbacks=[model_checkpoint],
     )
 
-    trainer.fit(model_module, train_data_loader, test_data_loader)
+    trainer.fit(
+        model_module,
+        train_data_loader,
+        test_data_loader,
+        ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt",
+    )
 
 
 def predict_document_image(
     image_path: Path,
     model: LayoutLMv3ForSequenceClassification,
     processor: LayoutLMv3Processor,
-    device: str = "cpu",
+    device: str = "cuda",
 ):
     annotation_path = (
         str(image_path).replace('images', 'annotations').replace('.png', '.json')
@@ -285,24 +288,35 @@ def predict_document_image(
             bbox=encoding["bbox"].to(device),
             pixel_values=encoding["pixel_values"].to(device),
         )
-
+    #
+    # _predictions = outputs.logits.argmax(-1).squeeze().tolist()
+    # _token_boxes = encoding.bbox.squeeze().tolist()
+    # normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+    #
+    #
     logits = output.logits
-    predicted_class = logits.argmax()
-    probabilities = F.softmax(logits, dim=-1).flatten().tolist()
+    predicted_class = logits.argmax(-1)
+    probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
 
-    return model.config.id2label[predicted_class.item()], probabilities
+    return (
+        model.config.id2label[predicted_class.item()],
+        probabilities[predicted_class.item()],
+    )
 
 
 def inference():
     # load ckpt for inference
-    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_1/checkpoints/epoch=9-step=8810-val_loss=0.1862.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=4-step=10020-val_loss=0.1633.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=7-step=13026-val_loss=0.1810.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_5/checkpoints/epoch=5-step=10688-val_loss=0.1514.ckpt.dir"
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
     train_data, test_data, valid_data = create_split_data(data)
 
     # load model
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    # device = "cpu"
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
     )
@@ -324,7 +338,7 @@ def inference():
             continue
 
         predicted_label, probabilities = predict_document_image(
-            image_path, model, processor
+            image_path, model, processor, device
         )
 
         print(
@@ -334,7 +348,7 @@ def inference():
         true_labels.append(label)
         pred_labels.append(predicted_label)
 
-        if len(true_labels) > 50:
+        if len(true_labels) > 5000:
             break
 
     print("Classification report")

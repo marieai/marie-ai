@@ -28,7 +28,7 @@ def process_file(
         docs = None
         kwa = {"checksum": checksum, "img_path": img_path}
         payload = executor.extract(docs, **kwa)
-        # print(payload)
+        print(payload)
         store_json_object(payload, f"/tmp/tensors/json/{filename}.json")
 
         if storage_enabled:
@@ -66,7 +66,8 @@ if __name__ == "__main__":
     print(transformers.__version__)
     # _name_or_path = "rms/layoutlmv3-large-corr-ner"
     _name_or_path = "rms/layoutlmv3-large-20221118-001-best"
-    _name_or_path = "rms/layoutlmv3-large-20221129-dit"
+    _name_or_path = "/mnt/data/models/layoutlmv3-large-stride/checkpoint-1000"
+
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
 
@@ -76,7 +77,7 @@ if __name__ == "__main__":
     executor = NerExtractionExecutor(_name_or_path)
 
     storage_enabled = False
-    img_path = f"/home/gbugaj/tmp/2022-08-09/PID_698_7367_0_159277012.tif"
+    img_path = f"/home/greg/datasets/private/data-hipa/medical_page_classification/raw/CORRESPONDENCE/159026608_1.png"
 
     if not os.path.isdir(img_path):
         process_file(executor, img_path, storage_enabled, storage_conf)

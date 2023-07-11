@@ -1,5 +1,6 @@
 import logging
 import os
+from math import ceil
 from typing import Any, List, Optional, Tuple, Union, Dict
 
 import numpy as np
@@ -33,7 +34,7 @@ from marie.utils.docs import (
     convert_frames,
     array_from_docs,
 )
-from marie.utils.image_utils import hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast, hash_file
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
@@ -128,11 +129,14 @@ class NerExtractionExecutor(Executor, StorageMixin):
         """prepare for the model"""
         # Method:2 Create Layout processor with custom future extractor
         # Max model size is 512, so we will need to handle any documents larger than that
-        feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
-        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
-            "microsoft/layoutlmv3-large"
-            # only_label_first_subword = True
+        feature_extractor = LayoutLMv3FeatureExtractor(
+            apply_ocr=False, do_resize=True, resample=Image.LANCZOS
         )
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
+            "microsoft/layoutlmv3-large",
+            only_label_first_subword=False,
+        )
+
         processor = LayoutLMv3Processor(
             feature_extractor=feature_extractor, tokenizer=tokenizer
         )
@@ -143,9 +147,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
         """
         Create token classification model
         """
-        labels, _, _ = self.get_label_info()
+        labels, id2label, label2id = self.get_label_info()
         model = AutoModelForTokenClassification.from_pretrained(
-            model_dir, num_labels=len(labels)
+            model_dir, num_labels=len(labels), label2id=label2id, id2label=id2label
         )
 
         model.eval()
@@ -210,141 +214,141 @@ class NerExtractionExecutor(Executor, StorageMixin):
         processor = self.processor
         device = self.device
         id2label = {v: k for v, k in enumerate(labels)}
+        labels, id2label, label2id = self.get_label_info()
+        # processor.tokenizer.only_label_first_subword = False
 
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ["TOKENIZERS_PARALLELISM"] = "true"
         logger.info(
             f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
         )
 
+        width, height = image.size
         # partition the words and boxes into batches of 512 tokens with 128 stride
-        # stride is the number of tokens to move forward
+        # stride is the number of tokens to move forward, this is to handle long documents that are larger than 512 tokens
+        # there will be overlap between the batches, so we will need to handle that later
 
-        for word, box in zip(words, boxes):
-            logger.info(f"Word : {box} : {word} ")
+        encoding = processor(
+            # fmt: off
+            image,
+            words,
+            boxes=boxes,
+            truncation=True,
+            return_offsets_mapping=True,
+            return_overflowing_tokens=True,
+            stride=128,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=512,
+            # fmt: on
+        )
 
-        partitions = []
-        stride = 64
-        partition_count = len(words) // stride
-        max_len = len(words)
+        offset_mapping_batched = encoding.pop("offset_mapping")
+        overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping')
+        encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
 
-        logger.info(f"Words: {len(words)}")
-        logger.info(f"Stride: {stride}")
-        logger.info(f"Partition count: {partition_count}")
+        for k, v in encoding.items():
+            print(k, v.shape)
 
-        for i in range(0, partition_count):
-            partition_boxes = boxes[i * stride : min((i + 1) * stride, max_len)]
-            partition_words = words[i * stride : min((i + 1) * stride, max_len)]
-            partition_indices = [
-                k for k in range(i * stride, min((i + 1) * stride, max_len))
-            ]
-            partitions.append((partition_words, partition_boxes, partition_indices))
+        # Debug tensor info
+        self.debug_visuals = True
+        if self.debug_visuals:
+            img_tensor = encoding["pixel_values"]
+            img = Image.fromarray(
+                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+            )
+            img.save(f"/tmp/tensors/tensor.png")
 
-        logger.info(f"Number of partitions: {len(partitions)}")
+        # ensure proper device placement
+        for ek, ev in encoding.items():
+            encoding[ek] = ev.to(device)
 
-        # for each partition, run inference
-        for partition_words, partition_boxes, partition_indices in partitions:
-            logger.info(f"Partition words: {len(partition_words)}")
-            logger.info(f"Partition boxes: {len(partition_boxes)}")
-            logger.info(f"Partition indices: {len(partition_indices)}")
-
-            width, height = image.size
-            # Encode the image
-            encoding = processor(
-                # fmt: off
-                image,
-                words,
-                boxes=boxes,
-                truncation=True,
-                return_offsets_mapping=True,
-                # return_overflowing_tokens=True,
-                padding="max_length",
-                return_tensors="pt",
-                max_length=512,
-                # stride=128,
-                # fmt: on
+        # Perform forward pass
+        with torch.inference_mode():
+            outputs = model(**encoding)
+            # Get the predictions and probabilities
+            probs = (
+                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
             )
 
-            offset_mapping = encoding.pop("offset_mapping")
-            # overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping') # return_overflowing_tokens=True
+            # The model outputs logits of shape (batch_size, seq_len, num_labels).
+            logits = outputs.logits
+            batch_size, seq_len, num_labels = logits.shape
 
-            print("shape of encoding after")
-            for k, v in encoding.items():
-                print(k, v.shape)
+            # Get the predictions and bounding boxes by batch and convert to list
+            predictions_batched = logits.argmax(-1).squeeze().tolist()
+            token_boxes_batched = encoding.bbox.squeeze().tolist()
+            normalized_logits_batched = (
+                outputs.logits.softmax(dim=-1).squeeze().tolist()
+            )
 
-            # Debug tensor info
-            if self.debug_visuals:
-                # img_tensor = encoded_inputs["image"] # v2
-                img_tensor = encoding["pixel_values"]
-                img = Image.fromarray(
-                    (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
-                )
-                # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
+            # If batch size is 1, convert to list
+            if batch_size == 1:
+                predictions_batched = [predictions_batched]
+                token_boxes_batched = [token_boxes_batched]
+                normalized_logits_batched = [normalized_logits_batched]
 
-            # ensure proper device placement
-            for ek, ev in encoding.items():
-                encoding[ek] = ev.to(device)
+            out_prediction = []
+            out_boxes = []
+            out_scores = []
 
-            # Perform forward pass
-            with torch.inference_mode():
-                outputs = model(**encoding)
-                # Get the predictions and probabilities
-                probs = (
-                    nn.softmax(outputs.logits.squeeze(), dim=1)
-                    .max(dim=1)
-                    .values.tolist()
-                )
-                _predictions = outputs.logits.argmax(-1).squeeze().tolist()
-                _token_boxes = encoding.bbox.squeeze().tolist()
-                normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
+            for batch_index in range(batch_size):
+                # Get the predictions and bounding boxes for the current batch
+                predictions = predictions_batched[batch_index]
+                token_boxes = token_boxes_batched[batch_index]
+                normalized_logits = normalized_logits_batched[batch_index]
+                offset_mapping = offset_mapping_batched[batch_index]
 
-            # TODO : Filer the results
-            # Filter the predictions and bounding boxes based on a threshold
-            # predictions = _filter(_predictions, probs, threshold)
-            # token_boxes = _filter(_token_boxes, probs, threshold)
-            predictions = _predictions
-            token_boxes = _token_boxes
+                # TODO : Filer the results
+                # Filter the predictions and bounding boxes based on a threshold
+                # predictions = _filter(_predictions, probs, threshold)
+                # token_boxes = _filter(_token_boxes, probs, threshold)
 
-            print("predictions")
-            print(len(predictions))
+                # Only keep non-subword predictions
+                is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+                true_predictions = [
+                    id2label[pred]
+                    for idx, pred in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
 
-            print(predictions)
-            print("token_boxes")
-            print(token_boxes)
-            # Only keep non-subword predictions
-            is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
-            true_predictions = [
-                id2label[pred]
-                for idx, pred in enumerate(predictions)
-                # if not is_subword[idx]
-            ]
+                true_boxes = [
+                    unnormalize_box(box, width, height)
+                    for idx, box in enumerate(token_boxes)
+                    if not is_subword[idx]
+                ]
+                # convert boxes from float to int
+                true_boxes = [[int(b) for b in box] for box in true_boxes]
 
-            print(f"true_predictions : {len(true_predictions)}")
+                true_scores = [
+                    round(normalized_logits[idx][val], 6)
+                    for idx, val in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
 
-            true_boxes = [
-                unnormalize_box(box, width, height)
-                for idx, box in enumerate(token_boxes)
-                #   if not is_subword[idx]
-            ]
+                assert len(true_predictions) == len(true_boxes) == len(true_scores)
 
-            true_scores = [
-                round(normalized_logits[idx][val], 6)
-                for idx, val in enumerate(predictions)
-                # if not is_subword[idx]
-            ]
+                # check if  token_boxes are same as the true_boxes and if so pick the one with highest score
+                if batch_index > 0:
+                    for idx, box in enumerate(out_boxes):
+                        if box == [0, 0, 0, 0]:
+                            continue
+                        # check if box is in last_boxes
+                        if box in true_boxes:
+                            current_idx = true_boxes.index(box)
+                            if true_scores[current_idx] > out_scores[idx]:
+                                out_prediction[idx] = true_predictions[current_idx]
+                                out_scores[idx] = true_scores[current_idx]
+                            elif true_scores[current_idx] < out_scores[idx]:
+                                # remove the box from true_boxes
+                                true_predictions.pop(current_idx)
+                                true_boxes.pop(current_idx)
+                                true_scores.pop(current_idx)
 
-            assert len(true_predictions) == len(true_boxes) == len(true_scores)
+                out_prediction.extend(true_predictions)
+                out_boxes.extend(true_boxes)
+                out_scores.extend(true_scores)
 
-            out_predictions = [true_predictions]
-            out_boxes = [true_boxes]
-            out_scores = [true_scores]
-
-            return out_predictions, out_boxes, out_scores
-
-        out_predictions = []
-        out_boxes = []
-        out_scores = []
-
-        return out_predictions, out_boxes, out_scores
+        return out_prediction, out_boxes, out_scores
 
     def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
@@ -797,11 +801,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 boxes[k].append(
                     normalize_bbox(word["box"], (image.size[0], image.size[1]))
                 )
-                # This is to prevent following error
-                # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
-                if len(boxes[k]) == 512:
-                    print("Clipping MAX boxes at 512")
-                    break
             assert len(words[k]) == len(boxes[k])
         assert len(frames) == len(boxes) == len(words)
         return True, frames, boxes, words, ocr_results, file_hash
@@ -819,17 +818,13 @@ class NerExtractionExecutor(Executor, StorageMixin):
             width = _image.size[0]
             height = _image.size[1]
 
-            all_predictions, all_boxes, all_scores = self.inference(
+            true_predictions, true_boxes, true_scores = self.inference(
                 _image,
                 _words,
                 _boxes,
                 labels,
                 0.1,
             )
-
-            true_predictions = all_predictions[0]
-            true_boxes = all_boxes[0]
-            true_scores = all_scores[0]
 
             # show detail scores
             if self.debug_scores:

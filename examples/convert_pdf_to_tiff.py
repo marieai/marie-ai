@@ -36,7 +36,7 @@ def process_image(img_path):
     kwa = {}
     results = executor.extract(docs, **kwa)
     print(results)
-    store_json_object(results, f"/tmp/pdf_2_tif/json/{name}.json")
+    # store_json_object(results, f"/tmp/pdf_2_tif/json/{name}.json")
     return results
 
 
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     ensure_exists("/tmp/pdf_2_tif")
 
     # process_dir_pdf("/home/gbugaj/tmp/corr-routing/finished/V20_LARGE")
-
     # process_dir("/opt/shares/_hold/ENSEMBLE/SAMPLE/PRODUCTION/PDF")
     # process_dir_ner("/tmp/pdf_2_tif")
-    process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
+    # process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
+    process_image("/home/gbugaj/tmp/PID_1925_9289_0_157186264.png")
