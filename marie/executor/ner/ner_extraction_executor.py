@@ -33,7 +33,7 @@ from marie.utils.docs import (
     convert_frames,
     array_from_docs,
 )
-from marie.utils.image_utils import hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast, hash_file
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
@@ -248,6 +248,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
             logger.info(f"Partition indices: {len(partition_indices)}")
 
             width, height = image.size
+
             # Encode the image
             encoding = processor(
                 # fmt: off
@@ -256,7 +257,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 boxes=boxes,
                 truncation=True,
                 return_offsets_mapping=True,
-                # return_overflowing_tokens=True,
                 padding="max_length",
                 return_tensors="pt",
                 max_length=512,
@@ -265,20 +265,19 @@ class NerExtractionExecutor(Executor, StorageMixin):
             )
 
             offset_mapping = encoding.pop("offset_mapping")
-            # overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping') # return_overflowing_tokens=True
 
             print("shape of encoding after")
             for k, v in encoding.items():
                 print(k, v.shape)
 
             # Debug tensor info
+            self.debug_visuals = True
             if self.debug_visuals:
-                # img_tensor = encoded_inputs["image"] # v2
                 img_tensor = encoding["pixel_values"]
                 img = Image.fromarray(
                     (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
                 )
-                # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
+                img.save(f"/tmp/tensors/tensor.png")
 
             # ensure proper device placement
             for ek, ev in encoding.items():
@@ -310,26 +309,25 @@ class NerExtractionExecutor(Executor, StorageMixin):
             print(predictions)
             print("token_boxes")
             print(token_boxes)
+
             # Only keep non-subword predictions
             is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
             true_predictions = [
                 id2label[pred]
                 for idx, pred in enumerate(predictions)
-                # if not is_subword[idx]
+                if not is_subword[idx]
             ]
-
-            print(f"true_predictions : {len(true_predictions)}")
 
             true_boxes = [
                 unnormalize_box(box, width, height)
                 for idx, box in enumerate(token_boxes)
-                #   if not is_subword[idx]
+                if not is_subword[idx]
             ]
 
             true_scores = [
                 round(normalized_logits[idx][val], 6)
                 for idx, val in enumerate(predictions)
-                # if not is_subword[idx]
+                if not is_subword[idx]
             ]
 
             assert len(true_predictions) == len(true_boxes) == len(true_scores)
