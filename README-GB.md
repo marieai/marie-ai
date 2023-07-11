@@ -457,6 +457,15 @@ https://www.educative.io/answers/what-is-the-least-connections-load-balancing-te
 https://github.com/Ritvik19/Implemented-Data-Science/blob/main/LayoutLMv2-Document-Classification.ipynb
 https://github.com/ahmedrasheed3995/DocumentClassification
 https://www.mlexpert.io/machine-learning/tutorials/document-classification-with-layoutlmv3#easyocr
+https://github.com/AjaxMultiCommentary/ajmc/blob/0389fc6cd53514d4c988baafe2831e0623a03b37/ajmc/olr/layoutlm/layoutlm.py#L20
+
+### LayoutLMV3 - ONNX 
+https://github.com/fioresxcat/VAT_245/tree/fa526ac7e2ce9bb392ca66bd86305d69caee7a86
+
+# Table Transformer and Table Detection
+https://github.com/NielsRogge/Transformers-Tutorials/blob/master/Table%20Transformer/Using_Table_Transformer_for_table_detection_and_table_structure_recognition.ipynb
+
 
 
 https://cloud.google.com/document-ai
+

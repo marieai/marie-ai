@@ -1159,6 +1159,11 @@ def __rescale_annotate_frames(
 
 
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
+
+    if True:
+        print("Skipping rescale_annotate_frames")
+        return
+
     ann_dir = os.path.join(src_dir, "annotations")
     img_dir = os.path.join(src_dir, "images")
 
