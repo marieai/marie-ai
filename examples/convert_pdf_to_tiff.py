@@ -21,7 +21,7 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
-executor = None  # NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
+executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
 
 
@@ -72,7 +72,8 @@ def process_dir_pdf(image_dir: str):
 if __name__ == "__main__":
     ensure_exists("/tmp/pdf_2_tif")
 
-    process_dir_pdf("/home/gbugaj/tmp/corr-routing/finished/V20_LARGE")
+    # process_dir_pdf("/home/gbugaj/tmp/corr-routing/finished/V20_LARGE")
 
     # process_dir("/opt/shares/_hold/ENSEMBLE/SAMPLE/PRODUCTION/PDF")
     # process_dir_ner("/tmp/pdf_2_tif")
+    process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
