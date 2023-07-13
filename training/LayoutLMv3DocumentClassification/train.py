@@ -309,7 +309,7 @@ def inference():
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=4-step=10020-val_loss=0.1633.ckpt.dir"
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=7-step=13026-val_loss=0.1810.ckpt.dir"
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt.dir"
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_5/checkpoints/epoch=5-step=10688-val_loss=0.1514.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_8/checkpoints/epoch=11-step=23523-val_loss=0.1027.ckpt.dir"
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
     train_data, test_data, valid_data = create_split_data(data)
@@ -348,8 +348,8 @@ def inference():
         true_labels.append(label)
         pred_labels.append(predicted_label)
 
-        if len(true_labels) > 5000:
-            break
+        # if len(true_labels) > 5000:
+        #     break
 
     print("Classification report")
     print(labels)

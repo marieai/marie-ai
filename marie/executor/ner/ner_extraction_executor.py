@@ -244,10 +244,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
         offset_mapping_batched = encoding.pop("offset_mapping")
         overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping')
-        encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
-
-        for k, v in encoding.items():
-            print(k, v.shape)
+        # encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
 
         # Debug tensor info
         self.debug_visuals = True
@@ -259,8 +256,13 @@ class NerExtractionExecutor(Executor, StorageMixin):
             img.save(f"/tmp/tensors/tensor.png")
 
         # ensure proper device placement
-        for ek, ev in encoding.items():
-            encoding[ek] = ev.to(device)
+        for k in encoding.keys():
+            if k != "pixel_values":
+                encoding[k] = encoding[k].to(device)
+            else:
+                encoding[k] = torch.cat([x.unsqueeze(0) for x in encoding[k]]).to(
+                    device
+                )
 
         # Perform forward pass
         with torch.inference_mode():
@@ -347,6 +349,11 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 out_prediction.extend(true_predictions)
                 out_boxes.extend(true_boxes)
                 out_scores.extend(true_scores)
+
+        # everything should be labeled
+        # print(f"NER: {len(words)}")
+        # print(f"PRED: {len(out_prediction)}")
+        # assert len(out_prediction) == len(words)
 
         return out_prediction, out_boxes, out_scores
 
