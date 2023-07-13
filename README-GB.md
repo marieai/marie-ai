@@ -352,14 +352,14 @@ https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/i
 https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
 
 
-GOOD CODE REFERENCES:
+## GOOD CODE REFERENCES:
 RAY https://github.com/ray-project/ray
-HAYSTACK https://github.com/deepset-ai/haystack/tree/main
+HAYSTACK https://github.com/deepset-ai/haystack/tree/main   
+docile   : https://github.com/rossumai/docile/blob/ffc139e8e37505121c4b49243011ceed18653650/baselines/NER/docile_inference_NER_multilabel_layoutLMv3.py
 QURATOR https://github.com/qurator-spk/eynollah
 DAGSTER dagster
 
 https://hevodata.com/signup/?step=email
-
 
 
 https://www.marktechpost.com/2022/11/01/a-new-mlops-system-called-alaas-active-learning-as-a-service-adopts-the-philosophy-of-machine-learning-as-service-and-implements-a-server-client-architecture/
