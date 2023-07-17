@@ -1,5 +1,4 @@
 import argparse
-import concurrent.futures
 import distutils.util
 import glob
 import hashlib
@@ -11,23 +10,18 @@ import multiprocessing as mp
 import os
 import random
 import shutil
-import string
 import sys
 import time
-import uuid
-from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
 from multiprocessing import Pool
 # import rstr
 import cv2
 import numpy as np
 from faker import Faker
-from faker.providers import BaseProvider
 from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
-from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.line_processor import find_line_number
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 from marie.numpyencoder import NumpyEncoder
@@ -245,7 +239,7 @@ def extract_icr(image, label:str, boxp, icrp, debug_fragments: bool = False):
     m.update(msg_bytes)
     checksum = m.hexdigest()
 
-    ensure_exists(f"{_tmp_path}/icr")
+    ensure_exists(f"{_tmp_path}/icr/{checksum}/")
     print(f"checksum = {checksum}")
     json_file = f"{_tmp_path}/icr/{checksum}/{checksum}.json"
 
@@ -255,13 +249,15 @@ def extract_icr(image, label:str, boxp, icrp, debug_fragments: bool = False):
         json_data = from_json_file(json_file)
         return json_data["boxes"], json_data["result"]
 
-    # TODO: Model needs to be trained to Extract sub-boxes from snippets
-    # # Extract sub-boxes
     key = checksum
-    # boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
-    #     key, "field", image, PSMode.SPARSE)
     # NOTE: For now we assume there are no internal boxes to be discovered
     boxes, img_fragments, lines = [], [], [1]
+    # TODO: Model needs to be trained to Extract sub-boxes from snippets
+    # # Extract sub-boxes
+    # if label == "other":
+    #     boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
+    #         key, "field", image, PSMode.SPARSE)
+
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
@@ -276,8 +272,11 @@ def extract_icr(image, label:str, boxp, icrp, debug_fragments: bool = False):
         img_fragments = [image]
         lines = [1]
 
-    result, overlay_image = icrp.recognize(
-        key, label, image, boxes, img_fragments, lines)
+    result = {"words": []}
+    if label != "other": # NOTE: 'other' Box is the entire document. Currently no need to parse it.
+        result, overlay_image = icrp.recognize(
+            key, label, image, boxes, img_fragments, lines)
+
 
     data = {"boxes": boxes, "result": result}
     with open(json_file, "w") as f:
@@ -647,7 +646,7 @@ def __augment_decorated_process(
             }
     """
 
-    Faker.seed(0)
+    # Faker.seed(0)
 
     filename = file_path.split("/")[-1].split(".")[0]
     prefixes = mask_config['prefixes']
@@ -746,101 +745,8 @@ def __augment_decorated_process(
         del draw
 
 
-def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str, font_dir: str):
+def augment_decorated_annotation(count: int, src_dir: str, dest_dir: str, font_dir: str, mask_config: dict):
 
-    mask_config = {
-        'prefixes': ['r.', 'd.', 's.', 'g.'],  # Implicit location of field on the image
-        'fonts': [font for font in os.listdir(font_dir) if font[-3:] in ("ttf", "otf")],
-        'masks_by_type': {
-            'address': ['address', ],
-            'money': [
-                'allowed_amount_answer',
-                'allowed_amount_total_answer',
-                'billed_amount_answer',
-                'billed_amount_total_answer',
-                'check_amount_answer',
-                'check_number_answer',
-                'cob_answer',
-                'cob_total_answer',
-                'coinsurance_answer',
-                'coinsurance_total_answer',
-                'copay_answer',
-                'copay_total_answer',
-                'deductible_answer',
-                'deductible_total_answer',
-                'disallowed_answer',
-                'disallowed_total_answer',
-                'discount_answer',
-                'discount_total_answer',
-                'drg_amount_answer',
-                'drg_amount_total_answer',
-                "higher_allowable_answer",
-                'ineligible_amount_member_answer',
-                'interest_answer',
-                'interest_total_answer',
-                'medicare_allowed_answer',
-                'medicare_paid_answer',
-                'mem_liability_answer',
-                'mem_liabilty_total_answer',
-                'money',
-                'money_answer',
-                'other_adjustment_answer',
-                'over_rnc_answer',
-                'over_rnc_total_answer',
-                'overpayments_recovery_answer',
-                'paid_amount_answer',
-                'paid_amount_total_answer',
-                'partial_denial_answer',
-                'patient_responsibility_answer',
-                'patient_responsibility_total_answer',
-                'plan_coverage_answer',
-                'prepaid_answer',
-                'prepaid_total_answer',
-                'total',
-                'withholding_answer',
-                'withholding_total_answer',
-                'writeoff_answer',
-                'writeoff_total_answer',
-            ],
-            'name': [
-                "member_name_answer",
-                "patient_name_answer",
-                "provider_answer",
-            ],
-            'date': [
-                "check_date_answer",
-                "begin_date_of_service_answer",  # NOTE: potentially a Short date
-                "end_date_of_service_answer",
-                "birthdate_answer",
-                "date",
-                "letter_date",
-            ],
-            'alpha-numeric': [
-                # Just numeric
-                "claim_number_answer",
-                "document_control_number",
-                "member_number_answer",
-                "patient_account_number_answer",
-                "line_number_answer",
-                "quantity_answer",
-                "tooth_number_answer",
-                # could be Alpha, Numeric, or Alpha-numeric
-                "remark_code_answer",
-                "code_answer",
-                "code_modifier_answer",
-                "procedure_code_answer",
-                "remark_code_answer",
-                "mem_liability_code_answer",
-                "non-chargeable_amount_code_answer",
-                "payment_code_answer",
-                "procedure_code_answer",
-                "procedure_code_modifier_answer",
-                "remark_code_answer",
-                "revenue_code_answer",
-                "tooth_surface_answer",
-            ],
-        },
-    }
 
     ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
     img_dir = ensure_exists(os.path.join(src_dir, "images"))
@@ -1169,15 +1075,19 @@ def default_augment(args: object):
         if args.dir_output != "./augmented"
         else os.path.abspath(os.path.join(root_dir, f"{mode}-augmented"))
     )
-    # TODO: add font directory path to arg-parser and update README usage.
+
+    # load mask config file
+    mask_config = from_json_file(args.mask_config)
     font_dir = os.path.join(__root_dir__, "../assets/fonts")
+    if mask_config['font_dir'] != "DEFAULT":
+        font_dir = mask_config['font_dir']
 
     print(f"mode      = {mode}")
     print(f"aug_count = {aug_count}")
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
     print(f"font_dir  = {font_dir}")
-    augment_decorated_annotation(count=aug_count, src_dir=src_dir, dest_dir=dst_dir, font_dir=font_dir)
+    augment_decorated_annotation(aug_count, src_dir, dst_dir, font_dir, mask_config)
 
 
 def default_rescale(args: object):
@@ -1289,11 +1199,8 @@ def default_all_steps(args: object):
 
     # execute each step
     # default_convert(Namespace(**args_1))
-
     # default_decorate(Namespace(**args_2))
-
     default_augment(Namespace(**args_3))
-
     # default_rescale(Namespace(**args_4))
 
 
@@ -1540,6 +1447,14 @@ def extract_args(args=None) -> object:
         type=str,
         default='./config.json',
         help="Configuration file used for conversion",
+    )
+
+    convert_all_parser.add_argument(
+        "--mask_config",
+        required=True,
+        type=str,
+        default='./mask.json',
+        help="Configuration file used for augmentation",
     )
 
     try:
