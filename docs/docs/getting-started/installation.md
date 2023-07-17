@@ -110,7 +110,7 @@ If you wish to run and develop `Marie-AI` directly, install it from source:
 First install required build dependencies, if they are not present.
 
 ```shell
-sudo apt-get install libpq-dev python-dev-is-python3
+sudo apt-get install python-dev-is-python3 libpq-dev pk_config libjpeg-dev libcario2-dev libmagickwand-dev
 ```
 
 Install ONNX Runtime from source [https://onnxruntime.ai/docs/build/inferencing.html] :
