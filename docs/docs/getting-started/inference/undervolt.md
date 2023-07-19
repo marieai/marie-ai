@@ -51,7 +51,7 @@ Enabled persistence mode for GPU 00000000:04:00.0.
 ## Adjust GPU power limit
 
 ```shell
-sudo nvidia-smi -pl 400
+sudo nvidia-smi -pl 350
 ```
 
 ```text

@@ -305,6 +305,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
                 # Only keep non-subword predictions
                 is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+
                 true_predictions = [
                     id2label[pred]
                     for idx, pred in enumerate(predictions)
@@ -327,7 +328,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
                 assert len(true_predictions) == len(true_boxes) == len(true_scores)
 
-                # check if  token_boxes are same as the true_boxes and if so pick the one with highest score
+                # check if  token_boxes are same as the true_boxes and if so pick the one with the highest score
                 if batch_index > 0:
                     for idx, box in enumerate(out_boxes):
                         if box == [0, 0, 0, 0]:

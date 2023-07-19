@@ -1,0 +1,28 @@
+---
+- name: Marie-AI Cluster - GPU Undervolt
+  hosts: ml.cluster
+  gather_facts: false
+
+  tasks:
+  - name: Enable persistence mode
+    ansible.builtin.shell: |
+        sudo nvidia-smi -pm 1
+    register: out
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+
+  - name: Adjust GPU power limit
+    ansible.builtin.shell: |
+        sudo nvidia-smi -pl 350
+    register: out
+    become_method: sudo
+  - debug: var=out.stdout_lines
+
+
+  # - name: Adjust GPU clock speed
+  #   ansible.builtin.shell: |
+  #       sudo nvidia-smi -lgc 0,2100
+  #   register: out
+  #   become_method: sudo
+  # - debug: var=out.stdout_lines

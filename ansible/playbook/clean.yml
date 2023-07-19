@@ -1,0 +1,12 @@
+---
+- name: Marie-AI Cluster - Cleanup
+  hosts: ml.cluster
+  gather_facts: false
+
+  tasks:
+  - name: Truncate all docker logs
+    ansible.builtin.shell: |
+         sudo find /var/lib/docker/containers -name '*.log' -exec truncate -s0 {} \;
+    register: out
+    become_method: sudo
+  - debug: var=out.stdout_lines
