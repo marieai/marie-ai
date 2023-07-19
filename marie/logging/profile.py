@@ -281,12 +281,12 @@ class TimeContext:
     def _exit_msg(self):
         if self._logger:
             self._logger.info(
-                f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)'
+                f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
             )
         else:
             print(
                 colored(
-                    f'{self.task_name} takes {self.readable_duration} ({self.duration:.2f}s)'
+                    f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
                 ),
                 flush=True,
             )

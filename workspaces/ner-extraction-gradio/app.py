@@ -8,11 +8,8 @@ from marie.utils.image_utils import hash_file, hash_frames_fast
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner")
 executor = NerExtractionExecutor(
-    "/home/gbugaj/dev/marieai/marie-ai/model_zoo/rms/layoutlmv3-large-finetuned"
-)
-# executor = NerExtractionExecutor(
-#     "/mnt/data/models/layoutlmv3-large-stride/checkpoint-1000"
-# )
+    "/mnt/data/models/layoutlmv3-large-finetuned/checkpoint-10000"
+)  # Finetuned on 2021-09-30
 
 
 def process_image(image):
