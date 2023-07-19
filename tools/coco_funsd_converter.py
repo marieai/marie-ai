@@ -536,7 +536,6 @@ def generate_alpha_numeric(original: str, alpha: bool = True, numeric: bool = Tr
     return fake.password(length=len(original), digits=numeric, upper_case=alpha,
                          special_chars=False,  lower_case=False)
 
-
 def generate_text(original: str, mask_type: str) -> str:
     """Generate text for specific type of label"""
     if mask_type == "money":
@@ -554,6 +553,9 @@ def generate_text(original: str, mask_type: str) -> str:
         numeric = original.isnumeric()
         if not alpha and not numeric:
             alpha = numeric = True
+            if len(original) < 2:
+                alpha = np.random.choice([True, False])
+                numeric = not alpha
         return generate_alpha_numeric(original, alpha, numeric)
 
 
