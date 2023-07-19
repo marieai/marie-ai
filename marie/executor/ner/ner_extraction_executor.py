@@ -1,6 +1,7 @@
-import logging
 import os
-from math import ceil
+from typing import Any, List, Optional, Tuple, Union, Dict
+
+import os
 from typing import Any, List, Optional, Tuple, Union, Dict
 
 import numpy as np
@@ -10,6 +11,14 @@ from PIL import Image, ImageDraw
 
 # Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
 from docarray import DocumentArray, Document
+from transformers import (
+    AutoModelForTokenClassification,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3Processor,
+    LayoutLMv3TokenizerFast,
+)
+from transformers.utils import check_min_version
+
 from marie import Executor, requests, safely_encoded
 from marie.boxes import PSMode
 
@@ -28,25 +37,17 @@ from marie.executor.ner.utils import (
     visualize_prediction,
 )
 from marie.logging.logger import MarieLogger
-from marie.ocr import DefaultOcrEngine, OcrEngine, CoordinateFormat
+from marie.ocr import DefaultOcrEngine, CoordinateFormat
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
     convert_frames,
     array_from_docs,
 )
-from marie.utils.image_utils import hash_frames_fast, hash_file
+from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
-from torch.backends import cudnn
-from transformers import (
-    AutoModelForTokenClassification,
-    LayoutLMv3FeatureExtractor,
-    LayoutLMv3Processor,
-    LayoutLMv3TokenizerFast,
-)
-from transformers.utils import check_min_version
 
 check_min_version("4.5.0")
 
@@ -130,7 +131,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         # Method:2 Create Layout processor with custom future extractor
         # Max model size is 512, so we will need to handle any documents larger than that
         feature_extractor = LayoutLMv3FeatureExtractor(
-            apply_ocr=False, do_resize=True, resample=Image.LANCZOS
+            apply_ocr=False, do_resize=True, resample=Image.BILINEAR
         )
         tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
             "microsoft/layoutlmv3-large",
