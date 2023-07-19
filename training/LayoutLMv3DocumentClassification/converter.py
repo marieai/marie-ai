@@ -231,8 +231,13 @@ def extract_args(args=None) -> object:
 
 if __name__ == "__main__":
 
-    #  python converter.py rescale --dir ~/datasets/private/medical_page_classification/raw --dir-output ~/datasets/private/medical_page_classification/output/images
-    #  python converter.py decorate --dir ~/datasets/private/medical_page_classification/output/images --dir-output ~/datasets/private/medical_page_classification/output/annotations
+    #  Page classification dataset
+    #  python converter.py rescale --dir ~/datasets/private/data-hipa/medical_page_classification/raw --dir-output ~/datasets/private/data-hipa/medical_page_classification/output/images
+    #  python converter.py decorate --dir ~/datasets/private/data-hipa/medical_page_classification/output/images --dir-output ~/datasets/private/data-hipa/medical_page_classification/output/annotations
+
+    # Payer dataset
+    # python converter.py rescale --dir ~/datasets/private/data-hipa/payer/converted --dir-output ~/datasets/private/data-hipa/payer/output/images
+    # python converter.py decorate --dir ~/datasets/private/data-hipa/payer/output/images --dir-output ~/datasets/private/data-hipa/payer/output/annotations
 
     args = extract_args()
     print("-" * 120)

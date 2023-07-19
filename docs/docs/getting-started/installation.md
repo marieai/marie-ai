@@ -50,8 +50,20 @@ If you are experienced with PyTorch and have already installed it, just skip thi
 The following command will install PyTorch 2.0 with CUDA 11.8 support. 
 If you want to install PyTorch without CUDA support, you can remove the `cu118` part from the command.
 
+Install development version of PyTorch 2.0 with CUDA 11.8 support:
 ```shell
 pip3 install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+```
+
+Install stable version of PyTorch 2.0 with CUDA 11.8 support:
+```shell
+pip install --upgrade torch torchvision
+```
+
+If you have properly configuru CUDA, you can verify the installation by running the following command:
+
+```shell
+python3 -c "import torch; print(torch.__version__)"
 ```
 
 ##  Using a Python virtual environment
@@ -429,7 +441,52 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 
 ```
 
+###  PIL.Image.LINEAR no longer exists #5010 
+Manually update `detectron2`  to fix the issue.
+https://github.com/facebookresearch/detectron2/issues/5010
 
+
+### Cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_' 
+
+```shell
+cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_' (/home/greg/dev/marieai/marie-ai/venv/lib/python3.10/site-packages/urllib3/util/ssl_.py)
+```
+
+We need to downgrade `urllib3` to `<2.0.0` to fix the issue. For our case we need to downgrade to `1.26.7`
+
+```shell  
+pip install urllib3==1.26.7
+``` 
+You can verify the version with following command
+
+```shell
+pip show urllib3
+```
+
+### ModuleNotFoundError: No module named 'torch._six'
+[[BUG] No module named 'torch._six' #2845](https://github.com/microsoft/DeepSpeed/issues/2845]https://github.com/microsoft/DeepSpeed/issues/2845)
+
+```shell
+    from .. import utils as ds_utils
+  File "/home/greg/dev/marieai/marie-ai/venv/lib/python3.10/site-packages/deepspeed/runtime/utils.py", line 19, in <module>
+    from torch._six import inf
+ModuleNotFoundError: No module named 'torch._six'
+```
+
+```shell
+pip show deepspeed
+
+Name: deepspeed
+Version: 0.8.0
+```
+To resolve this upgrade `deepspeed` to `0.9.0` or higher.
+```shell
+pip install deepspeed --upgrade
+pip show deepspeed
+
+Name: deepspeed
+Version: 0.10.0
+```
 
 ### References
 [Docker overview](https://docs.docker.com/get-started/overview/)

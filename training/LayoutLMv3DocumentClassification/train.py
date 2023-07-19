@@ -32,6 +32,7 @@ from transformers import (
     AutoModel,
 )
 
+from marie.logging.profile import TimeContext
 from training.LayoutLMv3DocumentClassification.llmv3_dataset import (
     DocumentClassificationDataset,
     scale_bounding_box,
@@ -43,9 +44,7 @@ dataset_path = os.path.expanduser(
     "~/datasets/private/data-hipa/medical_page_classification/output/images"
 )
 
-dataset_pathXX = os.path.expanduser(
-    "~/datasets/private/medical_page_classification/output/images"
-)
+dataset_path = os.path.expanduser("~/datasets/private/data-hipa/payer/output/images")
 
 
 def load_data():
@@ -54,8 +53,11 @@ def load_data():
     df_images = []
 
     for label in sorted(os.listdir(dataset_path)):
+        items = os.listdir(os.path.join(dataset_path, label))
+        print(f"label: {label} >> {len(items)}")
+
         labels.append(label)
-        for image in os.listdir(os.path.join(dataset_path, label)):
+        for image in items:
             df_images.append(os.path.join(dataset_path, label, image))
             df_labels.append(label)
 
@@ -71,6 +73,8 @@ def load_data():
 
 
 model_name_or_path = "microsoft/layoutlmv3-base"
+
+
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
 
@@ -134,7 +138,7 @@ class ModelModule(pl.LightningModule):
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             num_labels=n_classes,
-            finetuning_task="document-classification",
+            finetuning_task="payer-classification",
             cache_dir="/mnt/data/cache",
             input_size=224,
             hidden_dropout_prob=0.1,
@@ -241,7 +245,8 @@ def train():
         model_module,
         train_data_loader,
         test_data_loader,
-        ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt",
+        # ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt",
+        # ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_10/checkpoints/epoch=14-step=2460-val_loss=0.9631.ckpt",
     )
 
 
@@ -304,12 +309,26 @@ def predict_document_image(
     )
 
 
+def infer_single_image(label, image_path, model, processor, device):
+    annotation_path = image_path.replace('images', 'annotations').replace(
+        '.png', '.json'
+    )
+    if not os.path.exists(annotation_path):
+        print(f"Missing annotation file for {annotation_path} for image {image_path}")
+        return -1, -1
+
+    return predict_document_image(image_path, model, processor, device)
+
+
 def inference():
     # load ckpt for inference
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=4-step=10020-val_loss=0.1633.ckpt.dir"
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=7-step=13026-val_loss=0.1810.ckpt.dir"
     model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt.dir"
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_5/checkpoints/epoch=5-step=10688-val_loss=0.1514.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_8/checkpoints/epoch=11-step=23523-val_loss=0.1027.ckpt.dir"
+
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_16/checkpoints/epoch=32-step=5181-val_loss=0.6300.ckpt.dir"
+
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
     train_data, test_data, valid_data = create_split_data(data)
@@ -317,39 +336,63 @@ def inference():
     # load model
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     # device = "cpu"
+
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
     )
     model = model.eval().to(device)
 
+    # With compile :
+    #  Inference time modes :
+    #  reduce-overhead : Inference time  takes 54 seconds (54.157s)
+    #  default         : Inference time takes 51 seconds (51.553s)
+    #  max-autotune    : Inference time takes 56 seconds (56.915s)
+    # mode :onnxrt Inference time takes 49 seconds (49.465s)
+
+    # Without compile :
+    #   Inference time  takes 1 minute and 1 second (61.28s)
+
+    print(torch._dynamo.list_backends())
+
+    if True:
+        try:
+            with TimeContext("Compile model"):
+                import torchvision.models as models
+                import torch._dynamo as dynamo
+
+                torch._dynamo.config.verbose = True
+                torch.backends.cudnn.benchmark = True
+                model = torch.compile(model, backend="inductor", mode="max-autotune")
+                # model = torch.compile(model, backend="onnxrt", fullgraph=False)
+                # model = torch.compile(model)
+                print("Model compiled set")
+        except Exception as err:
+            print(f"Model compile not supported: {err}")
+
     print(model.config.id2label)
     true_labels = []
     pred_labels = []
 
-    for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
-        label, image_path = df
-        annotation_path = image_path.replace('images', 'annotations').replace(
-            '.png', '.json'
-        )
-        if not os.path.exists(annotation_path):
-            print(
-                f"Missing annotation file for {annotation_path} for image {image_path}"
-            )
-            continue
-
-        predicted_label, probabilities = predict_document_image(
-            image_path, model, processor, device
-        )
-
-        print(
-            f"Expected / predicted label: {label} , {predicted_label} with probabilities: {probabilities}"
-        )
-
-        true_labels.append(label)
-        pred_labels.append(predicted_label)
-
-        if len(true_labels) > 5000:
+    # forcing compilation of model
+    with TimeContext("Inference model compile"):
+        for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
+            label, image_path = df
+            infer_single_image(label, image_path, model, processor, device)
             break
+
+    with TimeContext("Inference time"):
+        for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
+            label, image_path = df
+            predicted_label, probabilities = infer_single_image(
+                label, image_path, model, processor, device
+            )
+
+            true_labels.append(label)
+            pred_labels.append(predicted_label)
+
+            print(
+                f"Expected / predicted label: {label} , {predicted_label} with probabilities: {probabilities}"
+            )
 
     print("Classification report")
     print(labels)
@@ -369,5 +412,7 @@ def inference():
 
 
 if __name__ == "__main__":
+    torch.set_float32_matmul_precision('high')
     # train()
+
     inference()
