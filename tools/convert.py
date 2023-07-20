@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import glob
 import distutils.util
@@ -204,7 +205,7 @@ def default_convert(args: object):
     convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
 
 
-def get_convert_subparser(subparsers=None) -> argparse.ArgumentParser:
+def get_convert_parser(subparsers=None) -> argparse.ArgumentParser:
     """
     Argument parser
 
@@ -280,7 +281,7 @@ def get_convert_subparser(subparsers=None) -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    args = get_convert_subparser().parse_args()
+    args = get_convert_parser().parse_args()
     print("-" * 120)
     print(args)
     print("-" * 120)

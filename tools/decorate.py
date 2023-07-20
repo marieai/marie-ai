@@ -275,11 +275,11 @@ def default_decorate(args: object):
     decorate_funsd(src_dir, debug_fragments=False)
 
 
-def get_decorate_subparser(subparsers=None) -> argparse.ArgumentParser:
+def get_decorate_parser(subparsers=None) -> argparse.ArgumentParser:
     """
     Argument parser
 
-    PYTHONPATH="$PWD" python convert.py --mode test --dir ~/datasets/CORR/output/dataset/
+    PYTHONPATH="$PWD" python decorate.py --mode test --dir ~/datasets/CORR/output/dataset/
 
     :param subparsers: If left None, a new ArgumentParser will be made. Otherwise pass the object generated from
                        argparse.ArgumentParser(...).add_subparsers(...) to add this as a subparser.
@@ -311,7 +311,7 @@ def get_decorate_subparser(subparsers=None) -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
-    args = get_decorate_subparser().parse_args()
+    args = get_decorate_parser().parse_args()
     logger = logging.getLogger(__name__)
     print("-" * 120)
     print(args)
