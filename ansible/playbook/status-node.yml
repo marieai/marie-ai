@@ -7,6 +7,15 @@
     stack_name: "dev"
 
   tasks:
+
+    - name: Install python docker
+      apt: name=python3-docker state=latest
+      register: out
+      become_user: root # we need to be root
+      become: yes
+      become_method: sudo
+    - debug: var=out.stdout_lines
+
     - name: Get infos on container
       docker_container_info:
         name: "marieai-{{ stack_name }}-server"
@@ -20,5 +29,4 @@
       debug:
         var: result.container.State.Running
       when: result.exists
-
 
