@@ -1,4 +1,6 @@
-import logging
+import os
+from typing import Any, List, Optional, Tuple, Union, Dict
+
 import os
 from typing import Any, List, Optional, Tuple, Union, Dict
 
@@ -9,6 +11,14 @@ from PIL import Image, ImageDraw
 
 # Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
 from docarray import DocumentArray, Document
+from transformers import (
+    AutoModelForTokenClassification,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3Processor,
+    LayoutLMv3TokenizerFast,
+)
+from transformers.utils import check_min_version
+
 from marie import Executor, requests, safely_encoded
 from marie.boxes import PSMode
 
@@ -27,7 +37,7 @@ from marie.executor.ner.utils import (
     visualize_prediction,
 )
 from marie.logging.logger import MarieLogger
-from marie.ocr import DefaultOcrEngine, OcrEngine, CoordinateFormat
+from marie.ocr import DefaultOcrEngine, CoordinateFormat
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
     convert_frames,
@@ -38,14 +48,6 @@ from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
-from torch.backends import cudnn
-from transformers import (
-    AutoModelForTokenClassification,
-    LayoutLMv3FeatureExtractor,
-    LayoutLMv3Processor,
-    LayoutLMv3TokenizerFast,
-)
-from transformers.utils import check_min_version
 
 check_min_version("4.5.0")
 
@@ -67,7 +69,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        # super(NerExtractionExecutor, self).__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -95,7 +96,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
             raise FileNotFoundError(
                 "Expected config 'marie.json' not found in model directory"
             )
-
+        self.logger.info(f"NER loading from : {config_path}")
         self.init_configuration = load_json_file(config_path)
 
         self.debug_visuals = self.init_configuration["debug"]["visualize"]["enabled"]
@@ -129,11 +130,14 @@ class NerExtractionExecutor(Executor, StorageMixin):
         """prepare for the model"""
         # Method:2 Create Layout processor with custom future extractor
         # Max model size is 512, so we will need to handle any documents larger than that
-        feature_extractor = LayoutLMv3FeatureExtractor(apply_ocr=False)
-        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
-            "microsoft/layoutlmv3-large"
-            # only_label_first_subword = True
+        feature_extractor = LayoutLMv3FeatureExtractor(
+            apply_ocr=False, do_resize=True, resample=Image.BILINEAR
         )
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
+            "microsoft/layoutlmv3-large",
+            only_label_first_subword=False,
+        )
+
         processor = LayoutLMv3Processor(
             feature_extractor=feature_extractor, tokenizer=tokenizer
         )
@@ -144,9 +148,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
         """
         Create token classification model
         """
-        labels, _, _ = self.get_label_info()
+        labels, id2label, label2id = self.get_label_info()
         model = AutoModelForTokenClassification.from_pretrained(
-            model_dir, num_labels=len(labels)
+            model_dir, num_labels=len(labels), label2id=label2id, id2label=id2label
         )
 
         model.eval()
@@ -211,14 +215,19 @@ class NerExtractionExecutor(Executor, StorageMixin):
         processor = self.processor
         device = self.device
         id2label = {v: k for v, k in enumerate(labels)}
+        labels, id2label, label2id = self.get_label_info()
+        # processor.tokenizer.only_label_first_subword = False
 
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ["TOKENIZERS_PARALLELISM"] = "true"
         logger.info(
             f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
         )
 
         width, height = image.size
-        # Encode the image
+        # partition the words and boxes into batches of 512 tokens with 128 stride
+        # stride is the number of tokens to move forward, this is to handle long documents that are larger than 512 tokens
+        # there will be overlap between the batches, so we will need to handle that later
+
         encoding = processor(
             # fmt: off
             image,
@@ -226,70 +235,129 @@ class NerExtractionExecutor(Executor, StorageMixin):
             boxes=boxes,
             truncation=True,
             return_offsets_mapping=True,
+            return_overflowing_tokens=True,
+            stride=128,
             padding="max_length",
-            return_tensors="pt"
+            return_tensors="pt",
+            max_length=512,
             # fmt: on
         )
-        offset_mapping = encoding.pop("offset_mapping")
+
+        offset_mapping_batched = encoding.pop("offset_mapping")
+        overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping')
+        # encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
 
         # Debug tensor info
+        self.debug_visuals = True
         if self.debug_visuals:
-            # img_tensor = encoded_inputs["image"] # v2
-            img_tensor = encoding["pixel_values"]  # v3
+            img_tensor = encoding["pixel_values"]
             img = Image.fromarray(
                 (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
             )
-            # img.save(f"/tmp/tensors/tensor_{file_hash}_{frame_idx}.png")
+            img.save(f"/tmp/tensors/tensor.png")
 
         # ensure proper device placement
-        for ek, ev in encoding.items():
-            encoding[ek] = ev.to(device)
+        for k in encoding.keys():
+            if k != "pixel_values":
+                encoding[k] = encoding[k].to(device)
+            else:
+                encoding[k] = torch.cat([x.unsqueeze(0) for x in encoding[k]]).to(
+                    device
+                )
 
         # Perform forward pass
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model(**encoding)
             # Get the predictions and probabilities
             probs = (
                 nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
             )
-            _predictions = outputs.logits.argmax(-1).squeeze().tolist()
-            _token_boxes = encoding.bbox.squeeze().tolist()
-            normalized_logits = outputs.logits.softmax(dim=-1).squeeze().tolist()
 
-        # TODO : Filer the results
-        # Filter the predictions and bounding boxes based on a threshold
-        # predictions = _filter(_predictions, probs, threshold)
-        # token_boxes = _filter(_token_boxes, probs, threshold)
-        predictions = _predictions
-        token_boxes = _token_boxes
+            # The model outputs logits of shape (batch_size, seq_len, num_labels).
+            logits = outputs.logits
+            batch_size, seq_len, num_labels = logits.shape
 
-        # Only keep non-subword predictions
-        is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
-        true_predictions = [
-            id2label[pred]
-            for idx, pred in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+            # Get the predictions and bounding boxes by batch and convert to list
+            predictions_batched = logits.argmax(-1).squeeze().tolist()
+            token_boxes_batched = encoding.bbox.squeeze().tolist()
+            normalized_logits_batched = (
+                outputs.logits.softmax(dim=-1).squeeze().tolist()
+            )
 
-        true_boxes = [
-            unnormalize_box(box, width, height)
-            for idx, box in enumerate(token_boxes)
-            if not is_subword[idx]
-        ]
+            # If batch size is 1, convert to list
+            if batch_size == 1:
+                predictions_batched = [predictions_batched]
+                token_boxes_batched = [token_boxes_batched]
+                normalized_logits_batched = [normalized_logits_batched]
 
-        true_scores = [
-            round(normalized_logits[idx][val], 6)
-            for idx, val in enumerate(predictions)
-            if not is_subword[idx]
-        ]
+            out_prediction = []
+            out_boxes = []
+            out_scores = []
 
-        assert len(true_predictions) == len(true_boxes) == len(true_scores)
+            for batch_index in range(batch_size):
+                # Get the predictions and bounding boxes for the current batch
+                predictions = predictions_batched[batch_index]
+                token_boxes = token_boxes_batched[batch_index]
+                normalized_logits = normalized_logits_batched[batch_index]
+                offset_mapping = offset_mapping_batched[batch_index]
 
-        predictions = [true_predictions]
-        boxes = [true_boxes]
-        scores = [true_scores]
+                # TODO : Filer the results
+                # Filter the predictions and bounding boxes based on a threshold
+                # predictions = _filter(_predictions, probs, threshold)
+                # token_boxes = _filter(_token_boxes, probs, threshold)
 
-        return predictions, boxes, scores
+                # Only keep non-subword predictions
+                is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+
+                true_predictions = [
+                    id2label[pred]
+                    for idx, pred in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
+
+                true_boxes = [
+                    unnormalize_box(box, width, height)
+                    for idx, box in enumerate(token_boxes)
+                    if not is_subword[idx]
+                ]
+                # convert boxes from float to int
+                true_boxes = [[int(b) for b in box] for box in true_boxes]
+
+                true_scores = [
+                    round(normalized_logits[idx][val], 6)
+                    for idx, val in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
+
+                assert len(true_predictions) == len(true_boxes) == len(true_scores)
+
+                # check if  token_boxes are same as the true_boxes and if so pick the one with the highest score
+                if batch_index > 0:
+                    for idx, box in enumerate(out_boxes):
+                        if box == [0, 0, 0, 0]:
+                            continue
+                        # check if box is in last_boxes
+                        if box in true_boxes:
+                            current_idx = true_boxes.index(box)
+                            if true_scores[current_idx] > out_scores[idx]:
+                                out_prediction[idx] = true_predictions[current_idx]
+                                out_scores[idx] = true_scores[current_idx]
+                            elif true_scores[current_idx] < out_scores[idx]:
+                                # remove the box from true_boxes
+                                true_predictions.pop(current_idx)
+                                true_boxes.pop(current_idx)
+                                true_scores.pop(current_idx)
+
+                out_prediction.extend(true_predictions)
+                out_boxes.extend(true_boxes)
+                out_scores.extend(true_scores)
+
+        # everything should be labeled
+        # print(f"NER: {len(words)}")
+        # print(f"PRED: {len(out_prediction)}")
+        # assert len(out_prediction) == len(words)
+
+        return out_prediction, out_boxes, out_scores
 
     def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
@@ -675,7 +743,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         :return:
         """
 
-        if frames is None:
+        if frames is None or len(frames) == 0:
             self.logger.warning(f"Frames are empty")
             return
 
@@ -720,6 +788,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
         if "error" in ocr_results:
             return False, frames, [], [], ocr_results, file_hash
 
+        self.debug_visuals = True
+        self.debug_visuals_icr = True
+
         if self.debug_visuals and self.debug_visuals_icr:
             visualize_icr(frames, ocr_results, file_hash)
 
@@ -739,11 +810,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 boxes[k].append(
                     normalize_bbox(word["box"], (image.size[0], image.size[1]))
                 )
-                # This is to prevent following error
-                # The expanded size of the tensor (516) must match the existing size (512) at non-singleton dimension 1.
-                if len(boxes[k]) == 512:
-                    print("Clipping MAX boxes at 512")
-                    break
             assert len(words[k]) == len(boxes[k])
         assert len(frames) == len(boxes) == len(words)
         return True, frames, boxes, words, ocr_results, file_hash
@@ -761,17 +827,13 @@ class NerExtractionExecutor(Executor, StorageMixin):
             width = _image.size[0]
             height = _image.size[1]
 
-            all_predictions, all_boxes, all_scores = self.inference(
+            true_predictions, true_boxes, true_scores = self.inference(
                 _image,
                 _words,
                 _boxes,
                 labels,
                 0.1,
             )
-
-            true_predictions = all_predictions[0]
-            true_boxes = all_boxes[0]
-            true_scores = all_scores[0]
 
             # show detail scores
             if self.debug_scores:

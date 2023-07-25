@@ -2,11 +2,13 @@ import base64
 import os
 import sys
 import typing
+from typing import Optional, List, Dict, Any, Tuple
 
 import PIL
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
+from numpy import ndarray
 
 from marie.base_handler import BaseHandler
 from marie.logging.predefined import default_logger
@@ -55,9 +57,7 @@ class IcrProcessor(BaseHandler):
             return r["text"], r["confidence"]
         return None, 0
 
-    def recognize_from_boxes(
-        self, image, boxes, **kwargs
-    ) -> typing.List[typing.Dict[str, any]]:
+    def recognize_from_boxes(self, image, boxes, **kwargs) -> List[Dict[str, any]]:
         """Recognize text from image using lists of bounding boxes.
 
         Args:
@@ -76,17 +76,27 @@ class IcrProcessor(BaseHandler):
         """
         raise Exception("Not Implemented")
 
-    def recognize(self, _id, key, img: np.ndarray, boxes, fragments, lines):
-        """Recognize text from multiple images.
-        Args:
-            _id: Unique Image ID
-            key: Unique image key/region for the extraction
-            img: Image to run recognition against,
-            boxes: Boxes to recognize
-            fragments: Image fragments to extract, A pre-cropped image containing characters
-            lines: Lines associates with the image fragment / boxes
+    def recognize(
+        self,
+        _id,
+        key,
+        img: np.ndarray,
+        boxes,
+        fragments,
+        lines,
+        return_overlay: Optional[bool] = False,
+    ) -> tuple[Dict, Optional[ndarray]]:
         """
-
+        Recognize text from multiple images.
+        :param _id: Unique Image ID
+        :param key: Unique image key/region for the extraction
+        :param img: Image to run recognition against, this is the full image
+        :param boxes: Boxes to recognize
+        :param fragments: Image fragments to extract, A pre-cropped image containing characters
+        :param lines: Lines associates with the image fragment / boxes
+        :param return_overlay: Draw debug overlay and return it as numpy array
+        :return:
+        """
         logger.debug(f"ICR recognize : {_id}, {key}")
         if img is None:
             raise Exception("Input image can't be empty")
@@ -105,14 +115,14 @@ class IcrProcessor(BaseHandler):
             lines
         ), "You must provide the same number of lines as boxes."
         encode_fragments = False
-        draw_debug_overlay = True
+        # draw_debug_overlay = True
 
         try:
             shape = img.shape
             debug_dir = ensure_exists(os.path.join(self.work_dir, _id))
             debug_all_dir = ensure_exists(os.path.join(self.work_dir, "fields", key))
 
-            if draw_debug_overlay:
+            if return_overlay:
                 pil_overlay = Image.new(
                     "RGB", (img.shape[1], img.shape[0]), (255, 255, 255)
                 )
@@ -147,10 +157,13 @@ class IcrProcessor(BaseHandler):
                 fragment = fragments[index]
                 line = lines[index]
                 extraction = results[index]
-
                 txt_label = extraction["text"]
                 confidence = extraction["confidence"]
                 conf_label = round(confidence, 3)
+
+                if conf_label < 0.5:
+                    logger.warning(f"Low text confidence {conf_label} for {txt_label}")
+                    # continue
 
                 payload = {
                     "id": i,
@@ -164,7 +177,7 @@ class IcrProcessor(BaseHandler):
 
                 words.append(payload)
 
-                if draw_debug_overlay:
+                if return_overlay:
                     font_size = determine_font_size(box[3])
                     draw_overlay.text(
                         (box[0], box[1] + box[3] // 4),
@@ -179,13 +192,6 @@ class IcrProcessor(BaseHandler):
                         font=get_default_font(int(font_size)),
                         fill=(0, 0, 255),
                     )
-
-            if False:
-                savepath = os.path.join(debug_dir, f"{key}-icr-result.png")
-                cv2.imwrite(savepath, overlay_image)
-
-                savepath = os.path.join(debug_all_dir, f"{_id}.png")
-                cv2.imwrite(savepath, overlay_image)
 
             unique_line_ids = sorted(np.unique(lines))
             line_results = np.empty(len(unique_line_ids), dtype=object)
@@ -243,10 +249,10 @@ class IcrProcessor(BaseHandler):
                 )
         except Exception:
             raise
-
         # this OP is slow, so we only do it if we need to return the overlay image
-        overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
-        # overlay_image = None
-        logger.debug("Box extraction complete")
-
+        if return_overlay:
+            overlay_image = cv2.cvtColor(np.array(pil_overlay), cv2.COLOR_RGB2BGR)
+        else:
+            overlay_image = None
+        logger.debug("Textbox extraction complete")
         return result, overlay_image

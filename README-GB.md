@@ -352,14 +352,14 @@ https://github.com/UBIAI/layoutlmv3FineTuning/blob/master/Layoutlmv3_inference/i
 https://powerusers.microsoft.com/t5/AI-Builder/bd-p/AIBuilder
 
 
-GOOD CODE REFERENCES:
+## GOOD CODE REFERENCES:
 RAY https://github.com/ray-project/ray
-HAYSTACK https://github.com/deepset-ai/haystack/tree/main
+HAYSTACK https://github.com/deepset-ai/haystack/tree/main   
+docile   : https://github.com/rossumai/docile/blob/ffc139e8e37505121c4b49243011ceed18653650/baselines/NER/docile_inference_NER_multilabel_layoutLMv3.py
 QURATOR https://github.com/qurator-spk/eynollah
 DAGSTER dagster
 
 https://hevodata.com/signup/?step=email
-
 
 
 https://www.marktechpost.com/2022/11/01/a-new-mlops-system-called-alaas-active-learning-as-a-service-adopts-the-philosophy-of-machine-learning-as-service-and-implements-a-server-client-architecture/
@@ -452,3 +452,20 @@ https://github.com/autogluon/autogluon/
 
 # Load-balancer
 https://www.educative.io/answers/what-is-the-least-connections-load-balancing-technique
+
+# LayoutLMV3
+https://github.com/Ritvik19/Implemented-Data-Science/blob/main/LayoutLMv2-Document-Classification.ipynb
+https://github.com/ahmedrasheed3995/DocumentClassification
+https://www.mlexpert.io/machine-learning/tutorials/document-classification-with-layoutlmv3#easyocr
+https://github.com/AjaxMultiCommentary/ajmc/blob/0389fc6cd53514d4c988baafe2831e0623a03b37/ajmc/olr/layoutlm/layoutlm.py#L20
+
+### LayoutLMV3 - ONNX 
+https://github.com/fioresxcat/VAT_245/tree/fa526ac7e2ce9bb392ca66bd86305d69caee7a86
+
+# Table Transformer and Table Detection
+https://github.com/NielsRogge/Transformers-Tutorials/blob/master/Table%20Transformer/Using_Table_Transformer_for_table_detection_and_table_structure_recognition.ipynb
+
+
+
+https://cloud.google.com/document-ai
+

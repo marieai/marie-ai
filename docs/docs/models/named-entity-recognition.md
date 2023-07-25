@@ -324,7 +324,7 @@ model and make sure that everything is configured correctly.
 **usage**
 
 ```shell
-PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/dataset/private/corr-indexer  --config ~/dataset/private/corr-indexer/config.json --mask_config ~/dataset/private/corr-indexer/mask.json```
+PYTHONPATH="$PWD" python ./tools/coco_funsd_augmenter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/datasets/private/corr-indexer  --config ~/datasets/private/corr-indexer/config.json ```
 ```
 
 

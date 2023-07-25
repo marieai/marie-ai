@@ -47,13 +47,13 @@ class JobDetails(BaseModel):
     submission_id: Optional[str] = Field(
         None,
         description="A submission ID is an ID created for every job submitted via"
-        "the Ray Jobs API. It can "
+        "the Jobs API. It can "
         "be used to fetch data about jobs using the Ray Jobs API.",
     )
     driver_info: Optional[DriverInfo] = Field(
         None,
         description="The driver related to this job. For jobs submitted via "
-        "the Ray Jobs API, "
+        "the Jobs API, "
         "it is the last driver launched by that job submission, "
         "or None if there is no driver.",
     )

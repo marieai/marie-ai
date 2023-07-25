@@ -36,7 +36,7 @@ def process_image(img_path):
     kwa = {}
     results = executor.extract(docs, **kwa)
     print(results)
-    store_json_object(results, f"/tmp/pdf_2_tif/json/{name}.json")
+    # store_json_object(results, f"/tmp/pdf_2_tif/json/{name}.json")
     return results
 
 
@@ -61,7 +61,9 @@ def process_dir_pdf(image_dir: str):
             # read fraes from pdf
             frames = frames_from_file(img_path)
             print(len(frames))
-            merge_tiff_frames(frames, "/tmp/pdf_2_tif/{}.tif".format(name))
+            merge_tiff_frames(
+                frames, "/home/gbugaj/tmp/corr-routing/finished/V20/{}.tif".format(name)
+            )
         except Exception as e:
             print(e)
             # raise e
@@ -69,6 +71,9 @@ def process_dir_pdf(image_dir: str):
 
 if __name__ == "__main__":
     ensure_exists("/tmp/pdf_2_tif")
-    ensure_exists("/tmp/pdf_2_tif/ner")
+
+    # process_dir_pdf("/home/gbugaj/tmp/corr-routing/finished/V20_LARGE")
     # process_dir("/opt/shares/_hold/ENSEMBLE/SAMPLE/PRODUCTION/PDF")
-    process_dir_ner("/tmp/pdf_2_tif")
+    # process_dir_ner("/tmp/pdf_2_tif")
+    # process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
+    process_image("/home/gbugaj/tmp/PID_1925_9289_0_157186264.png")

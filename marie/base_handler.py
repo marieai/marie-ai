@@ -1,6 +1,8 @@
 """
 Base default handler to load torchscript or eager mode [state_dict] models
 Also, provides handle method per torch serve custom model specification
+
+https://pytorch.org/docs/stable/profiler.html
 """
 
 import abc

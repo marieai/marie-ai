@@ -2,7 +2,7 @@ import argparse
 import copy
 import os
 import time
-from typing import Any, Tuple, Union
+from typing import Any, Tuple, Union, Optional
 
 import PIL
 import cv2
@@ -117,8 +117,9 @@ def lines_from_bboxes(image, bboxes):
     Returns:
         lines_bboxes: Bounding boxes for the lines in (x,y,w,h) format
     """
+    enable_visualization = True
 
-    if False:
+    if enable_visualization:
         viz_img = visualize_bboxes(image, bboxes)
         viz_img.save(
             os.path.join("/tmp/fragments", f"line_refiner_initial.png"), format="PNG"
@@ -129,13 +130,14 @@ def lines_from_bboxes(image, bboxes):
     for box in bboxes:
         x1, y1, x2, y2 = box.astype(np.int32)
         w = x2 - x1
-        h = (y2 - y1) // 2
-        y1_adj = y1 + h // 2
+        q = (y2 - y1) // 8
+        h = (y2 - y1) // 2 + q
+        y1_adj = y1 + h // 2 - q
         cv2.rectangle(overlay, (x1, y1_adj), (x1 + w, y1_adj + h), (0, 0, 0), -1)
 
     ret, link_score = cv2.threshold(overlay, 0, 255, cv2.THRESH_BINARY)
 
-    if False:
+    if enable_visualization:
         cv2.imwrite(os.path.join("/tmp/fragments", f"overlay_refiner-RAW.PNG"), overlay)
         cv2.imwrite(
             os.path.join("/tmp/fragments", f"overlay_refiner-link_score.PNG"),
@@ -143,8 +145,16 @@ def lines_from_bboxes(image, bboxes):
         )
 
     # Create structure element for extracting horizontal lines through morphology operations
+    # select the horizontal size based on the image width  3000 -> 160 1000 -> 80 500 -> 40
+
     cols = link_score.shape[1]
-    horizontal_size = cols // 30
+    half_cols = cols // 2
+    stride = cols // min(160, cols)
+    horizontal_size = stride if stride > 1 else half_cols
+
+    print(f"cols: {cols}")
+    print(f"half_cols: {half_cols}")
+    print(f"horizontal_size: {horizontal_size}")
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
@@ -152,7 +162,7 @@ def lines_from_bboxes(image, bboxes):
     horizontal = cv2.erode(horizontal, horizontal_struct)
     horizontal = cv2.dilate(horizontal, horizontal_struct)
 
-    if False:
+    if enable_visualization:
         cv2.imwrite("/tmp/fragments/horizontal.jpg", horizontal)
 
     if False:
@@ -183,13 +193,75 @@ def lines_from_bboxes(image, bboxes):
     # the format now will be in xywh
     lines_bboxes = line_merge(binary_mask, line_bboxes)
 
-    if False:
+    if enable_visualization:
         viz_img = visualize_bboxes(image, lines_bboxes, format="xywh")
         viz_img.save(
             os.path.join("/tmp/fragments", f"line_refiner-final.png"), format="PNG"
         )
 
     return lines_bboxes
+
+
+def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Crop given image to content and return new box with the offset.
+    No content is defined as first non background(white) pixel.
+
+    @param frame: the image frame to process
+    @param content_aware: if enabled we will apply more aggressive crop method
+    @return: the offset box in LTRB format (left, top, right, bottom) and cropped image.
+    """
+
+    start = time.time()
+    # conversion required, or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
+    # frame = np.random.choice([0, 255], size=(32, 32), p=[0.01, 0.99]).astype("uint8")
+    # Transform source image to gray if it is not already
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # with content aware we will apply more aggressive crop method to remove the background
+    # there is a trade off here, we will lose some content but we will also remove the background
+    if content_aware:
+        # apply division normalization to preprocess the image
+        blur = cv2.GaussianBlur(gray, (5, 5), sigmaX=0, sigmaY=0)
+        # divide
+        divide = cv2.divide(gray, blur, scale=255)
+        thresh = cv2.threshold(divide, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        #
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 3))
+        op_frame = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    else:
+        op_frame = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    indices = np.array(np.where(op_frame == [0]))
+    img_w = op_frame.shape[1]
+    img_h = op_frame.shape[0]
+
+    min_x_pad = 1
+    min_y_pad = 1
+    # cv2.imwrite("/tmp/fragments/crop_to_content_box.jpg", op_frame)
+    if len(indices[0]) == 0:
+        # no content found, return the whole image
+        return [0, 0, 0, 0], frame
+
+    # indices are in y,X format
+    if content_aware:
+        x = max(0, indices[1].min() - min_x_pad)
+        y = max(0, indices[0].min() - min_y_pad)
+        h = min(img_h, indices[0].max() - y + min_y_pad)
+        w = min(img_w, indices[1].max() - x + min_x_pad)
+    else:
+        x = indices[1].min()
+        y = indices[0].min()
+        h = indices[0].max() - y
+        w = indices[1].max() - x
+
+    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
+    dt = time.time() - start
+    # create offset box in LTRB format (left, top, right, bottom) from XYWH format
+    offset = [x, y, img_w - w, img_h - h]
+    # print("crop_to_content_box took {}s".format(dt))
+    # print("offset box: {}".format(offset))
+    return offset, cropped
 
 
 class BoxProcessorUlimDit(BoxProcessor):
@@ -228,7 +300,11 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
-    def psm_sparse(self, image: np.ndarray):
+    def psm_sparse(self, image: np.ndarray,
+                   bbox_optimization: Optional[bool] = False,
+                   bbox_context_aware: Optional[bool] = True,
+                   enable_visualization: Optional[bool] = False,
+                   ):
         try:
             self.logger.debug(f"Starting box predictions")
             predictions = self.predictor(image)
@@ -270,13 +346,48 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             len_b = len(bboxes)
             if len_a != len_b:
-                self.logger.debug(f"Removed predicted boxes that did not meet size minimum requirements: {len_a - len_b}")
+                self.logger.debug(
+                    f"Removed predicted boxes that did not meet size minimum requirements: {len_a - len_b}")
             if len_b == 0:
                 self.logger.debug(f"No boxes found within requirements")
                 return [], [], [], [], []
-              
+
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
+
+            if bbox_optimization:
+                # extract snippets from the image
+                for i, box in enumerate(bboxes):
+                    box = np.array(box).astype(np.int32)
+                    x0, y0, x1, y1 = box
+                    w = x1 - x0
+                    h = y1 - y0
+                    snippet = image[y0: y0 + h, x0: x0 + w:]
+                    offset, cropped = crop_to_content_box(snippet, content_aware=bbox_context_aware)
+                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}.png", snippet)
+                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}_cropped.png", cropped)
+                    adj_box = [box[0] + offset[0], box[1] + offset[1], box[2] - (offset[2] - offset[0]),
+                               box[3] - (offset[3] - offset[1])]
+
+                    # print(f"Snippet {i} : {box} -> {offset} -> {adj_box}")
+                    bboxes[i] = adj_box
+
+            # FIXME : This is a hack
+            # TODO : Update the model to correctly predict the orientation of the text and assign the correct class
+            # remove vertical boxes
+            bb = []
+            for box in bboxes:
+                h = box[2] - box[0]
+                w = box[3] - box[1]
+                rat = w / h
+                if rat < 2.5:
+                    bb.append(box)
+
+            bboxes = np.array(bb)
+
+            if len(bboxes) == 0:
+                self.logger.debug(f"No boxes predicted.")
+                return [], [], [], [], []
 
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
@@ -303,7 +414,9 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def extract_bounding_boxes(
-            self, _id, key, img, psm=PSMode.SPARSE
+            self, _id, key, img, psm=PSMode.SPARSE,
+            bbox_optimization: Optional[bool] = False,
+            bbox_context_aware: Optional[bool] = True,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -327,7 +440,8 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
-                bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(image)
+                bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(image, bbox_optimization,
+                                                                               bbox_context_aware)
             # elif psm == PSMode.WORD:
             #     bboxes, polys, scores, lines_bboxes, classes = self.psm_word(image_norm)
             elif psm == PSMode.LINE:

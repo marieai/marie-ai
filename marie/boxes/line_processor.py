@@ -1,14 +1,15 @@
 from __future__ import print_function
 
+import copy
 import os
-from typing import Any, List
+from typing import Any, List, Optional
 
 import cv2
 import numpy as np
 
 from marie.utils.overlap import find_overlap_vertical
 
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
 
 
 def find_line_number(lines, box):
@@ -31,7 +32,7 @@ def find_line_number(lines, box):
                 line_number = index + 1
 
     if line_number == -1:
-        default_logger.info(
+        logger.info(
             f"Invalid line number : -1, this looks like a bug/vertical line : {box}"
         )
         min_y = 100000
@@ -42,7 +43,7 @@ def find_line_number(lines, box):
             if dy < min_y:
                 line_number = i + 1
                 min_y = dy
-        default_logger.info(f"Adjusted closest line_number = {line_number}")
+        logger.info(f"Adjusted closest line_number = {line_number}")
     return line_number
 
 
@@ -55,44 +56,37 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
     idxs = np.argsort(y1)
     bboxes = bboxes[idxs]
     lines = []
-    visited = [False for k in range(0, len(bboxes))]
+    visited = [False for _ in range(0, len(bboxes))]
 
     for idx in range(0, len(bboxes)):
         if visited[idx]:
             continue
         visited[idx] = True
         box = bboxes[idx]
+        x, y, w, h = box
         overlaps, indexes, scores = find_overlap_vertical(box, bboxes)
-        # default_logger.debug(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
+        # logger.debug(f" ***   {box}  -> : {len(overlaps)} ::: {overlaps} , {scores} , {indexes}")
 
         # now we check each overlap against each other
         # for each item that overlaps our box check to make sure that the ray back is valid
         exp_count = len(overlaps)
         idx_to_merge = [idx]
 
+        idx_to_remove = []
         for k, (overlap, index, score) in enumerate(zip(overlaps, indexes, scores)):
             if visited[index] or score < min_iou:
                 continue
+            # check if we have candidates that are overlapping the source
             bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes)
+
+            # if source is overlapping the candidate and the candidate is overlapping the source
             if len(bi_overlaps) == exp_count:
                 idx_to_merge.append(index)
                 visited[index] = True
-                s_h = box[3]
-                # check if we have candidates that are fully overlapping the source
-                if False:
-                    for m, (bi_overlap, bi_index, bi_score) in enumerate(
-                        zip(bi_overlaps, bi_indexes, bi_scores)
-                    ):
-                        c_h = bboxes[bi_index][3]
-                        if c_h < s_h:
-                            default_logger.debug(
-                                f"REMOVE : {bboxes[index]} :: {bboxes[bi_index]}"
-                            )
-                        # print(f"\t\t\t\t{k} -> {s_h}   === {c_h} ")
+
         lines.append(idx_to_merge)
 
     lines_bboxes = []
-
     for i, indexes in enumerate(lines):
         overlaps = bboxes[indexes]
         min_x = overlaps[:, 0].min()
@@ -115,19 +109,30 @@ def line_merge(image, bboxes) -> List[Any]:
         _h = 0
         _w = 0
 
-    iou_scores = [0.6, 0.5, 0.4, 0.3]
-    # iou_scores = [0.6, 0.6, 0.5, 0.35]
-    merged_bboxes = bboxes
+    enable_visualization = True
+    iou_scores = [0.8, 0.7, 0.6, 0.5, 0.4, 0.37, 0.35]
+    no_change_count = 0
+    min_change_count = 2
+
+    merged_bboxes = copy.deepcopy(bboxes)
     for i in range(0, len(iou_scores)):
         # overlay = copy.deepcopy(image)
+        size_before_merge = len(merged_bboxes)
         merged_bboxes = __line_merge(image, merged_bboxes, iou_scores[i])
-        if False:
+        size_after_merge = len(merged_bboxes)
+        if size_before_merge == size_after_merge:
+            no_change_count += 1
+            if no_change_count > min_change_count:
+                logger.debug(f"NO CHANGE : {iou_scores[i]}")
+                break
+
+        if enable_visualization:
             overlay = np.ones((_h, _w, 3), dtype=np.uint8) * 255
             for box in merged_bboxes:
                 x, y, w, h = box
-                color = (255, 0, 0)  # list(np.random.random(size=3) * 256)
                 color = list(np.random.random(size=3) * 256)
                 cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 1)
+
             cv2.imwrite(
                 os.path.join("/tmp/fragments", f"overlay_refiner-{i}.png"), overlay
             )

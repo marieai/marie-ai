@@ -5,7 +5,7 @@
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag: 3.0.12-cuda
+    image_tag: 3.0.17-cuda
     server_port: 8080
   tasks:
 #    - name: Create network
@@ -21,6 +21,7 @@
         state: started
         recreate: "{{ (stack_name == 'dev') | bool }}"
         pull: true
+        tty: true
         restart_policy: "always" # always | on-failure | unless-stopped
         network_mode: host #"marie-{{ stack_name }}"
         command: server --start --uses /etc/marie/config/service/marie.yml
@@ -39,11 +40,11 @@
         log_options:
           max-size: 100m
           max-file: 10
-                  
-
         env:
           MARIE_DEFAULT_MOUNT: "/etc/marie"
           MARIE_LOG_CONFIG: docker
+          MARIE_DEPLOYMENT_NAME: marie
+          COLUMNS: "180"
           JINA_LOG_LEVEL:
             "{{ lookup('ansible.builtin.env', 'JINA_LOG_LEVEL') | default('DEBUG', true) }}"
 #        ports:
