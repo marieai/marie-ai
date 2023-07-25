@@ -1,7 +1,7 @@
 import io
 import os
 import json
-import logging
+import shutil
 
 __tmp_path__ = "/tmp/marie"
 
@@ -17,3 +17,10 @@ def ensure_exists(dir_to_validate) -> str:
     if not os.path.exists(dir_to_validate):
         os.makedirs(dir_to_validate, exist_ok=True)
     return dir_to_validate
+
+
+def copyFiles(src_file_paths, dest_path):
+    """Copies a list of files to a destination directory."""
+    os.makedirs(dest_path, exist_ok=True)
+    for file_path in src_file_paths:
+        shutil.copyfile(file_path, os.path.join(dest_path, os.path.split(file_path)[1]))
