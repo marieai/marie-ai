@@ -137,7 +137,7 @@ def __main__(
 
         is_latest_version(github_repo="marie-ai")
 
-    if True:
+    if False:
         import shutil
 
         # os.environ['COLUMNS'] = "211"
@@ -218,7 +218,7 @@ def __main__(
 def setup_server(config: Dict[str, Any]) -> None:
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
-    setup_scheduler(config.get("scheduler", {}))
+    # setup_scheduler(config.get("scheduler", {}))
 
 
 def filter_endpoint():

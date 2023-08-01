@@ -137,6 +137,12 @@ class TextExtractionExecutor(Executor):
                 **payload_kwargs,
             )
 
+            del frames
+            del regions
+            import gc
+
+            gc.collect()
+
             return {"status": "succeeded", "runtime_info": self.runtime_info}
         except BaseException as error:
             self.logger.error(f"Extract error : {error}", exc_info=False)
