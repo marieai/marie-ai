@@ -21,8 +21,11 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, array_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
-executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
+# executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")
+executor = NerExtractionExecutor(
+    "/home/gbugaj/dev/marieai/marie-ai/model_zoo/rms/layoutlmv3-large-20230711-stride128"
+)
 
 
 def process_image(img_path):
@@ -77,3 +80,4 @@ if __name__ == "__main__":
     # process_dir_ner("/tmp/pdf_2_tif")
     # process_image("/home/gbugaj/tmp/analysis/OVERFLOWING-CORR/148447127_0.png")
     process_image("/home/gbugaj/tmp/PID_1925_9289_0_157186264.png")
+    # process_image("/home/gbugaj/tmp/eob-issues/158954482_0.png")

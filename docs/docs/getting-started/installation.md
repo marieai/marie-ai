@@ -150,7 +150,6 @@ pip install pybind11
 
 pip install -r requirements.txt
 pip install -v -e .
-
 ```
 
 ### Additional dependencies

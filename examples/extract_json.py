@@ -15,7 +15,7 @@ api_base_url = "http://172.83.14.129:6000/api"  # Traefic loadballancer
 api_base_url = "http://172.16.11.162:5000/api"  # loadballancer
 api_base_url = "http://172.20.10.15:51000/api"  # server
 api_base_url = "http://192.168.102.65:51000/api"
-api_base_url = "http://172.20.10.41:51000/api"  # gpu-021
+# api_base_url = "http://172.20.10.41:51000/api"  # gpu-021
 
 default_queue_id = "0000-0000-0000-0000"
 api_key = "MY_API_KEY"
@@ -72,8 +72,8 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
 
     json_payload = {
         "queue_id": uid,
-        # "data": base64_str,
-        "uri": "s3://marie/incoming/PID_1764_8829_0_179519650.tif",
+        "data": base64_str,
+        # "uri": "s3://marie/incoming/PID_1764_8829_0_179519650.tif",
         "mode": mode,
         "output": "json",
         "doc_id": f"greg-{uid}",
@@ -91,7 +91,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         {"Content-Type": "application/json; charset=utf-8"},
     ]
 
-    NITER = 1
+    NITER = 100
 
     for k in range(NITER):
         start = time.time()
@@ -138,6 +138,7 @@ if __name__ == "__main__":
     if True:
         src = "~/tmp/image5839050414130576656-0.tif"
         src = "~/tmp/PID_1925_9289_0_157186264.tif"
+        src = "~/tmp/PID_1028_7826_0_157684456.tif"
         # src = "~/datasets/dataset/medprov/PID/171131488/PID_1971_9380_0_171131488.tif"
         src = os.path.expanduser(src)
         print(src)

@@ -117,7 +117,7 @@ def lines_from_bboxes(image, bboxes):
     Returns:
         lines_bboxes: Bounding boxes for the lines in (x,y,w,h) format
     """
-    enable_visualization = True
+    enable_visualization = False
 
     if enable_visualization:
         viz_img = visualize_bboxes(image, bboxes)
@@ -151,10 +151,10 @@ def lines_from_bboxes(image, bboxes):
     half_cols = cols // 2
     stride = cols // min(160, cols)
     horizontal_size = stride if stride > 1 else half_cols
-
-    print(f"cols: {cols}")
-    print(f"half_cols: {half_cols}")
-    print(f"horizontal_size: {horizontal_size}")
+    #
+    # print(f"cols: {cols}")
+    # print(f"half_cols: {half_cols}")
+    # print(f"horizontal_size: {horizontal_size}")
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
