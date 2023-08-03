@@ -97,6 +97,10 @@ Remote :
 memray3.10 live
 ``` 
 
+### Testing for memory leaks
+```shell
+memray flamegraph --leaks ~/tmp/memray/marie.bin.3658615
+```
 
 [](https://bloomberg.github.io/memray/run.html)
 https://towardsdatascience.com/how-to-add-git-hooks-for-your-python-projects-using-the-pre-commit-framework-773acc3b28a7

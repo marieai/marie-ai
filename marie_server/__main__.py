@@ -9,6 +9,7 @@ import torch
 from marie import Flow
 from marie import __version__
 import marie.helper
+from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 
 from marie.conf.helper import load_yaml
@@ -130,6 +131,8 @@ def __main__(
     # install handler for exceptions
     sys.excepthook = handle_exception
     install(show_locals=True)
+
+    MDC.put("request_id", "0000")
     logger.info(f"Starting marie server : {__version__}")
 
     if "NO_VERSION_CHECK" not in os.environ:

@@ -3,6 +3,8 @@ import sys
 import time
 import traceback
 import uuid
+import contextvars
+
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -12,6 +14,7 @@ from fastapi import Request
 from marie import Client
 from marie.api import extract_payload
 from marie.api import value_from_payload_or_args
+from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger
 from marie.messaging import (
     mark_as_complete,
@@ -142,14 +145,18 @@ async def handle_request(
     api_tag: str, request: Request, client: Client, handler: callable
 ):
     try:
+        job_id = generate_job_id()
+        MDC.put("request_id", job_id)
+
         payload = await request.json()
 
         # write payload to file
-        ensure_exists("/tmp/payloads")
-        with open(f"/tmp/payloads/{api_tag}.json", "w") as f:
-            f.write(str(payload))
+        # TODO : remove this
+        if True:
+            ensure_exists("/tmp/payloads")
+            with open(f"/tmp/payloads/{api_tag}.json", "w") as f:
+                f.write(str(payload))
 
-        job_id = generate_job_id()
         default_logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
 
@@ -198,6 +205,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         default_logger.info(f"Starting request: {job_id}")
         parameters, input_docs = await parse_payload_to_docs(payload)
         job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
+        parameters["job_id"] = job_id
         # payload data attribute should be stripped at this time
         parameters["payload"] = payload  # THIS IS TEMPORARY HERE
 
@@ -222,7 +230,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
 
         return results
     except BaseException as e:
-        default_logger.error(f"processing error : {e}", exc_info=False)
+        default_logger.error(f"processing error : {e}", exc_info=True)
         status = "FAILED"
 
         # get the traceback and clear the frames to avoid memory leak
