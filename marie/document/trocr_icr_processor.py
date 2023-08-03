@@ -153,12 +153,13 @@ def preprocess_samples(src_images, img_transform, device):
 # @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, samples, bpe):
 
+    predictions = []
+    scores = []
+
     results = task.inference_step(
         generator, model, samples, prefix_tokens=None, constraints=None
     )
 
-    predictions = []
-    scores = []
     # https://fairseq.readthedocs.io/en/latest/getting_started.html
     # https://github.com/facebookresearch/fairseq/blob/main/fairseq/sequence_scorer.py
     # https://github.com/facebookresearch/fairseq/blob/4f618a758ccd6b1924508ccbfb32eaacc3ea11c5/fairseq_cli/generate.py#L215-L221

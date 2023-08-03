@@ -20,7 +20,7 @@ class AdlibRenderer(ResultRenderer):
         super().__init__(config)
         if config is None:
             config = {}
-        self.logger.info(f"AdlibRenderer config : {config}")
+        self.logger.debug(f"AdlibRenderer config : {config}")
         self.summary_filename = summary_filename
 
     @property

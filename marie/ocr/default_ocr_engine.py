@@ -259,15 +259,14 @@ class DefaultOcrEngine(OcrEngine):
         try:
             queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
             regions = [] if regions is None else regions
-            ro_frames = []
+            ro_frames = [None] * len(frames)
             # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
-            for _, frame in enumerate(frames):
+            for idx, frame in enumerate(frames):
+                f = frame
                 if isinstance(frame, Image.Image):
                     converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
-                    f = copy.deepcopy(converted)
-                else:
-                    f = copy.deepcopy(frame)
-                ro_frames.append(f)
+                    f = converted
+                ro_frames[idx] = f.copy()
 
             # calculate hash based on the image frame
             # ro_frames = np.array(ro_frames)
