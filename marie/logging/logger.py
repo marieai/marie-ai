@@ -14,6 +14,7 @@ from marie.constants import __resources_path__, __uptime__, __windows__
 from marie.enums import LogVerbosity
 from marie.jaml import JAML
 from marie.logging import formatter
+from marie.logging.mdc_filter import MDCContextFilter
 from marie.utils.json import to_json
 from typing import Mapping, Union
 from collections import OrderedDict
@@ -165,6 +166,7 @@ class MarieLogger:
 
         self.logger = logging.getLogger(context)
         self.logger.propagate = False
+        self.logger.addFilter(MDCContextFilter(context))
 
         context_vars = {
             'name': name,
@@ -232,7 +234,7 @@ class MarieLogger:
             if not os.path.exists(config_path):
                 config_path = old_config_path
 
-        with open(config_path) as fp:
+        with open(config_path, encoding='utf-8') as fp:
             config = JAML.load(fp)
 
         for h in config['handlers']:

@@ -831,9 +831,14 @@ class WorkerRequestHandler:
         return None
 
     def _log_data_request(self, request: DataRequest):
+        from marie.logging.mdc import MDC
+
+        MDC.put('request_id', request.header.request_id)
         self.logger.debug(
             f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
         )
+        rid = MDC.get('request_id')
+        print(f'rid: {rid}')
 
     async def process_data(self, requests: List[DataRequest], context) -> DataRequest:
         """
@@ -847,7 +852,7 @@ class WorkerRequestHandler:
             self._summary, self._receiving_request_seconds, self._metric_attributes
         ):
             try:
-                if self.logger.debug_enabled:
+                if True or self.logger.debug_enabled:
                     self._log_data_request(requests[0])
 
                 if context is not None:
