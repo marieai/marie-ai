@@ -116,7 +116,7 @@ class TextExtractionExecutor(Executor):
                 ref_id = hash_frames_fast(frames)
                 ref_type = "extract"
 
-            self.logger.info(
+            self.logger.debug(
                 "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
                 f" checksum: {ref_id}, {ref_type},  {frame_len}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}"
@@ -139,9 +139,6 @@ class TextExtractionExecutor(Executor):
 
             del frames
             del regions
-            import gc
-
-            gc.collect()
 
             return {"status": "succeeded", "runtime_info": self.runtime_info}
         except BaseException as error:

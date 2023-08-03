@@ -306,11 +306,12 @@ class BoxProcessorUlimDit(BoxProcessor):
                    enable_visualization: Optional[bool] = False,
                    ):
         try:
+
             self.logger.debug(f"Starting box predictions")
-            predictions = self.predictor(image)
-            predictions = predictions["instances"]
+            rp = self.predictor(image)
+            predictions = rp["instances"]
             # Following will hang if we move the predictions from GPU to CPU all at once
-            # This is a workaround to avoid the hang
+            # This is a workaround to avoid the hanging
             # predictions = predictions.to(self.cpu_device)
             boxes = (
                 predictions.pred_boxes.to(self.cpu_device)
@@ -327,7 +328,10 @@ class BoxProcessorUlimDit(BoxProcessor):
                 if predictions.has("pred_classes")
                 else None
             )
+
+            # delete the predictor to free up memory
             del predictions
+            del rp
 
             # check if boxes are empty, which means no boxes were detected(blank image)
             if boxes is None or len(boxes) == 0:
