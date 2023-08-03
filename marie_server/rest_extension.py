@@ -226,7 +226,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         status = "FAILED"
 
         # get the traceback and clear the frames to avoid memory leak
-        _, val, tb = sys.exc_info = sys.exc_info()
+        _, val, tb = sys.exc_info()
         traceback.clear_frames(tb)
 
         filename = tb.tb_frame.f_code.co_filename
