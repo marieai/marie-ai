@@ -3,7 +3,7 @@ from typing import Optional, Union, List
 
 import torch
 
-from marie.document_classifier.base import BaseDocumentClassifier
+from ..document_classifier.base import BaseDocumentClassifier
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 

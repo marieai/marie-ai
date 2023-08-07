@@ -1,2 +1,0 @@
-from marie.document_classifier.base import BaseDocumentClassifier
-from marie.document_classifier.transformers import TransformersDocumentClassifier
