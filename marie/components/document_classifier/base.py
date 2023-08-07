@@ -1,8 +1,6 @@
 import os
 
 from marie.base_handler import BaseHandler
-import torch
-import numpy as np
 from marie.constants import __model_path__
 
 
