@@ -41,6 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie.logging.logger import MarieLogger
     from marie.types.request import Request
 
+
 # GB:MOD
 class WorkerRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
@@ -495,10 +496,10 @@ class WorkerRequestHandler:
                 params = requests[0].parameters
                 results_key = self._KEY_RESULT
 
-                if not results_key in params.keys():
+                if results_key not in params.keys():
                     params[results_key] = dict()
 
-                if isinstance(return_data, (dict)):
+                if isinstance(return_data, dict):
                     params[results_key].update({self.args.name: return_data})
                 else:
                     params[results_key].update({self.args.name: return_data})

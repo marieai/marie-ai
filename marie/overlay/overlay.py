@@ -355,8 +355,6 @@ class OverlayProcessor(BaseHandler):
         starttime = timeit.default_timer()
         # Output > N x C x W x H
         outputs = model(data)
-        print("Batch size is :", outputs[0].shape[0])
-        print("Inference time is :", timeit.default_timer() - starttime)
         batch_output = outputs[0][0]  # get the first batch
         # tensor to numpy
         image_numpy = batch_output.detach().cpu().numpy()
