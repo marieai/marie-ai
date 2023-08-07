@@ -259,11 +259,7 @@ pip install opencv-python==4.5.4.60
 
 ## References
 
-[consul-catalog](https://doc.traefik.io/traefik/v2.2/providers/consul-catalog/)
-[apispec](https://apispec.readthedocs.io/en/latest/install.html)
-[gradio](https://gradio.app/)
 [deepdoctection](https://github.com/deepdoctection/deepdoctection)
-[Consul / Traefik configuration](https://devonhubner.org/using_traefik_with_consul/)
 [Lightning-AI](https://github.com/Lightning-AI)
 
 
