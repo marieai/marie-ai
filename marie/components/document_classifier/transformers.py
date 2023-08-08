@@ -1,27 +1,27 @@
 import os
-from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Callable, Dict, Any
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from docarray import DocumentArray
+from torch.nn import Module
 from tqdm import tqdm
 from transformers import (
     pipeline,
     LayoutLMv3Processor,
-    LayoutLMv3ForSequenceClassification,
     LayoutLMv3ImageProcessor,
-    LayoutLMv3Tokenizer,
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
 
-from ..document_classifier.base import BaseDocumentClassifier
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from ..document_classifier.base import BaseDocumentClassifier
 from ...helper import batch_iterator
+from ...logging.profile import TimeContext
 
 
 def scale_bounding_box(
@@ -35,16 +35,6 @@ def scale_bounding_box(
     ]
 
 
-def create_processor(model_name_or_path: str):
-    feature_extractor = LayoutLMv3ImageProcessor(
-        apply_ocr=False, do_resize=True, resample=Image.LANCZOS
-    )
-    tokenizer = LayoutLMv3Tokenizer.from_pretrained(model_name_or_path)
-    processor = LayoutLMv3Processor(feature_extractor, tokenizer)
-
-    return processor
-
-
 class TransformersDocumentClassifier(BaseDocumentClassifier):
     """
     Transformer based model for document classification using the HuggingFace's transformers framework
@@ -53,7 +43,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
     def __init__(
         self,
-        model_name_or_path: Optional[Union[str, os.PathLike]] = None,
+        model_name_or_path: Union[str, os.PathLike],
         model_version: Optional[str] = None,
         tokenizer: Optional[str] = None,
         use_gpu: bool = True,
@@ -88,7 +78,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         classify <sep> This example is LABEL . <sep>" and the model predicts whether that sequence is a contradiction
         or an entailment.
         :param batch_size: Number of Documents to be processed at a time.
-        :param classification_field: Name of Document's meta field to be used for classification. If left unset, Document.content is used by default.
+        :param classification_field: Name of Document's meta field to be used for classification. If left unset, Document.tensor is used by default.
         :param use_auth_token: The API token used to download private models from Huggingface.
                                If this parameter is set to `True`, then the token generated when running
                                `transformers-cli login` (stored in ~/.huggingface) will be used.
@@ -162,13 +152,16 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 feature_extractor, tokenizer=self.tokenizer
             )
 
+        self.model = self.optimize_model(self.model)
+
     def predict(
         self,
         documents: DocumentArray,
-        words: Optional[List[str]] = None,
-        boxes: Optional[List[List[int]]] = None,
+        words: Optional[List[List[str]]] = None,
+        boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
     ) -> DocumentArray:
+
         if batch_size is None:
             batch_size = self.batch_size
 
@@ -179,7 +172,9 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             assert (
                 words is not None and boxes is not None
             ), "words and boxes must be provided for sequence classification"
-            assert len(words) == len(boxes), "words and boxes must have the same length"
+            assert (
+                len(documents) == len(words) == len(boxes)
+            ), "documents, words and boxes must have the same length"
 
         batches = batch_iterator(documents, batch_size)
         predictions = []
@@ -199,36 +194,62 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             elif self.task == "text-classification":
                 batch_results = self.model(batch, top_k=self.top_k, truncation=True)
             elif self.task == "sequence-classification":
-                raise NotImplementedError(
-                    "Sequence classification is not yet supported."
-                )
+                batch_results = []
+                for doc, w, b in zip(batch, words, boxes):
+                    if doc.content_type != "tensor":
+                        raise ValueError(
+                            f"Document content_type {doc.content_type} is not supported"
+                        )
+                    batch_results.append(
+                        self.predict_document_image(
+                            doc.tensor, words=w, boxes=b, top_k=self.top_k
+                        )
+                    )
+
             predictions.extend(batch_results)
             pb.update(len(batch))
         pb.close()
 
-        for doc, result in zip(documents, predictions):
-            print(result)
-
+        for document, prediction in zip(documents, predictions):
+            if self.task == "sequence-classification":
+                formatted_prediction = {
+                    "label": prediction[0]["label"],
+                    "score": prediction[0]["score"],
+                    "details": {el["label"]: el["score"] for el in prediction},
+                }
+            else:
+                raise NotImplementedError  # TODO
+            document.tags["classification"] = formatted_prediction
         return documents
 
-    def predict_document_image(self, image: np.ndarray):
-        id2label = self.model.config.id2label
-        ocr_results = []
+    def predict_document_image(
+        self,
+        image: np.ndarray,
+        words: List[List[str]],
+        boxes: List[List[int]],
+        top_k: int = 1,
+    ) -> list[dict[str, Any]]:
+        """
+        Predicts the label of a document image
 
-        width, height = image.size
+        :param image: image to predict
+        :param words: words in the image
+        :param boxes: bounding boxes of the words
+        :param top_k: number of predictions to return
+        :return: prediction dictionary with label and score
+        """
+        id2label = self.model.config.id2label
+        width, height = image.shape[1], image.shape[0]
         width_scale = 1000 / width
         height_scale = 1000 / height
-
-        words = []
-        boxes = []
-        for w in ocr_results[0]["words"]:
-            boxes.append(scale_bounding_box(w["box"], width_scale, height_scale))
-            words.append(w["text"])
+        boxes_normalized = [
+            scale_bounding_box(box, width_scale, height_scale) for box in boxes
+        ]
 
         encoding = self.processor(
             image,
             words,
-            boxes=boxes,
+            boxes=boxes_normalized,
             max_length=512,
             padding="max_length",
             truncation=True,
@@ -242,12 +263,32 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 bbox=encoding["bbox"].to(self.device),
                 pixel_values=encoding["pixel_values"].to(self.device),
             )
+        # TODO: add top_k support
 
         logits = output.logits
         predicted_class = logits.argmax(-1)
         probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
 
-        return (
-            id2label[predicted_class.item()],
-            probabilities[predicted_class.item()],
-        )
+        return [
+            {
+                "label": id2label[predicted_class.item()],
+                "score": probabilities[predicted_class.item()],
+            }
+        ]
+
+    def optimize_model(self, model: nn.Module) -> Callable | Module:
+        """Optimizes the model for inference. This method is called by the __init__ method."""
+        try:
+            with TimeContext("Compiling model", logger=self.logger):
+                import torchvision.models as models
+                import torch._dynamo as dynamo
+
+                torch._dynamo.config.verbose = True
+                # torch.backends.cudnn.benchmark = True
+                # model = torch.compile(model, backend="inductor", mode="max-autotune")
+                # model = torch.compile(model, backend="onnxrt", fullgraph=False)
+                model = torch.compile(model)
+                return model
+        except Exception as err:
+            self.logger.warning(f"Model compile not supported: {err}")
+            return model

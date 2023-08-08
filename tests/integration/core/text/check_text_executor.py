@@ -44,11 +44,10 @@ def check_executor():
     img_path = "/home/gbugaj/dev/ldt-document-dump/cache/175238378.tif"
     img_path = "/opt/shares/medrxprovdata/510/PID/20230417/PID_510_7077_0_175677910.tif"
 
-    mode="sparse"
+    mode = "sparse"
     docs = docs_from_file(img_path)
     frames = array_from_docs(docs)
     kwa = {"payload": {"output": "json", "mode": "line", "format": "xyxy"}}
-
 
     # Prepare file for upload
     with open(img_path, "rb") as file:
@@ -97,11 +96,9 @@ def check_executor():
     parameters["payload"] = payload  # THIS IS TEMPORARY HERE
     kwa = parameters
 
-
     if True:
         executor = TextExtractionExecutor()
         results = executor.extract(docs, parameters=kwa)
-
 
 
 async def check_executor_via_client():
@@ -115,7 +112,7 @@ async def check_executor_via_client():
     )
 
     async for resp in client.post(
-        '/text/extract',
+        "/text/extract",
         docs=docs,
         parameters=parameters,
         request_size=-1,

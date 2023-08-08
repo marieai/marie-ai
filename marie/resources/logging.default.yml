@@ -20,7 +20,7 @@ configs:
     port: # when not given then record it locally,  /dev/log on linux /var/run/syslog on mac
     formatter: PlainFormatter
   RichHandler:
-    format: '%(request_id)-11s ::: {name}@%(process)2d %(message)s'
+    format: '%(request_id)-11s : {name}@%(process)2d %(message)s'
     markup: false
     rich_tracebacks: false
     show_path: false

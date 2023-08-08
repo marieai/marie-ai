@@ -136,7 +136,7 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         self._check_kwargs(kwargs)
         logger.info(f"Resolving native model from : {model_root}")
         resolved = {}
-        for root_dir, dir, files in os.walk(model_root):
+        for root_dir, file_dir, files in os.walk(model_root):
             name_key = "_name_or_path"
             for file in files:
                 if file == "marie.json":
@@ -196,7 +196,7 @@ class ModelRegistry:
     _NATIVE_PATH_HANDLER = NativeModelRegistryHandler()
 
     @staticmethod
-    def __get_path_handler(_name_or_path: str) -> ModelRegistryHandler:
+    def _get_path_handler(_name_or_path: str) -> ModelRegistryHandler:
         """
         Finds a ModelRegistryHandler that supports the given protocol path. Falls back to the native
         ModelRegistryHandler if no other handler is found.
@@ -216,6 +216,9 @@ class ModelRegistry:
         pass
 
     def load_model(self):
+        """
+        Load a model from the model registry
+        """
         pass
 
     @staticmethod
@@ -235,7 +238,7 @@ class ModelRegistry:
                               or None if the model could not be located
         """
 
-        return ModelRegistry.__get_path_handler(_name_or_path)._get_local_path(_name_or_path, **kwargs)  # type: ignore
+        return ModelRegistry._get_path_handler(_name_or_path)._get_local_path(_name_or_path, **kwargs)  # type: ignore
 
     @staticmethod
     def register_handler(handler: ModelRegistryHandler) -> None:

@@ -1,5 +1,6 @@
 import io
 import json
+import os.path
 from typing import Any
 
 from marie.numpyencoder import NumpyEncoder
@@ -21,6 +22,9 @@ def store_json_object(results, json_path) -> None:
 
 def load_json_file(filename) -> Any:
     """Read JSON File"""
+    if filename is not None:
+        filename = os.path.expanduser(filename)
+
     with io.open(filename, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
         return data
