@@ -49,7 +49,7 @@ def test_get_local_path_from_name(test_input, model_zoo_dir):
     model_dir = os.path.join(model_zoo_dir, test_input)
     create_model_assets(model_zoo_dir, test_input)
 
-    config = ModelRegistry.get_local_path(test_input, **kwargs)
+    config = ModelRegistry.get(test_input, **kwargs)
 
     assert config == model_dir
 
@@ -63,6 +63,6 @@ def test_get_local_path_from_path(test_input, model_zoo_dir):
     create_model_assets(model_zoo_dir, test_input)
 
     kwargs = {}
-    config = ModelRegistry.get_local_path(model_dir, **kwargs)
+    config = ModelRegistry.get(model_dir, **kwargs)
 
     assert config == model_dir

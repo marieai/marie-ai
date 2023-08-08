@@ -11,6 +11,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
+from marie.components import TransformersDocumentClassifier
 from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
@@ -120,10 +121,15 @@ class ExtractPipeline:
         else:
             self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
 
-        if True:
-            self.overlay_processor = OverlayProcessor(
-                work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
-            )
+        self.overlay_processor = OverlayProcessor(
+            work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
+        )
+
+        self.document_classifier = TransformersDocumentClassifier(
+            model_name_or_path="marie/layoutlmv3-document-classification"
+        )
+
+        # self.document_classifier.run(documents=DocumentArray(documents), words=[words], boxes=[boxes])
 
     def segment(
         self,

@@ -1,7 +1,12 @@
+import collections
 import json
 import logging
 import os
-from typing import Any, Dict, List, MutableMapping, Optional, OrderedDict, Tuple, Union
+from importlib.util import find_spec
+from typing import Any, Dict, List, MutableMapping, Optional, Tuple, Union
+from collections import OrderedDict
+
+from huggingface_hub import hf_hub_download
 
 from marie.constants import __model_path__
 
@@ -51,6 +56,13 @@ class ModelRegistryHandler:
             for k, v in kwargs.items():
                 logger.warning("{}={} argument ignored".format(k, v))
 
+    @staticmethod
+    def strip_prefix(_name_or_path: str, prefixes: List[str]) -> str:
+        for prefix in prefixes:
+            if _name_or_path.startswith(prefix):
+                return _name_or_path[len(prefix) :]
+        return _name_or_path
+
     def _get_supported_prefixes(self) -> List[str]:
         """
         Returns:
@@ -66,15 +78,21 @@ class ModelRegistryHandler:
         """
         raise NotImplementedError()
 
-    def _get_local_path(self, _name_or_path: str, **kwargs: Any) -> str:
+    def get_local_path(
+        self,
+        _name_or_path: str,
+        version: str = None,
+        raise_exceptions_for_missing_entries: bool = True,
+        **kwargs: Any,
+    ) -> str:
         """
         Get the local path for the provider name or path
-        Returns:
-            str: the local path to the model directory
+
+        str: the local path to the model directory
         """
         raise NotImplementedError()
 
-    def _discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
+    def discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
         """
         Discover all models that this provider can locate
         Returns:
@@ -82,7 +100,9 @@ class ModelRegistryHandler:
         """
         raise NotImplementedError()
 
-    def _resolve(self, _name_or_path, **kwargs):
+    def _resolve(
+        self, _name_or_path, raise_exceptions_for_missing_entries: bool = True, **kwargs
+    ):
         """
         Attempt to resolve specific model by name
         """
@@ -103,11 +123,15 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         self.discovered = False
 
     def _resolve(
-        self, _name_or_path: Union[str, os.PathLike], **kwargs
-    ) -> Tuple[os.PathLike, Dict[str, str]]:
+        self,
+        _name_or_path: Union[str, os.PathLike],
+        raise_exceptions_for_missing_entries: bool = True,
+        **kwargs,
+    ) -> Tuple[Union[os.PathLike, None], Union[Dict[str, Any], None]]:
 
+        full_filename = "marie.json"
         if os.path.isdir(_name_or_path):
-            config = os.path.join(_name_or_path, "marie.json")
+            config = os.path.join(_name_or_path, full_filename)
         elif os.path.isfile(_name_or_path):
             config = _name_or_path
         else:
@@ -116,31 +140,43 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
                 if "__model_path__" in kwargs
                 else __model_path__
             )
-            config = os.path.join(model_root, _name_or_path, "marie.json")
+            config = os.path.join(model_root, _name_or_path, full_filename)
             if not os.path.exists(config):
-                raise RuntimeError(f"Invalid resolution source : {_name_or_path}")
+                if raise_exceptions_for_missing_entries:
+                    raise EnvironmentError(
+                        f"{_name_or_path} does not appear to have a file named {full_filename}."
+                    )
+                else:
+                    return None, None
 
         logger.info(f"Found model definition in {config}")
-
         with open(config, "r", encoding="utf-8") as json_file:
             data = json.load(json_file)
             return os.path.dirname(config), data
 
-    def _discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
+    def discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
         model_root = (
             kwargs.pop("__model_path__")
             if "__model_path__" in kwargs
             else __model_path__
         )
+        logger.info(f"Resolving native model from : {model_root}")
+
+        # NOOP
+        use_auth_token = (
+            kwargs.pop("use_auth_token") if "use_auth_token" in kwargs else None
+        )
 
         self._check_kwargs(kwargs)
-        logger.info(f"Resolving native model from : {model_root}")
         resolved = {}
+
         for root_dir, file_dir, files in os.walk(model_root):
             name_key = "_name_or_path"
             for file in files:
                 if file == "marie.json":
-                    config_path, data = self._resolve(root_dir)
+                    config_path, data = self._resolve(
+                        root_dir, raise_exceptions_for_missing_entries=False
+                    )
                     if name_key not in data:
                         logger.warning(
                             f"Key '{name_key}' not found in discovered config"
@@ -159,23 +195,68 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         return self.resolved_models
 
     def _get_supported_prefixes(self) -> List[str]:
-        return ["file://", "model://"]
+        return ["file://", "model://", "zoo://"]
 
-    def _get_local_path(self, _name_or_path: str, **kwargs: Any) -> Union[str, None]:
+    def get_local_path(
+        self,
+        _name_or_path: str,
+        version: str = None,
+        raise_exceptions_for_missing_entries: bool = True,
+        **kwargs: Any,
+    ) -> Union[str | os.PathLike, None]:
         if not self.discovered:
-            self._discover(**kwargs)
+            self.discover(**kwargs)
         if _name_or_path in self.resolved_models:
             return self.resolved_models[_name_or_path]
         else:
-            config_dir, config_data = self._resolve(_name_or_path, **kwargs)
+            config_dir, config_data = self._resolve(
+                _name_or_path, raise_exceptions_for_missing_entries, **kwargs
+            )
             if config_dir is not None:
                 self.resolved_models[_name_or_path] = config_dir
             return config_dir
 
     def _exists(self, _name_or_path: str, **kwargs: Any) -> bool:
         if not self.discovered:
-            self._discover(**kwargs)
+            self.discover(**kwargs)
         return _name_or_path in self.resolved_models
+
+
+class HuggingFaceModelRegistry(ModelRegistryHandler):
+    def _get_supported_prefixes(self) -> List[str]:
+        return ["hf://", "transformer://"]
+
+    def get_local_path(
+        self,
+        _name_or_path: str,
+        version: str = None,
+        raise_exceptions_for_missing_entries: bool = True,
+        **kwargs: Any,
+    ) -> Union[str | os.PathLike, None]:
+        model_name_or_path = ModelRegistryHandler.strip_prefix(
+            _name_or_path, self._get_supported_prefixes()
+        )
+
+        _HUGGINGFACE_AVAILABLE = True
+        try:
+            import huggingface_hub
+        except ModuleNotFoundError:
+            _HUGGINGFACE_AVAILABLE = False
+
+        if _HUGGINGFACE_AVAILABLE:
+            try:
+                from huggingface_hub import hf_hub_url, cached_download
+                from huggingface_hub.constants import REPO_TYPES
+                from huggingface_hub.file_download import cached_download
+
+                # model_url = hf_hub_url(model_name_or_path, REPO_TYPES.model)
+                model_url = hf_hub_url(model_name_or_path)
+                model_path = hf_hub_download(model_url)
+                return model_path
+            except Exception as e:
+                if raise_exceptions_for_missing_entries:
+                    raise e
+        return None
 
 
 class ModelRegistry:
@@ -183,20 +264,21 @@ class ModelRegistry:
     A class for users to access models from specific providers
 
         Handlers:
-            zoo    : Local model zoo(native file access)
-            git    : Git
-            S3     : Amazon S3
-            gdrive : Google Drive
-            dvc    : Data Version Control
-            mflow  : Mflow support
-            transformers: Transformers model
+            zoo          : Local model zoo(native file access) - default handler with model://
+            git          : Git
+            S3           : S3 storage (AWS, Minio, etc.)
+            gdrive       : Google Drive
+            dvc          : Data Version Control
+            mflow        : Mflow support
+            transformers : HuggingFace Transformers models
+            azure        : Azure storage
     """
 
     _PATH_HANDLERS: MutableMapping[str, ModelRegistryHandler] = OrderedDict()
     _NATIVE_PATH_HANDLER = NativeModelRegistryHandler()
 
     @staticmethod
-    def _get_path_handler(_name_or_path: str) -> ModelRegistryHandler:
+    def get_handler(_name_or_path: str) -> ModelRegistryHandler:
         """
         Finds a ModelRegistryHandler that supports the given protocol path. Falls back to the native
         ModelRegistryHandler if no other handler is found.
@@ -207,38 +289,40 @@ class ModelRegistry:
         Returns:
             handler (ModelRegistryHandler)
         """
+        if "://" not in _name_or_path:
+            return ModelRegistry._NATIVE_PATH_HANDLER
+        scheme = _name_or_path[: _name_or_path.index("://") + 3]
+
         for p in ModelRegistry._PATH_HANDLERS.keys():
-            if _name_or_path.startswith(p):
+            if scheme == p:
                 return ModelRegistry._PATH_HANDLERS[p]
-        return ModelRegistry._NATIVE_PATH_HANDLER
 
-    def __init__(self, **kwargs):
-        pass
-
-    def load_model(self):
-        """
-        Load a model from the model registry
-        """
-        pass
+        raise ValueError(f"Unsupported protocol '{scheme}' for model : {_name_or_path}")
 
     @staticmethod
-    def get_local_path(_name_or_path: str, **kwargs: Any) -> Union[str, None]:
+    def get(
+        name_or_path: str,
+        version: Optional[str] = None,
+        raise_exceptions_for_missing_entries: Optional[bool] = True,
+        **kwargs: Any,
+    ) -> Union[str, None]:
         """
         Get a filepath which is compatible with native Python I/O such as `open`
         and `os.path`.
 
         If URI points to a remote resource, this function may download and cache
-        the resource to local disk.
+        the resource to local disk. Depending on the protocol, this cache may be shared with other providers.
 
-        Args:
-            _name_or_path (str): A URI supported by this ModelRegistryHandler
-
-        Returns:
-            local_path (str): a file path which exists on the local file system,
-                              or None if the model could not be located
+        :param version: Optional version of the resource
+        :param name_or_path: URI path to resource
+        :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
         """
 
-        return ModelRegistry._get_path_handler(_name_or_path)._get_local_path(_name_or_path, **kwargs)  # type: ignore
+        handler = ModelRegistry.get_handler(name_or_path)
+
+        return handler.get_local_path(
+            name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
+        )  # type: ignore
 
     @staticmethod
     def register_handler(handler: ModelRegistryHandler) -> None:
@@ -276,8 +360,11 @@ class ModelRegistry:
         handlers.append(ModelRegistry._NATIVE_PATH_HANDLER)
         for handler in handlers:
             try:
-                discovered = handler._discover(**kwargs)
+                discovered = handler.discover(**kwargs)
                 resolved = {**resolved, **discovered}
             except Exception as e:
                 logger.error(f"Handler {handler} failed during discovery", e)
         return resolved
+
+
+ModelRegistry.register_handler(HuggingFaceModelRegistry())

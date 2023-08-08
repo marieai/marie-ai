@@ -113,7 +113,7 @@ class SlidingWindowNerExtractionExecutor(Executor, StorageMixin):
         ensure_exists("/tmp/tensors")
         ensure_exists("/tmp/tensors/json")
 
-        model_name_or_path: str = ModelRegistry.get_local_path(model_name_or_path)
+        model_name_or_path: str = ModelRegistry.get(model_name_or_path)
         if not os.path.isdir(model_name_or_path):
             raise Exception(f"Expected model directory but got : {model_name_or_path}")
 

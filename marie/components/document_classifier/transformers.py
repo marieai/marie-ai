@@ -22,6 +22,7 @@ from marie.models.utils import initialize_device_settings
 from ..document_classifier.base import BaseDocumentClassifier
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
+from ...registry.model_registry import ModelRegistry
 
 
 def scale_bounding_box(
@@ -97,7 +98,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.task = task
         self.labels = labels
         self.top_k = top_k
-        self.progress_bar = True
+        self.progress_bar = False
 
         if labels and task == "text-classification":
             self.logger.warning(
@@ -116,6 +117,18 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
+
+        kwargs = {
+            "__model_path__": os.path.expanduser("~/tmp/models")
+        }  # custom model path
+        kwargs = {"use_auth_token": use_auth_token}
+        resolved_model_name_or_path = ModelRegistry.get(
+            model_name_or_path,
+            version=None,
+            raise_exceptions_for_missing_entries=True,
+            **kwargs,
+        )
+        assert os.path.exists(resolved_model_name_or_path)
 
         if tokenizer is None:
             tokenizer = model_name_or_path
@@ -152,7 +165,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 feature_extractor, tokenizer=self.tokenizer
             )
 
-        self.model = self.optimize_model(self.model)
+        if False:
+            self.model = self.optimize_model(self.model)
 
     def predict(
         self,
@@ -283,7 +297,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 import torchvision.models as models
                 import torch._dynamo as dynamo
 
-                torch._dynamo.config.verbose = True
+                torch._dynamo.config.verbose = False
+                torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
                 # model = torch.compile(model, backend="inductor", mode="max-autotune")
                 # model = torch.compile(model, backend="onnxrt", fullgraph=False)
