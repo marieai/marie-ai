@@ -2,7 +2,7 @@ import imghdr
 import io
 import os
 import tempfile
-from typing import Any, List, Union
+from typing import Any, List, Union, Optional, AnyStr
 
 import cv2
 import numpy as np
@@ -13,6 +13,7 @@ from PyPDF4 import PdfFileReader
 from PyPDF4.utils import PdfReadError
 
 from marie import Document, DocumentArray
+from marie.common.file_io import StrOrBytesPath
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff", "pdf"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif", "pdf": "pdf"}
@@ -204,11 +205,16 @@ def load_image(img_path, img_format: str = "cv"):
     return True, [img]
 
 
-def array_from_docs(docs: DocumentArray):
+def array_from_docs(
+    docs: Union[DocumentArray | List[Document]], field: Optional[str] = None
+) -> List[np.ndarray]:
     """Convert DocumentArray to Numpy Array"""
     frames = []
+    if field is None:
+        field = 'tensor'
+
     for doc in docs:
-        frames.append(doc.tensor)
+        frames.append(getattr(doc, field))
 
     # each tensor can be of different size that is why we are using 'concatenate' instead of 'vstack'
     # concat = np.concatenate(frames, axis=None)
@@ -216,39 +222,30 @@ def array_from_docs(docs: DocumentArray):
     return frames
 
 
-def docs_from_file(img_path: str) -> DocumentArray:
+def docs_from_file(
+    path: StrOrBytesPath, pages: Optional[List[int]] = None
+) -> DocumentArray:
     """Create DocumentArray from image"""
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"File not found : {img_path}")
+    if path is not None:
+        path = os.path.expanduser(path)
 
-    loaded, frames = load_image(img_path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found : {path}")
+
+    loaded, frames = load_image(path)
     docs = DocumentArray()
 
     if loaded:
-        for frame in frames:
+        for idx, frame in enumerate(frames):
+            if pages is not None and idx not in pages:
+                continue
+
             document = Document(content=frame)
             docs.append(document)
-
     return docs
 
 
-def docs_from_file_specific(img_path: str, pages: list) -> DocumentArray:
-    """Create DocumentArray from image containing only specific frames"""
-    loaded_docs = docs_from_file(img_path)
-    docs = DocumentArray()
-
-    if len(loaded_docs) > 0:
-        if len(pages) == 0:
-            return loaded_docs
-
-        for i, doc in enumerate(loaded_docs):
-            if i in pages:
-                docs.append(doc)
-
-    return docs
-
-
-def frames_from_file(img_path: str) -> np.ndarray:
+def frames_from_file(img_path: StrOrBytesPath) -> np.ndarray:
     """Create Numpy frame array from image"""
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")
@@ -258,7 +255,8 @@ def frames_from_file(img_path: str) -> np.ndarray:
     return frames
 
 
-def is_array_like(obj):
+def is_array_like(obj: Any) -> bool:
+    """Check if object is array like"""
     if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
         return True
     return False

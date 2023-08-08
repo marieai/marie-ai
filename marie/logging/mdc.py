@@ -1,6 +1,6 @@
 import contextvars
 
-ctx_mdc = contextvars.ContextVar('mdc', default={})
+ctx_mdc = contextvars.ContextVar("mdc", default={})
 
 
 class MDC(object):
@@ -41,5 +41,9 @@ class MDC(object):
 
     @staticmethod
     def get_all() -> dict:
+        """
+        Get all the context values as a dictionary.
+        :return: A dictionary containing all the context values.
+        """
         ctx = contextvars.copy_context()
         return ctx.get(ctx_mdc)

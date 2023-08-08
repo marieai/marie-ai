@@ -23,7 +23,7 @@ from marie.messaging import (
 )
 from marie.messaging.publisher import mark_as_scheduled
 from marie.types.request.data import DataRequest
-from marie.utils.docs import docs_from_file_specific
+from marie.utils.docs import docs_from_file
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
 from marie_server.job.job_manager import generate_job_id
@@ -113,8 +113,7 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
     except:
         pass
 
-    input_docs = docs_from_file_specific(tmp_file, pages)
-    # input_docs = docs_from_file(tmp_file)
+    input_docs = docs_from_file(tmp_file, pages)
 
     if clear_payload:
         key = "data"
