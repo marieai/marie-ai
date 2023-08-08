@@ -39,7 +39,7 @@ model.
 
 ```python
 _name_or_path = "group/layoutlmv3-large-indexer-ner"
-_name_or_path = ModelRegistry.get_local_path(_name_or_path)
+_name_or_path = ModelRegistry.get(_name_or_path)
 ```
 
 **Customize model search directory**
@@ -52,5 +52,5 @@ __model_path__ = os.path.join(
 )
 _name_or_path = "group/layoutlmv3-large-indexer-ner"
 kwargs = {"__model_path__": __model_path__}
-_name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
+_name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
 ```

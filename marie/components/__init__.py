@@ -1,4 +1,4 @@
-from marie.components.document_classifier.base import BaseDocumentClassifier
-from marie.components.document_classifier.transformers import (
+from marie.components.document_classifier import (
+    BaseDocumentClassifier,
     TransformersDocumentClassifier,
 )

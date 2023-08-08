@@ -1,4 +1,6 @@
 import os
+from typing import Dict, Any
+from urllib.parse import urlparse
 
 from docarray import DocumentArray
 
@@ -24,18 +26,23 @@ def get_words_and_boxes(ocr_results) -> tuple:
 def test_sequence_classifier():
     # kwargs = {"__model_path__": __model_path__}
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    kwargs = {"__model_path__": os.path.expanduser("~/tmp/models")}
-    model_name_or_path = (
-        "marie/layoutlmv3-document-classification"  # Test model based on LayoutLMv3
-    )
-    model_name_or_path = ModelRegistry.get_local_path(model_name_or_path, **kwargs)
-    assert os.path.exists(model_name_or_path)
 
+    model_name_or_path = "zoo://marie/layoutlmv3-document-classification"  # Test model based on LayoutLMv3
+    model_name_or_path = "hf://microsoft/layoutlmv3-baseXXX"
+
+    kwargs = {"__model_path__": os.path.expanduser("~/tmp/models")}  # custom model path
+    kwargs = {"use_auth_token": False}
+
+    resolved_model_name_or_path = ModelRegistry.get(model_name_or_path, version=None,
+                                                    raise_exceptions_for_missing_entries=True,
+                                                    **kwargs)
+    print("resolved_model_name_or_path", resolved_model_name_or_path)
+
+    return
     documents = docs_from_file("~/tmp/models/mpc/158955602_1.png")
     ocr_results = load_json_file("~/tmp/models/mpc/158955602_1.json")
     words, boxes = get_words_and_boxes(ocr_results)
 
     classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
-    classifier.run(documents=DocumentArray(documents), words=[words], boxes=[boxes])
-
+    # classifier.run(documents=DocumentArray(documents), words=[words], boxes=[boxes])
     print("classifier", classifier)

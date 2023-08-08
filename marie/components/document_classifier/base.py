@@ -1,23 +1,18 @@
-import os
 from abc import abstractmethod
 from typing import Optional, List
 
 from docarray import DocumentArray
 
 from marie.base_handler import BaseHandler
-from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 
 
 class BaseDocumentClassifier(BaseHandler):
     def __init__(
         self,
-        cuda: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
-        self.cuda = cuda
-        self.initialized = False
         self.logger = MarieLogger(self.__class__.__name__).logger
 
     @abstractmethod

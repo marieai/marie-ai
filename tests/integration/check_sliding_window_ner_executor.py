@@ -68,7 +68,7 @@ if __name__ == "__main__":
     _name_or_path = "rms/layoutlmv3-large-20221118-001-best"
     _name_or_path = "rms/layoutlmv3-large-20221129-dit"
     kwargs = {"__model_path__": __model_path__}
-    _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
+    _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
 
     # Load config
     config_data = load_yaml(os.path.join(__config_dir__, "marie-debug.yml"))

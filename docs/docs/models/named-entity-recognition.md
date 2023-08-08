@@ -106,7 +106,7 @@ if __name__ == "__main__":
     print(transformers.__version__)
     _name_or_path = "rms/layoutlmv3-large-corr-ner"
     kwargs = {"__model_path__": __model_path__}
-    _name_or_path = ModelRegistry.get_local_path(_name_or_path, **kwargs)
+    _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
 
     print(__config_dir__)
     # Load config
