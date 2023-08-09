@@ -1,12 +1,8 @@
-import collections
 import json
 import logging
 import os
-from importlib.util import find_spec
-from typing import Any, Dict, List, MutableMapping, Optional, Tuple, Union
 from collections import OrderedDict
-
-from huggingface_hub import hf_hub_download
+from typing import Any, Dict, List, MutableMapping, Optional, Tuple, Union
 
 from marie.constants import __model_path__
 
@@ -236,27 +232,34 @@ class HuggingFaceModelRegistry(ModelRegistryHandler):
         model_name_or_path = ModelRegistryHandler.strip_prefix(
             _name_or_path, self._get_supported_prefixes()
         )
-
+        # https://huggingface.co/docs/huggingface_hub/guides/download
         _HUGGINGFACE_AVAILABLE = True
         try:
             import huggingface_hub
         except ModuleNotFoundError:
             _HUGGINGFACE_AVAILABLE = False
 
+        model_path = None
+        throwable = None
+
         if _HUGGINGFACE_AVAILABLE:
             try:
-                from huggingface_hub import hf_hub_url, cached_download
-                from huggingface_hub.constants import REPO_TYPES
-                from huggingface_hub.file_download import cached_download
+                from huggingface_hub import snapshot_download
 
-                # model_url = hf_hub_url(model_name_or_path, REPO_TYPES.model)
-                model_url = hf_hub_url(model_name_or_path)
-                model_path = hf_hub_download(model_url)
-                return model_path
+                model_path = snapshot_download(
+                    repo_id=model_name_or_path, revision=version, token=None
+                )
             except Exception as e:
-                if raise_exceptions_for_missing_entries:
-                    raise e
-        return None
+                logger.error(f"Error downloading model from HuggingFace: {e}")
+                throwable = e
+
+        if raise_exceptions_for_missing_entries and model_path is None:
+            raise EnvironmentError(
+                f"{_name_or_path} does not appear to have a valid HuggingFace model",
+                throwable,
+            )
+
+        return model_path
 
 
 class ModelRegistry:
@@ -316,6 +319,8 @@ class ModelRegistry:
         :param version: Optional version of the resource
         :param name_or_path: URI path to resource
         :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
+
+        :return: Local folder path (string) of repo if found, else None
         """
 
         handler = ModelRegistry.get_handler(name_or_path)
@@ -367,4 +372,5 @@ class ModelRegistry:
         return resolved
 
 
+ModelRegistry.register_handler(NativeModelRegistryHandler())
 ModelRegistry.register_handler(HuggingFaceModelRegistry())
