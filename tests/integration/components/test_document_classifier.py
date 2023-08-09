@@ -28,15 +28,16 @@ def test_sequence_classifier():
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     model_name_or_path = "zoo://marie/layoutlmv3-document-classification"  # Test model based on LayoutLMv3
-    model_name_or_path = "hf://microsoft/layoutlmv3-baseXXX"
+    # model_name_or_path = "hf://microsoft/layoutlmv3-base"
 
-    kwargs = {"__model_path__": os.path.expanduser("~/tmp/models")}  # custom model path
-    kwargs = {"use_auth_token": False}
+    if True:
+        kwargs = {"__model_path__": os.path.expanduser("~/tmp/models")}  # custom model path
+        kwargs = {"use_auth_token": False}
 
-    resolved_model_name_or_path = ModelRegistry.get(model_name_or_path, version=None,
-                                                    raise_exceptions_for_missing_entries=True,
-                                                    **kwargs)
-    print("resolved_model_name_or_path", resolved_model_name_or_path)
+        resolved_model_name_or_path = ModelRegistry.get(model_name_or_path, version=None,
+                                                        raise_exceptions_for_missing_entries=True,
+                                                        **kwargs)
+        print("resolved_model_name_or_path", resolved_model_name_or_path)
 
     return
     documents = docs_from_file("~/tmp/models/mpc/158955602_1.png")

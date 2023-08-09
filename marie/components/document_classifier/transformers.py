@@ -119,16 +119,17 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.device = resolved_devices[0]
 
         kwargs = {
-            "__model_path__": os.path.expanduser("~/tmp/models")
-        }  # custom model path
-        kwargs = {"use_auth_token": use_auth_token}
-        resolved_model_name_or_path = ModelRegistry.get(
+            "__model_path__": os.path.expanduser("~/tmp/models"),
+            "use_auth_token": use_auth_token,
+        }
+
+        model_name_or_path = ModelRegistry.get(
             model_name_or_path,
             version=None,
             raise_exceptions_for_missing_entries=True,
             **kwargs,
         )
-        assert os.path.exists(resolved_model_name_or_path)
+        assert os.path.exists(model_name_or_path)
 
         if tokenizer is None:
             tokenizer = model_name_or_path
