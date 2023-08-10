@@ -29,7 +29,7 @@ class OcrEngine(ABC):
     @abstractmethod
     def extract(
         self,
-        frames: Union[np.ndarray, List[Image.Image]],
+        frames: Union[np.ndarray, List[np.ndarray], List[Image.Image]],
         pms_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYXY,
         regions: [] = None,

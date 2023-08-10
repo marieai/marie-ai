@@ -62,7 +62,7 @@ class DefaultOcrEngine(OcrEngine):
 
     def __process_extract_fullpage(
         self,
-        frames: np.ndarray,
+        frames: List[np.ndarray],
         queue_id: str,
         checksum: str,
         pms_mode: PSMode,
@@ -249,27 +249,28 @@ class DefaultOcrEngine(OcrEngine):
 
     def extract(
         self,
-        frames: Union[np.ndarray, List[Image.Image]],
+        frames: Union[np.ndarray, List[np.ndarray], List[Image.Image]],
         pms_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
         regions: [] = None,
         queue_id: str = None,
         **kwargs: Any,
-    ):
+    ) -> List[Dict]:
         try:
             queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
             regions = [] if regions is None else regions
-            ro_frames = [None] * len(frames)
+
+            ro_frames = []  # [None] * len(frames)
             # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
             for idx, frame in enumerate(frames):
                 f = frame
                 if isinstance(frame, Image.Image):
                     converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
                     f = converted
-                ro_frames[idx] = f.copy()
+                ro_frames.append(f.copy())
+                # ro_frames[idx] = f.copy()
 
             # calculate hash based on the image frame
-            # ro_frames = np.array(ro_frames)
             checksum = hash_frames_fast(ro_frames)
 
             self.logger.debug(

@@ -16,6 +16,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
+from marie.constants import __model_path__
 
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
@@ -118,8 +119,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             )
         self.device = resolved_devices[0]
 
-        kwargs = {
-            "__model_path__": os.path.expanduser("~/tmp/models"),
+        registry_kwargs = {
+            "__model_path__": __model_path__,
             "use_auth_token": use_auth_token,
         }
 
@@ -127,9 +128,10 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             model_name_or_path,
             version=None,
             raise_exceptions_for_missing_entries=True,
-            **kwargs,
+            **registry_kwargs,
         )
         assert os.path.exists(model_name_or_path)
+        self.logger.info(f"Resolved model : {model_name_or_path}")
 
         if tokenizer is None:
             tokenizer = model_name_or_path

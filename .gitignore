@@ -1,4 +1,4 @@
-
+lightning_logs/
 model_zoo/
 .cache/
 torch_compile_debug/

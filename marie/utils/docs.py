@@ -245,7 +245,7 @@ def docs_from_file(
     return docs
 
 
-def frames_from_file(img_path: StrOrBytesPath) -> np.ndarray:
+def frames_from_file(img_path: StrOrBytesPath) -> List[np.ndarray]:
     """Create Numpy frame array from image"""
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")

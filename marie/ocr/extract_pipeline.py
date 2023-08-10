@@ -27,6 +27,7 @@ from marie.utils.json import store_json_object, load_json_file
 from marie.utils.tiff_ops import burst_tiff_frames, merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
+from marie.ocr.util import get_words_and_boxes
 
 
 def split_filename(img_path: str) -> (str, str, str):
@@ -128,8 +129,6 @@ class ExtractPipeline:
         self.document_classifier = TransformersDocumentClassifier(
             model_name_or_path="marie/layoutlmv3-document-classification"
         )
-
-        # self.document_classifier.run(documents=DocumentArray(documents), words=[words], boxes=[boxes])
 
     def segment(
         self,
@@ -294,6 +293,7 @@ class ExtractPipeline:
         # clean frames are used for OCR and to generate clean document
         ocr_results = self.ocr_frames(ref_id, clean_frames, root_asset_dir)
 
+        self.classify(ref_id, ref_type, frames, ocr_results, root_asset_dir)
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
@@ -562,3 +562,44 @@ class ExtractPipeline:
                     )
                 except Exception as e:
                     self.logger.error(f"Error restoring assets {dir_to_restore} : {e}")
+
+    def classify(
+        self,
+        ref_id: str,
+        ref_type: str,
+        frames: list[np.ndarray],
+        ocr_results: dict,
+        root_asset_dir: str,
+    ):
+        """
+        Classify document at page level
+
+        :param ref_id: document reference id (e.g. filename)
+        :param ref_type: document reference type(e.g. document, page, process)
+        :param frames: list of frames (images)
+        :param ocr_results: OCR results
+        :param root_asset_dir: root asset directory
+        :return:
+        """
+        from marie.utils.docs import docs_from_image
+
+        documents = docs_from_image(frames)
+        words = []
+        boxes = []
+
+        for page_idx in range(len(documents)):
+            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
+            words.append(page_words)
+            boxes.append(page_boxes)
+
+        assert len(words) == len(boxes) == len(frames) == len(documents)
+        classified_docs = self.document_classifier.run(
+            documents=documents, words=words, boxes=boxes
+        )
+
+        for document in classified_docs:
+            assert 'classification' in document.tags
+            classification = document.tags['classification']
+            print("classification", classification)
+            assert 'label' in classification
+            assert 'score' in classification

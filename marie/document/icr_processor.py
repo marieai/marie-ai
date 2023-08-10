@@ -161,7 +161,7 @@ class IcrProcessor(BaseHandler):
                 confidence = extraction["confidence"]
                 conf_label = round(confidence, 3)
 
-                if conf_label < 0.5:
+                if False and conf_label < 0.5:
                     logger.warning(f"Low text confidence {conf_label} for {txt_label}")
                     # continue
 
