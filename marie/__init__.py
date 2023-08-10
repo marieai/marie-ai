@@ -18,33 +18,38 @@ from distutils.util import strtobool as strtobool
 if _sys.version_info < (3, 10, 0):
     raise OSError(f"Marie requires Python >= 3.10, but yours is {_sys.version_info}")
 
-if True or strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "true")):
-    import warnings
+if strtobool(_os.environ.get("MARIE_SUPPRESS_WARNINGS", "false")):
+    # attempt to suppress all warnings from dependencies
 
-    warnings.simplefilter(action="ignore", category=FutureWarning)
-    warnings.simplefilter(action="ignore", category=UserWarning)
-    warnings.simplefilter(action="ignore", category=DeprecationWarning)
+    _warnings.simplefilter(action="ignore", category=FutureWarning)
+    _warnings.simplefilter(action="ignore", category=UserWarning)
+    _warnings.simplefilter(action="ignore", category=DeprecationWarning)
 
-    # this will suppress all the warning
-    def warn(*args, **kwargs):
+    # # Compiled functions can't take variable number of arguments or use keyword-only arguments with defaults
+    try:
+
+        def warn(*args, **kwargs):
+            pass
+
+        # _warnings.warn = warn
+
+        # Work around for https://github.com/pytorch/pytorch/issues/29637
+        # We will owerwrite the formatting function for warnings to make it not print anything
+    except Exception as ex:
         pass
+else:
 
-    import warnings
+    def _warning_on_one_line(message, category, filename, lineno, *args, **kwargs):
+        return "\033[1;33m%s: %s\033[0m \033[1;30m(raised from %s:%s)\033[0m\n" % (
+            category.__name__,
+            message,
+            filename,
+            lineno,
+        )
 
-    warnings.warn = warn
+    _warnings.formatwarning = _warning_on_one_line
+    _warnings.simplefilter("always", DeprecationWarning)
 
-
-def _warning_on_one_line(message, category, filename, lineno, *args, **kwargs):
-    return "\033[1;33m%s: %s\033[0m \033[1;30m(raised from %s:%s)\033[0m\n" % (
-        category.__name__,
-        message,
-        filename,
-        lineno,
-    )
-
-
-_warnings.formatwarning = _warning_on_one_line
-_warnings.simplefilter("always", DeprecationWarning)
 # fix fork error on MacOS but seems no effect? must do EXPORT manually before jina start
 _os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 

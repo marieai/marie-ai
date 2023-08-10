@@ -1,16 +1,14 @@
 import io
 import json
-import multiprocessing
 import os
 from pathlib import Path
-import torch.nn.functional as F
 
-from PIL import Image, ImageDraw, ImageFont
-from fsspec.core import url_to_fs
-import torch.nn.functional as F
 import pandas as pd
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
+from PIL import Image
+from fsspec.core import url_to_fs
 from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from sklearn.metrics import (
@@ -29,7 +27,6 @@ from transformers import (
     AdamW,
     LayoutLMv3ImageProcessor,
     AutoConfig,
-    AutoModel,
 )
 
 from marie.logging.profile import TimeContext

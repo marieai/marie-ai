@@ -91,7 +91,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
         {"Content-Type": "application/json; charset=utf-8"},
     ]
 
-    NITER = 100
+    NITER = 1
 
     for k in range(NITER):
         start = time.time()

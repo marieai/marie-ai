@@ -168,11 +168,7 @@ class MarieLogger:
         self.logger.propagate = False
         self.logger.addFilter(MDCContextFilter(context))
 
-        context_vars = {
-            'name': name,
-            'uptime': __uptime__,
-            'context': context,
-        }
+        context_vars = {'name': name, 'uptime': __uptime__, 'context': context}
 
         self.add_handlers(log_config, **context_vars)
         self.debug = self.logger.debug

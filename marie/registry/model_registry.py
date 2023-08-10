@@ -140,7 +140,8 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
             if not os.path.exists(config):
                 if raise_exceptions_for_missing_entries:
                     raise EnvironmentError(
-                        f"{_name_or_path} does not appear to have a file named {full_filename}."
+                        f"{_name_or_path} does not appear to have a file named {full_filename} in root path : "
+                        f"{model_root}"
                     )
                 else:
                     return None, None
@@ -200,16 +201,20 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         raise_exceptions_for_missing_entries: bool = True,
         **kwargs: Any,
     ) -> Union[str | os.PathLike, None]:
+        model_name_or_path = ModelRegistryHandler.strip_prefix(
+            _name_or_path, self._get_supported_prefixes()
+        )
+
         if not self.discovered:
             self.discover(**kwargs)
-        if _name_or_path in self.resolved_models:
-            return self.resolved_models[_name_or_path]
+        if model_name_or_path in self.resolved_models:
+            return self.resolved_models[model_name_or_path]
         else:
             config_dir, config_data = self._resolve(
-                _name_or_path, raise_exceptions_for_missing_entries, **kwargs
+                model_name_or_path, raise_exceptions_for_missing_entries, **kwargs
             )
             if config_dir is not None:
-                self.resolved_models[_name_or_path] = config_dir
+                self.resolved_models[model_name_or_path] = config_dir
             return config_dir
 
     def _exists(self, _name_or_path: str, **kwargs: Any) -> bool:
@@ -233,29 +238,25 @@ class HuggingFaceModelRegistry(ModelRegistryHandler):
             _name_or_path, self._get_supported_prefixes()
         )
         # https://huggingface.co/docs/huggingface_hub/guides/download
-        _HUGGINGFACE_AVAILABLE = True
-        try:
-            import huggingface_hub
-        except ModuleNotFoundError:
-            _HUGGINGFACE_AVAILABLE = False
-
         model_path = None
         throwable = None
 
-        if _HUGGINGFACE_AVAILABLE:
-            try:
-                from huggingface_hub import snapshot_download
+        try:
+            from huggingface_hub import snapshot_download
 
-                model_path = snapshot_download(
-                    repo_id=model_name_or_path, revision=version, token=None
-                )
-            except Exception as e:
-                logger.error(f"Error downloading model from HuggingFace: {e}")
-                throwable = e
+            model_path = snapshot_download(
+                repo_id=model_name_or_path, revision=version, token=None
+            )
+        except Exception as e:
+            logger.error(f"Error downloading model from HuggingFace: {e}")
+            throwable = e
+        except ModuleNotFoundError as e:
+            logger.error(f"HuggingFace is not installed: {e}")
+            throwable = e
 
         if raise_exceptions_for_missing_entries and model_path is None:
             raise EnvironmentError(
-                f"{_name_or_path} does not appear to have a valid HuggingFace model",
+                f"{model_name_or_path} does not appear to have a valid HuggingFace model",
                 throwable,
             )
 

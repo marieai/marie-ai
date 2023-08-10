@@ -31,7 +31,7 @@ class BaseDocumentClassifier(BaseHandler):
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
-    ):
+    ) -> DocumentArray:
         """
         Run the document classifier on the given documents.
 

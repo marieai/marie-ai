@@ -1,5 +1,6 @@
 import os
 
+from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
 from marie.ocr.extract_pipeline import ExtractPipeline, split_filename, s3_asset_path
 from marie.storage import StorageManager
@@ -26,13 +27,14 @@ def setup_storage():
 
 if __name__ == "__main__":
     # setup_storage()
+    MDC.put('request_id', 'test')
 
     img_path = (
-        # "/home/gbugaj/dev/ldt-document-dump/cache/179575453.tif"
-        # "/home/gbugaj/tmp/eob-issues/158954482_0.png"
-        "/home/gbugaj/tmp/analysis/PID_1956_9362_0_177978797/300DPI/PID_1956_9362_0_177978797.tif"
-        # "~/tmp/blank.png"
-        # "~/tmp/4007/176081094.tif"
+        # "~/dev/ldt-document-dump/cache/179575453.tif"
+        # "~/tmp/eob-issues/158954482_0.png"
+        # "~/tmp/analysis/PID_1956_9362_0_177978797/300DPI/PID_1956_9362_0_177978797.tif"
+        # "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
+        "~/dev/ldt-document-dump/cache/181313152.tif"
     )
 
     # # Register VFS handlers
@@ -48,7 +50,7 @@ if __name__ == "__main__":
         raise Exception(f"File not found : {img_path}")
 
     frames = frames_from_file(img_path)
-    frames = [frames[1]]
+    # frames = [frames[1]]
     filename, prefix, suffix = split_filename(img_path)
     pipeline = ExtractPipeline()
 
