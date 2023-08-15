@@ -2,9 +2,6 @@ import asyncio
 import sys
 import time
 import traceback
-import uuid
-import contextvars
-
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional
 

@@ -71,6 +71,13 @@ To start the server, run the following command:
 marie server --start --uses /mnt/data/marie-ai/config/service/marie.yml
 ```
 
+
+For development purposes, you can also start the storage services in a separate container:
+```shell
+docker compose  --env-file ./config/.env -f ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
+```
+ 
+
 ### Memory profiling
 Via the `memray` command, you can profile the memory usage of the server :
 

@@ -465,3 +465,5 @@ https://github.com/NielsRogge/Transformers-Tutorials/blob/master/Table%20Transfo
 
 https://cloud.google.com/document-ai
 
+
+
