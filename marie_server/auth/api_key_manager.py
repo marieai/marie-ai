@@ -91,7 +91,8 @@ class APIKeyManager:
                 f" (must be 58 characters long and start with 'mas_' or 'mau_')"
             )
 
-        cls._keys[name] = {
+        cls._keys[key_conf["api_key"]] = {
+            "name": key_conf["name"],
             "api_key": key_conf["api_key"],
             "enabled": enabled,
         }
@@ -103,17 +104,17 @@ class APIKeyManager:
         """
         return cls._keys
 
-    def is_valid(self, key: str) -> bool:
+    @classmethod
+    def is_valid(cls, key: str) -> bool:
         """
         Check if a key is valid
         :param key: the key to check
         :return: True if the key is valid and enabled, False otherwise
         """
 
-        if key in self._keys:
-            if self._keys[key]["enabled"]:
+        if key in cls._keys:
+            if cls._keys[key]["enabled"]:
                 return True
-
         return False
 
     @classmethod

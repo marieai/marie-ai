@@ -18,9 +18,12 @@ api_base_url = "http://192.168.102.65:51000/api"
 # api_base_url = "http://172.20.10.41:51000/api"  # gpu-021
 
 default_queue_id = "0000-0000-0000-0000"
-api_key = "MY_API_KEY"
-auth_headers = {"Authorization": f"Bearer {api_key}"}
-headers = ({"Content-Type": "application/json; charset=utf-8"},)
+api_key = "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ"
+
+auth_headers = {
+    "Authorization": f"Bearer {api_key}",
+    "Content-Type": "application/json; charset=utf-8",
+}
 
 
 def online(api_ulr) -> bool:
@@ -86,24 +89,23 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     print(f"Uploading to marie-ai for processing : {file}")
     print(upload_url)
 
-    auth_headers = [
-        {"Authorization": f"Bearer {api_key}"},
-        {"Content-Type": "application/json; charset=utf-8"},
-    ]
-
     NITER = 1
+    json_result = None
 
     for k in range(NITER):
         start = time.time()
         result = requests.post(
             upload_url,
-            headers={"Content-Type": "application/json; charset=utf-8"},
+            headers=auth_headers,
             json=json_payload,
         )
+
+        if result.status_code != 200:
+            print(result.text)
+            raise Exception(f"Error : {result.status_code}, {result.text}")
+
         json_result = result.json()
         print(json_result)
-        # txt = json_result.text
-        # print(txt)
         delta = time.time() - start
         print(f"Request time : {delta}")
 
