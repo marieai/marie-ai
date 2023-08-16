@@ -140,6 +140,14 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
 async def handle_request(
     api_tag: str, request: Request, client: Client, handler: callable
 ):
+    """
+    Handle request from REST endpoint, parse payload, extract file and send it to the executor
+    :param api_tag:
+    :param request:
+    :param client:
+    :param handler:
+    :return:
+    """
     try:
         job_id = generate_job_id()
         MDC.put("request_id", job_id)

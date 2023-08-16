@@ -1,17 +1,15 @@
-import asyncio
-import curses
 import inspect
 import os
 import sys
 import traceback
 from typing import Dict, Any, Optional
+
 import torch
+from rich.traceback import install
+
+import marie.helper
 from marie import Flow
 from marie import __version__
-import marie.helper
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
-
 from marie.conf.helper import load_yaml
 from marie.constants import (
     __model_path__,
@@ -19,6 +17,8 @@ from marie.constants import (
     __marie_home__,
     __cache_path__,
 )
+from marie.logging.mdc import MDC
+from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
     Toast,
     NativeToastHandler,
@@ -27,8 +27,6 @@ from marie.messaging import (
 )
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
-from rich.traceback import install
-
 from marie_server.rest_extension import extend_rest_interface
 
 torch.set_float32_matmul_precision("high")
@@ -49,7 +47,7 @@ def setup_toast_events(toast_config: Dict[str, Any]):
         Toast.register(RabbitMQToastHandler(rabbitmq_config), native=False)
 
 
-def setup_storage(storage_config: Dict[str, Any]):
+def setup_storage(storage_config: Dict[str, Any]) -> None:
     """Setup the storage handler"""
 
     if "s3" in storage_config:
@@ -60,7 +58,7 @@ def setup_storage(storage_config: Dict[str, Any]):
         StorageManager.mkdir("s3://marie")
 
 
-def setup_scheduler(scheduler_config: Dict[str, Any]):
+def setup_scheduler(scheduler_config: Dict[str, Any]) -> None:
     """Set up the job scheduler"""
     if "psql" in scheduler_config:
         # check if the scheduler is enabled
@@ -71,6 +69,14 @@ def setup_scheduler(scheduler_config: Dict[str, Any]):
             scheduler.start_schedule()
     else:
         logger.warning("No scheduler config found")
+
+
+def setup_auth(auth_config: Dict[str, Any]) -> None:
+    """Set up the auth handler"""
+    print("auth_config", auth_config)
+    from marie_server.auth.api_key_manager import APIKeyManager
+
+    APIKeyManager.from_config(auth_config)
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
@@ -95,15 +101,15 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 def columns():
     """Returns the number of columns available for displaying the output."""
-    if 'COLUMNS' in os.environ:
-        return int(os.environ['COLUMNS'])
+    if "COLUMNS" in os.environ:
+        return int(os.environ["COLUMNS"])
 
     if not sys.stdout.isatty():
         return DEFAULT_TERM_COLUMNS
 
     try:
-        tput_columns = os.popen('tput cols', 'r').read().rstrip()
-        os.environ['COLUMNS'] = str(int(tput_columns))
+        tput_columns = os.popen("tput cols", "r").read().rstrip()
+        os.environ["COLUMNS"] = str(int(tput_columns))
 
         return int(tput_columns)
     except:
@@ -132,7 +138,7 @@ def __main__(
     sys.excepthook = handle_exception
     install(show_locals=True)
 
-    MDC.put("request_id", "0000")
+    MDC.put("request_id", "main")
     logger.info(f"Starting marie server : {__version__}")
 
     if "NO_VERSION_CHECK" not in os.environ:
@@ -158,10 +164,10 @@ def __main__(
         logging.basicConfig(
             level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)]
         )
-        logging.error('test')
-        logging.warning('test')
-        logging.info('test')
-        logging.debug('test')
+        logging.error("test")
+        logging.warning("test")
+        logging.info("test")
+        logging.debug("test")
         Console().print(shutil.get_terminal_size())
 
         sys.exit(1)
@@ -219,12 +225,18 @@ def __main__(
 
 
 def setup_server(config: Dict[str, Any]) -> None:
+    """
+    Set up the server
+    :param config: the config
+    """
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
+    setup_auth(config.get("auth", {}))
+
     # setup_scheduler(config.get("scheduler", {}))
 
 
-def filter_endpoint():
+def filter_endpoint() -> None:
     """
     Filter out dry_run endpoint from uvicorn logs
     :return:
