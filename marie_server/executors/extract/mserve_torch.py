@@ -10,7 +10,24 @@ from marie_server.rest_extension import (
     handle_request,
 )
 
+from fastapi import HTTPException, Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 extract_flow_is_ready = False
+
+security = HTTPBearer()
+
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Function that is used to validate the token in the case that it requires it
+    """
+    token = credentials.credentials
+    try:
+        payload = token
+        print("payload => ", payload)
+    except Exception as e:  # catches any exception
+        raise HTTPException(status_code=401, detail=str(e))
 
 
 def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
@@ -21,7 +38,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
     :return:
     """
 
-    @app.post('/api/text/extract-test', tags=['text', 'rest-api'])
+    @app.post("/api/text/extract-test", tags=["text", "rest-api"])
     async def text_extract_post_test(request: Request):
         default_logger.info("Executing text_extract_post")
         payload = await request.json()
@@ -32,7 +49,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         async def async_inputs():
             uuid_val = uuid.uuid4()
             for _ in range(2):
-                yield Document(text=f'Doc_{uuid_val}#{_}')
+                yield Document(text=f"Doc_{uuid_val}#{_}")
                 await asyncio.sleep(0.2)
 
         # {'data': ????, 'mode': 'multiline', 'output': 'json', 'doc_id': 'e8974900-0bee-4a9a-9c91-d8fdc909f446', 'doc_type': 'example_ner'
@@ -40,17 +57,17 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         print(">> ")
         outputs = DocumentArray()
         out_text = []
-        async for resp in client.post('/text/extract', async_inputs, request_size=1):
-            print('--' * 100)
+        async for resp in client.post("/text/extract", async_inputs, request_size=1):
+            print("--" * 100)
             print(resp)
             print(resp.texts)
             out_text.append(resp.texts)
-            print('++' * 100)
+            print("++" * 100)
             outputs.append(resp)
 
         return {"message": f"ZZZ : {len(outputs)}", "out_text": out_text}
 
-    @app.get('/api/extract', tags=['text', 'rest-api'])
+    @app.get("/api/extract", tags=["text", "rest-api"])
     async def text_extract_get(request: Request):
         default_logger.info("Executing text_extract_get")
         return {"message": "reply"}
@@ -58,7 +75,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
     async def __process(client: Client, input_docs, parameters):
         payload = {}
         async for resp in client.post(
-            '/text/extract',
+            "/text/extract",
             input_docs,
             request_size=-1,
             parameters=parameters,
@@ -69,7 +86,9 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
 
         return payload
 
-    @app.post('/api/extract', tags=['text', 'rest-api'])
+    @app.post(
+        "/api/extract", tags=["text", "rest-api"], dependencies=[Depends(verify_token)]
+    )
     async def text_extract_post(request: Request):
         """
         Handle API Extract endpoint
@@ -82,7 +101,11 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         extract_flow_is_ready = True
         return await handle_request("extract", request, client, __process)
 
-    @app.get('/api/text/status', tags=['text', 'rest-api'])
+    @app.get("/api/text/status", tags=["text", "rest-api"])
     async def text_status():
+        """
+        Handle API Status endpoint
+        :return:
+        """
         default_logger.info("Executing text_status")
         return {"status": "OK"}
