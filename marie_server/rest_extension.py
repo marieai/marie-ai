@@ -12,7 +12,7 @@ from marie import Client
 from marie.api import extract_payload
 from marie.api import value_from_payload_or_args
 from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
     mark_as_complete,
     mark_as_started,
@@ -140,14 +140,6 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
 async def handle_request(
     api_tag: str, request: Request, client: Client, handler: callable
 ):
-    """
-    Handle request from REST endpoint, parse payload, extract file and send it to the executor
-    :param api_tag:
-    :param request:
-    :param client:
-    :param handler:
-    :return:
-    """
     try:
         job_id = generate_job_id()
         MDC.put("request_id", job_id)
@@ -161,7 +153,7 @@ async def handle_request(
             with open(f"/tmp/payloads/{api_tag}.json", "w") as f:
                 f.write(str(payload))
 
-        default_logger.info(f"handle_request[{api_tag}] : {job_id}")
+        logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
 
         future = [
@@ -179,7 +171,7 @@ async def handle_request(
 
         return {"jobid": job_id, "status": "ok"}
     except Exception as e:
-        default_logger.error(f"Error: {e}")
+        logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
@@ -206,7 +198,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
     results = None
 
     try:
-        default_logger.info(f"Starting request: {job_id}")
+        logger.info(f"Starting request: {job_id}")
         parameters, input_docs = await parse_payload_to_docs(payload)
         job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
         parameters["job_id"] = job_id
@@ -234,7 +226,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
 
         return results
     except BaseException as e:
-        default_logger.error(f"processing error : {e}", exc_info=True)
+        logger.error(f"processing error : {e}", exc_info=True)
         status = "FAILED"
 
         # get the traceback and clear the frames to avoid memory leak

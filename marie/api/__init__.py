@@ -3,6 +3,7 @@ import imghdr
 import io
 import os
 from datetime import datetime
+from typing import Dict, Tuple
 
 import cv2
 import numpy as np
@@ -18,26 +19,23 @@ ALLOWED_TYPES = {"png", "jpeg", "tiff"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif"}
 
 
-def store_temp_file(message_bytes, queue_id, file_type, store_raw):
-    """Store temp file from decoded payload
-    :param message_bytes:
-    :param queue_id:
-    :param file_type:
-    :param store_raw:
-    :return:
+def store_temp_file(message_bytes, queue_id, file_type, store_raw) -> tuple[str, str]:
+    """Store temp file from decoded payload message
+    :param message_bytes: message bytes
+    :param queue_id: queue id to use for storing temp files
+    :param file_type: file type to store
+    :param store_raw: store raw file or convert to image
+    :return: tuple of temp file and checksum
     """
 
     m = hashlib.sha256()
     m.update(message_bytes)
-    checksum = m.hexdigest()
+    file_digest = m.hexdigest()
 
     upload_dir = ensure_exists(f"/tmp/marie/{queue_id}")
     ext = TYPES_TO_EXT[file_type]
 
-    current_datetime = datetime.now()
-    str_current_datetime = str(current_datetime)
-    # tmp_file = f"{upload_dir}/{checksum}_{str_current_datetime}.{ext}"
-    tmp_file = f"{upload_dir}/{checksum}.{ext}"
+    tmp_file = f"{upload_dir}/{file_digest}.{ext}"
 
     if store_raw:
         # message read directly from a file
@@ -51,7 +49,7 @@ def store_temp_file(message_bytes, queue_id, file_type, store_raw):
         img = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
         cv2.imwrite(tmp_file, img)
 
-    return tmp_file, checksum
+    return tmp_file, file_digest
 
 
 def extract_payload(payload, queue_id) -> tuple[str, str, str]:
@@ -129,10 +127,14 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
     if file_type == "tiff":
         store_raw = True
 
-    tmp_file, checksum = store_temp_file(data, queue_id, file_type, store_raw)
-    logger.info(f"File info: {checksum} {file_type}, {tmp_file}")
+    tmp_file, file_digest = store_temp_file(data, queue_id, file_type, store_raw)
+    # if we don't perform this check our method returns
+    # <built-in function print> instead of the actual value <str, str>
+    if not isinstance(file_digest, str):
+        raise Exception("Checksum is not a string")
 
-    return tmp_file, checksum, file_type
+    logger.info(f"File info: {file_digest} {file_type}, {tmp_file}")
+    return tmp_file, file_digest, file_type
 
 
 def value_from_payload_or_args(payload, key, default=None):
@@ -144,6 +146,7 @@ def value_from_payload_or_args(payload, key, default=None):
     :param default: the default value to assign
     :return:
     """
+
     ret_type = default
     if key in payload:
         ret_type = payload[key]

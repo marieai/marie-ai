@@ -1,17 +1,19 @@
 import asyncio
 import uuid
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
+from fastapi import HTTPException, Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.status import HTTP_403_FORBIDDEN, HTTP_401_UNAUTHORIZED
+
 from marie import Client, DocumentArray
 from marie import Document
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
+from marie_server.auth.api_key_manager import APIKeyManager
 from marie_server.rest_extension import (
     parse_response_to_payload,
     handle_request,
 )
-
-from fastapi import HTTPException, Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 extract_flow_is_ready = False
 
@@ -22,12 +24,19 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
     """
     Function that is used to validate the token in the case that it requires it
     """
-    token = credentials.credentials
     try:
-        payload = token
-        print("payload => ", payload)
-    except Exception as e:  # catches any exception
-        raise HTTPException(status_code=401, detail=str(e))
+        token = credentials.credentials
+        logger.info(f"Verifying token => {token}")
+        valid = APIKeyManager.is_valid(token)
+        if not valid:
+            raise HTTPException(
+                status_code=HTTP_401_UNAUTHORIZED, detail="Invalid API Key"
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            if e.status_code in [HTTP_403_FORBIDDEN, HTTP_401_UNAUTHORIZED]:
+                raise e
+        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail=str(e))
 
 
 def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
@@ -40,7 +49,8 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
 
     @app.post("/api/text/extract-test", tags=["text", "rest-api"])
     async def text_extract_post_test(request: Request):
-        default_logger.info("Executing text_extract_post")
+        logger.info("Executing text_extract_post")
+
         payload = await request.json()
         print(payload.keys())
         inputs = DocumentArray.empty(6)
@@ -69,7 +79,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
 
     @app.get("/api/extract", tags=["text", "rest-api"])
     async def text_extract_get(request: Request):
-        default_logger.info("Executing text_extract_get")
+        logger.info("Executing text_extract_get")
         return {"message": "reply"}
 
     async def __process(client: Client, input_docs, parameters):
@@ -107,5 +117,5 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         Handle API Status endpoint
         :return:
         """
-        default_logger.info("Executing text_status")
+        logger.info("Executing text_status")
         return {"status": "OK"}
