@@ -24,5 +24,4 @@ configs:
     markup: false
     rich_tracebacks: false
     show_path: false
-    log_time_format: '[%x %X]'
-    
+    log_time_format: '[%x %X]'    
