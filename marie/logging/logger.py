@@ -4,6 +4,7 @@ import logging.handlers
 import os
 import platform
 import sys
+import uuid
 from typing import Optional, NamedTuple, Mapping, Union
 
 from rich.logging import LogRender as _LogRender
@@ -161,12 +162,14 @@ class MarieLogger:
             name = os.getenv('MARIE_DEPLOYMENT_NAME', context)
 
         # Remove all handlers associated with the root logger object.
-        # for handler in logging.root.handlers[:]:
-        #     logging.root.removeHandler(handler)
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+
+        mdx_context_vars = {'request_id': ""}
 
         self.logger = logging.getLogger(context)
         self.logger.propagate = False
-        self.logger.addFilter(MDCContextFilter(context))
+        self.logger.addFilter(MDCContextFilter(context, **mdx_context_vars))
 
         context_vars = {'name': name, 'uptime': __uptime__, 'context': context}
 

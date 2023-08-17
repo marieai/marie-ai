@@ -193,8 +193,6 @@ class TextExtractionExecutorMock(Executor):
         import time
 
         print("TEXT-START")
-        time.sleep(5)
-        print("DONE")
 
     @requests(on="/text/status")
     def status(self, parameters, **kwargs):
