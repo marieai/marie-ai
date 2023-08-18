@@ -1,11 +1,12 @@
 from typing import Dict, Any
 
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
 from marie.messaging import Toast
 from marie.utils.json import to_json
 
 
 def event_builder(
+    api_key: str,
     job_id: str,
     event_name: str,
     job_tag: str,
@@ -14,6 +15,7 @@ def event_builder(
     payload: Any,
 ) -> Dict[str, Any]:
     msg = {
+        "api_key": api_key,
         "jobid": job_id,
         "event": event_name,
         "status": status,
@@ -25,6 +27,7 @@ def event_builder(
 
 
 async def mark_as_scheduled(
+    api_key: str,
     job_id: str,
     event_name: str,
     job_tag: str,
@@ -35,6 +38,7 @@ async def mark_as_scheduled(
     """
     Mark request as scheduled for processing, this will be called by when the request is received by the server
 
+    :param api_key: The API key that is used to authenticate the request.
     :param job_id:  The unique identifier that is assigned to the job.
     :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
     :param event_name: The operation used to analyze the input document, such as Extract or Overlay.
@@ -44,15 +48,16 @@ async def mark_as_scheduled(
     :return:
     """
 
-    default_logger.debug(f"Executing mark_as_scheduled : {job_id} : {timestamp}")
+    logger.debug(f"Executing mark_as_scheduled : {job_id} : {timestamp}")
     event = f"{event_name}.scheduled"
     await Toast.notify(
         event,
-        event_builder(job_id, event, job_tag, status, timestamp, payload),
+        event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
     )
 
 
 async def mark_as_started(
+    api_key: str,
     job_id: str,
     event_name: str,
     job_tag: str,
@@ -63,6 +68,7 @@ async def mark_as_started(
     """
     Mark request as stared, this will be called when the request has been started by worker process.
 
+    :param api_key: The API key that is used to authenticate the request.
     :param job_id:  The unique identifier that is assigned to the job.
     :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
     :param event_name: The operation used to analyze the input document, such as Extract or Overlay.
@@ -72,15 +78,16 @@ async def mark_as_started(
     :return:
     """
 
-    default_logger.debug(f"Executing mark_request_as_started : {job_id} : {timestamp}")
+    logger.debug(f"Executing mark_request_as_started : {job_id} : {timestamp}")
     event = f"{event_name}.started"
     await Toast.notify(
         event,
-        event_builder(job_id, event, job_tag, status, timestamp, payload),
+        event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
     )
 
 
 async def mark_as_failed(
+    api_key: str,
     job_id: str,
     event_name: str,
     job_tag: str,
@@ -91,6 +98,7 @@ async def mark_as_failed(
     """
     Mark request as failed
 
+    :param api_key: The API key that is used to authenticate the request.
     :param job_id:  The unique identifier that is assigned to the job.
     :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
     :param event_name: The operation used to analyze the input document, such as Extract or Overlay.
@@ -100,15 +108,16 @@ async def mark_as_failed(
     :return:
     """
 
-    default_logger.debug(f"Executing mark_request_as_failed : {job_id} : {timestamp}")
+    logger.debug(f"Executing mark_request_as_failed : {job_id} : {timestamp}")
     event = f"{event_name}.failed"
     await Toast.notify(
         event,
-        event_builder(job_id, event, job_tag, status, timestamp, payload),
+        event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
     )
 
 
 async def mark_as_complete(
+    api_key: str,
     job_id: str,
     event_name: str,
     job_tag: str,
@@ -119,6 +128,7 @@ async def mark_as_complete(
     """
     Mark request as completed
 
+    :param api_key: The API key that is used to authenticate the request.
     :param job_id:  The unique identifier that is assigned to the job.
     :param status: The status of the job. Valid values are Succeeded, Failed, or Error.
     :param event_name: The operation used to analyze the input document, such as Extract or Overlay.
@@ -127,9 +137,9 @@ async def mark_as_complete(
     :param payload:
     :return:
     """
-    default_logger.debug(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
+    logger.debug(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
     event = f"{event_name}.completed"
     await Toast.notify(
         event,
-        event_builder(job_id, event, job_tag, status, timestamp, payload),
+        event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
     )

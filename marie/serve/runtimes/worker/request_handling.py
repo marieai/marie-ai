@@ -838,8 +838,9 @@ class WorkerRequestHandler:
         self.logger.debug(
             f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
         )
-        rid = MDC.get('request_id')
-        print(f'rid: {rid}')
+        # rid = MDC.get('request_id')
+        # print(f'rid: {rid}')
+        # print(request)
 
     async def process_data(self, requests: List[DataRequest], context) -> DataRequest:
         """

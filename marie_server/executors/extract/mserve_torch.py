@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from typing import Annotated
 
 from fastapi import FastAPI, Request
 from fastapi import HTTPException, Depends
@@ -30,7 +31,9 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         valid = APIKeyManager.is_valid(token)
         if not valid:
             raise HTTPException(
-                status_code=HTTP_401_UNAUTHORIZED, detail="Invalid API Key"
+                status_code=HTTP_401_UNAUTHORIZED,
+                detail="Invalid API Key",
+                headers={"WWW-Authenticate": "Bearer"},
             )
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -99,12 +102,18 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
     @app.post(
         "/api/extract", tags=["text", "rest-api"], dependencies=[Depends(verify_token)]
     )
-    async def text_extract_post(request: Request):
+    async def text_extract_post(
+        request: Request, token: Annotated[str, Depends(verify_token)]
+    ):
         """
         Handle API Extract endpoint
         :param request:
+        :param token: API Key
         :return:
         """
+
+        logger.info(f"Executing text_extract_post : {token}")
+
         global extract_flow_is_ready
         if not extract_flow_is_ready and not await client.is_flow_ready():
             raise HTTPException(status_code=503, detail="Flow is not yet ready")
