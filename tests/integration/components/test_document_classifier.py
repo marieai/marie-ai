@@ -9,8 +9,6 @@ from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
 from marie.utils.json import load_json_file
 
-MDC.put("request_id", "")
-
 
 def test_sequence_classifier():
     # kwargs = {"__model_path__": __model_path__}

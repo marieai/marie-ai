@@ -25,9 +25,15 @@ class RabbitMQToastHandler(ToastHandler):
         self, notification: Any, silence_exceptions: bool = False, **kwargs: Any
     ) -> None:
         try:
+            if "API_KEY" not in notification:
+                raise ValueError(
+                    f"API_KEY not present in notification : {notification}"
+                )
+
             msg_config = self.config
-            exchange = "marie.events"
-            queue = "events"
+            api_key = notification["API_KEY"]
+            exchange = f"{api_key}.marie.events"
+            queue = f"{api_key}.events"
             routing_key = notification["event"] if "event" in notification else "*"
 
             client = BlockingPikaClient(conf=msg_config)
@@ -57,6 +63,8 @@ class RabbitMQToastHandler(ToastHandler):
     async def notify(self, notification: Any, **kwargs: Any) -> bool:
         if not self.config or not self.config["enabled"]:
             return False
+
+        print("Notification : ", notification)
 
         await self.__notify_task(notification, True, **kwargs)
         # task = asyncio.ensure_future(self.__notify_task(notification, True, **kwargs))

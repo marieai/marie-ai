@@ -1,20 +1,31 @@
 import os
 
 import gradio as gr
+import numpy as np
 from PIL import Image
 
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.docs import frames_from_file
+from marie.utils.image_utils import imwrite
 from marie.utils.utils import ensure_exists
 
 overlay_processor = OverlayProcessor(work_dir=ensure_exists("/tmp/form-segmentation"))
 
 
-def process_image(image):
-    src_img_path = "/tmp/segment.png"
-    image.save(src_img_path)
+def process_image(src_img_path):
+    # src_img_path = "/tmp/segment.png"
+    # image.save(src_img_path)
     docId = "segment"
     real, fake, blended = overlay_processor.segment(docId, src_img_path)
+
+    # debug image
+    if True:
+        stack_dir = ensure_exists("/tmp/overlay-stack")
+        # stacked = np.hstack((real, fake, blended))
+        stacked = np.hstack((real, blended))
+        save_path = os.path.join(stack_dir, f"{docId}.png")
+        imwrite(save_path, stacked)
+        print(f"Saving  document : {save_path}")
 
     return fake, blended
 
@@ -34,10 +45,9 @@ def interface():
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
         filename = selection["name"]
-        docId = "segment"
-        frame = frames_from_file(filename)[0]
-
-        real, fake, blended = overlay_processor.segment(docId, filename)
+        # docId = "segment"
+        real, blended = process_image(filename)
+        # real, fake, blended = overlay_processor.segment(docId, filename)
         return fake, blended
 
     with gr.Blocks() as iface:
@@ -72,7 +82,7 @@ def interface():
 
         btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
         btn_submit.click(process_image, inputs=[src], outputs=[fake, blended])
-        btn_reset.click(lambda: src.reset())
+        btn_reset.click(lambda: src.clear())
 
         gallery.select(gallery_click_handler, inputs=[gallery], outputs=[fake, blended])
 
