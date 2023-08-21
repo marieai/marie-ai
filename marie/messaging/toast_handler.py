@@ -48,5 +48,6 @@ class ToastHandler:
 
     @property
     def priority(self) -> int:
-        """The lower the priority, the earlier the handler is called. Default is 1. to make it the last handler to be called"""
+        """The lower the priority, the earlier the handler is called.
+        Default is 1. to make it the last handler to be called"""
         return 1

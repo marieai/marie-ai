@@ -1,11 +1,11 @@
-import asyncio
 from typing import Any, List
 
+from pika.exchange_type import ExchangeType
+
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.messaging.rabbitmq import BlockingPikaClient
 from marie.messaging.toast_handler import ToastHandler
-from pika.exchange_type import ExchangeType
-from marie.excepts import BadConfigSource
 
 
 class RabbitMQToastHandler(ToastHandler):
@@ -25,13 +25,13 @@ class RabbitMQToastHandler(ToastHandler):
         self, notification: Any, silence_exceptions: bool = False, **kwargs: Any
     ) -> None:
         try:
-            if "API_KEY" not in notification:
+            if "api_key" not in notification:
                 raise ValueError(
-                    f"API_KEY not present in notification : {notification}"
+                    f"'api_key' not present in notification : {notification}"
                 )
 
             msg_config = self.config
-            api_key = notification["API_KEY"]
+            api_key = notification["api_key"]
             exchange = f"{api_key}.marie.events"
             queue = f"{api_key}.events"
             routing_key = notification["event"] if "event" in notification else "*"
@@ -63,8 +63,6 @@ class RabbitMQToastHandler(ToastHandler):
     async def notify(self, notification: Any, **kwargs: Any) -> bool:
         if not self.config or not self.config["enabled"]:
             return False
-
-        print("Notification : ", notification)
 
         await self.__notify_task(notification, True, **kwargs)
         # task = asyncio.ensure_future(self.__notify_task(notification, True, **kwargs))
