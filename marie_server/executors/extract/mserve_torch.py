@@ -11,35 +11,13 @@ from marie import Client, DocumentArray
 from marie import Document
 from marie.logging.predefined import default_logger as logger
 from marie_server.auth.api_key_manager import APIKeyManager
+from marie_server.auth.auth_bearer import TokenBearer
 from marie_server.rest_extension import (
     parse_response_to_payload,
     handle_request,
 )
 
 extract_flow_is_ready = False
-
-security = HTTPBearer()
-
-
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """
-    Function that is used to validate the token in the case that it requires it
-    """
-    try:
-        token = credentials.credentials
-        logger.info(f"Verifying token => {token}")
-        valid = APIKeyManager.is_valid(token)
-        if not valid:
-            raise HTTPException(
-                status_code=HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            if e.status_code in [HTTP_403_FORBIDDEN, HTTP_401_UNAUTHORIZED]:
-                raise e
-        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail=str(e))
 
 
 def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
@@ -100,11 +78,9 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         return payload
 
     @app.post(
-        "/api/extract", tags=["text", "rest-api"], dependencies=[Depends(verify_token)]
+        "/api/extract", tags=["text", "rest-api"], dependencies=[Depends(TokenBearer())]
     )
-    async def text_extract_post(
-        request: Request, token: Annotated[str, Depends(verify_token)]
-    ):
+    async def text_extract_post(request: Request, token: str = Depends(TokenBearer())):
         """
         Handle API Extract endpoint
         :param request:
@@ -112,13 +88,13 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         :return:
         """
 
-        logger.info(f"Executing text_extract_post : {token}")
+        logger.info(f"text_extract_postXXX : {token}")
 
         global extract_flow_is_ready
         if not extract_flow_is_ready and not await client.is_flow_ready():
             raise HTTPException(status_code=503, detail="Flow is not yet ready")
         extract_flow_is_ready = True
-        return await handle_request("extract", request, client, __process)
+        return await handle_request(token, "extract", request, client, __process)
 
     @app.get("/api/text/status", tags=["text", "rest-api"])
     async def text_status():

@@ -44,9 +44,8 @@ class Toast:
 
     @staticmethod
     async def notify(event: str, notification: Any, **kwargs: Any):
-        # lets fire and forget
-        if "API_KEY" not in notification:
-            raise ValueError(f"API_KEY not present in notification : {notification}")
+        if "api_key" not in notification:
+            raise ValueError(f"'api_key' not present in notification : {notification}")
 
         tasks = [
             asyncio.ensure_future(handler.notify(notification, **kwargs))

@@ -138,8 +138,17 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
 
 
 async def handle_request(
-    api_tag: str, request: Request, client: Client, handler: callable
+    api_key: str, api_tag: str, request: Request, client: Client, handler: callable
 ):
+    """
+    Handle request from REST API
+    :param api_key:  API Key
+    :param api_tag:  API Tag (e.g. extract, ner, overlay)
+    :param request:  FastAPI request object
+    :param client:  Marie Client
+    :param handler:  Handler function
+    :return:
+    """
     try:
         job_id = generate_job_id()
         MDC.put("request_id", job_id)
@@ -158,7 +167,9 @@ async def handle_request(
 
         future = [
             asyncio.ensure_future(
-                process_request(api_tag, job_id, payload, partial(handler, client))
+                process_request(
+                    api_key, api_tag, job_id, payload, partial(handler, client)
+                )
             )
         ]
 
@@ -175,7 +186,9 @@ async def handle_request(
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-async def process_request(api_tag: str, job_id: str, payload: Any, handler: callable):
+async def process_request(
+    api_key: str, api_tag: str, job_id: str, payload: Any, handler: callable
+):
     """
     When request is processed, it will be marked as  `STARTED` and then `COMPLETED` or `FAILED`.
     If there is an error, it will be marked as `FAILED` with the error message supplied from the caller.
@@ -184,13 +197,12 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         SCHEDULED -> STARTED -> COMPLETED
         SCHEDULED -> STARTED -> FAILED
 
-    Args:
-        api_tag:
-        job_id:
-        payload:
-        handler:
-
-    Returns:
+    :param api_key: API Key
+    :param api_tag: API Tag (e.g. extract, ner, overlay)
+    :param job_id:  Job ID
+    :param payload:  Payload
+    :param handler:  Handler function
+    :return:
     """
 
     status = "OK"
@@ -208,11 +220,11 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         # Currently we are scheduling the job before we start processing the request to avoid out of order jobs
         # When we start processing the request, we will mark the job as `STARTED` in the worker node
         await mark_as_scheduled(
-            job_id, api_tag, job_tag, status, int(time.time()), payload
+            api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
         )
 
         await mark_as_started(
-            job_id, api_tag, job_tag, status, int(time.time()), payload
+            api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
         )
 
         async def run(op, _docs, _param):
@@ -221,7 +233,7 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
         results = await run(handler, input_docs, parameters)
 
         await mark_as_complete(
-            job_id, api_tag, job_tag, status, int(time.time()), results
+            api_key, job_id, api_tag, job_tag, status, int(time.time()), results
         )
 
         return results
@@ -244,4 +256,6 @@ async def process_request(api_tag: str, job_id: str, payload: Any, handler: call
             "name": name,
             "line_no": line_no,
         }
-        await mark_as_failed(job_id, api_tag, job_tag, status, int(time.time()), exc)
+        await mark_as_failed(
+            api_key, job_id, api_tag, job_tag, status, int(time.time()), exc
+        )
