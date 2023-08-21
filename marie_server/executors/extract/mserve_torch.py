@@ -1,16 +1,12 @@
 import asyncio
 import uuid
-from typing import Annotated
 
 from fastapi import FastAPI, Request
 from fastapi import HTTPException, Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from starlette.status import HTTP_403_FORBIDDEN, HTTP_401_UNAUTHORIZED
 
 from marie import Client, DocumentArray
 from marie import Document
 from marie.logging.predefined import default_logger as logger
-from marie_server.auth.api_key_manager import APIKeyManager
 from marie_server.auth.auth_bearer import TokenBearer
 from marie_server.rest_extension import (
     parse_response_to_payload,
@@ -84,11 +80,11 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         """
         Handle API Extract endpoint
         :param request:
-        :param token: API Key
+        :param token: API Key token
         :return:
         """
 
-        logger.info(f"text_extract_postXXX : {token}")
+        logger.info(f"text_extract_post : {token}")
 
         global extract_flow_is_ready
         if not extract_flow_is_ready and not await client.is_flow_ready():

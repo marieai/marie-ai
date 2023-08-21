@@ -1,8 +1,9 @@
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from marie import Client
 from marie.logging.predefined import default_logger
+from marie_server.auth.auth_bearer import TokenBearer
 
 from marie_server.rest_extension import parse_response_to_payload, parse_payload_to_docs
 
@@ -18,8 +19,14 @@ def extend_rest_interface_ner(app: FastAPI, client: Client) -> None:
     :return:
     """
 
-    @app.post('/api/ner/{queue_id}', tags=['ner', 'rest-api'])
-    @app.post('/api/ner', tags=['ner', 'rest-api'])
+    @app.post(
+        '/api/ner/{queue_id}',
+        tags=['ner', 'rest-api'],
+        dependencies=[Depends(TokenBearer())],
+    )
+    @app.post(
+        '/api/ner', tags=['ner', 'rest-api'], dependencies=[Depends(TokenBearer())]
+    )
     async def text_ner_post(request: Request):
         default_logger.info("Executing text_ner_post")
         try:
