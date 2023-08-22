@@ -178,8 +178,14 @@ def visualize_icr(
             words_all.append(text)
 
             # get text size
-            text_size = font.getsize(text)
-            button_size = (text_size[0] + 8, text_size[1] + 8)
+            # text_size = font.getsize(text) #  Use getbbox or getlength instead.
+            text_size = font.getbbox(text)
+            text_w = text_size[2] - text_size[0]
+            text_h = text_size[3] - text_size[1]
+
+            button_size = (text_w + 8, text_h + 8)
+            # button_size = (text_size[0] + 8, text_size[1] + 8)
+
             # create image with correct size and black background
             button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
             # put text on button with 10px margins
