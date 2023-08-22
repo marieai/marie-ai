@@ -138,7 +138,12 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
 
 
 async def handle_request(
-    api_key: str, api_tag: str, request: Request, client: Client, handler: callable
+    api_key: str,
+    api_tag: str,
+    request: Request,
+    client: Client,
+    handler: callable,
+    endpoint: str,
 ):
     """
     Handle request from REST API
@@ -147,6 +152,7 @@ async def handle_request(
     :param request:  FastAPI request object
     :param client:  Marie Client
     :param handler:  Handler function
+    :param endpoint: Endpoint URL to call on the client
     :return:
     """
     try:
@@ -168,7 +174,11 @@ async def handle_request(
         future = [
             asyncio.ensure_future(
                 process_request(
-                    api_key, api_tag, job_id, payload, partial(handler, client)
+                    api_key,
+                    api_tag,
+                    job_id,
+                    payload,
+                    partial(handler, client, endpoint=endpoint),
                 )
             )
         ]
@@ -184,6 +194,23 @@ async def handle_request(
     except Exception as e:
         logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+async def process_document_request(
+    client: Client, input_docs, parameters: dict, endpoint: str
+):
+    payload = {}
+    async for resp in client.post(
+        endpoint,
+        input_docs,
+        request_size=-1,
+        parameters=parameters,
+        return_responses=True,
+    ):
+        payload = parse_response_to_payload(resp, expect_return_value=False)
+        break  # we only need the first response
+
+    return payload
 
 
 async def process_request(

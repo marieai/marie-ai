@@ -11,6 +11,7 @@ from marie_server.auth.auth_bearer import TokenBearer
 from marie_server.rest_extension import (
     parse_response_to_payload,
     handle_request,
+    process_document_request,
 )
 
 extract_flow_is_ready = False
@@ -24,7 +25,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
     :return:
     """
 
-    @app.post("/api/text/extract-test", tags=["text", "rest-api"])
+    @app.post("/api/document/extract-test", tags=["text", "rest-api"])
     async def text_extract_post_test(request: Request):
         logger.info("Executing text_extract_post")
 
@@ -54,15 +55,15 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
 
         return {"message": f"ZZZ : {len(outputs)}", "out_text": out_text}
 
-    @app.get("/api/extract", tags=["text", "rest-api"])
+    @app.get("/api/document/extract", tags=["document", "rest-api"])
     async def text_extract_get(request: Request):
         logger.info("Executing text_extract_get")
         return {"message": "reply"}
 
-    async def __process(client: Client, input_docs, parameters):
+    async def __processXXXXX(client: Client, input_docs, parameters):
         payload = {}
         async for resp in client.post(
-            "/text/extract",
+            "/document/extract",
             input_docs,
             request_size=-1,
             parameters=parameters,
@@ -74,7 +75,9 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         return payload
 
     @app.post(
-        "/api/extract", tags=["text", "rest-api"], dependencies=[Depends(TokenBearer())]
+        "/api/document/extract",
+        tags=["document", "rest-api"],
+        dependencies=[Depends(TokenBearer())],
     )
     async def text_extract_post(request: Request, token: str = Depends(TokenBearer())):
         """
@@ -90,9 +93,16 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         if not extract_flow_is_ready and not await client.is_flow_ready():
             raise HTTPException(status_code=503, detail="Flow is not yet ready")
         extract_flow_is_ready = True
-        return await handle_request(token, "extract", request, client, __process)
+        return await handle_request(
+            token,
+            "extract",
+            request,
+            client,
+            process_document_request,
+            "/document/extract",
+        )
 
-    @app.get("/api/text/status", tags=["text", "rest-api"])
+    @app.get("/api/document/status", tags=["text", "rest-api"])
     async def text_status():
         """
         Handle API Status endpoint

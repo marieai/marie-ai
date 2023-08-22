@@ -1,1 +1,1 @@
-from .overlay_executor import tor
+from .overlay_executor import OverlayExecutor

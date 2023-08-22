@@ -9,7 +9,7 @@ from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
 from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger
+from marie.logging.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat
 from marie.ocr.extract_pipeline import ExtractPipeline
 from marie.utils.docs import array_from_docs
@@ -48,17 +48,7 @@ class TextExtractionExecutor(Executor):
             "use_cuda": use_cuda,
         }
 
-    @requests(on="/text/info")
-    def info(self, **kwargs):
-        self.logger.info(f"Self : {self}")
-        return {"index": "complete"}
-
-    @requests(on="/text/read")
-    def read(self, **kwargs):
-        self.logger.info(f"Self : {self}")
-        return {"index": "complete"}
-
-    @requests(on="/text/extract")
+    @requests(on="/document/extract")
     # @safely_encoded
     def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         """Load the image from `uri`, extract text and bounding boxes.
@@ -156,6 +146,16 @@ class TextExtractionExecutor(Executor):
                     "error": "inference exception",
                 }
 
+    @requests(on="/document/status")
+    def status(self, parameters, **kwargs):
+        use_cuda = torch.cuda.is_available()
+        print(f"{use_cuda=}")
+        return {"index": "complete", "use_cuda": use_cuda}
+
+    @requests(on="/document/validate")
+    def validate(self, parameters, **kwargs):
+        return {"valid": True}
+
 
 class TextExtractionExecutorMock(Executor):
     def __init__(
@@ -194,18 +194,22 @@ class TextExtractionExecutorMock(Executor):
 
         print("TEXT-START")
 
-    @requests(on="/text/status")
+    @requests(on="/document/status")
     def status(self, parameters, **kwargs):
         use_cuda = torch.cuda.is_available()
         print(f"{use_cuda=}")
         return {"index": "complete", "use_cuda": use_cuda}
 
-    @requests(on="/text/extract")
+    @requests(on="/document/validate")
+    def validate(self, parameters, **kwargs):
+        return {"valid": True}
+
+    @requests(on="/document/extract")
     @safely_encoded
     def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
-        default_logger.info(f"Executing extract : {len(docs)}")
-        default_logger.info(kwargs)
-        default_logger.info(parameters)
+        logger.info(f"Executing extract : {len(docs)}")
+        logger.info(kwargs)
+        logger.info(parameters)
 
         import threading
         import time
@@ -224,7 +228,7 @@ class TextExtractionExecutorMock(Executor):
 
         print("AFTER")
         print(payload)
-        time.sleep(1.3)
+        time.sleep(5)
 
         for doc in docs:
             doc.text = f"{doc.text} : >> {threading.get_ident()}"

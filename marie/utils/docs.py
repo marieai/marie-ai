@@ -225,7 +225,13 @@ def array_from_docs(
 def docs_from_file(
     path: StrOrBytesPath, pages: Optional[List[int]] = None
 ) -> DocumentArray:
-    """Create DocumentArray from image"""
+    """
+    Create DocumentArray from image file
+
+    :param path:  path to image file
+    :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
+    :return: DocumentArray with tensor content
+    """
     if path is not None:
         path = os.path.expanduser(path)
 
@@ -234,14 +240,15 @@ def docs_from_file(
 
     loaded, frames = load_image(path)
     docs = DocumentArray()
+    # no pages specified, we will use all pages as documents
+    if pages is None or len(pages) == 0:
+        pages = [i for i in range(len(frames))]
 
     if loaded:
         for idx, frame in enumerate(frames):
-            if pages is not None and idx not in pages:
+            if idx not in pages:
                 continue
-
-            document = Document(content=frame)
-            docs.append(document)
+            docs.append(Document(content=frame))
     return docs
 
 

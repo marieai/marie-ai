@@ -1,15 +1,13 @@
 import base64
-import glob
 import os
+import threading
 import time
 import uuid
 
 import requests
-from PIL import Image
 
-from marie.executor.ner.utils import visualize_icr
-from marie.utils.utils import ensure_exists
 from examples.utils import setup_queue
+from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
 default_queue_id = "0000-0000-0000-0000"
@@ -22,26 +20,26 @@ auth_headers = {
 
 
 def online(api_ulr) -> bool:
-    import requests
-
     r = requests.head(api_ulr)
+    print(r.status_code)
     # The 308 (Permanent Redirect)
     return r.status_code == 200 or r.status_code == 308
 
 
-def process_extract(queue_id: str, mode: str, file_location: str) -> str:
+def process_extract(
+    queue_id: str, mode: str, file_location: str, stop_event: threading.Event = None
+) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
-    upload_url = f"{api_base_url}/extract/{queue_id}"
-    upload_url = f"{api_base_url}/extract"
+    endpoint_url = f"{api_base_url}/document/extract"
     # upload_url = f"{api_base_url}/overlay"
     # upload_url = f"{api_base_url}/ner/{queue_id}"
     # upload_url = f"{api_base_url}/ner"
 
-    print(api_base_url)
-    print(upload_url)
+    print(endpoint_url)
     if False and not online(api_base_url):
-        raise Exception(f"API server is not online : {api_base_url}")
+        stop_event.set()
+        raise Exception(f"API server is not online : {endpoint_url}")
 
     # Prepare file for upload
     with open(file_location, "rb") as file:
@@ -84,7 +82,7 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     # print(json_payload)
     # Upload file to api
     print(f"Uploading to marie-ai for processing : {file}")
-    print(upload_url)
+    print(endpoint_url)
 
     NITER = 1
     json_result = None
@@ -92,13 +90,13 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     for k in range(NITER):
         start = time.time()
         result = requests.post(
-            upload_url,
+            endpoint_url,
             headers=auth_headers,
             json=json_payload,
         )
 
         if result.status_code != 200:
-            print(result.text)
+            stop_event.set()
             raise Exception(f"Error : {result}")
 
         json_result = result.json()
@@ -109,45 +107,28 @@ def process_extract(queue_id: str, mode: str, file_location: str) -> str:
     return json_result
 
 
-def process_dir(image_dir: str):
-    for idx, img_path in enumerate(
-        glob.glob(os.path.join(os.path.expanduser(image_dir), "*.*"))
-    ):
-        try:
-            icr_data = process_extract(
-                queue_id=default_queue_id, mode="multiline", file_location=img_path
-            )
-            print(icr_data)
-            image = Image.open(src).convert("RGB")
-            visualize_icr(image, icr_data)
-        except Exception as e:
-            print(e)
-            # raise e
-
-
 if __name__ == "__main__":
     ensure_exists("/tmp/snippet")
 
-    # Specify the path to the file you would like to process
-    src = "./set-001/test/fragment-003.png"
-
-    if False:
-        process_dir("~/dataset/assets-private/corr-indexer/validation")
+    stop_event = threading.Event()
 
     setup_queue(
-        api_key, "events", "extract.completed", lambda x: print(f"callback: {x}")
+        api_key,
+        "extract.events",
+        stop_event,
+        ["extract.completed", "extract.failed"],
+        lambda x: print(f"callback: {x}"),
     )
 
-    if True:
-        src = "~/tmp/PID_1925_9289_0_157186264.tif"
-        src = "~/tmp/PID_1028_7826_0_157684456.tif"
-        src = os.path.expanduser(src)
-        print(src)
+    # Specify the path to the file you would like to process
+    src = os.path.expanduser("~/tmp/PID_1028_7826_0_157684456.tif")
+    print(src)
 
-        json_result = process_extract(
-            queue_id=default_queue_id, mode="multiline", file_location=src
-        )
+    json_result = process_extract(
+        queue_id=default_queue_id,
+        mode="multiline",
+        file_location=src,
+        stop_event=stop_event,
+    )
 
-        print(json_result)
-        # image = Image.open(src).convert("RGB")
-        # visualize_icr(image, icr_data)
+    print(json_result)
