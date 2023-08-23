@@ -7,7 +7,6 @@ import uuid
 import requests
 
 from examples.utils import setup_queue, online
-from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
 default_queue_id = "0000-0000-0000-0000"
@@ -24,7 +23,7 @@ def process_extract(
 ) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
-    endpoint_url = f"{api_base_url}/document/extract"
+    endpoint_url = f"{api_base_url}/document/classify"
 
     print(endpoint_url)
     if False and not online(api_base_url):
@@ -36,39 +35,16 @@ def process_extract(
         encoded_bytes = base64.b64encode(file.read())
         base64_str = encoded_bytes.decode("utf-8")
 
-    # Treat the image as a single word.
-    # WORD = "word"
-    # Sparse text. Find as much text as possible in no particular order.
-    # SPARSE = "sparse"
-    # Treat the image as a single text line.
-    # LINE = "line"
-    # Raw line. Treat the image as a single text line, NO bounding box detection performed.
-    # RAW_LINE = "raw_line"
-    # Multiline. Treat the image as multiple text lines, NO bounding box detection performed.
-    # MULTI_LINE = "multiline"
-
-    # Attributes
-    # data[null]=> base 64 encoded image
-    # mode['word]=> extraction mode
-    # output['json']=> json,text,pdf
-
     uid = str(uuid.uuid4())
-
-    json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-    # json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-
     json_payload = {
         "queue_id": queue_id,
         "data": base64_str,
         # "uri": "s3://marie/incoming/PID_1764_8829_0_179519650.tif",
-        "mode": mode,
-        "output": "json",
-        "doc_id": f"extract-{uid}",
+        "modelXXX": "marie/layoutlmv3-document-classification",
+        "doc_id": f"classify-{uid}",
         "doc_type": "lbx",
-        # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
     }
 
-    # print(json_payload)
     # Upload file to api
     print(f"Uploading to marie-ai for processing : {file}")
     print(endpoint_url)
@@ -97,22 +73,21 @@ def process_extract(
 
 
 if __name__ == "__main__":
-    ensure_exists("/tmp/snippet")
-
     stop_event = threading.Event()
 
     setup_queue(
         api_key,
-        "extract",
-        "extract.#",
+        "classifier",
+        "classify.#",
         stop_event,
-        ["extract.completed", "extract.failed"],
+        ["classify.completed", "classify.failed"],
         lambda x: print(f"callback: {x}"),
     )
 
     # Specify the path to the file you would like to process
     src = os.path.expanduser("~/tmp/PID_1028_7826_0_157684456.tif")
     src = os.path.expanduser("~/tmp/PID_1925_9289_0_157186264.png")
+
     print(src)
 
     json_result = process_extract(

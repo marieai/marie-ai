@@ -44,6 +44,9 @@ def extend_rest_interface(app: "FastAPI") -> "FastAPI":
     from .executors.overlay.mserve_torch import (
         extend_rest_interface_overlay,
     )
+    from .executors.classifier.mserve_torch import (
+        extend_rest_interface_classifier,
+    )
 
     client = Client(
         host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
@@ -52,6 +55,7 @@ def extend_rest_interface(app: "FastAPI") -> "FastAPI":
     extend_rest_interface_extract(app, client)
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
+    extend_rest_interface_classifier(app, client)
 
     return app
 
@@ -144,6 +148,7 @@ async def handle_request(
     client: Client,
     handler: callable,
     endpoint: str,
+    validate_payload_callback: Optional[callable] = None,
 ):
     """
     Handle request from REST API
@@ -153,6 +158,7 @@ async def handle_request(
     :param client:  Marie Client
     :param handler:  Handler function
     :param endpoint: Endpoint URL to call on the client
+    :param validate_payload_callback: Callback function to validate payload
     :return:
     """
     try:
@@ -167,6 +173,11 @@ async def handle_request(
             ensure_exists("/tmp/payloads")
             with open(f"/tmp/payloads/{api_tag}.json", "w") as f:
                 f.write(str(payload))
+
+        if validate_payload_callback:
+            status, msg = validate_payload_callback(payload)
+            if not status:
+                return {"jobid": job_id, "status": "failed", "message": msg}
 
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
@@ -199,6 +210,14 @@ async def handle_request(
 async def process_document_request(
     client: Client, input_docs, parameters: dict, endpoint: str
 ):
+    """
+    Process document request
+    :param client:
+    :param input_docs:
+    :param parameters:
+    :param endpoint:
+    :return:
+    """
     payload = {}
     async for resp in client.post(
         endpoint,

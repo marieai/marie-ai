@@ -34,6 +34,10 @@ DEFAULT_TERM_COLUMNS = 120
 
 
 def setup_toast_events(toast_config: Dict[str, Any]):
+    """
+    Setup the toast events for the server notification system
+    :param toast_config: The toast config
+    """
     native_config = toast_config["native"]
     psql_config = toast_config["psql"]
     rabbitmq_config = toast_config["rabbitmq"]
@@ -121,6 +125,12 @@ def main(
     env: Optional[Dict[str, str]] = None,
     env_file: Optional[str] = None,
 ):
+    """
+    Main entry point for the Marie server
+    :param yml_config:
+    :param env:
+    :param env_file:
+    """
     __main__(yml_config, env, env_file)
 
 

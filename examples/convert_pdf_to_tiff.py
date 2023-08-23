@@ -1,25 +1,13 @@
-import base64
+import glob
 import glob
 import os
-import time
-import uuid
-
-import requests
-from PIL import Image
-
-from marie.executor.ner.utils import visualize_icr
-from marie.utils.docs import frames_from_file
-from marie.utils.tiff_ops import merge_tiff_frames
-from marie.utils.utils import ensure_exists
-
-
-from marie.utils.json import load_json_file, store_json_object
-
-from PIL import Image
 
 from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, array_from_docs
-from marie.utils.image_utils import hash_file, hash_frames_fast
+from marie.utils.docs import frames_from_file
+from marie.utils.image_utils import hash_frames_fast
+from marie.utils.tiff_ops import merge_tiff_frames
+from marie.utils.utils import ensure_exists
 
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr")

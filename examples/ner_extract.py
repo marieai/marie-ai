@@ -6,7 +6,7 @@ import uuid
 
 import requests
 
-from examples.utils import setup_queue
+from examples.utils import setup_queue, online
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
@@ -17,13 +17,6 @@ auth_headers = {
     "Authorization": f"Bearer {api_key}",
     "Content-Type": "application/json; charset=utf-8",
 }
-
-
-def online(api_ulr) -> bool:
-    r = requests.head(api_ulr)
-    print(r.status_code)
-    # The 308 (Permanent Redirect)
-    return r.status_code == 200 or r.status_code == 308
 
 
 def process_extract(
@@ -90,7 +83,8 @@ if __name__ == "__main__":
 
     setup_queue(
         api_key,
-        "ner.events",
+        "ner",
+        "ner.#",
         stop_event,
         ["ner.completed", "ner.failed"],
         lambda x: print(f"callback: {x}"),
@@ -98,6 +92,7 @@ if __name__ == "__main__":
 
     # Specify the path to the file you would like to process
     src = os.path.expanduser("~/tmp/PID_1028_7826_0_157684456.tif")
+    src = os.path.expanduser("~/tmp/PID_1925_9289_0_157186264.png")
     print(src)
 
     json_result = process_extract(

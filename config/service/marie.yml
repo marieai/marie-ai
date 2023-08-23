@@ -17,7 +17,7 @@ shared_config:
     amazon_mq :  &amazon_mq_conf_shared
       provider: amazon-rabbitmq
       hostname: ${{ ENV.AWS_MQ_HOSTNAME }}
-      port: 5671
+      port: 15672
       username: ${{ ENV.AWS_MQ_USERNAME }}
       password: ${{ ENV.AWS_MQ_PASSWORD }}
       tls: True
@@ -110,7 +110,7 @@ with:
   event_tracking: True
 
   expose_endpoints:
-    /text/extract:
+    /document/extract:
       methods: ["POST"]
       summary: Extract data-POC
       tags:
@@ -133,44 +133,37 @@ with:
       tags:
         - ner
 
+    /document/classify:
+      methods: ["POST"]
+      summary: Classify document at page level
+      tags:
+        - classify
+
 executors:
-  - name: extract_t
-    uses:
-      jtype: TextExtractionExecutorMock
-      metas:
-        py_modules:
-          - marie.executor.text
-    timeout_ready: 3000000
-    replicas: 4
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-    env :
-      CUDA_VISIBLE_DEVICES: RR
+#  - name: extract_executor
+#    uses:
+#      jtype: TextExtractionExecutorMock
+#      metas:
+#        py_modules:
+#          - marie.executor.text
+#    timeout_ready: 3000000
+#    replicas: 1
+##    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
 
 
-  - name: extract_xyz
-    uses:
-      jtype: TextExtractionExecutorMock
-      metas:
-        py_modules:
-          - marie.executor.text
-    timeout_ready: 3000000
-    replicas: 4
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-    env :
-      CUDA_VISIBLE_DEVICES: RR
-
-# Authentication and Authorization configuration
-auth:
-  keys:
-    - name : service-A
-      api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
-      enabled : True
-      roles : [admin, user]
-
-    - name : service-B
-      api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
-      enabled : True
-      roles : [admin, user]
+#  - name: extract_xyz
+#    uses:
+#      jtype: TextExtractionExecutorMock
+#      metas:
+#        py_modules:
+#          - marie.executor.text
+#    timeout_ready: 3000000
+#    replicas: 1
+##    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
 
 #  - name: ner_t
 #    uses:
@@ -188,6 +181,24 @@ auth:
 #    replicas: ${{ CONTEXT.gpu_device_count }}
 #    env :
 #      CUDA_VISIBLE_DEVICES: RR
+
+  - name: document_classifier
+    uses:
+      jtype: DocumentClassificationExecutor
+      with:
+        model_name_or_path :
+          - 'marie/layoutlmv3-document-classification'
+          - 'marie/layoutlmv3-document-classification'
+        <<: *psql_conf_shared
+        storage_enabled : False
+      metas:
+        py_modules:
+          - marie.executor.classifier
+    timeout_ready: 3000000
+#    replicas: 1
+    replicas: ${{ CONTEXT.gpu_device_count }}
+    env :
+      CUDA_VISIBLE_DEVICES: RR
 ##
 #  - name: overlay_t
 #    uses:
@@ -201,5 +212,17 @@ auth:
 #          - marie.executor.overlay
 #    timeout_ready: 3000000
 #    replicas: 1
-#
 
+# Authentication and Authorization configuration
+
+auth:
+  keys:
+    - name : service-A
+      api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
+      enabled : True
+      roles : [admin, user]
+
+    - name : service-B
+      api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
+      enabled : True
+      roles : [admin, user]

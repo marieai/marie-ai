@@ -55,7 +55,14 @@ class BlockingPikaClient:
         passive=False,
         durable=False,
     ) -> Any:
-
+        """
+        Declare an exchange on the RabbitMQ server
+        :param exchange:
+        :param exchange_type:
+        :param passive:
+        :param durable:
+        :return:
+        """
         return self.channel.exchange_declare(
             exchange=exchange,
             exchange_type=exchange_type,
@@ -64,6 +71,12 @@ class BlockingPikaClient:
         )
 
     def publish_message(self, exchange, routing_key, message):
+        """
+        Publish a message to an exchange with a routing key
+        :param exchange:
+        :param routing_key:
+        :param message:
+        """
         # channel = self.connection.channel()
         channel = self.channel
         hdrs = {"key": "val"}
