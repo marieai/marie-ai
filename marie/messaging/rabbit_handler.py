@@ -35,22 +35,24 @@ class RabbitMQToastHandler(ToastHandler):
             api_key = notification["api_key"]
 
             exchange = f"{api_key}.events"
-            queue = f"{api_key}.events"
+            queue = f"{api_key}.all-events"
 
             routing_key = notification["event"] if "event" in notification else "*"
-            print("routing_key", routing_key)
+
             client = BlockingPikaClient(conf=msg_config)
             # Declare the destination exchange with the topic exchange type to allow routing
             client.exchange_declare(
                 exchange, durable=True, exchange_type=ExchangeType.topic
             )
 
-            if False:
-                client.declare_queue(queue, durable=True)
-                # Bind the queue to the destination exchange
-                client.channel.queue_bind(
-                    queue, exchange=exchange, routing_key=routing_key
-                )
+            # ensure the queue exists and is bound to the exchange
+            # The mandatory flag tells RabbitMq that the message must be routable
+            # to a queue. If it is not, the message will be returned to the publisher
+            # this is why we need to declare a catch-all (default) queue and bind it to the exchange
+
+            client.declare_queue(queue, durable=True)
+            # Bind the queue to the destination exchange
+            client.channel.queue_bind(queue, exchange=exchange, routing_key="#")
 
             client.publish_message(
                 exchange=exchange, routing_key=routing_key, message=notification

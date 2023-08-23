@@ -39,8 +39,9 @@ Examples of how to use this library to accomplish various tasks can be found in 
 It contains code examples for:
 
 * Document cleanup
-* Optical character recognition
-* Textbox detection
+* Optical character recognition (OCR)
+* Document Classification
+* Document Splitter
 * Named Entity Recognition
 * Form detection
 * And more
