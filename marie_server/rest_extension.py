@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import time
 import traceback
@@ -161,6 +162,9 @@ async def handle_request(
     :param validate_payload_callback: Callback function to validate payload
     :return:
     """
+
+    silence_exceptions = strtobool(os.environ.get("MARIE_SILENCE_EXCEPTIONS", False))
+
     try:
         job_id = generate_job_id()
         MDC.put("request_id", job_id)
@@ -204,7 +208,18 @@ async def handle_request(
         return {"jobid": job_id, "status": "ok"}
     except Exception as e:
         logger.error(f"Error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        code = 500
+        detail = "Internal Server Error"
+
+        if not silence_exceptions:
+            if isinstance(e, HTTPException):
+                code = e.status_code
+                detail = e.detail
+            else:
+                detail = e.__str__()
+
+        return {"status": "error", "error": {"code": code, "message": detail}}
+        # raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 async def process_document_request(
