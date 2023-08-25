@@ -20,6 +20,7 @@
         image: "marieai/marie:{{ image_tag }}"
         state: started
         recreate: "{{ (stack_name == 'dev') | bool }}"
+#        auto_remove: "{{ (stack_name == 'dev') | bool }}"
         pull: true
         tty: true
         restart_policy: "always" # always | on-failure | unless-stopped
