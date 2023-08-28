@@ -1,9 +1,9 @@
 import glob
 import os
 import shutil
+from datetime import datetime
 from functools import partial
 from typing import Union, List
-from datetime import datetime
 
 import numpy as np
 import torch
@@ -12,22 +12,22 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
-from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
 from marie.ocr.mock_ocr_engine import MockOcrEngine
+from marie.ocr.util import get_words_and_boxes
 from marie.overlay.overlay import OverlayProcessor
 from marie.renderer import TextRenderer, PdfRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
 from marie.storage import StorageManager
+from marie.utils.docs import docs_from_image
 from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object, load_json_file
 from marie.utils.tiff_ops import burst_tiff_frames, merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
-from marie.ocr.util import get_words_and_boxes
 
 
 def split_filename(img_path: str) -> (str, str, str):
@@ -103,7 +103,8 @@ def s3_asset_path(
 class ExtractPipeline:
     def __init__(
         self,
-        models_dir: str = os.path.join(__model_path__),
+        # models_dir: str = os.path.join(__model_path__),
+        pipeline_config: dict[str, any] = None,
         cuda: bool = True,
         **kwargs,
     ) -> None:
@@ -127,7 +128,10 @@ class ExtractPipeline:
         )
 
         self.document_classifier = TransformersDocumentClassifier(
-            model_name_or_path="marie/layoutlmv3-document-classification"
+            model_name_or_path=pipeline_config["page_classifier"]["model_name_or_path"],
+            batch_size=1,
+            use_gpu=False,
+            # batch_size=pipeline_config["page_classifier"]["batch_size"],
         )
 
     def segment(
@@ -270,7 +274,7 @@ class ExtractPipeline:
 
     def execute_frames_pipeline(
         self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str
-    ) -> None:
+    ) -> dict[str, any]:
 
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
@@ -279,6 +283,14 @@ class ExtractPipeline:
             f"Executing pipeline for document : {ref_id}, {ref_type} > {root_asset_dir}"
         )
 
+        # document metadata
+        metadata = {}
+
+        metadata["ref_id"] = ref_id
+        metadata["ref_type"] = ref_type
+        metadata[
+            "pages"
+        ] = f"{len(frames)}"  # Using string to avoid type conversion issues
         # check if we have already processed this document and restore assets
         self.restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
@@ -289,17 +301,22 @@ class ExtractPipeline:
 
         # make sure we have clean image
         clean_frames = self.segment(ref_id, frames, root_asset_dir)
-
         # clean frames are used for OCR and to generate clean document
         ocr_results = self.ocr_frames(ref_id, clean_frames, root_asset_dir)
 
-        self.classify(ref_id, ref_type, frames, ocr_results, root_asset_dir)
+        metadata["ocr"] = ocr_results
+        metadata["classification"] = self.classify(
+            ref_id, ref_type, frames, ocr_results, root_asset_dir
+        )
+
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
 
         self.pack_assets(ref_id, root_asset_dir)
-        self.store_assets(ref_id, ref_type, root_asset_dir)
+        metadata["assets"] = self.store_assets(ref_id, ref_type, root_asset_dir)
+
+        return metadata
 
     def execute_regions_pipeline(
         self,
@@ -343,7 +360,7 @@ class ExtractPipeline:
         regions: List = None,
         queue_id: str = None,
         **payload_kwargs,
-    ):
+    ) -> dict[str, any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
         then only the specified regions will be extracted from the document with the rest of the steps being skipped.
@@ -394,7 +411,9 @@ class ExtractPipeline:
                 coordinate_format,
             )
         else:
-            self.execute_frames_pipeline(ref_id, ref_type, frames, root_asset_dir)
+            return self.execute_frames_pipeline(
+                ref_id, ref_type, frames, root_asset_dir
+            )
 
     def render_text(self, frames, results, root_asset_dir):
         renderer = TextRenderer(config={"preserve_interword_spaces": True})
@@ -484,7 +503,9 @@ class ExtractPipeline:
             os.path.join(assets_dir, f"{prefix}.pdf"),
         )
 
-    def store_assets(self, ref_id: str, ref_type: str, root_asset_dir: str) -> None:
+    def store_assets(
+        self, ref_id: str, ref_type: str, root_asset_dir: str
+    ) -> List[str]:
         """
         Store assets in primary storage (S3)
 
@@ -495,20 +516,24 @@ class ExtractPipeline:
         """
 
         try:
+            s3_asset_base = s3_asset_path(ref_id, ref_type)
+
             connected = StorageManager.ensure_connection(
                 "s3://", silence_exceptions=True
             )
             if not connected:
                 self.logger.error(f"Error storing assets : Could not connect to S3")
-                return
+                return [s3_asset_base]
 
             # copy the files to s3
             StorageManager.copy_dir(
                 root_asset_dir,
-                s3_asset_path(ref_id, ref_type),
+                s3_asset_base,
                 relative_to_dir=root_asset_dir,
                 match_wildcard="*",
             )
+
+            return StorageManager.list(s3_asset_base, return_full_path=True)
         except Exception as e:
             self.logger.error(f"Error storing assets : {e}")
 
@@ -519,7 +544,7 @@ class ExtractPipeline:
         root_asset_dir: str,
         full_restore=False,
         overwrite=False,
-    ) -> None:
+    ) -> str or None:
         """
         Restore assets from primary storage (S3) into root asset directory. This restores
         the assets from the last run of the extrac pipeline.
@@ -533,11 +558,12 @@ class ExtractPipeline:
         :return:
         """
 
+        s3_root_path = s3_asset_path(ref_id, ref_type)
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
         if not connected:
             self.logger.error(f"Error restoring assets : Could not connect to S3")
-            return
-        s3_root_path = s3_asset_path(ref_id, ref_type)
+            return None
+
         self.logger.info(f"Restoring assets from {s3_root_path} to {root_asset_dir}")
 
         if full_restore:
@@ -562,13 +588,14 @@ class ExtractPipeline:
                     )
                 except Exception as e:
                     self.logger.error(f"Error restoring assets {dir_to_restore} : {e}")
+        return s3_root_path
 
     def classify(
         self,
         ref_id: str,
         ref_type: str,
-        frames: list[np.ndarray],
-        ocr_results: dict,
+        frames: List[np.ndarray],
+        ocr_results: dict[str, any],
         root_asset_dir: str,
     ):
         """
@@ -579,27 +606,40 @@ class ExtractPipeline:
         :param frames: list of frames (images)
         :param ocr_results: OCR results
         :param root_asset_dir: root asset directory
-        :return:
+        :return: classification results
         """
-        from marie.utils.docs import docs_from_image
+        try:
+            documents = docs_from_image(frames)
 
-        documents = docs_from_image(frames)
-        words = []
-        boxes = []
+            words = []
+            boxes = []
+            meta = []
 
-        for page_idx in range(len(documents)):
-            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
-            words.append(page_words)
-            boxes.append(page_boxes)
+            for page_idx in range(len(documents)):
+                page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
+                words.append(page_words)
+                boxes.append(page_boxes)
 
-        assert len(words) == len(boxes) == len(frames) == len(documents)
-        classified_docs = self.document_classifier.run(
-            documents=documents, words=words, boxes=boxes
-        )
+            assert len(words) == len(boxes) == len(documents)
+            classified_docs = self.document_classifier.run(
+                documents=documents, words=words, boxes=boxes
+            )
 
-        for document in classified_docs:
-            assert 'classification' in document.tags
-            classification = document.tags['classification']
-            print("classification", classification)
-            assert 'label' in classification
-            assert 'score' in classification
+            for idx, document in enumerate(classified_docs):
+                assert 'classification' in document.tags
+                classification = document.tags['classification']
+                print("classification", classification)
+                assert 'label' in classification
+                assert 'score' in classification
+                meta.append(
+                    {
+                        'page': f"{idx}",  # Using string to avoid type conversion issues
+                        'classification': classification['label'],
+                        'score': classification['score'],
+                    }
+                )
+
+            self.logger.info(f"Classification : {meta}")
+            return meta
+        except Exception as e:
+            self.logger.error(f"Error classifying document : {e}")

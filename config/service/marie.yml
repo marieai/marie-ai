@@ -152,6 +152,33 @@ executors:
 #    env :
 #      CUDA_VISIBLE_DEVICES: RR
 
+  - name: extract_t
+    uses:
+      jtype: TextExtractionExecutor
+      #      jtype: TextExtractionExecutorMock
+      with:
+        storage:
+          # postgresql configuration. Will be used only if value of backend is "psql"
+          psql:
+            <<: *psql_conf_shared
+            default_table: extract_metadata
+            enabled: True
+        pipeline:
+          name: 'default'
+          page_classifier:
+            model_name_or_path: 'marie/lmv3-medical-document-classification'
+            enabled: True
+          page_splitter:
+            model_name_or_path: 'marie/lmv3-medical-document-splitter'
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.text
+    timeout_ready: 3000000
+    replicas: 1
+    #    replicas: ${{ CONTEXT.gpu_device_count }}
+    env:
+      CUDA_VISIBLE_DEVICES: RR
 
 #  - name: extract_xyz
 #    uses:
