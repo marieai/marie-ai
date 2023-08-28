@@ -224,7 +224,7 @@ def test_write_dir(tmpdir, docker_compose):
     expected = N * len(dirs)
 
     # list the files
-    items = StorageManager.list("s3://marie/wt/")
+    items = StorageManager.list("s3://marie/wt/", return_full_path=True)
     assert len(items) == expected
 
     # # copy the files back

@@ -1,18 +1,14 @@
-import asyncio
 import base64
 import os
 import uuid
 
 from marie import Client
-from marie.executor.ner.utils import visualize_icr
 from marie.executor.text import TextExtractionExecutor
-from marie.renderer import PdfRenderer, TextRenderer
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.docs import array_from_docs, docs_from_file
-from marie.utils.json import load_json_file, store_json_object
+from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists
 from marie_server.rest_extension import (
-    parse_payload_to_docs,
     parse_payload_to_docs_sync,
 )
 

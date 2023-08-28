@@ -122,9 +122,17 @@ docker compose -f ./Dockerfiles/docker-compose.yml --project-directory . up cons
 Start storage
 ```shell
 docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
-
 ```
 ## Docker 
+
+
+Start Marie-AI with minimal dependencies
+
+```sh 
+docker compose  --env-file ./config/.env -f ./Dockerfiles/docker-compose.yml -f ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans 
+```
+
+
 
 ### CPU
 Building docker container 

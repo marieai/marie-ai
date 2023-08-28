@@ -1,13 +1,14 @@
 import os
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, Any
 
 import numpy as np
 import torch
-from docarray import DocumentArray
+from docarray import DocumentArray, Document
 
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
+from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat
@@ -17,22 +18,40 @@ from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 
 
-class TextExtractionExecutor(Executor):
+class TextExtractionExecutor(Executor, StorageMixin):
     """
     Executor for extracting text.
     Text extraction can either be executed out over the entire image or over selected regions of interests (ROIs)
     aka bounding boxes.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        name: str = "",
+        device: Optional[str] = None,
+        num_worker_preprocess: int = 4,
+        storage: dict[str, any] = None,
+        pipeline: dict[str, any] = None,
+        dtype: Optional[Union[str, torch.dtype]] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
+
+        logger.info(f"Starting executor : {self.__class__.__name__}")
+        logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
+        logger.info(f"Storage config: {storage}")
+        logger.info(f"Pipeline config: {pipeline}")
+        logger.info(f"Device : {device}")
+        logger.info(f"Num worker preprocess : {num_worker_preprocess}")
+        logger.info(f"Kwargs : {kwargs}")
+
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.pipeline = ExtractPipeline(cuda=use_cuda)
+        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=use_cuda)
 
         instance_name = "not_defined"
         if kwargs is not None:
@@ -48,8 +67,13 @@ class TextExtractionExecutor(Executor):
             "use_cuda": use_cuda,
         }
 
+        if storage is not None and "psql" in storage:
+            sconf = storage["psql"]
+            storage_enabled = sconf.get("enabled", False)
+            self.setup_storage(storage_enabled, sconf)
+
     @requests(on="/document/extract")
-    # @safely_encoded
+    @safely_encoded
     def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         """Load the image from `uri`, extract text and bounding boxes.
         :param parameters:
@@ -99,12 +123,14 @@ class TextExtractionExecutor(Executor):
                     self.logger.debug("The p-value of {} is {}".format(key, value))
                 ref_id = parameters.get("ref_id")
                 ref_type = parameters.get("ref_type")
+                job_id = parameters.get("job_id", "0000-0000-0000-0000")
             else:
                 self.logger.warning(
                     f"REF_ID and REF_TYPE are not present in parameters"
                 )
                 ref_id = hash_frames_fast(frames)
                 ref_type = "extract"
+                job_id = "0000-0000-0000-0000"
 
             self.logger.debug(
                 "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
@@ -116,7 +142,7 @@ class TextExtractionExecutor(Executor):
             if "args" in payload:
                 payload_kwargs = payload["args"]
 
-            self.pipeline.execute(
+            metadata = self.pipeline.execute(
                 ref_id=ref_id,
                 ref_type=ref_type,
                 frames=frames,
@@ -127,24 +153,33 @@ class TextExtractionExecutor(Executor):
                 **payload_kwargs,
             )
 
+            metadata["jobid"] = job_id
+
             del frames
             del regions
 
-            return {"status": "succeeded", "runtime_info": self.runtime_info}
+            self.persist(ref_id, ref_type, metadata)
+
+            # strip out ocr results from metadata
+            include_ocr = False
+            if not include_ocr and "ocr" in metadata:
+                del metadata["ocr"]
+
+            return {
+                "status": "succeeded",
+                "runtime_info": self.runtime_info,
+                "metadata": metadata,
+            }
         except BaseException as error:
             self.logger.error(f"Extract error : {error}", exc_info=False)
+            msg = "inference exception"
             if self.show_error:
-                return {
-                    "status": "error",
-                    "runtime_info": self.runtime_info,
-                    "error": str(error),
-                }
-            else:
-                return {
-                    "status": "error",
-                    "runtime_info": self.runtime_info,
-                    "error": "inference exception",
-                }
+                msg = (str(error),)
+            return {
+                "status": "error",
+                "runtime_info": self.runtime_info,
+                "error": msg,
+            }
 
     @requests(on="/document/status")
     def status(self, parameters, **kwargs):
@@ -156,6 +191,36 @@ class TextExtractionExecutor(Executor):
     def validate(self, parameters, **kwargs):
         return {"valid": True}
 
+    def persist(self, ref_id: str, ref_type: str, results: Any) -> None:
+        """Persist results"""
+
+        def _tags(index: int, ftype: str, checksum: str):
+            return {
+                "action": "extract",
+                "index": index,
+                "type": ftype,
+                "ttl": 48 * 60,
+                "checksum": checksum,
+            }
+
+        if self.storage_enabled:
+            # frame_checksum = hash_frames_fast(frames=[frame])
+            docs = DocumentArray(
+                [
+                    Document(
+                        content=results,
+                        tags=_tags(-1, "metadata", ref_id),
+                    )
+                ]
+            )
+
+            self.store(
+                ref_id=ref_id,
+                ref_type=ref_type,
+                store_mode="content",
+                docs=docs,
+            )
+
 
 class TextExtractionExecutorMock(Executor):
     def __init__(
@@ -163,6 +228,7 @@ class TextExtractionExecutorMock(Executor):
         name: str = "",
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
+        pipeline: Optional[dict[str, any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -174,6 +240,10 @@ class TextExtractionExecutorMock(Executor):
         :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
         """
         super().__init__(**kwargs)
+        import time
+
+        logger.info(f"Starting mock executor : {time.time()}")
+
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
@@ -190,8 +260,9 @@ class TextExtractionExecutorMock(Executor):
             "use_cuda": use_cuda,
             "device": self.device.__str__() if self.device is not None else "",
         }
-        import time
 
+        logger.info(f"Runtime info: {self.runtime_info}")
+        logger.info(f"Pipeline : {pipeline}")
         print("TEXT-START")
 
     @requests(on="/document/status")
