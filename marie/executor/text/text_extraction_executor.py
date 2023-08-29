@@ -150,10 +150,9 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 coordinate_format=coordinate_format,
                 regions=regions,
                 queue_id=queue_id,
+                job_id=job_id,
                 **payload_kwargs,
             )
-
-            metadata["jobid"] = job_id
 
             del frames
             del regions
