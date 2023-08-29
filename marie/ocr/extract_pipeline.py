@@ -3,6 +3,7 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 from typing import Union, List
 
 import numpy as np
@@ -273,7 +274,7 @@ class ExtractPipeline:
         return results
 
     def execute_frames_pipeline(
-        self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str
+        self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str, job_id: str
     ) -> dict[str, any]:
 
         if ref_type is None or ref_id is None:
@@ -288,6 +289,8 @@ class ExtractPipeline:
 
         metadata["ref_id"] = ref_id
         metadata["ref_type"] = ref_type
+        metadata["job_id"] = job_id
+
         metadata[
             "pages"
         ] = f"{len(frames)}"  # Using string to avoid type conversion issues
@@ -313,10 +316,21 @@ class ExtractPipeline:
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
 
-        self.pack_assets(ref_id, root_asset_dir)
-        metadata["assets"] = self.store_assets(ref_id, ref_type, root_asset_dir)
+        self.pack_assets(ref_id, ref_type, root_asset_dir, metadata)
+        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        self.store_assets(ref_id, ref_type, root_asset_dir)
 
         return metadata
+
+    def store_metadata(
+        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, any]
+    ) -> None:
+        """
+        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
+        """
+        filename, prefix, suffix = split_filename(ref_id)
+        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
+        store_json_object(metadata, metadata_path)
 
     def execute_regions_pipeline(
         self,
@@ -359,6 +373,7 @@ class ExtractPipeline:
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
         regions: List = None,
         queue_id: str = None,
+        job_id: str = None,
         **payload_kwargs,
     ) -> dict[str, any]:
         """
@@ -380,6 +395,7 @@ class ExtractPipeline:
         :param coordinate_format: coordinate format for OCR default is XYWH
         :param regions:  regions to extract from the document pages
         :param queue_id:  queue id to associate with the document
+        :param job_id: job id to associate with the document
         :param payload_kwargs:  additional payload arguments
         :return:
         """
@@ -412,7 +428,7 @@ class ExtractPipeline:
             )
         else:
             return self.execute_frames_pipeline(
-                ref_id, ref_type, frames, root_asset_dir
+                ref_id, ref_type, frames, root_asset_dir, job_id
             )
 
     def render_text(self, frames, results, root_asset_dir):
@@ -471,7 +487,9 @@ class ExtractPipeline:
             filename_generator=lambda x: f"{prefix}_{x}.{suffix}.xml",
         )
 
-    def pack_assets(self, ref_id: str, root_asset_dir):
+    def pack_assets(
+        self, ref_id: str, ref_type: str, root_asset_dir, metadata: dict[str, any]
+    ):
         # create assets
         assets_dir = ensure_exists(os.path.join(root_asset_dir, "assets"))
         blob_dir = os.path.join(root_asset_dir, "blobs")
@@ -502,6 +520,21 @@ class ExtractPipeline:
             os.path.join(pdf_dir, "results.pdf"),
             os.path.join(assets_dir, f"{prefix}.pdf"),
         )
+
+        remote_path = s3_asset_path(
+            ref_id, ref_type, include_prefix=False, include_filename=False
+        )
+        resolved_paths = []
+
+        for path in Path(root_asset_dir).rglob("*"):
+            if not path.is_file():
+                continue
+            resolved_path = path.relative_to(root_asset_dir)
+            resolved_path = os.path.join(remote_path, resolved_path)
+            resolved_paths.append(resolved_path)
+        metadata["assets"] = resolved_paths
+
+        return metadata
 
     def store_assets(
         self, ref_id: str, ref_type: str, root_asset_dir: str
