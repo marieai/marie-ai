@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Union, List
+from typing import Union, List, Optional
 
 import numpy as np
 import torch
@@ -131,8 +131,7 @@ class ExtractPipeline:
         self.document_classifier = TransformersDocumentClassifier(
             model_name_or_path=pipeline_config["page_classifier"]["model_name_or_path"],
             batch_size=1,
-            use_gpu=False,
-            # batch_size=pipeline_config["page_classifier"]["batch_size"],
+            use_gpu=True,
         )
 
     def segment(
@@ -274,7 +273,13 @@ class ExtractPipeline:
         return results
 
     def execute_frames_pipeline(
-        self, ref_id: str, ref_type: str, frames: List, root_asset_dir: str, job_id: str
+        self,
+        ref_id: str,
+        ref_type: str,
+        frames: List,
+        root_asset_dir: str,
+        job_id: str,
+        runtime_conf: Optional[dict[str, any]] = None,
     ) -> dict[str, any]:
 
         if ref_type is None or ref_id is None:
@@ -283,6 +288,12 @@ class ExtractPipeline:
         self.logger.info(
             f"Executing pipeline for document : {ref_id}, {ref_type} > {root_asset_dir}"
         )
+        self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
+
+        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
+            "enabled", True
+        )
+        self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
 
         # document metadata
         metadata = {}
@@ -308,9 +319,11 @@ class ExtractPipeline:
         ocr_results = self.ocr_frames(ref_id, clean_frames, root_asset_dir)
 
         metadata["ocr"] = ocr_results
-        metadata["classification"] = self.classify(
-            ref_id, ref_type, frames, ocr_results, root_asset_dir
-        )
+
+        if page_classifier_enabled:
+            metadata["page_classifier"] = self.classify(
+                ref_id, ref_type, frames, ocr_results, root_asset_dir
+            )
 
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
@@ -374,7 +387,7 @@ class ExtractPipeline:
         regions: List = None,
         queue_id: str = None,
         job_id: str = None,
-        **payload_kwargs,
+        runtime_conf: Optional[dict[str, any]] = None,
     ) -> dict[str, any]:
         """
         Execute the pipeline for the document with the given frames.If regions are specified,
@@ -386,7 +399,8 @@ class ExtractPipeline:
         2. Burst the document
         3. Perform OCR on the document
         4. Extract the regions from the document
-        5. Store the results in the backend store(s3 , redis, etc.)
+        5. Classify the document
+        6. Store the results in the backend store(s3 , redis, etc.)
 
         :param ref_id:  reference id of the document (e.g. file name)
         :param ref_type: reference type of the document (e.g. invoice, receipt, etc)
@@ -396,7 +410,7 @@ class ExtractPipeline:
         :param regions:  regions to extract from the document pages
         :param queue_id:  queue id to associate with the document
         :param job_id: job id to associate with the document
-        :param payload_kwargs:  additional payload arguments
+        :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute)
         :return:
         """
 
@@ -413,8 +427,7 @@ class ExtractPipeline:
         root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
 
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
-        self.logger.info(f"Frames : {len(frames)}")
-        self.logger.info(f"Payload args : {payload_kwargs}")
+        self.logger.info(f"runtime_conf args : {runtime_conf}")
 
         if regions and len(regions) > 0:
             self.execute_regions_pipeline(
@@ -428,10 +441,10 @@ class ExtractPipeline:
             )
         else:
             return self.execute_frames_pipeline(
-                ref_id, ref_type, frames, root_asset_dir, job_id
+                ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
             )
 
-    def render_text(self, frames, results, root_asset_dir):
+    def render_text(self, frames, results, root_asset_dir) -> None:
         renderer = TextRenderer(config={"preserve_interword_spaces": True})
         renderer.render(
             frames,
@@ -439,7 +452,7 @@ class ExtractPipeline:
             output_filename=os.path.join(root_asset_dir, "results.txt"),
         )
 
-    def render_pdf(self, ref_id: str, frames, results, root_asset_dir):
+    def render_pdf(self, ref_id: str, frames, results, root_asset_dir) -> None:
         output_dir = ensure_exists(os.path.join(root_asset_dir, "pdf"))
         renderer = PdfRenderer(config={})
         # generating two pdfs one with overlay and one without

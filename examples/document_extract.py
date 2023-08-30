@@ -65,7 +65,18 @@ def process_extract(
         "output": "json",
         "doc_id": f"extract-{uid}",
         "doc_type": "lbx",
-        # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
+        "features": [
+            {
+                "type": "pipeline",
+                "name": "default",
+                "page_classifier": {
+                    "enabled": False,
+                },
+                "page_splitter": {
+                    "enabled": False,
+                },
+            }
+        ],
     }
 
     # print(json_payload)
