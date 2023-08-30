@@ -137,10 +137,15 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 f" checksum: {ref_id}, {ref_type},  {frame_len}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}"
             )
-
             payload_kwargs = {}
             if "args" in payload:
-                payload_kwargs = payload["args"]
+                payload_kwargs["args"] = payload["args"]
+
+            runtime_conf = {}
+            if "features" in payload:
+                for feature in payload["features"]:
+                    if "type" in feature and feature["type"] == "pipeline":
+                        runtime_conf = feature
 
             metadata = self.pipeline.execute(
                 ref_id=ref_id,
@@ -151,7 +156,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 regions=regions,
                 queue_id=queue_id,
                 job_id=job_id,
-                **payload_kwargs,
+                runtime_conf=runtime_conf,
             )
 
             del frames
