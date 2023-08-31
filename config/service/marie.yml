@@ -214,8 +214,8 @@ executors:
       jtype: DocumentClassificationExecutor
       with:
         model_name_or_path :
-          - 'marie/layoutlmv3-document-classification'
-          - 'marie/layoutlmv3-document-classification'
+          - 'marie/lmv3-medical-document-classification'
+          - 'marie/lmv3-medical-document-classification'
         <<: *psql_conf_shared
         storage_enabled : False
       metas:
