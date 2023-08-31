@@ -124,7 +124,7 @@ if __name__ == "__main__":
     # Specify the path to the file you would like to process
     src = os.path.expanduser("~/tmp/PID_1028_7826_0_157684456.tif")
     src = os.path.expanduser("~/tmp/PID_1925_9289_0_157186264.png")
-    src = os.path.expanduser("~/tmp/page-level-classification/182972842.tif")
+    # src = os.path.expanduser("~/tmp/page-level-classification/182972842.tif")
     print(src)
 
     json_result = process_extract(
