@@ -4,12 +4,39 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-        {
-            "name": "Python: Current File",
-            "type": "python",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal"
-        }
+      // Attaches to injected debugpy hosted on port 5678.
+      // https://code.visualstudio.com/docs/containers/docker-compose
+      {
+        "name": "Python: Remote Attach Marie (docker)",
+        "type": "python",
+        "request": "attach",
+        "connect": {
+          "host": "0.0.0.0",
+          "port": 5678
+        },
+        "pathMappings": [
+          {
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "."
+          }
+        ]
+      },
+      // Attaches to injected debugpy hosted on port 5678.
+      // https://code.visualstudio.com/docs/containers/docker-compose
+      {
+        "name": "Python: Remote Attach Marie (localhost)",
+        "type": "python",
+        "request": "attach",
+        "connect": {
+          "host": "0.0.0.0",
+          "port": 5678
+        },
+        // "pathMappings": [
+        //   {
+        //     "localRoot": "${workspaceFolder}",
+        //     "remoteRoot": "./marie"
+        //   }
+        // ]
+      }
     ]
-}
+  }

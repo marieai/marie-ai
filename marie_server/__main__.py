@@ -131,6 +131,37 @@ def main(
     :param env:
     :param env_file:
     """
+
+    try:
+        # setup debugpy for remote debugging
+        if os.environ.get("MARIE_DEBUG", False):
+            debugpy_port = int(
+                (
+                    os.environ.get("MARIE_DEBUG_PORT")
+                    if os.environ.get("MARIE_DEBUG_PORT")
+                    else 5678
+                )
+            )
+
+            logger.info(
+                f"Setting up debugpy for remote debugging on port {debugpy_port}"
+            )
+            import debugpy
+
+            # Required see https://github.com/microsoft/debugpy/issues/262
+            # debugpy.configure({"python": "python", "subProcess": True})
+            host = os.environ.get("MARIE_DEBUG_HOST", "0.0.0.0")
+            debugpy.listen((host, debugpy_port))
+
+            # Pause the program until a remote debugger is attached
+            if os.environ.get("MARIE_DEBUG_WAIT_FOR_CLIENT", True):
+                logger.info(
+                    f"Waiting for the debugging client to connect on port {debugpy_port}"
+                )
+                debugpy.wait_for_client()
+    except Exception as e:
+        logger.error(f"Error setting up debugpy : {e}")
+
     __main__(yml_config, env, env_file)
 
 

@@ -62,15 +62,15 @@ def setup_queue(
 
     def consume(
         api_key: str,
-        queue_: str,
+        queue: str,
         routing_key: str,
         stop_event: threading.Event,
         exit_on_event: str,
         on_message_received: callable,
     ):
-        print(f"Consuming queue : {queue_} with routing key : {routing_key}")
+        print(f"Consuming queue : {queue} with routing key : {routing_key}")
         exchange = f"{api_key}.events"
-        queue = f"{api_key}.{queue_}"
+        queue = f"{api_key}.{queue}"
 
         while not stop_event.is_set():
             try:
