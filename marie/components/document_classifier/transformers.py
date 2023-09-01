@@ -108,6 +108,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 labels,
             )
 
+        use_gpu = False
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
         )
@@ -118,6 +119,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
+        print("self.device", self.device)
 
         registry_kwargs = {
             "__model_path__": __model_path__,
@@ -159,6 +161,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 model_name_or_path
             )
+            self.model = self.optimize_model(self.model)
             self.model = self.model.eval().to(resolved_devices[0])
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
             feature_extractor = LayoutLMv3ImageProcessor(
@@ -167,9 +170,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             self.processor = LayoutLMv3Processor(
                 feature_extractor, tokenizer=self.tokenizer
             )
-
-        if False:
-            self.model = self.optimize_model(self.model)
 
     def predict(
         self,
@@ -274,6 +274,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         )
 
         with torch.inference_mode():
+            # with torch.no_grad(), torch.cpu.amp.autocast(dtype=torch.bfloat16):
             output = self.model(
                 input_ids=encoding["input_ids"].to(self.device),
                 attention_mask=encoding["attention_mask"].to(self.device),
@@ -300,13 +301,19 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 import torchvision.models as models
                 import torch._dynamo as dynamo
 
+                # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
+                print("backends")
+                print(torch._dynamo.list_backends(None))
                 torch._dynamo.config.verbose = False
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
-                # model = torch.compile(model, backend="inductor", mode="max-autotune")
+                # dynamo ~0.658s
+                # onnxrt ~0.658s
+                model = torch.compile(model, backend="ipex", mode="max-autotune")
                 # model = torch.compile(model, backend="onnxrt", fullgraph=False)
-                model = torch.compile(model)
+                # model = torch.compile(model)
                 return model
         except Exception as err:
+            raise err
             self.logger.warning(f"Model compile not supported: {err}")
             return model

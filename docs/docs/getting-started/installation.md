@@ -294,14 +294,15 @@ docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 
 If we have properly configured our environment you should be able to build the container locally.
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu.Dockerfile  -t marieai/marie:3.0.5-cuda --no-cache
+DOCKER_BUILDKIT=1 docker build . --cpuset-cpus="0-32"  --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu-310.Dockerfile -t marieai/marie:3.0.18-cuda --no-cache
 ```
 
 After container have been build we can test it with following. 
 
 ```
-docker run --rm -it marieai/marie:3.0.5-cuda -vf
+docker run --rm -it marieai/marie:3.0.18-cuda -vf
 ```
+
 
 ## Container maintenance
 

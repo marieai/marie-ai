@@ -8,6 +8,10 @@ import json
 import requests
 from pika.exchange_type import ExchangeType
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def online(api_url) -> bool:
     """
@@ -21,6 +25,7 @@ def online(api_url) -> bool:
 
 
 def setup_queue(
+    connection_config: dict,
     api_key: str,
     queue: str = "events",
     routing_key: str = "#",
@@ -31,6 +36,7 @@ def setup_queue(
     """
     Setup a queue to receive events from the API server
 
+    :param connection_config: The connection configuration (hostname, port, username, password)
     :param api_key: The API key
     :param queue: The queue name
     :param routing_key: The routing key to use for the queue binding
@@ -39,7 +45,7 @@ def setup_queue(
     :param callback: The callback function to call when a message is received
     """
 
-    print(f"Setting up queue for : {api_key}")
+    logger.info(f"Setting up queue for : {api_key}")
 
     def on_message_callback(
         exit_on_event: [str | list], channel, method_frame, header_frame, body
@@ -52,7 +58,7 @@ def setup_queue(
         payload = json.loads(payload)
         event = payload["event"]
         jobid = payload["jobid"]
-        print(f"Received event : {now},  {event} : {jobid}")
+        logger.info(f"Received event : {now},  {event} : {jobid}")
         if callback is not None:
             callback(payload)
 
@@ -68,16 +74,32 @@ def setup_queue(
         exit_on_event: str,
         on_message_received: callable,
     ):
-        print(f"Consuming queue : {queue} with routing key : {routing_key}")
+        logger.info(f"Consuming queue : {queue} with routing key : {routing_key}")
         exchange = f"{api_key}.events"
         queue = f"{api_key}.{queue}"
 
         while not stop_event.is_set():
             try:
-                credentials = pika.PlainCredentials("guest", "guest")
-                parameters = pika.ConnectionParameters(
-                    "localhost", 5672, "/", credentials
-                )
+                hostname = connection_config.get("hostname", "localhost")
+                port = int(connection_config.get("port", 5672))
+                username = connection_config.get("username", "guest")
+                password = connection_config.get("password", "guest")
+                tls_enabled = connection_config.get("tls", False)
+
+                if tls_enabled:
+                    url = f"amqps://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+                else:
+                    url = f"amqp://{username}:{password}@{hostname}:{port}?connection_attempts=3&heartbeat=3600"
+
+                logger.info(f"Connecting to : {url}")
+
+                parameters = pika.URLParameters(url)
+                # Turn on delivery confirmations
+                if False:
+                    credentials = pika.PlainCredentials("guest", "guest")
+                    parameters = pika.ConnectionParameters(
+                        "localhost", 5672, "/", credentials
+                    )
 
                 connection = pika.BlockingConnection(parameters)
                 channel = connection.channel()
@@ -105,7 +127,7 @@ def setup_queue(
             # Recover on all other connection errors
             except pika.exceptions.AMQPConnectionError:
                 continue
-        print("Consumer thread has exited")
+        logger.info("Consumer thread has exited")
 
     consumer_thread = Thread(
         target=consume,
