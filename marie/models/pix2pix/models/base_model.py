@@ -228,6 +228,9 @@ class BaseModel(ABC):
                 for param in net.parameters():
                     param.grad = None
 
+                # convert to half precision (FP32 to FP16)
+                net.half()
+
                 # FIXME: fix this, it causes OOM and inference is very bad (distorts images)
                 if False:
                     try:
@@ -248,7 +251,6 @@ class BaseModel(ABC):
                             mode="max-autotune",
                             dynamic=True,
                             fullgraph=True,
-                            backend="aot_ts_nvfuser",
                          )
                         setattr(self, "net" + name, model)
                     except Exception as e:

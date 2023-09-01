@@ -10,6 +10,7 @@ from examples.utils import setup_queue, online
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
+api_base_url = "http://asp-gpu008:51000/api"
 default_queue_id = "0000-0000-0000-0000"
 api_key = "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ"
 
@@ -70,7 +71,7 @@ def process_extract(
                 "type": "pipeline",
                 "name": "default",
                 "page_classifier": {
-                    "enabled": False,
+                    "enabled": True,
                 },
                 "page_splitter": {
                     "enabled": False,
@@ -111,8 +112,12 @@ if __name__ == "__main__":
     ensure_exists("/tmp/snippet")
 
     stop_event = threading.Event()
+    connection_config = {
+        "hostname": "gext-02.rms-asp.com",
+    }
 
     setup_queue(
+        connection_config,
         api_key,
         "extract",
         "extract.#",

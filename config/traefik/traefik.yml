@@ -63,8 +63,11 @@ entryPoints:
         certResolver: http-resolver
 
   # MARIE-HTTP entry point - does nothing but redirecting to HTTPS
+  # https://doc.traefik.io/traefik/v2.1/routing/entrypoints/#forwarded-header
   marie:
     address: ":5000"
+    forwardedHeaders:
+      insecure: true
     http:
       tls:
         certResolver: http-resolver

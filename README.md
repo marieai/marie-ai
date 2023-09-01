@@ -50,13 +50,13 @@ It contains code examples for:
 ## Run with default entrypoint
 
 ```shell
-docker run --rm  -it marieai/marie:3.0.12-cuda 
+docker run --rm  -it marieai/marie:3.0.19-cuda
 ```
 
 ## Run the server with custom entrypoint
 
 ```shell
-docker run --rm  -it --entrypoint /bin/bash  marieai/marie:3.0.12-cuda  
+docker run --rm  -it --entrypoint /bin/bash  marieai/marie:3.0.19-cuda  
 ```
 
 ## Telemetry
