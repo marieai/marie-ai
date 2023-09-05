@@ -6,3 +6,7 @@
 /dist/
 /node_modules/
 /model_zoo/
+
+./model_zoo
+./docs
+
