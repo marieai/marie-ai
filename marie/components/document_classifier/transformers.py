@@ -273,8 +273,12 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             return_tensors="pt",
         )
 
+        # https://github.com/pytorch/pytorch/tree/main/torch/csrc/jit/codegen/onednn#example-with-bfloat16
+        # Disable AMP for JIT
+        # torch._C._jit_set_autocast_mode(False)
+        # with torch.no_grad(), torch.cpu.amp.autocast():
+
         with torch.inference_mode():
-            # with torch.no_grad(), torch.cpu.amp.autocast(dtype=torch.bfloat16):
             output = self.model(
                 input_ids=encoding["input_ids"].to(self.device),
                 attention_mask=encoding["attention_mask"].to(self.device),
@@ -307,13 +311,15 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 torch._dynamo.config.verbose = False
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
-                # dynamo ~0.658s
-                # onnxrt ~0.658s
-                model = torch.compile(model, backend="ipex", mode="max-autotune")
+                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
+                # ipex
+                model = torch.compile(
+                    model, backend="inductor", mode="default", fullgraph=False
+                )
                 # model = torch.compile(model, backend="onnxrt", fullgraph=False)
                 # model = torch.compile(model)
                 return model
         except Exception as err:
-            raise err
             self.logger.warning(f"Model compile not supported: {err}")
+            raise err
             return model

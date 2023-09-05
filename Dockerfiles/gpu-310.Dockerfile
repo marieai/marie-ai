@@ -88,6 +88,7 @@ RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 whe
 RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 
+RUN python3 -m pip install intel-openmp
 #RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
 
 RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
@@ -139,13 +140,20 @@ RUN apt-get update && \
         vim \
         imagemagick \
         libtiff-dev \
+        libomp-dev \
+        libjemalloc-dev \
+        libgoogle-perftools-dev \
         libmagickwand-dev && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \
+    ln -s /usr/lib/x86_64-linux-gnu/libtcmalloc.so /usr/lib/libtcmalloc.so && \
+    ln -s /usr/lib/x86_64-linux-gnu/libiomp5.so /usr/lib/libiomp5.so && \
     dpkg-reconfigure -f noninteractive tzdata && \
     rm -rf /var/lib/apt/lists/* \
     && apt-get autoremove \
     && apt-get clean
 
+ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so"
 ENV WORKDIR /marie
 
 # Copy python virtual environment from build-image
