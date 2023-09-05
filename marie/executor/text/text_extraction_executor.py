@@ -2,6 +2,7 @@ import os
 from typing import Dict, Union, Optional, Any
 
 import numpy as np
+import psutil
 import torch
 from docarray import DocumentArray, Document
 
@@ -11,6 +12,7 @@ from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
+from marie.models.utils import enable_tf32, openmp_setup
 from marie.ocr import CoordinateFormat
 from marie.ocr.extract_pipeline import ExtractPipeline
 from marie.utils.docs import array_from_docs
@@ -44,6 +46,8 @@ class TextExtractionExecutor(Executor, StorageMixin):
         logger.info(f"Device : {device}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
+
+        setup_torch_optimizations()
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -247,6 +251,7 @@ class TextExtractionExecutorMock(Executor):
         import time
 
         logger.info(f"Starting mock executor : {time.time()}")
+        setup_torch_optimizations()
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -317,3 +322,21 @@ class TextExtractionExecutorMock(Executor):
 
         meta = get_ip_address()
         return out
+
+
+def setup_torch_optimizations():
+    logger.info(f"Setting up torch optimizations")
+    # Optimizations for PyTorch
+    core_count = psutil.cpu_count(logical=False)
+    torch.set_float32_matmul_precision("high")
+
+    # disabling due to CUDA issues with spawn method
+    logger.info(f"Setting up TF32")
+    enable_tf32()
+
+    logger.info(f"Setting up OpenMP with {core_count} threads")
+    openmp_setup(core_count)
+    torch.set_num_threads(core_count)
+
+    # Enable oneDNN Graph
+    torch.jit.enable_onednn_fusion(True)

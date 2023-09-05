@@ -236,21 +236,6 @@ def __main__(
         "gpu_device_count": gpu_device_count(),
     }
 
-    # Optimizations for PyTorch
-    core_count = psutil.cpu_count(logical=False)
-    torch.set_float32_matmul_precision("high")
-
-    # disabling due to CUDA issues with spawn method
-    # logger.info(f"Setting up TF32")
-    # enable_tf32()
-
-    logger.info(f"Setting up OpenMP with {core_count} threads")
-    openmp_setup(core_count)
-    torch.set_num_threads(core_count)
-
-    # Enable oneDNN Graph
-    torch.jit.enable_onednn_fusion(True)
-
     jemallocpath = "/usr/lib/%s-linux-gnu/libjemalloc.so.2" % (platform.machine(),)
 
     if os.path.isfile(jemallocpath):
