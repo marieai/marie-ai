@@ -326,11 +326,19 @@ class TextExtractionExecutorMock(Executor):
 
 def setup_torch_optimizations():
     logger.info(f"Setting up torch optimizations")
+
     # Optimizations for PyTorch
     core_count = psutil.cpu_count(logical=False)
-    torch.set_float32_matmul_precision("high")
 
-    # disabling due to CUDA issues with spawn method
+    torch_versions = torch.__version__.split(".")
+    torch_major_version = int(torch_versions[0])
+    torch_minor_version = int(torch_versions[1])
+    if torch_major_version > 1 or (
+        torch_major_version == 1 and torch_minor_version >= 12
+    ):
+        # Gives a large speedup on Ampere-class GPUs
+        torch.set_float32_matmul_precision("high")
+
     logger.info(f"Setting up TF32")
     enable_tf32()
 

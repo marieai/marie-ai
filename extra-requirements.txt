@@ -147,4 +147,9 @@ orjson:                        standard,core
 # this version is required for the current version of detectron2
 omegaconf==2.3.0:             standard,core
 hydra-core==1.3.1:            standard,core
-Pillow-SIMD:            standard,core
+Pillow-SIMD:                  standard,core
+
+# https://github.com/facebookresearch/detectron2/issues/5010
+pillow~=9.5:                  standard,core
+
+

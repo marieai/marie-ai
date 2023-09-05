@@ -118,7 +118,7 @@ class ExtractPipeline:
         self.logger = MarieLogger(context=self.__class__.__name__)
 
         # TODO : add support for dependency injection
-        mock_ocr = False
+        mock_ocr = True
         if mock_ocr:
             self.ocr_engine = MockOcrEngine(cuda=use_cuda)
         else:

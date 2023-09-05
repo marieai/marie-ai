@@ -46,7 +46,7 @@ def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
 
         print("Testing text renderer")
 
-        # store_json_object(results, os.path.join("/tmp/fragments", f"results-{key}.json"))
+        store_json_object(results, os.path.join("/tmp/fragments", f"results-{key}.json"))
         # results = load_json_file(os.path.join("/tmp/fragments", f"results-{key}.json"))
         #
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
@@ -74,8 +74,7 @@ if __name__ == "__main__":
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "~tmp/4007/176073139.tif"
-    img_path = "/tmp/form-segmentation/8186b2882f4f83bd5ed0a338e6e1be4c/179575453_8_8186b2882f4f83bd5ed0a338e6e1be4c.png"
+    img_path = "~/tmp/4007/176073139.tif"
 
     # frames = [crop_to_content(frame, True) for frame in frames]
 
