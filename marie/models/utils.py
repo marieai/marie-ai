@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_device_settings(
-        use_cuda: Optional[bool] = None,
-        local_rank: int = -1,
-        multi_gpu: bool = True,
-        devices: Optional[List[Union[str, torch.device]]] = None,
+    use_cuda: Optional[bool] = None,
+    local_rank: int = -1,
+    multi_gpu: bool = True,
+    devices: Optional[List[Union[str, torch.device]]] = None,
 ) -> Tuple[List[torch.device], int]:
     """
     Returns a list of available devices.
@@ -26,14 +26,20 @@ def initialize_device_settings(
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
     """
-    if use_cuda is False:  # Note that it could be None, in which case we also want to just skip this step.
+    if (
+        use_cuda is False
+    ):  # Note that it could be None, in which case we also want to just skip this step.
         devices_to_use = [torch.device("cpu")]
         n_gpu = 0
     elif devices:
         if not isinstance(devices, list):
-            raise ValueError(f"devices must be a list, but got {devices} of type {type(devices)}")
+            raise ValueError(
+                f"devices must be a list, but got {devices} of type {type(devices)}"
+            )
         if any(isinstance(device, str) for device in devices):
-            torch_devices: List[torch.device] = [torch.device(device) for device in devices]
+            torch_devices: List[torch.device] = [
+                torch.device(device) for device in devices
+            ]
             devices_to_use = torch_devices
         else:
             devices_to_use = devices  # type: ignore [assignment]
@@ -41,7 +47,9 @@ def initialize_device_settings(
     elif local_rank == -1:
         if torch.cuda.is_available():
             if multi_gpu:
-                devices_to_use = [torch.device(device) for device in range(torch.cuda.device_count())]
+                devices_to_use = [
+                    torch.device(device) for device in range(torch.cuda.device_count())
+                ]
                 n_gpu = torch.cuda.device_count()
             else:
                 devices_to_use = [torch.device("cuda:0")]
@@ -59,7 +67,10 @@ def initialize_device_settings(
     # HF transformers v4.21.2 pipeline object doesn't accept torch.device("cuda"), it has to be an indexed cuda device
     # TODO eventually remove once the limitation is fixed in HF transformers
     device_to_replace = torch.device("cuda")
-    devices_to_use = [torch.device("cuda:0") if device == device_to_replace else device for device in devices_to_use]
+    devices_to_use = [
+        torch.device("cuda:0") if device == device_to_replace else device
+        for device in devices_to_use
+    ]
 
     # sometimes we have CUDA/GPU support but want to only use CPU
     if os.environ.get("MARIE_DISABLE_CUDA"):
@@ -67,6 +78,36 @@ def initialize_device_settings(
         n_gpu = 0
 
     logger.info(
-        "Using devices: %s - Number of GPUs: %s", ", ".join([str(device) for device in devices_to_use]).upper(), n_gpu
+        "Using devices: %s - Number of GPUs: %s",
+        ", ".join([str(device) for device in devices_to_use]).upper(),
+        n_gpu,
     )
     return devices_to_use, n_gpu
+
+
+def enable_tf32():
+    if torch.cuda.is_available():
+
+        torch.backends.cudnn.benchmark = True
+
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+
+################################################################
+# OpenMP setup
+################################################################
+
+
+def openmp_setup(threads: int):
+    """Set OpenMP environment variables.
+
+    Arguments:
+        threads (int): number of threads
+    """
+    logger.info(f"Setting OMP_NUM_THREADS to {threads}")
+
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["OMP_SCHEDULE"] = "STATIC"
+    os.environ["OMP_PROC_BIND"] = "CLOSE"
+    os.environ["OMP_PLACES"] = "CORES"

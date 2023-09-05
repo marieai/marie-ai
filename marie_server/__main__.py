@@ -1,9 +1,11 @@
 import inspect
 import os
+import platform
 import sys
 import traceback
 from typing import Dict, Any, Optional
 
+import psutil
 import torch
 from rich.traceback import install
 
@@ -25,6 +27,7 @@ from marie.messaging import (
     RabbitMQToastHandler,
     PsqlToastHandler,
 )
+from marie.models.utils import enable_tf32, openmp_setup
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
 from marie_server.rest_extension import extend_rest_interface
@@ -233,6 +236,26 @@ def __main__(
     context = {
         "gpu_device_count": gpu_device_count(),
     }
+
+    # Optimizations for PyTorch
+    core_count = psutil.cpu_count(logical=False)
+
+    logger.info(f"Setting up TF32")
+    enable_tf32()
+
+    logger.info(f"Setting up OpenMP with {core_count} threads")
+    openmp_setup(core_count)
+    torch.set_num_threads(core_count)
+
+    # Enable oneDNN Graph
+    torch.jit.enable_onednn_fusion(True)
+
+    jemallocpath = "/usr/lib/%s-linux-gnu/libjemalloc.so.2" % (platform.machine(),)
+
+    if os.path.isfile(jemallocpath):
+        os.environ["LD_PRELOAD"] = jemallocpath
+    else:
+        logger.info("Could not find %s, will not use" % (jemallocpath,))
 
     # put env variables into context
     if env:
