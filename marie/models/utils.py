@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_device_settings(
-    use_cuda: Optional[bool] = None,
-    local_rank: int = -1,
-    multi_gpu: bool = True,
-    devices: Optional[List[Union[str, torch.device]]] = None,
+        use_cuda: Optional[bool] = None,
+        local_rank: int = -1,
+        multi_gpu: bool = True,
+        devices: Optional[List[Union[str, torch.device]]] = None,
 ) -> Tuple[List[torch.device], int]:
     """
     Returns a list of available devices.
@@ -27,7 +27,7 @@ def initialize_device_settings(
                         parameter is not used and a single cpu device is used for inference.
     """
     if (
-        use_cuda is False
+            use_cuda is False
     ):  # Note that it could be None, in which case we also want to just skip this step.
         devices_to_use = [torch.device("cpu")]
         n_gpu = 0
@@ -87,11 +87,19 @@ def initialize_device_settings(
 
 def enable_tf32():
     if torch.cuda.is_available():
-
         torch.backends.cudnn.benchmark = True
-
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+
+
+def torch_gc():
+    """Run torch garbage collection and CUDA IPC collect."""
+    if torch.cuda.is_available():
+        for devid in range(torch.cuda.device_count()):
+            device_id = f"cuda:{devid}"
+            with torch.cuda.device(device_id):
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
 
 
 ################################################################

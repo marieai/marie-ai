@@ -1,3 +1,5 @@
+import os
+
 import requests
 
 import marie.helper
@@ -13,6 +15,7 @@ def test_extend_fastapi():
         return app
 
     marie.helper.extend_rest_interface = extend_rest_function
+    os.environ["JINA_MP_START_METHOD"] = "spawn"
     f = Flow(protocol='http')
 
     with f:
