@@ -3,5 +3,6 @@
 /.vscode
 /keys
 .cache/
-model_zoo
-node_modules/
+/dist/
+/node_modules/
+/model_zoo/
