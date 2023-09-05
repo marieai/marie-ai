@@ -306,8 +306,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 import torch._dynamo as dynamo
 
                 # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
-                print("backends")
-                print(torch._dynamo.list_backends(None))
                 torch._dynamo.config.verbose = False
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
@@ -321,5 +319,4 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 return model
         except Exception as err:
             self.logger.warning(f"Model compile not supported: {err}")
-            raise err
             return model

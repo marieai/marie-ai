@@ -32,7 +32,6 @@ from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
 from marie_server.rest_extension import extend_rest_interface
 
-torch.set_float32_matmul_precision("high")
 DEFAULT_TERM_COLUMNS = 120
 
 
@@ -239,9 +238,11 @@ def __main__(
 
     # Optimizations for PyTorch
     core_count = psutil.cpu_count(logical=False)
+    torch.set_float32_matmul_precision("high")
 
-    logger.info(f"Setting up TF32")
-    enable_tf32()
+    # disabling due to CUDA issues with spawn method
+    # logger.info(f"Setting up TF32")
+    # enable_tf32()
 
     logger.info(f"Setting up OpenMP with {core_count} threads")
     openmp_setup(core_count)
@@ -268,6 +269,8 @@ def __main__(
         for k, v in os.environ.items():
             print(f"{k} = {v}")
 
+    marie.helper.extend_rest_interface = extend_rest_interface
+
     # Load the config file and setup the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
 
@@ -276,13 +279,14 @@ def __main__(
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
-        include_gateway=False,
+        include_gateway=True,
         # noblock_on_start=True,
     )
 
-    marie.helper.extend_rest_interface = extend_rest_interface
     filter_endpoint()
     setup_server(config)
+
+    # os.environ["JINA_MP_START_METHOD"] = "spawn"
 
     with f:
         f.block()
