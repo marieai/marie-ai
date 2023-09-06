@@ -84,20 +84,18 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 
 RUN python3.10 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
-RUN python3 -m pip install --no-cache-dir  -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+RUN python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 
 RUN python3 -m pip install intel-openmp
-#RUN python3 -m pip install --no-cache-dir torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu116
-
 RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
 
 # Order is important, need to install detectron2 last expected version is 0.6
-RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore
-RUN python3 -m pip install git+https://github.com/pytorch/fairseq.git
-RUN python3 -m pip install git+https://github.com/ying09/TextFuseNet.git
-RUN python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
+    python3 -m pip install git+https://github.com/pytorch/fairseq.git && \
+    python3 -m pip install git+https://github.com/ying09/TextFuseNet.git && \
+    python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
