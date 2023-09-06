@@ -1,0 +1,16 @@
+---
+
+- name: pull image
+  hosts: ml.cluster
+  gather_facts: true
+  vars:
+    image_tag: 3.0.20-cuda
+  tasks:
+    # https://docs.ansible.com/ansible/latest/collections/community/docker/docker_image_module.html
+    - name:  Pull the inference-server
+      community.docker.docker_image:
+        name: "marieai/marie:{{ image_tag }}"
+        source: pull
+        pull:
+          platform: linux/amd64
+        force_source: true

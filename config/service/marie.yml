@@ -154,8 +154,8 @@ executors:
 
   - name: extract_t
     uses:
-      jtype: TextExtractionExecutor
-      #      jtype: TextExtractionExecutorMock
+#      jtype: TextExtractionExecutor
+      jtype: TextExtractionExecutorMock
       with:
         storage:
           # postgresql configuration. Will be used only if value of backend is "psql"
