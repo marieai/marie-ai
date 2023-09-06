@@ -5,7 +5,8 @@
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag: 3.0.17-cuda
+    image_tag_prev: 3.0.19-cuda
+    image_tag: 3.0.20-cuda
     server_port: 8080
   tasks:
 #    - name: Create network
@@ -46,6 +47,7 @@
           MARIE_LOG_CONFIG: docker
           MARIE_DEPLOYMENT_NAME: marie
           COLUMNS: "180"
+          JINA_MP_START_METHOD: "fork"
           JINA_LOG_LEVEL:
             "{{ lookup('ansible.builtin.env', 'JINA_LOG_LEVEL') | default('DEBUG', true) }}"
 #        ports:
@@ -56,4 +58,4 @@
 
 # Docker debug command
 # docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)
-# docker run --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --start --uses /etc/marie/config/service/marie.yml
+# docker run --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.18-cuda server --start --uses /etc/marie/config/service/marie.yml
