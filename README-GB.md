@@ -347,6 +347,13 @@ This application uses Open Source components. You can find the source code of th
 We acknowledge and are grateful to these developers for their contributions to open source.
 
 
+Kill hanged docker 
+
+```
+ps auxw | grep $(docker container ls | grep containername | awk '{print $1}') | awk '{print $2}'
+kill -9 12345678
+```
+
 
 ## Resources
 https://mmocr.readthedocs.io/en/latest/datasets/det.html#funsd

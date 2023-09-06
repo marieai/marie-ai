@@ -10,6 +10,8 @@ from examples.utils import setup_queue, online
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
+endpoint_url = f"{api_base_url}/document/extract"
+
 default_queue_id = "0000-0000-0000-0000"
 api_key = "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ"
 
@@ -24,7 +26,6 @@ def process_extract(
 ) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
-    endpoint_url = f"{api_base_url}/document/extract"
 
     print(endpoint_url)
     if False and not online(api_base_url):
@@ -112,7 +113,7 @@ if __name__ == "__main__":
 
     stop_event = threading.Event()
     connection_config = {
-        "hostname": "gext-02.rms-asp.com",
+        "hostname": "localhost",
     }
 
     setup_queue(
