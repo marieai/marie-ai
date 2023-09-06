@@ -129,6 +129,8 @@ def setup_queue(
                 continue
         logger.info("Consumer thread has exited")
 
+        print("stop_event.is_set() : ", stop_event.is_set())
+
     consumer_thread = Thread(
         target=consume,
         args=(

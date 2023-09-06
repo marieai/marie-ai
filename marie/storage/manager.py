@@ -356,7 +356,7 @@ class StorageManager:
 
     @staticmethod
     def ensure_connection(
-        path: Optional[str] = None, silence_exceptions=Optional[bool], **kwargs: Any
+            path: Optional[str] = None, silence_exceptions: object = Optional[bool], **kwargs: Any
     ) -> bool:
         """
         Ensures that the connection to the given path is established.
