@@ -1,10 +1,7 @@
-import _thread
 import base64
 import json
 import logging
 import os
-import signal
-import sys
 import threading
 import time
 import uuid
@@ -23,6 +20,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 api_base_url = "http://127.0.0.1:51000/api"
+api_base_url = "http://gext-02.rms-asp.com:5000/api"
+# api_base_url = "http://asp-gpu002.rms-asp.com:51000/api"
 endpoint_url = f"{api_base_url}/document/extract"
 
 default_queue_id = "0000-0000-0000-0000"
@@ -46,7 +45,7 @@ def process_extract(
 
     logger.info(endpoint_url)
     if False and not online(api_base_url):
-        stop_event.set()
+        # stop_event.set()
         raise Exception(f"API server is not online : {endpoint_url}")
 
     # Prepare file for upload
@@ -131,6 +130,11 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         extension = os.path.splitext(filename)[1]
         os.makedirs(output_dir, exist_ok=True)
 
+        json_output_path = os.path.join(output_dir, f"{name}.json")
+        if os.path.exists(json_output_path):
+            logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
+            continue
+
         json_result = process_extract(
             queue_id=default_queue_id,
             mode="multiline",
@@ -146,17 +150,8 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         }
 
 
-def setup_storage():
-    handler = S3StorageHandler(
-        config={
-            "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
-            "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
-            "S3_STORAGE_BUCKET_NAME": "marie",
-            "S3_ENDPOINT_URL": "http://localhost:8000",
-            "S3_ENDPOINT_URLZZ": "http://gext-05.rms-asp.com:8000",
-            "S3_ADDRESSING_STYLE": "path",
-        }
-    )
+def setup_storage(config: dict):
+    handler = S3StorageHandler(config=config)
 
     # export AWS_ACCESS_KEY_ID=MARIEACCESSKEY; export AWS_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY;  aws s3 ls --endpoint-url http://localhost:8000
     StorageManager.register_handler(handler=handler)
@@ -164,7 +159,6 @@ def setup_storage():
 
 
 def message_handler(stop_event, message):
-    print("message_handler : ", main_queue.qsize())
     completed_event = False
     try:
         if isinstance(message, str):
@@ -172,6 +166,8 @@ def message_handler(stop_event, message):
 
         event = message["event"]
         jobid = message["jobid"]
+
+        print("message_handler : ", main_queue.qsize(), event, jobid)
 
         if event != "extract.completed":
             return
@@ -214,15 +210,30 @@ def message_handler(stop_event, message):
             main_queue.get(False)
 
         if main_queue.empty():
-            stop_event.set()
+            pass
+            # stop_event.set()
 
 
 if __name__ == "__main__":
     stop_event = threading.Event()
-    setup_storage()
+
+    storage_config = {
+        "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
+        "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
+        "S3_STORAGE_BUCKET_NAME": "marie",
+        "S3_ENDPOINT_URL_L": "http://localhost:8000",
+        "S3_ENDPOINT_URL": "http://172.16.11.163:8000",
+        "S3_ADDRESSING_STYLE": "path",
+    }
+
+    setup_storage(storage_config)
 
     connection_config = {
-        "hostname": "localhost",
+        "hostname__": "localhost",
+        "hostname": "172.16.11.162",
+        "port": 5672,
+        "username": "guest",
+        "password": "guest",
     }
 
     setup_queue(
@@ -236,14 +247,35 @@ if __name__ == "__main__":
         # lambda x: print(f"callback: {x}"),
     )
 
-    process_dir(
-        "~/datasets/private/medical_page_classification/small",
-        "/tmp/medical_page_classification",
-        stop_event,
-    )
+    # cleanup empty files, this can happen for example when the file is not an image or service fails
+    #  find $dir -size 0 -type f -delete
+
+    if True:
+        process_dir(
+            # "~/datasets/private/medical_page_classification/small",
+            "~/datasets/private/data-hipa/medical_page_classification/raw",
+            "/home/greg/datasets/private/data-hipa/medical_page_classification/output/annotations/",
+            stop_event,
+        )
+
+        # process_dir(
+        #     "~/datasets/private/data-hipa/payer-determination/raw",
+        #     "~/datasets/private/data-hipa/payer-determination/output/annotations/",
+        #     stop_event,
+        # )
+
     # join current thread / wait for event or we will get "cannot schedule new futures after interpreter shutdown"
-    while not stop_event.is_set():
-        stop_event.wait()
-        print("Exiting")
-        # sys.exit(0) # exit the main thread
-        os._exit(0)  # exit all threads
+
+    while True:
+        time.sleep(10)
+    # get curren thread
+    current_thread = threading.current_thread()
+    current_thread.join()
+
+    # stop_event.wait()
+    if False:
+        while not stop_event.is_set():
+            stop_event.wait()
+            print("Exiting")
+            # sys.exit(0) # exit the main thread
+            os._exit(0)  # exit all threads

@@ -30,6 +30,7 @@ from marie.messaging import (
 from marie.models.utils import enable_tf32, openmp_setup
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
+from marie.utils.types import strtobool
 from marie_server.rest_extension import extend_rest_interface
 
 DEFAULT_TERM_COLUMNS = 120
@@ -56,11 +57,12 @@ def setup_toast_events(toast_config: Dict[str, Any]):
 def setup_storage(storage_config: Dict[str, Any]) -> None:
     """Setup the storage handler"""
 
-    if "s3" in storage_config:
+    if "s3" in storage_config and strtobool(storage_config["s3"]["enabled"]):
         logger.info("Setting up storage handler for S3")
         handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
         StorageManager.register_handler(handler=handler)
-        StorageManager.ensure_connection("s3://")
+        StorageManager.ensure_connection("s3://", silence_exceptions=False)
+
         StorageManager.mkdir("s3://marie")
 
 
@@ -136,7 +138,7 @@ def main(
 
     try:
         # setup debugpy for remote debugging
-        if os.environ.get("MARIE_DEBUG", False):
+        if strtobool(os.environ.get("MARIE_DEBUG", False)):
             debugpy_port = int(
                 (
                     os.environ.get("MARIE_DEBUG_PORT")

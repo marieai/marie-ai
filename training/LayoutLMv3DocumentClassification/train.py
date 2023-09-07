@@ -37,11 +37,13 @@ from training.LayoutLMv3DocumentClassification.llmv3_dataset import (
 
 pl.seed_everything(42)
 
-dataset_path = os.path.expanduser(
+dataset_pathXX = os.path.expanduser(
     "~/datasets/private/data-hipa/medical_page_classification/output/images"
 )
 
-dataset_path = os.path.expanduser("~/datasets/private/data-hipa/payer/output/images")
+dataset_path = os.path.expanduser(
+    "~/datasets/private/data-hipa/payer-determination/output/images"
+)
 
 
 def load_data():
@@ -65,7 +67,7 @@ def load_data():
     print(idx2label)
     print(label2idx)
 
-    data = pd.DataFrame({'image_path': df_images, 'label': df_labels})
+    data = pd.DataFrame({"image_path": df_images, "label": df_labels})
     return data, labels, idx2label, label2idx
 
 
@@ -227,7 +229,7 @@ def train():
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss', patience=1, strict=False, verbose=False, mode='min'
+        monitor="val_loss", patience=1, strict=False, verbose=False, mode="min"
     )
 
     trainer = pl.Trainer(
@@ -254,7 +256,7 @@ def predict_document_image(
     device: str = "cuda",
 ):
     annotation_path = (
-        str(image_path).replace('images', 'annotations').replace('.png', '.json')
+        str(image_path).replace("images", "annotations").replace(".png", ".json")
     )
     if not os.path.exists(annotation_path):
         print(f"Missing annotation file for {annotation_path} for image {image_path}")
@@ -307,8 +309,8 @@ def predict_document_image(
 
 
 def infer_single_image(label, image_path, model, processor, device):
-    annotation_path = image_path.replace('images', 'annotations').replace(
-        '.png', '.json'
+    annotation_path = image_path.replace("images", "annotations").replace(
+        ".png", ".json"
     )
     if not os.path.exists(annotation_path):
         print(f"Missing annotation file for {annotation_path} for image {image_path}")
@@ -372,13 +374,13 @@ def inference():
 
     # forcing compilation of model
     with TimeContext("Inference model compile"):
-        for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
+        for df in tqdm(zip(valid_data["label"], valid_data["image_path"])):
             label, image_path = df
             infer_single_image(label, image_path, model, processor, device)
             break
 
     with TimeContext("Inference time"):
-        for df in tqdm(zip(valid_data['label'], valid_data['image_path'])):
+        for df in tqdm(zip(valid_data["label"], valid_data["image_path"])):
             label, image_path = df
             predicted_label, probabilities = infer_single_image(
                 label, image_path, model, processor, device
@@ -409,7 +411,7 @@ def inference():
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision('high')
-    # train()
+    torch.set_float32_matmul_precision("high")
+    train()
 
-    inference()
+    # inference()

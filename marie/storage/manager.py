@@ -152,9 +152,10 @@ class PathHandler:
         """
         raise NotImplementedError()
 
-    def ensure_connection(self) -> None:
+    def ensure_connection(self, silence_exceptions: bool = False) -> None:
         """
         Checks if the resource at the given URI is online.
+        :param silence_exceptions:  If True, exceptions will be silenced and False will be returned instead.
         """
         raise NotImplementedError()
 
@@ -356,7 +357,9 @@ class StorageManager:
 
     @staticmethod
     def ensure_connection(
-            path: Optional[str] = None, silence_exceptions: object = Optional[bool], **kwargs: Any
+        path: Optional[str] = None,
+        silence_exceptions: object = Optional[bool],
+        **kwargs: Any,
     ) -> bool:
         """
         Ensures that the connection to the given path is established.
@@ -456,7 +459,9 @@ class StorageManager:
         :param kwargs:
         :return:    None
         """
-        return StorageManager.__get_path_handler(path)._read_to_file(path, dst_path_or_buffer, overwrite, **kwargs)  # type: ignore
+        return StorageManager.__get_path_handler(path)._read_to_file(
+            path, dst_path_or_buffer, overwrite, **kwargs
+        )  # type: ignore
 
     @classmethod
     def copy_dir(
