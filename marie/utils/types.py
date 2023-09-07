@@ -16,4 +16,4 @@ def strtobool(val: [bool | str]) -> bool:
     if isinstance(val, bool):
         return val
 
-    return util.strtobool(val)
+    return bool(util.strtobool(val))
