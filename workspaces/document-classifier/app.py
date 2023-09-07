@@ -13,13 +13,13 @@ from marie.logging.mdc import MDC
 from marie.ocr import DefaultOcrEngine, MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.docs import frames_from_file, docs_from_image
-
+from marie.logging.predefined import default_logger as logger
 import argparse
 
 use_cuda = torch.cuda.is_available()
 
-# TODO : add support for dependency injection
-MDC.put("request_id", "0")
+# # TODO : add support for dependency injection
+# MDC.put("request_id", "0")
 
 mock_ocr = False
 if mock_ocr:
@@ -29,7 +29,9 @@ else:
 
 
 def process_frames(
-    frames: Union[np.ndarray, List[np.ndarray]], model_name_or_path: str
+    frames: Union[np.ndarray, List[np.ndarray]],
+    model_name_or_path: str,
+    classifier: TransformersDocumentClassifier,
 ):
     MDC.put("request_id", "1")
 
@@ -37,7 +39,7 @@ def process_frames(
         frames = [frames]
 
     ocr_results = ocr_engine.extract(frames)
-    classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
+    # classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
     documents = docs_from_image(frames)
 
     words = []
@@ -65,10 +67,14 @@ def process_frames(
 gallery_selection = None
 
 
-def process_all_frames(model_name_or_path: str, image_src):
+def process_all_frames(
+    model_name_or_path: str, classifier: TransformersDocumentClassifier, image_src
+):
     MDC.put("request_id", "2")
     frames = gradio_src_to_frames(image_src)
-    results = process_frames(frames, model_name_or_path=model_name_or_path)
+    results = process_frames(
+        frames, model_name_or_path=model_name_or_path, classifier=classifier
+    )
     return results
 
 
@@ -94,7 +100,7 @@ def gradio_src_to_frames(image_src):
     return frames_from_file(image_src.name)
 
 
-def interface(model_name_or_path: str):
+def interface(model_name_or_path: str, classifier: TransformersDocumentClassifier):
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         global gallery_selection
         gallery_selection = src_gallery[evt.index]
@@ -142,12 +148,12 @@ def interface(model_name_or_path: str):
                 json_output = gr.outputs.JSON()
 
         btn_submit_all.click(
-            partial(process_all_frames, model_name_or_path),
+            partial(process_all_frames, model_name_or_path, classifier),
             inputs=[src],
             outputs=[json_output],
         )
         btn_submit_selected.click(
-            partial(process_selection, model_name_or_path),
+            partial(process_selection, model_name_or_path, classifier),
             inputs=[gallery],
             outputs=[json_output],
         )
@@ -165,7 +171,7 @@ def parse_args():
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
-        default='marie/layoutlmv3-document-classification',
+        default='marie/lmv3-document-classification',
         help="Path to pretrained model or model identifier from Model Hub",
     )
 
@@ -188,4 +194,9 @@ if __name__ == "__main__":
     args = parse_args()
     model_name_or_path = args.pretrained_model_name_or_path
 
-    interface(model_name_or_path=model_name_or_path)
+    logger.info(f"Using model : {model_name_or_path}")
+    classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
+
+    interface(model_name_or_path=model_name_or_path, classifier=classifier)
+
+# python ./app.py --pretrained_model_name_or_path  marie/lmv3-medical-document-classification

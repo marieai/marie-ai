@@ -108,7 +108,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 labels,
             )
 
-        use_gpu = False
+        use_gpu = True
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
         )
