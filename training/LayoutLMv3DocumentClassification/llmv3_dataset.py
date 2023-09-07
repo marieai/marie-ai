@@ -54,7 +54,7 @@ class DocumentClassificationDataset(Dataset):
         processor: LayoutLMv3Processor,
     ):
         super().__init__()
-        self.image_paths = pd_data['image_path']
+        self.image_paths = pd_data["image_path"]
         self.classes = classes  # sorted(pd_data['label'].unique())
         self.pd_data = pd_data
         self.processor = processor
@@ -71,8 +71,8 @@ class DocumentClassificationDataset(Dataset):
         # validate that all images have an annotation file
         image_paths_valid = []
         for image_path in self.image_paths:
-            annotation_path = image_path.replace('images', 'annotations').replace(
-                '.png', '.json'
+            annotation_path = image_path.replace("images", "annotations").replace(
+                ".png", ".json"
             )
             if not os.path.exists(annotation_path):
                 print(
@@ -90,8 +90,8 @@ class DocumentClassificationDataset(Dataset):
     def __getitem__(self, item):
         # print(f"Loading item {item} of {len(self.image_paths)}")
         image_path = self.image_paths[item]
-        annotation_path = image_path.replace('images', 'annotations').replace(
-            '.png', '.json'
+        annotation_path = image_path.replace("images", "annotations").replace(
+            ".png", ".json"
         )
 
         if not os.path.exists(annotation_path):
@@ -103,7 +103,11 @@ class DocumentClassificationDataset(Dataset):
         words = []
 
         with io.open(annotation_path, "r", encoding="utf-8") as json_file:
-            ocr_results = json.load(json_file)
+            try:
+                ocr_results = json.load(json_file)
+            except Exception as e:
+                print(f"Error loading annotation file {annotation_path}: {e}")
+                raise e
 
         self.scale_bounding_box = True
 
@@ -119,10 +123,10 @@ class DocumentClassificationDataset(Dataset):
                 )
             for w in ocr_results[0]["words"]:
                 if self.scale_bounding_box:
-                    bbox = normalize_bbox(w['box'], size)
-                    bbox = scale_bounding_box(w['box'], width_scale, height_scale)
+                    bbox = normalize_bbox(w["box"], size)
+                    bbox = scale_bounding_box(w["box"], width_scale, height_scale)
                 else:
-                    bbox = w['box']
+                    bbox = w["box"]
 
                 # The `bbox` coordinate values should be within 0-1000 range.
                 assert all(
@@ -130,7 +134,7 @@ class DocumentClassificationDataset(Dataset):
                 ), f"Invalid bbox coordinates {bbox} for image {image_path}"
 
                 boxes.append(bbox)
-                words.append(w['text'])
+                words.append(w["text"])
 
             assert len(boxes) == len(words)
             encoding = self.processor(
@@ -157,15 +161,15 @@ class DocumentClassificationDataset(Dataset):
             # transform(image_data)
             #
             label = self.label2idx[
-                self.pd_data.loc[self.pd_data['image_path'] == image_path][
-                    'label'
+                self.pd_data.loc[self.pd_data["image_path"] == image_path][
+                    "label"
                 ].values[0]
             ]
 
             return dict(
-                input_ids=encoding['input_ids'].flatten(),
-                attention_mask=encoding['attention_mask'].flatten(),
-                bbox=encoding['bbox'].flatten(end_dim=1),
-                pixel_values=encoding['pixel_values'].flatten(end_dim=1),
+                input_ids=encoding["input_ids"].flatten(),
+                attention_mask=encoding["attention_mask"].flatten(),
+                bbox=encoding["bbox"].flatten(end_dim=1),
+                pixel_values=encoding["pixel_values"].flatten(end_dim=1),
                 labels=torch.tensor(label, dtype=torch.long),
             )

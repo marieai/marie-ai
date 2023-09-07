@@ -126,7 +126,7 @@ docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.s3.yml
 ## Docker 
 
 
-Start Marie-AI with minimal dependencies
+Start Marie-AI with minimal dependencies (s3, redis, consul, traefik, postgres, minio)
 
 ```sh 
 docker compose  --env-file ./config/.env -f ./Dockerfiles/docker-compose.yml -f ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans 

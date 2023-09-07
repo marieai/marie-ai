@@ -56,7 +56,11 @@ class Toast:
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:
-
+        """
+        Register specific handlers for notifications
+        :param handler: The handler to register
+        :param native: If the handler is native or not
+        """
         assert isinstance(handler, ToastHandler), handler
 
         if native:

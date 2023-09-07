@@ -237,8 +237,11 @@ class S3StorageHandler(PathHandler):
         self.s3 = self.create_s3_resource(self.config)
         self.suppress_errors = True
 
-    def ensure_connection(self):
-        """Check if connection to s3 is possible by checking all buckets (NOOP)"""
+    def ensure_connection(self, silence_exceptions: bool = False) -> None:
+        """Check if connection to s3 is possible by checking all buckets (NOOP)
+
+        :param silence_exceptions: Whether to suppress exceptions
+        """
         try:
             for bucket in self.s3.buckets.all():
                 dt = bucket.creation_date
