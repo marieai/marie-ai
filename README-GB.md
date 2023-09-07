@@ -482,3 +482,5 @@ https://cloud.google.com/document-ai
 
 
 
+LLaMA2 turning
+https://blog.ovhcloud.com/fine-tuning-llama-2-models-using-a-single-gpu-qlora-and-ai-notebooks/
