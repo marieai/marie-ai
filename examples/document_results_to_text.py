@@ -1,16 +1,8 @@
 import os
-import threading
 from pathlib import Path
 
 from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists
-
-
-def process_extract(
-    queue_id: str, mode: str, file_location: str, stop_event: threading.Event = None
-) -> str:
-    if not os.path.exists(file_location):
-        raise Exception(f"File not found : {file_location}")
 
 
 def process_dir(src_dir: str, output_dir: str):
@@ -45,5 +37,4 @@ def process_dir(src_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     ensure_exists("/tmp/marie/results-text")
-    # Specify the path to the file you would like to process
     process_dir("/tmp/marie/results", "/tmp/marie/results-text")

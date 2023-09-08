@@ -15,6 +15,7 @@ from examples.utils import setup_queue, online
 from marie.ocr.extract_pipeline import s3_asset_path
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
+from marie_server.storage.in_memory import InMemoryKV
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ auth_headers = {
     "Authorization": f"Bearer {api_key}",
     "Content-Type": "application/json; charset=utf-8",
 }
+
+# kv_store = InMemoryKV()
 
 job_to_file = {}
 
@@ -152,8 +155,6 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
             "filename": filename,
         }
 
-        break
-
 
 def setup_storage(config: dict):
     handler = S3StorageHandler(config=config)
@@ -265,7 +266,7 @@ if __name__ == "__main__":
         #
         process_dir(
             # "~/datasets/private/medical_page_classification/small",
-            "~/datasets/corr-routing/raw",
+            "~/datasets/corr-routing/converted",
             "~/datasets/corr-routing/output/annotations",
             stop_event,
         )
