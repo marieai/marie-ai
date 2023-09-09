@@ -166,10 +166,10 @@ executors:
         pipeline:
           name: 'default'
           page_classifier:
-            model_name_or_path: 'marie/lmv3-medical-document-classification'
+            model_name_or_path: 'marie/layoutlmv3-document-classification'
             enabled: True
           page_splitter:
-            model_name_or_path: 'marie/lmv3-medical-document-splitter'
+            model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
             enabled: True
       metas:
         py_modules:
@@ -209,23 +209,23 @@ executors:
 #    env :
 #      CUDA_VISIBLE_DEVICES: RR
 
-  - name: document_classifier
-    uses:
-      jtype: DocumentClassificationExecutor
-      with:
-        model_name_or_path :
-          - 'marie/lmv3-medical-document-classification'
-          - 'marie/lmv3-medical-document-classification'
-        <<: *psql_conf_shared
-        storage_enabled : False
-      metas:
-        py_modules:
-          - marie.executor.classifier
-    timeout_ready: 3000000
-#    replicas: 1
-    replicas: ${{ CONTEXT.gpu_device_count }}
-    env :
-      CUDA_VISIBLE_DEVICES: RR
+#  - name: document_classifier
+#    uses:
+#      jtype: DocumentClassificationExecutor
+#      with:
+#        model_name_or_path :
+#          - 'marie/layoutlmv3-document-classification'
+#          - 'marie/layoutlmv3-document-classification'
+#        <<: *psql_conf_shared
+#        storage_enabled : False
+#      metas:
+#        py_modules:
+#          - marie.executor.classifier
+#    timeout_ready: 3000000
+##    replicas: 1
+#    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
 ##
 #  - name: overlay_t
 #    uses:
