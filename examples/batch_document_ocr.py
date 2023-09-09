@@ -15,6 +15,7 @@ from examples.utils import setup_queue, online
 from marie.ocr.extract_pipeline import s3_asset_path
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
+from marie_server.storage.in_memory import InMemoryKV
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ auth_headers = {
     "Authorization": f"Bearer {api_key}",
     "Content-Type": "application/json; charset=utf-8",
 }
+
+# kv_store = InMemoryKV()
 
 job_to_file = {}
 
@@ -116,9 +119,7 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
     for img_path in Path(root_asset_dir).rglob("*"):
         if not img_path.is_file():
             continue
-        # if extension.lower() not in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
-        #     continue
-        #
+
         print(img_path)
 
         resolved_output_path = os.path.join(
@@ -129,6 +130,10 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         name = os.path.splitext(filename)[0]
         extension = os.path.splitext(filename)[1]
         os.makedirs(output_dir, exist_ok=True)
+
+        if extension.lower() not in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
+            logger.warning(f"Skipping {img_path} : {extension} not supported")
+            continue
 
         json_output_path = os.path.join(output_dir, f"{name}.json")
         if os.path.exists(json_output_path):
@@ -143,6 +148,7 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         )
 
         print(json_result)
+
         job_to_file[json_result["jobid"]] = {
             "file": img_path,
             "output_dir": output_dir,
@@ -251,10 +257,17 @@ if __name__ == "__main__":
     #  find $dir -size 0 -type f -delete
 
     if True:
+        # process_dir(
+        #     # "~/datasets/private/medical_page_classification/small",
+        #     "~/datasets/private/data-hipa/medical_page_classification/raw",
+        #     "/home/greg/datasets/private/data-hipa/medical_page_classification/output/annotations/",
+        #     stop_event,
+        # )
+        #
         process_dir(
             # "~/datasets/private/medical_page_classification/small",
-            "~/datasets/private/data-hipa/medical_page_classification/raw",
-            "/home/greg/datasets/private/data-hipa/medical_page_classification/output/annotations/",
+            "~/datasets/corr-routing/converted",
+            "~/datasets/corr-routing/output/annotations",
             stop_event,
         )
 

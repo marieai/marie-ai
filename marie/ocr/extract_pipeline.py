@@ -13,6 +13,7 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
 from marie.ocr.mock_ocr_engine import MockOcrEngine
@@ -128,10 +129,55 @@ class ExtractPipeline:
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
         )
 
-        self.document_classifier = TransformersDocumentClassifier(
-            model_name_or_path=pipeline_config["page_classifier"]["model_name_or_path"],
-            batch_size=1,
-            use_gpu=True,
+        self.document_classifiers = dict()
+        classifier_configs = pipeline_config["page_classifier"]
+
+        for classifier_config in classifier_configs:
+            if "model_name_or_path" not in classifier_config:
+                raise BadConfigSource(
+                    f"Missing model_name_or_path in classifier config : {classifier_config}"
+                )
+
+            if not classifier_config.get("enabled", True):
+                self.logger.warning(
+                    f"Skipping classifier : {classifier_config['model_name_or_path']}"
+                )
+                continue
+
+            classifier_model = classifier_config["model_name_or_path"]
+            classifier_device = (
+                classifier_config["device"] if "device" in classifier_config else "cpu"
+            )
+            classifier_name = (
+                classifier_config["name"]
+                if "name" in classifier_config
+                else classifier_config["model_name_or_path"]
+            )
+            classifier_type = (
+                classifier_config["type"]
+                if "type" in classifier_config
+                else "transformers"
+            )
+            self.logger.info(
+                f"Using model : {classifier_model} on device : {classifier_device}"
+            )
+
+            if classifier_name in self.document_classifiers:
+                raise BadConfigSource(f"Duplicate classifier name : {classifier_name}")
+
+            if classifier_type == "transformers":
+                self.document_classifiers[
+                    classifier_name
+                ] = TransformersDocumentClassifier(
+                    model_name_or_path=classifier_model,
+                    batch_size=1,
+                    use_gpu=True,
+                )
+            else:
+                raise ValueError(f"Invalid classifier type : {classifier_type}")
+
+        self.logger.info(
+            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
         )
 
     def segment(
@@ -654,38 +700,60 @@ class ExtractPipeline:
         :param root_asset_dir: root asset directory
         :return: classification results
         """
-        try:
-            documents = docs_from_image(frames)
 
+        document_meta = []
+        try:
             words = []
             boxes = []
-            meta = []
+            documents = docs_from_image(frames)
 
-            for page_idx in range(len(documents)):
+            for page_idx in range(len(frames)):
                 page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
                 words.append(page_words)
                 boxes.append(page_boxes)
 
-            assert len(words) == len(boxes) == len(documents)
-            classified_docs = self.document_classifier.run(
-                documents=documents, words=words, boxes=boxes
-            )
+            assert len(words) == len(boxes) == len(frames)
 
-            for idx, document in enumerate(classified_docs):
-                assert 'classification' in document.tags
-                classification = document.tags['classification']
-                print("classification", classification)
-                assert 'label' in classification
-                assert 'score' in classification
-                meta.append(
-                    {
-                        'page': f"{idx}",  # Using string to avoid type conversion issues
-                        'classification': classification['label'],
-                        'score': classification['score'],
-                    }
-                )
+            for key, document_classifier in self.document_classifiers.items():
+                meta = []
 
-            self.logger.info(f"Classification : {meta}")
-            return meta
+                try:
+                    self.logger.info(f"Classifying document : {key}")
+                    classified_docs = document_classifier.run(
+                        documents=documents, words=words, boxes=boxes
+                    )
+
+                    for idx, document in enumerate(classified_docs):
+                        assert 'classification' in document.tags
+                        classification = document.tags['classification']
+                        document.tags.pop('classification')
+
+                        assert 'label' in classification
+                        assert 'score' in classification
+                        meta.append(
+                            {
+                                'page': f"{idx}",  # Using string to avoid type conversion issues
+                                'classification': classification['label'],
+                                'score': classification['score'],
+                            }
+                        )
+
+                    self.logger.debug(f"Classification : {meta}")
+                    document_meta.append(
+                        {
+                            'classifier': key,
+                            'details': meta,
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error classifying document : {e}")
+                    document_meta.append(
+                        {
+                            'classifier': key,
+                            'details': [],
+                        }
+                    )
         except Exception as e:
             self.logger.error(f"Error classifying document : {e}")
+
+        return document_meta
