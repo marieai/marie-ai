@@ -567,7 +567,7 @@ class StorageManager:
         items = cls.list(remote_path, return_full_path=True)
 
         if not items:
-            logger.error("No files found at {}".format(remote_path))
+            logger.warning("No files found at {}".format(remote_path))
             return
 
         for path in items:

@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import threading
 import time
@@ -7,6 +8,7 @@ import uuid
 import requests
 
 from examples.utils import setup_queue, online
+from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"
@@ -27,7 +29,6 @@ def process_extract(
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
 
-    print(endpoint_url)
     if False and not online(api_base_url):
         stop_event.set()
         raise Exception(f"API server is not online : {endpoint_url}")
@@ -55,9 +56,6 @@ def process_extract(
 
     uid = str(uuid.uuid4())
 
-    json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-    # json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-
     json_payload = {
         "queue_id": queue_id,
         "data": base64_str,
@@ -65,7 +63,7 @@ def process_extract(
         "mode": mode,
         "output": "json",
         "doc_id": f"extract-{uid}",
-        "doc_type": "lbx",
+        "doc_type": "extract-adhoc",
         "features": [
             {
                 "type": "pipeline",
@@ -80,12 +78,10 @@ def process_extract(
         ],
     }
 
-    # print(json_payload)
-    # Upload file to api
     print(f"Uploading to marie-ai for processing : {file}")
     print(endpoint_url)
 
-    NITER = 100
+    NITER = 1
     json_result = None
 
     for k in range(NITER):
@@ -108,8 +104,31 @@ def process_extract(
     return json_result
 
 
+def message_handler(message):
+    try:
+        if isinstance(message, str):
+            message = json.loads(message)
+
+        event = message["event"]
+        jobid = message["jobid"]
+
+        print(f"event: {event}, jobid: {jobid}")
+        print(message)
+
+        if event != "extract.completed":
+            return
+
+        payload = json.loads(message["payload"])
+        store_json_object(payload, "/tmp/marie/extract.json")
+        store_json_object(message, "/tmp/marie/extract-event.json")
+
+    except Exception as e:
+        print(e)
+        return
+
+
 if __name__ == "__main__":
-    ensure_exists("/tmp/snippet")
+    ensure_exists("/tmp/marie")
 
     stop_event = threading.Event()
     connection_config = {
@@ -123,7 +142,8 @@ if __name__ == "__main__":
         "extract.#",
         stop_event,
         ["extract.completed", "extract.failed"],
-        lambda x: print(f"callback: {x}"),
+        # lambda x: print(f"callback: {x}"),
+        message_handler,
     )
 
     # Specify the path to the file you would like to process

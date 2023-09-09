@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 
 import torch
@@ -95,6 +96,7 @@ def default_rescale(args: object):
     # This should be our dataset folder
     src_dir = args.dir
     dst_dir = args.dir_output
+    normalize = args.normalize
 
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
@@ -114,8 +116,18 @@ def default_rescale(args: object):
                 if os.path.isfile(file_path):
                     print(f"file_path = {file_path}")
 
+                    # check if the file is an image
+                    filename, file_extension = os.path.splitext(file_path)
+                    if file_extension.lower() not in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".tif",
+                        ".tiff",
+                    ]:
+                        print(f"Skipping {file_path} : {file_extension} not supported")
+                        continue
                     image, orig_size = load_image_pil(file_path)
-
                     # NO SCALE NEEDED
                     # resized, target_size = __scale_height(image, 1000)
                     resized = image
@@ -123,10 +135,16 @@ def default_rescale(args: object):
                     # save the image
                     dst_folder = os.path.join(dst_dir, folder)
                     ensure_exists(dst_folder)
-
-                    # save the image in PNG format
                     filename, file_extension = os.path.splitext(file)
 
+                    if normalize:
+                        normalized = os.path.basename(file)
+                        normalized = normalized.split(".")
+                        normalized = normalized[0]
+                        normalized = normalized.lower()
+                        filename = re.sub(r'\W+', '_', normalized)
+
+                    # save the image in PNG format
                     dst_file = os.path.join(dst_folder, f"{filename}.png")
                     print(f"dst_file = {dst_file}")
                     resized.save(dst_file)
@@ -198,6 +216,13 @@ def extract_args(args=None) -> object:
         help="Suffix to append to the source directory",
     )
 
+    rescale_parser.add_argument(
+        "--normalize",
+        default=True,
+        type=bool,
+        help="Should we normalize the file names (remove spaces etc.)",
+    )
+
     visualize_parser = subparsers.add_parser("visualize", help="Visualize documents")
     visualize_parser.set_defaults(func=default_visualize)
 
@@ -238,6 +263,9 @@ if __name__ == "__main__":
     # Payer dataset
     # python converter.py rescale --dir ~/datasets/private/data-hipa/payer/converted --dir-output ~/datasets/private/data-hipa/payer/output/images
     # python converter.py decorate --dir ~/datasets/private/data-hipa/payer/output/images --dir-output ~/datasets/private/data-hipa/payer/output/annotations
+
+    # Corr dataset
+    # python converter.py rescale --dir ~/datasets/corr-routing/raw --dir-output ~/datasets/corr-routing/converted
 
     args = extract_args()
     print("-" * 120)
