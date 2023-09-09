@@ -84,7 +84,6 @@ storage:
     enabled : False
 
 
-
 # FLOW / GATEWAY configuration
 
 with:
