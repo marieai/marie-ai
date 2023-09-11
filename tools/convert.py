@@ -31,7 +31,7 @@ def _validate_qa_balance(category_counts: dict, link_map: dict, id_to_name: dict
     return category_imbalance
 
 def _convert_coco_to_funsd(
-        src_dir: str,
+        images_path: str,
         output_path: str,
         annotations_filename: str,
         config: object,
@@ -41,7 +41,7 @@ def _convert_coco_to_funsd(
     Convert CVAT annotated COCO dataset into FUNSD compatible format for finetuning models.
     """
     print("******* Conversion info ***********")
-    print(f"src_dir     : {src_dir}")
+    print(f"image_path     : {images_path}")
     print(f"output_path : {output_path}")
     print(f"annotations : {annotations_filename}")
     print(f"strip_file_path : {strip_file_path}")
@@ -122,8 +122,11 @@ def _convert_coco_to_funsd(
     # Start Conversion
     ensure_exists(os.path.join(output_path, "annotations_tmp"))
     ensure_exists(os.path.join(output_path, "images"))
+    src_images = {dir.name.split(".")[0] for dir in os.scandir(images_path) if dir.is_file()}
     for image_id, image_annotations in annotations_by_image.items():
-
+        filename = images_by_id[image_id].split("/")[-1].split(".")[0]
+        if filename not in src_images:  # Check to see if this annotation is a part of this dataset
+            continue
         form_dict = {"form": []}
         for i, annotation in enumerate(image_annotations):
             # Convert form XYWH -> xmin,ymin,xmax,ymax
@@ -144,8 +147,7 @@ def _convert_coco_to_funsd(
                 ],
             })
 
-        filename = images_by_id[image_id].split("/")[-1].split(".")[0]
-        src_img_path = os.path.join(src_dir, "images", f"{filename}.png")
+        src_img_path = os.path.join(images_path, f"{filename}.png")
         json_path = os.path.join(output_path, "annotations_tmp", f"{filename}.json")
         dst_img_path = os.path.join(output_path, "images", f"{filename}.png")
         # Save tmp state FUNSD JSON
@@ -156,7 +158,7 @@ def _convert_coco_to_funsd(
 
 
 def convert_coco_to_funsd(
-        src_dir: str, output_path: str, config: object, strip_file_name_path: bool
+        src_dir: str, image_path: str, output_path: str, config: object, strip_file_name_path: bool
 ) -> None:
     """
     Convert CVAT annotated COCO 1.0 dataset into FUNSD compatible format for finetuning models.
@@ -170,7 +172,7 @@ def convert_coco_to_funsd(
     for idx, annotations_filename in enumerate(items):
         try:
             print(f"Processing annotation : {annotations_filename}")
-            _convert_coco_to_funsd(src_dir, output_path, annotations_filename, config, strip_file_name_path)
+            _convert_coco_to_funsd(image_path, output_path, annotations_filename, config, strip_file_name_path)
         except Exception as e:
             raise e
 
@@ -183,12 +185,13 @@ def default_convert(args: object):
     mode = args.mode
     suffix = args.mode_suffix
     strip_file_name_path = args.strip_file_name_path
-    src_dir = os.path.join(args.dir, f"{mode}{suffix}")
+    src_dir = os.path.abspath(args.src_dir)
+    data_dir = os.path.join(args.src_dir, args.dataset_path)
 
     dst_path = (
         args.dir_converted
         if args.dir_converted != "./converted"
-        else os.path.join(args.dir, "output", "dataset", f"{mode}")
+        else os.path.join(args.src_dir, "output", f"{mode}")
     )
 
     if not os.path.exists(args.config):
@@ -202,7 +205,7 @@ def default_convert(args: object):
     print(f"src_dir    = {src_dir}")
     print(f"dst_path   = {dst_path}")
 
-    convert_coco_to_funsd(src_dir, dst_path, config, strip_file_name_path)
+    convert_coco_to_funsd(src_dir, data_dir, dst_path, config, strip_file_name_path)
 
 
 def get_convert_parser(subparsers=None) -> argparse.ArgumentParser:
@@ -246,11 +249,19 @@ def get_convert_parser(subparsers=None) -> argparse.ArgumentParser:
     )
 
     convert_parser.add_argument(
-        "--dir",
+        "--src_dir",
         required=True,
         type=str,
         default="~/dataset/ds-001/indexer",
         help="Base data directory",
+    )
+
+    convert_parser.add_argument(
+        "--dataset_path",
+        required=True,
+        type=str,
+        default="images/my-project/my-data",
+        help="A relative path from your src_dir: {source dir}/images/{Project name}/{Dataset name} ",
     )
 
     convert_parser.add_argument(

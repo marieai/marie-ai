@@ -17,9 +17,9 @@ def default_all_steps(args: object):
     print(args)
     print("*" * 180)
 
-    root_dir = args.dir
+    root_dir = args.src_dir
     aug_count = args.aug_count
-    dataset_dir = os.path.join(root_dir, "output", "dataset")
+    dataset_dir = os.path.join(root_dir, "output")
 
     # clone and remove  unused values
     args_1 = vars(args).copy()
@@ -105,11 +105,19 @@ def extract_args(args=None) -> object:
     )
 
     convert_all_parser.add_argument(
-        "--dir",
+        "--src_dir",
         required=True,
         type=str,
         default="~/dataset/ds-001/indexer",
         help="Base data directory",
+    )
+
+    convert_all_parser.add_argument(
+        "--dataset_path",
+        required=True,
+        type=str,
+        default="images/my-project/my-data",
+        help="A relative path from your src_dir: {source dir}/images/{Project name}/{Dataset name} ",
     )
 
     convert_all_parser.add_argument(

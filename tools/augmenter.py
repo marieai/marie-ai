@@ -41,13 +41,8 @@ def generate_date() -> str:
     return fake.date(pattern=random.choice(patterns))
 
 
-def generate_money(num_digits: int, decimal_place_buffer: int = 0,
-                   neg_prob: float = 0.1, sign_prob: float = 0.2, dec_only_prob: float = 0.1) -> str:
+def generate_money(max_value: float, neg_prob: float = 0.1, sign_prob: float = 0.2, dec_only_prob: float = 0.1) -> str:
     """ Generate a random string money value within set conditions."""
-
-    # Ensure fake value is within a number of decimal places from the source number of digits
-    max_value = ["9"] * (num_digits + decimal_place_buffer)
-    max_value = int(''.join(max_value))
     while True:
         label_text = fake.pricetag()
         generated_value = float(label_text.replace("$", "").replace(',', ''))
@@ -95,9 +90,10 @@ def generate_alpha_numeric(length: int, alpha: bool = True, numeric: bool = True
 def generate_text(original: str, mask_type: str) -> str:
     """Generate text for specific type of label"""
     if mask_type == "money":
-        money = original.replace("$", "").replace(",", "")
-        place_value = len(money.split('.')[0])
-        return generate_money(place_value)
+        money = original.replace("$", "").replace(",", "").split('.')[0]
+        # Ensure that the amount of money exceeds the number of decimal places of the original
+        max_value = int(''.join(["9"] * len(money))) if len(money) > 0 else 9
+        return generate_money(max_value)
     elif mask_type == "date":
         return generate_date()
     elif mask_type == "name":

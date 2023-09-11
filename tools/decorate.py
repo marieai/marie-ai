@@ -102,8 +102,7 @@ def __decorate_funsd(
     # line_numbers : line number associated with bounding box
     # lines : raw line boxes that can be used for further processing
     _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
-        filename, "lines", image, PSMode.SPARSE
-    )  # TODO: Need to investigate speed issue
+        filename, "lines", image)  # TODO: Need to investigate speed issue
 
     for item in data["form"]:
         # Boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
