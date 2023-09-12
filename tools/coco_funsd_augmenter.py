@@ -1383,6 +1383,7 @@ def default_convert(args: object):
     suffix = args.mode_suffix
     strip_file_name_path = args.strip_file_name_path
     src_dir = os.path.join(args.dir, f"{mode}{suffix}")
+    args.config = os.path.expanduser(args.config)
 
     dst_path = (
         args.dir_converted

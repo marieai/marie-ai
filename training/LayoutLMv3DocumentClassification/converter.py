@@ -266,6 +266,7 @@ if __name__ == "__main__":
 
     # Corr dataset
     # python converter.py rescale --dir ~/datasets/corr-routing/raw --dir-output ~/datasets/corr-routing/converted
+    # python converter.py rescale --dir ~/datasets/private/patpay-ner/303/images/patpay --dir-output ~/datasets/private/patpay-ner/303/images/patpay/converted
 
     args = extract_args()
     print("-" * 120)
