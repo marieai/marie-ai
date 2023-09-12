@@ -5,7 +5,7 @@ from typing import Dict
 import torch
 
 from marie.boxes.box_processor import PSMode
-from marie.ocr import CoordinateFormat, DefaultOcrEngine
+from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
 from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.utils.docs import frames_from_file
@@ -16,7 +16,7 @@ from marie.timer import Timer
 
 
 def process_dir(
-        ocr_engine: DefaultOcrEngine,
+        ocr_engine: OcrEngine,
         image_dir: str,
 ):
     import random
@@ -32,7 +32,7 @@ def process_dir(
 
 
 @Timer(text="Process time {:.4f} seconds")
-def process_file(ocr_engine: DefaultOcrEngine, img_path: str):
+def process_file(ocr_engine: OcrEngine, img_path: str):
     try:
         print("Processing", img_path)
         img_path = os.path.expanduser(img_path)
