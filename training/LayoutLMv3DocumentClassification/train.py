@@ -42,7 +42,7 @@ dataset_pathXX = os.path.expanduser(
 )
 
 dataset_path = os.path.expanduser(
-    "~/datasets/private/data-hipa/payer-determination/output/images"
+    "~/datasets/private/payer-determination/output/images"
 )
 
 
@@ -53,10 +53,14 @@ def load_data():
 
     for label in sorted(os.listdir(dataset_path)):
         items = os.listdir(os.path.join(dataset_path, label))
+        labels.append(label)
         print(f"label: {label} >> {len(items)}")
 
-        labels.append(label)
         for image in items:
+            # check if file is an image
+            extension = os.path.splitext(image)[1]
+            if extension not in [".png", ".jpg", ".jpeg", ".tif", ".tiff"]:
+                continue
             df_images.append(os.path.join(dataset_path, label, image))
             df_labels.append(label)
 
@@ -72,8 +76,6 @@ def load_data():
 
 
 model_name_or_path = "microsoft/layoutlmv3-base"
-
-
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
 
@@ -260,6 +262,7 @@ def predict_document_image(
     )
     if not os.path.exists(annotation_path):
         print(f"Missing annotation file for {annotation_path} for image {image_path}")
+        return -1, -1
 
     with io.open(annotation_path, "r", encoding="utf-8") as json_file:
         ocr_results = json.load(json_file)
@@ -321,12 +324,7 @@ def infer_single_image(label, image_path, model, processor, device):
 
 def inference():
     # load ckpt for inference
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=4-step=10020-val_loss=0.1633.ckpt.dir"
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_4/checkpoints/epoch=7-step=13026-val_loss=0.1810.ckpt.dir"
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt.dir"
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_8/checkpoints/epoch=11-step=23523-val_loss=0.1027.ckpt.dir"
-
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_16/checkpoints/epoch=32-step=5181-val_loss=0.6300.ckpt.dir"
+    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=34-step=7175-val_loss=0.3972.ckpt.dir"
 
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
@@ -353,7 +351,7 @@ def inference():
 
     print(torch._dynamo.list_backends())
 
-    if True:
+    if False:
         try:
             with TimeContext("Compile model"):
                 import torchvision.models as models
@@ -412,6 +410,6 @@ def inference():
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    train()
+    # train()
 
-    # inference()
+    inference()
