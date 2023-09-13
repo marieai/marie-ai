@@ -37,4 +37,7 @@ def process_dir(src_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     ensure_exists("/tmp/marie/results-text")
-    process_dir("/tmp/marie/results", "/tmp/marie/results-text")
+    process_dir(
+        "/home/gbugaj/datasets/private/payer-determination/output/annotations",
+        "/tmp/marie/results-text",
+    )
