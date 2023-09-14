@@ -19,6 +19,7 @@ from marie.constants import __model_path__, __config_dir__
 from marie.logging.logger import MarieLogger
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.overlap import merge_boxes
+from marie.utils.resize_image import resize_image
 
 
 def setup_cfg(args, device):
@@ -305,17 +306,19 @@ class BoxProcessorUlimDit(BoxProcessor):
                 ),
                 "--opts",
                 "MODEL.WEIGHTS",
-                os.path.join(models_dir, "./LARGE-09132023/model_0039999.pth"),
+                os.path.join(models_dir, "./LARGE-09132023/model_0045999.pth"),
             ]
         )
 
-        print("args", args)
-
+        self.logger.info(f"Loading model from {args.config_file}")
         self.strict_box_segmentation = False
         device = "cuda" if torch.cuda.is_available() else "cpu"
+
         cfg = setup_cfg(args, device)
+        self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")
+
 
     def psm_word(self, image):
         if self.strict_box_segmentation:
@@ -328,9 +331,26 @@ class BoxProcessorUlimDit(BoxProcessor):
                    enable_visualization: Optional[bool] = False,
                    ):
         try:
+            self.logger.debug(f"Starting box predictions : {image.shape}")
+            #  this should match Detectron2 model input size
+            # this is to ensure that the model works correctly
+            # FIXME : This is a hack
+            # TODO : Update the model to work with any size image
+            adj_x = 0
+            adj_y = 0
+            print(f"Image type : {image.shape}")
+            orig_image = image
 
-            self.logger.debug(f"Starting box predictions")
+            if image.shape[0] < self.min_size_test[0] or image.shape[1] < self.min_size_test[1]:
+                self.logger.warning(f"Image size is too small : {image.shape}, resizing to {self.min_size_test}")
+                image, coord = resize_image(image, (self.min_size_test[0], self.min_size_test[1]))
+                self.logger.warning(f"Resized image  : {image.shape}, {coord}")
+                # cv2.imwrite(f"/tmp/marie/bbox_framed.png", image)
+                adj_x = coord[0]
+                adj_y = coord[1]
+
             rp = self.predictor(image)
+            image = orig_image
             predictions = rp["instances"]
             # Following will hang if we move the predictions from GPU to CPU all at once
             # This is a workaround to avoid the hanging
@@ -361,6 +381,20 @@ class BoxProcessorUlimDit(BoxProcessor):
                 return [], [], [], [], []
 
             bboxes = _convert_boxes(boxes)
+            self.logger.info(f"Predicted boxes : {len(boxes)}")
+            # adjust the boxes to original image size
+            if adj_x != 0 or adj_y != 0:
+                bboxes[:, 0] = bboxes[:, 0] - adj_x
+                bboxes[:, 1] = bboxes[:, 1] - adj_y
+                bboxes[:, 2] = bboxes[:, 2] - adj_x
+                bboxes[:, 3] = bboxes[:, 3] - adj_y
+
+                # clip the boxes to image size and 0 to avoid negative values
+                bboxes[:, 0] = np.clip(bboxes[:, 0], 0, image.shape[1])
+                bboxes[:, 1] = np.clip(bboxes[:, 1], 0, image.shape[0])
+                bboxes[:, 2] = np.clip(bboxes[:, 2], 0, image.shape[1])
+                bboxes[:, 3] = np.clip(bboxes[:, 3], 0, image.shape[0])
+
             # for each box check if it has a height and width are in range of (0..2], if so remove it
             # this is a workaround for a bug in the model where it predicts a box with height and width of fraction of a pixel
             len_a = len(bboxes)
@@ -420,6 +454,9 @@ class BoxProcessorUlimDit(BoxProcessor):
             bboxes = bboxes[ind]
             lines = lines_from_bboxes(image, bboxes)
 
+            print(f"Lines : {len(lines)}")
+            print(f"Bboxes : {len(bboxes)}")
+            print(boxes)
             return bboxes, classes, scores, lines, classes
         except Exception as e:
             raise e
