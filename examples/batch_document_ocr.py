@@ -264,18 +264,18 @@ if __name__ == "__main__":
         #     stop_event,
         # )
         #
-        process_dir(
-            # "~/datasets/private/medical_page_classification/small",
-            "~/datasets/corr-routing/converted",
-            "~/datasets/corr-routing/output/annotations",
-            stop_event,
-        )
-
         # process_dir(
-        #     "~/datasets/private/data-hipa/payer-determination/raw",
-        #     "~/datasets/private/data-hipa/payer-determination/output/annotations/",
+        #     # "~/datasets/private/medical_page_classification/small",
+        #     "~/datasets/corr-routing/converted",
+        #     "~/datasets/corr-routing/output/annotations",
         #     stop_event,
         # )
+
+        process_dir(
+            "~/datasets/private/payer-determination/output/images",
+            "~/datasets/private/payer-determination/output/annotations/",
+            stop_event,
+        )
 
     # join current thread / wait for event or we will get "cannot schedule new futures after interpreter shutdown"
 

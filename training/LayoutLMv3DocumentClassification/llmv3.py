@@ -35,6 +35,10 @@ dataset_path = os.path.expanduser(
     "~/datasets/private/medical_page_classification/output/images"
 )
 
+dataset_path = os.path.expanduser(
+    "~/datasets/private/payer-determination/output/images"
+)
+
 labels = [label for label in os.listdir(dataset_path)]
 
 idx2label = {idx: label for idx, label in enumerate(labels)}

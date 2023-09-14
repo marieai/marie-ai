@@ -264,6 +264,11 @@ def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndar
     return offset, cropped
 
 
+class CompiledDefaultPredictor(DefaultPredictor):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+
+
 class BoxProcessorUlimDit(BoxProcessor):
     """DiT for Text Detection"""
 
@@ -277,18 +282,35 @@ class BoxProcessorUlimDit(BoxProcessor):
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
 
+        if False:
+            args = get_parser().parse_args(
+                [
+                    "--config-file",
+                    os.path.join(
+                        __config_dir__,
+                        "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                    ),
+                    "--opts",
+                    "MODEL.WEIGHTS",
+                    os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
+                ]
+            )
+
         args = get_parser().parse_args(
             [
                 "--config-file",
                 os.path.join(
                     __config_dir__,
-                    "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
+                    "zoo/unilm/dit/text_detection/mask_rcnn_dit_large.yaml",
                 ),
                 "--opts",
                 "MODEL.WEIGHTS",
-                os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
+                os.path.join(models_dir, "./LARGE-09132023/model_0039999.pth"),
             ]
         )
+
+        print("args", args)
+
         self.strict_box_segmentation = False
         device = "cuda" if torch.cuda.is_available() else "cpu"
         cfg = setup_cfg(args, device)
