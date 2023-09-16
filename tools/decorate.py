@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from tools import from_json_file, ensure_exists, __tmp_path__
-from marie.boxes import BoxProcessorUlimDit
+from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.document.trocr_icr_processor import TrOcrIcrProcessor
 from marie.boxes.line_processor import find_line_number
 from marie.numpyencoder import NumpyEncoder
@@ -38,6 +38,12 @@ def extract_icr(
     if os.path.exists(json_file):
         print(f"From JSONFILE : {json_file}")
         json_data = from_json_file(json_file)
+
+        results = json_data["result"]
+        print(f"words  = {len(results['words'])}")
+        if len(results["words"]) == 0:
+            print(f"Empty result for {checksum}")
+            return None, None
         return json_data["boxes"], json_data["result"]
 
     key = checksum
@@ -48,6 +54,10 @@ def extract_icr(
     # if label == "other":
     #     boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
     #         key, "field", image, PSMode.SPARSE)
+
+    boxes, img_fragments, lines, _, line_bboxes = boxp.extract_bounding_boxes(
+        key, "field", image, PSMode.SPARSE
+    )
 
     # we found no boxes, so we will creat only one box and wrap a whole image as that
     if boxes is None or len(boxes) == 0:
@@ -63,6 +73,11 @@ def extract_icr(
         boxes = [[0, 0, w, h]]
         img_fragments = [image]
         lines = [1]
+
+    # filter out fragments that are too small to be processed
+    img_fragments = [
+        img for img in img_fragments if img.shape[0] > 10 and img.shape[1] > 10
+    ]
 
     result = {"words": []}
     if (
@@ -136,7 +151,6 @@ def __decorate_funsd(
         boxes, results = extract_icr(
             snippet, item["label"], boxp, icrp, debug_fragments
         )
-        results.pop("meta", None)
 
         if (
             results is None
@@ -146,6 +160,8 @@ def __decorate_funsd(
         ):
             print(f"*No results in {filename} for id:{_id}")
             continue
+
+        results.pop("meta", None)
 
         words = []
         text = " ".join([line["text"] for line in results["lines"]])
@@ -181,30 +197,40 @@ def __decorate_funsd(
 
     print("-------- MASKED ----------")
     current_max_index = data["form"][-1]["id"]
-    for i, word in enumerate(results_masked["words"]):
-        x, y, w, h = word["box"]
-        line_number = find_line_number(line_bboxes, [x, y, w, h])
-        word_box = [x, y, x + w, y + h]
+    # Add masked boxes to the end of the list of annotations, with the same line number as the original box
+    # some of the boxes may be empty, so we will filter them out
+    if results_masked is not None and len(results_masked["words"]) > 0:
+        for i, word in enumerate(results_masked["words"]):
+            x, y, w, h = word["box"]
+            line_number = find_line_number(line_bboxes, [x, y, w, h])
+            word_box = [x, y, x + w, y + h]
 
-        item = {
-            "id": current_max_index + i,
-            "text": word["text"],
-            "box": word_box,
-            "line_number": line_number,
-            "linking": [],  # TODO: Not in use.
-            "label": "other",
-            "words": [{"text": word["text"], "box": word_box}],
-        }
+            item = {
+                "id": current_max_index + i,
+                "text": word["text"],
+                "box": word_box,
+                "line_number": line_number,
+                "linking": [],  # TODO: Not in use.
+                "label": "other",
+                "words": [{"text": word["text"], "box": word_box}],
+            }
 
-        data["form"].append(item)
+            data["form"].append(item)
 
     # Find all annotations by line number
     items_by_line = {}
+    form_data = []
     for item in data["form"]:
+        print(f"item = {item}")
+        if "line_number" not in item:
+            print(f"skipping item = {item}")
+            continue
         if item["line_number"] not in items_by_line:
             items_by_line[item["line_number"]] = []
         items_by_line[item["line_number"]].append(item)
+        form_data.append(item)
 
+    data["form"] = form_data
     # Order by line number
     unique_line_numbers = list(items_by_line.keys())
     unique_line_numbers.sort()

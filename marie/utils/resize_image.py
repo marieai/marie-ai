@@ -1,7 +1,7 @@
 import cv2
 
 
-def resize_image(image, desired_size, color=(255, 255, 255)):
+def resize_image(image, desired_size, color=(255, 255, 255)) -> tuple:
     """Helper function to resize an image while keeping the aspect ratio.
     Parameter
     ---------
@@ -38,4 +38,6 @@ def resize_image(image, desired_size, color=(255, 255, 255)):
     image = cv2.copyMakeBorder(
         image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
     )
-    return image
+    # convert top, bottom, left, right to x, y, w, h
+    x, y, w, h = left, top, right - left, bottom - top
+    return image, (x, y, w, h)
