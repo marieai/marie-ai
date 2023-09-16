@@ -269,6 +269,7 @@ def decorate_funsd(
     src_dir: str, overwrite: bool = False, debug_fragments: bool = False
 ) -> None:
     """'Decorate' FUNSD annotation files with ICR-ed contents from the source images."""
+    src_dir = os.path.expanduser(src_dir)
     work_dir_boxes = ensure_exists(f"{__tmp_path__}/boxes")
     work_dir_icr = ensure_exists(f"{__tmp_path__}/icr")
     output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
@@ -294,7 +295,7 @@ def decorate_funsd(
 
     for i, FUNSD_file_path in enumerate(items):
         print("*" * 60)
-        filename = FUNSD_file_path.split('/')[-1]
+        filename = FUNSD_file_path.split("/")[-1]
         print(f"Processing annotation : {filename}")
         try:
             if os.path.isfile(os.path.join(output_ann_dir, filename)) and not overwrite:

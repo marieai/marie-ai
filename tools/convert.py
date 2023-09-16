@@ -196,6 +196,7 @@ def convert_coco_to_funsd(
     source: "FUNSD: A Dataset for Form Understanding in Noisy Scanned Documents" https://arxiv.org/pdf/1905.13538.pdf
     """
     os.makedirs(output_path, exist_ok=True)
+    src_dir = os.path.expanduser(src_dir)
     items = glob.glob(
         os.path.join(src_dir, "annotations/*.json")
     )  # instances_default.json
@@ -223,6 +224,7 @@ def default_convert(args: object):
     print("*" * 180)
     mode = args.mode
     suffix = args.mode_suffix
+    args.src_dir = os.path.expanduser(args.src_dir)
     strip_file_name_path = args.strip_file_name_path
     src_dir = os.path.abspath(args.src_dir)
     data_dir = os.path.join(args.src_dir, args.dataset_path)
@@ -321,14 +323,14 @@ def get_convert_parser(subparsers=None) -> argparse.ArgumentParser:
         "--config",
         required=True,
         type=str,
-        default='./config.json',
+        default="./config.json",
         help="Configuration file used for conversion",
     )
 
     convert_parser.add_argument(
         "--debug",
         required=False,
-        action='store_true',
+        action="store_true",
         default=False,
         help="Turn on debug logging",
     )
