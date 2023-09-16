@@ -74,11 +74,30 @@ def extract_icr(
         img_fragments = [image]
         lines = [1]
 
-    # filter out fragments that are too small to be processed
-    img_fragments = [
-        img for img in img_fragments if img.shape[0] > 10 and img.shape[1] > 10
-    ]
+    print(
+        f"BEFORE  boxes = {len(boxes)} frag = {len(img_fragments)} lines = {len(lines)}"
+    )
 
+    # filter out fragments that are too small to be processed
+    fragments_tmp = []
+    boxes_tmp = []
+    lines_tmp = []
+
+    for idx, img in enumerate(img_fragments):
+        if img.shape[0] > 10 and img.shape[1] > 10:
+            fragments_tmp.append(img)
+            boxes_tmp.append(boxes[idx])
+            lines_tmp.append(lines[idx])
+        else:
+            print(f"Skipping fragment of size: {img.shape}, {boxes[idx]}")
+
+    boxes = boxes_tmp
+    img_fragments = fragments_tmp
+    lines = lines_tmp
+
+    print(
+        f"AFTER  boxes = {len(boxes)} frag = {len(img_fragments)} lines = {len(lines)}"
+    )
     result = {"words": []}
     if (
         label != "other"

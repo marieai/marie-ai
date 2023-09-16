@@ -306,7 +306,8 @@ class BoxProcessorUlimDit(BoxProcessor):
                 ),
                 "--opts",
                 "MODEL.WEIGHTS",
-                os.path.join(models_dir, "./LARGE-09132023/model_0045999.pth"),
+                # os.path.join(models_dir, "./LARGE-09132023/model_0045999.pth"),
+                os.path.join(models_dir, "./model_0038999-V3-BEST/model_0038999.pth"),
             ]
         )
 
@@ -456,7 +457,6 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             print(f"Lines : {len(lines)}")
             print(f"Bboxes : {len(bboxes)}")
-            print(boxes)
             return bboxes, classes, scores, lines, classes
         except Exception as e:
             raise e

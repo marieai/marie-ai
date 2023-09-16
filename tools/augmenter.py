@@ -168,7 +168,12 @@ def create_annotation_data(
     word_annotations = []
 
     while index < line_count:
-        text_width, text_height = draw.textsize(lines[index], font=font)
+        line_text = lines[index]
+        print(f"line_text = {line_text}")
+        # text_width, text_height = draw.textsize(line_text, font=font)
+        box = draw.textbbox((0, 0), line_text, font=font)
+        text_width, text_height = box[2] - box[3]
+        print(f"text_width = {text_width}, {text_height}  : {box}")
         # Can the text be contained?
         if (
             text_width > width
@@ -234,8 +239,8 @@ def _augment_decorated_process(
     # Faker.seed(0)
 
     filename = file_path.split("/")[-1].split(".")[0]
-    prefixes = mask_config['prefixes']
-    fonts = mask_config['fonts']
+    prefixes = mask_config['prefixes'] if 'prefixes' in mask_config else None
+    fonts = mask_config['fonts'] if 'fonts' in mask_config else None
     print(f"File: {file_path}")
     with open(file_path, "r", encoding="utf8") as f:
         data = json.load(f)
@@ -412,7 +417,9 @@ def default_augment(args: object):
     print(f"aug_count = {aug_count}")
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
-    augment_decorated_annotation(aug_count, src_dir, dst_dir, args.mask_config)
+    augment_decorated_annotation(
+        aug_count, src_dir, dst_dir, os.path.expanduser(args.mask_config)
+    )
 
 
 def get_augmenter_parser(subparsers=None) -> argparse.ArgumentParser:
