@@ -47,8 +47,20 @@ else:
             lineno,
         )
 
+    def _ignore_google_warnings():
+        import warnings
+
+        warnings.filterwarnings(
+            'ignore',
+            category=DeprecationWarning,
+            message='Deprecated call to `pkg_resources.declare_namespace(\'google\')`.',
+            append=True,
+        )
+
     _warnings.formatwarning = _warning_on_one_line
-    _warnings.simplefilter("always", DeprecationWarning)
+    _warnings.simplefilter('always', DeprecationWarning, append=True)
+    _ignore_google_warnings()
+
 
 # fix fork error on MacOS but seems no effect? must do EXPORT manually before jina start
 _os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
