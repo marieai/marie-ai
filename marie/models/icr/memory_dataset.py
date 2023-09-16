@@ -41,7 +41,6 @@ class MemoryDataset(Dataset):
                 img = Image.fromarray(image)
 
             try:
-                print(f"MD-Image shape: {image.shape}")
                 # Convert color to RGB
                 image = cv2.cvtColor(image, code=cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(image)
