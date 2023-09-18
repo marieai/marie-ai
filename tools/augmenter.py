@@ -24,6 +24,11 @@ def load_image_pil(image_path):
     return image, (w, h)
 
 
+def generate_phone() -> str:
+    """Generates a phone number"""
+    return fake.phone_number()
+
+
 def generate_date() -> str:
     """Generates a data from the patterns given:
     https://datatest.readthedocs.io/en/stable/how-to/date-time-str.html
@@ -116,7 +121,9 @@ def generate_text(original: str, mask_type: str) -> str:
         return generate_name(len(original.split(" ")))
     elif mask_type == "address":
         return generate_address()
-    else:  # Alpha-Numeric
+    elif mask_type == "phone":
+        return generate_phone()
+    elif mask_type == "alpha-numeric":  # Alpha-Numeric
         alpha = original.isalpha()
         numeric = original.isnumeric()
         if not alpha and not numeric:
@@ -125,6 +132,8 @@ def generate_text(original: str, mask_type: str) -> str:
                 alpha = np.random.choice([True, False])
                 numeric = not alpha
         return generate_alpha_numeric(len(original), alpha, numeric)
+    else:
+        raise Exception(f"Unknown mask type: {mask_type}")
 
 
 @lru_cache(maxsize=20)
@@ -169,11 +178,14 @@ def create_annotation_data(
 
     while index < line_count:
         line_text = lines[index]
-        print(f"line_text = {line_text}")
         # text_width, text_height = draw.textsize(line_text, font=font)
-        box = draw.textbbox((0, 0), line_text, font=font)
-        text_width, text_height = box[2] - box[3]
-        print(f"text_width = {text_width}, {text_height}  : {box}")
+        if hasattr(font, "getbbox"):
+            bbox = draw.textbbox((0, 0), line_text, font=font)
+        else:
+            w, h = draw.textsize(line_text, font=font)
+            bbox = (0, 0, w, h)
+        text_width, text_height = bbox[2], bbox[3]
+
         # Can the text be contained?
         if (
             text_width > width
@@ -254,6 +266,10 @@ def _augment_decorated_process(
         # Add mask type to annotation item
         for mask_type in mask_config["masks_by_type"]:
             if label in mask_config["masks_by_type"][mask_type]:
+                # if it is a string, skip it
+                # this could be a  "_comment": "check_amt_text_answer is an alpha value tied to a money value."
+                if isinstance(mask_config["masks_by_type"][mask_type], str):
+                    continue
                 data["form"][i]["mask_type"] = mask_type
                 break
         # Remove annotations we don't intend to mask from 'data'
@@ -293,9 +309,10 @@ def _augment_decorated_process(
             draw.rectangle(((x0, y0), (x1, y1)), fill="#FFFFFF")
 
             # Yellow boxes with outline for debug
-            # draw.rectangle(
-            #     ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
-            # )
+            if False:
+                draw.rectangle(
+                    ((x0, y0), (x1, y1)), fill="#FFFFCC", outline="#FF0000", width=1
+                )
 
             x0_y0 = np.array([x0, y0])
             for i, text_line in enumerate(aug_text.splitlines()):
@@ -310,6 +327,7 @@ def _augment_decorated_process(
                 {
                     "id": item["id"],
                     "text": aug_text,
+                    "label": item["label"],
                     "words": words_annotations,
                     "line_number": item["line_number"],
                     "word_index": item["word_index"],
@@ -319,7 +337,7 @@ def _augment_decorated_process(
 
         data_aug["form"] += data_constant["form"]
         # Save items
-        out_name_prefix = f"{k}_{filename}"
+        out_name_prefix = f"{filename}_{k}"
 
         json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
@@ -373,6 +391,22 @@ def augment_decorated_annotation(
     for guid, file in enumerate(os.listdir(ann_dir)):
         file_path = os.path.join(ann_dir, file)
         img_path = os.path.join(img_dir, file.replace("json", "png"))
+        fileid = file.split("_")[0]
+        # if fileid != "179431630":
+        #     continue
+
+        print("Processing file: ", file_path)
+
+        _augment_decorated_process(
+            count,
+            file_path,
+            img_path,
+            font_dir,
+            dest_aug_annotations_dir,
+            dest_aug_images_dir,
+            mask_config,
+        )
+
         _args = (
             count,
             file_path,
@@ -384,6 +418,7 @@ def augment_decorated_annotation(
         )
         aug_args.append(_args)
 
+    return
     start = time.time()
     print("\nPool Executor:")
     pool = mp.Pool(processes=int(mp.cpu_count() * 0.95))

@@ -88,16 +88,18 @@ def split_dataset(
         )
 
     images = np.array([os.path.join(img_dir, image) for image in os.listdir(img_dir)])
-    total_images = images.size
-    assert total_images <= 1, "Not enough images to split"
+    np.random.shuffle(images)
+    total_images = len(images)
+
+    assert total_images > 1, "Not enough images to split"
     training_size = int(total_images * split_percentage)
 
-    np.random.shuffle(images)
     train_set = images[:training_size]
     test_set = images[training_size:]
 
     ann_dir_out_train = ensure_exists(os.path.join(train_dir, "annotations"))
     img_dir_out_train = ensure_exists(os.path.join(train_dir, "images"))
+
     ann_dir_out_test = ensure_exists(os.path.join(test_dir, "annotations"))
     img_dir_out_test = ensure_exists(os.path.join(test_dir, "images"))
 
@@ -114,8 +116,9 @@ def split_dataset(
     elif format == "FUNSD":
         train_ann_set = split_funsd_annotation_files(ann_dir, train_set)
         test_ann_set = split_funsd_annotation_files(ann_dir, test_set)
-        copyFiles(train_ann_set, ann_dir_out_test)
-        copyFiles(test_ann_set, img_dir_out_test)
+
+        copyFiles(train_ann_set, ann_dir_out_train)
+        copyFiles(test_ann_set, ann_dir_out_test)
 
     copyFiles(train_set, img_dir_out_train)
     copyFiles(test_set, img_dir_out_test)
@@ -125,6 +128,10 @@ def default_split(args: object):
     print("Default split")
     print(args)
     print("*" * 180)
+
+    print('args.dir_output', args.dir_output)
+    print('args.dir', args.dir)
+    print('args.dir_output', args.dir_output)
 
     dst_dir = (
         args.dir_output if args.dir_output != "./split" else os.path.abspath(args.dir)
