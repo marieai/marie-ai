@@ -16,7 +16,6 @@ icr_processor = (
     MockOcrEngine()
 )  # TrOcrIcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
 
-
 icr_processor = TrOcrIcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
 
 
@@ -30,7 +29,7 @@ def process_image(image):
     ) = box_processor.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
 
     result, overlay_image = icr_processor.recognize(
-        "gradio ", "00000", image, boxes, fragments, lines
+        "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
@@ -68,7 +67,7 @@ def interface():
 if __name__ == "__main__":
     import torch
 
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
     # torch._dynamo.config.suppress_errors = False
 

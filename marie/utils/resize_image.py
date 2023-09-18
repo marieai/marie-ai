@@ -1,7 +1,9 @@
 import cv2
 
 
-def resize_image(image, desired_size, color=(255, 255, 255)) -> tuple:
+def resize_image(
+    image, desired_size, color=(255, 255, 255), keep_max_size=False
+) -> tuple:
     """Helper function to resize an image while keeping the aspect ratio.
     Parameter
     ---------
@@ -20,6 +22,26 @@ def resize_image(image, desired_size, color=(255, 255, 255)) -> tuple:
     """
 
     size = image.shape[:2]
+    if keep_max_size:
+        # size = (max(size[0], desired_size[0]), max(size[1], desired_size[1]))
+        h = size[0]
+        w = size[1]
+        dh = desired_size[0]
+        dw = desired_size[1]
+
+        if w > dw and h < dh:
+            print("Add padding to height")
+            delta_h = max(0, desired_size[0] - size[0])
+            top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+            left = 40
+            right = 40
+            image = cv2.copyMakeBorder(
+                image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
+            )
+            size = image.shape[:2]
+            # cv2.imwrite("/tmp/marie/box_framed_keep_max_size.png", image)
+            return image, (left, top, size[1], size[0])
+
     if size[0] > desired_size[0] or size[1] > desired_size[1]:
         ratio_w = float(desired_size[0]) / size[0]
         ratio_h = float(desired_size[1]) / size[1]

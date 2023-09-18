@@ -307,6 +307,8 @@ class TrOcrIcrProcessor(IcrProcessor):
 
                     for k in range(len(predictions)):
                         text = predictions[k]
+                        # TODO: make this configurable as an option. Different models can return different cases
+                        text = text.upper() if text is not None else ""
                         score = scores[k]
                         _, img_name = eval_data[k]
                         confidence = round(score, 4)
