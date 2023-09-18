@@ -50,7 +50,7 @@ def generate_money(
     """Generate a random string money value within set conditions."""
     while True:
         label_text = fake.pricetag()
-        generated_value = float(label_text.replace("$", "").replace(',', ''))
+        generated_value = float(label_text.replace("$", "").replace(",", ""))
         if max_value >= generated_value:
             break
     # TODO: make the below conditionals a passable list of augmentations
@@ -74,7 +74,7 @@ def generate_name(length: int) -> str:
     name = [fake_names_only.first_name()]
     if length > 1:
         name += [fake_names_only.last_name() for _ in range(1, length)]
-    return ' '.join(name)
+    return " ".join(name)
 
 
 def generate_address() -> str:
@@ -106,9 +106,9 @@ def generate_alpha_numeric(
 def generate_text(original: str, mask_type: str) -> str:
     """Generate text for specific type of label"""
     if mask_type == "money":
-        money = original.replace("$", "").replace(",", "").split('.')[0]
+        money = original.replace("$", "").replace(",", "").split(".")[0]
         # Ensure that the amount of money exceeds the number of decimal places of the original
-        max_value = int(''.join(["9"] * len(money))) if len(money) > 0 else 9
+        max_value = int("".join(["9"] * len(money))) if len(money) > 0 else 9
         return generate_money(max_value)
     elif mask_type == "date":
         return generate_date()
@@ -239,8 +239,8 @@ def _augment_decorated_process(
     # Faker.seed(0)
 
     filename = file_path.split("/")[-1].split(".")[0]
-    prefixes = mask_config['prefixes'] if 'prefixes' in mask_config else None
-    fonts = mask_config['fonts'] if 'fonts' in mask_config else None
+    prefixes = mask_config["prefixes"] if "prefixes" in mask_config else None
+    fonts = mask_config["fonts"] if "fonts" in mask_config else None
     print(f"File: {file_path}")
     with open(file_path, "r", encoding="utf8") as f:
         data = json.load(f)
@@ -252,12 +252,12 @@ def _augment_decorated_process(
         item = data["form"][i]
         label = item["label"][2:] if prefixes is not None else item["label"]
         # Add mask type to annotation item
-        for mask_type in mask_config['masks_by_type']:
-            if label in mask_config['masks_by_type'][mask_type]:
-                data["form"][i]['mask_type'] = mask_type
+        for mask_type in mask_config["masks_by_type"]:
+            if label in mask_config["masks_by_type"][mask_type]:
+                data["form"][i]["mask_type"] = mask_type
                 break
         # Remove annotations we don't intend to mask from 'data'
-        if 'mask_type' not in data["form"][i]:
+        if "mask_type" not in data["form"][i]:
             data_constant["form"].append(data["form"].pop(i))
         else:
             i += 1
@@ -282,7 +282,7 @@ def _augment_decorated_process(
             w = x1 - x0
             h = y1 - y0
 
-            aug_text = generate_text(item['text'], item['mask_type'])
+            aug_text = generate_text(item["text"], item["mask_type"])
             words_annotations, line_coordinates, font_size = create_annotation_data(
                 aug_text, w, h, font_path
             )
@@ -308,11 +308,11 @@ def _augment_decorated_process(
                 )
             data_aug["form"].append(
                 {
-                    'id': item['id'],
+                    "id": item["id"],
                     "text": aug_text,
                     "words": words_annotations,
-                    "line_number": item['line_number'],
-                    "word_index": item['word_index'],
+                    "line_number": item["line_number"],
+                    "word_index": item["word_index"],
                     "linking": [],
                 }
             )
@@ -324,7 +324,7 @@ def _augment_decorated_process(
         json_path = os.path.join(dest_annotation_dir, f"{out_name_prefix}.json")
         dst_img_path = os.path.join(dest_image_dir, f"{out_name_prefix}.png")
 
-        print(f'Writing : {json_path}')
+        print(f"Writing : {json_path}")
         with open(json_path, "w") as json_file:
             json.dump(
                 data_aug,
@@ -360,8 +360,8 @@ def augment_decorated_annotation(
     """
     mask_config = from_json_file(mask_config_path)
     font_dir = os.path.join(__root_dir__, "../assets/fonts")
-    if mask_config['font_dir'] != "DEFAULT":
-        font_dir = mask_config['font_dir']
+    if mask_config["font_dir"] != "DEFAULT":
+        font_dir = mask_config["font_dir"]
 
     font_dir = ensure_exists(font_dir)
     ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
@@ -403,6 +403,9 @@ def default_augment(args: object):
     print("*" * 180)
 
     # This should be our dataset folder
+    args.dir = os.path.expanduser(args.dir)
+    args.dir_output = os.path.expanduser(args.dir_output)
+
     mode = args.mode
     aug_count = args.aug_count
     root_dir = args.dir
@@ -480,7 +483,7 @@ def get_augmenter_parser(subparsers=None) -> argparse.ArgumentParser:
         "--mask_config",
         required=True,
         type=str,
-        default='./mask.json',
+        default="./mask.json",
         help="Configuration file used for augmentation",
     )
 

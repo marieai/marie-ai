@@ -144,6 +144,7 @@ def __decorate_funsd(
     image, size = load_image(image_path)
 
     print(f"Extracting line numbers with Box Processor for {filename}")
+
     # line_numbers : line number associated with bounding box
     # lines : raw line boxes that can be used for further processing
     _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
@@ -157,7 +158,7 @@ def __decorate_funsd(
 
         snippet = image[y0:y1, x0:x1, :]
         line_number = find_line_number(line_bboxes, [x0, y0, x1 - x0, y1 - y0])
-
+        debug_fragments = True
         # each snippet could be on multiple lines
         print(f"line_number = {line_number}")
         # export cropped region
@@ -322,6 +323,10 @@ def decorate_funsd(
                     f"File {filename} already decorated and Overwrite is disabled. Continuing to next file."
                 )
                 continue
+
+            # if filename[:-5] != "179579324_2":
+            #     print(f"Skipping {filename}")
+            #     continue
 
             with open(FUNSD_file_path, "r", encoding="utf8") as f:
                 data = json.load(f)

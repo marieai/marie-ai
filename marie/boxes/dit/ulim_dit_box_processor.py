@@ -72,7 +72,7 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -81,6 +81,10 @@ def visualize_bboxes(
         format(xyxy|xywh): format of the bboxes, defaults to `xyxy`
     """
 
+    if image is None:
+        raise Exception(
+            "Input image can't be empty : Ensure  overlay_bboxes is set to TRUE"
+        )
     # convert pil to OpenCV
     if type(image) == PIL.Image.Image:
         image = np.array(image)
@@ -203,7 +207,9 @@ def lines_from_bboxes(image, bboxes):
     return lines_bboxes
 
 
-def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndarray, np.ndarray]:
+def crop_to_content_box(
+    frame: np.ndarray, content_aware=False
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
     No content is defined as first non background(white) pixel.
@@ -256,7 +262,7 @@ def crop_to_content_box(frame: np.ndarray, content_aware=False) -> Tuple[np.ndar
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
+    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
@@ -274,10 +280,10 @@ class BoxProcessorUlimDit(BoxProcessor):
     """DiT for Text Detection"""
 
     def __init__(
-            self,
-            work_dir: str = "/tmp/boxes",
-            models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
-            cuda: bool = False,
+        self,
+        work_dir: str = "/tmp/boxes",
+        models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
+        cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
@@ -320,17 +326,18 @@ class BoxProcessorUlimDit(BoxProcessor):
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")
 
-
     def psm_word(self, image):
         if self.strict_box_segmentation:
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
-    def psm_sparse(self, image: np.ndarray,
-                   bbox_optimization: Optional[bool] = False,
-                   bbox_context_aware: Optional[bool] = True,
-                   enable_visualization: Optional[bool] = False,
-                   ):
+    def psm_sparse(
+        self,
+        image: np.ndarray,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
+        enable_visualization: Optional[bool] = False,
+    ):
         try:
             self.logger.debug(f"Starting box predictions : {image.shape}")
             #  this should match Detectron2 model input size
@@ -339,12 +346,21 @@ class BoxProcessorUlimDit(BoxProcessor):
             # TODO : Update the model to work with any size image
             adj_x = 0
             adj_y = 0
-            print(f"Image type : {image.shape}")
             orig_image = image
 
-            if image.shape[0] < self.min_size_test[0] or image.shape[1] < self.min_size_test[1]:
-                self.logger.warning(f"Image size is too small : {image.shape}, resizing to {self.min_size_test}")
-                image, coord = resize_image(image, (self.min_size_test[0], self.min_size_test[1]))
+            # Both height and width are smaller than the minimum size then frame the image
+            if (
+                image.shape[0] < self.min_size_test[0]
+                or image.shape[1] < self.min_size_test[1]
+            ):
+                self.logger.warning(
+                    f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
+                )
+                image, coord = resize_image(
+                    image,
+                    (self.min_size_test[0], self.min_size_test[1]),
+                    keep_max_size=True,
+                )
                 self.logger.warning(f"Resized image  : {image.shape}, {coord}")
                 # cv2.imwrite(f"/tmp/marie/bbox_framed.png", image)
                 adj_x = coord[0]
@@ -408,7 +424,8 @@ class BoxProcessorUlimDit(BoxProcessor):
             len_b = len(bboxes)
             if len_a != len_b:
                 self.logger.debug(
-                    f"Removed predicted boxes that did not meet size minimum requirements: {len_a - len_b}")
+                    f"Removed predicted boxes that did not meet size minimum requirements: {len_a - len_b}"
+                )
             if len_b == 0:
                 self.logger.debug(f"No boxes found within requirements")
                 return [], [], [], [], []
@@ -423,12 +440,18 @@ class BoxProcessorUlimDit(BoxProcessor):
                     x0, y0, x1, y1 = box
                     w = x1 - x0
                     h = y1 - y0
-                    snippet = image[y0: y0 + h, x0: x0 + w:]
-                    offset, cropped = crop_to_content_box(snippet, content_aware=bbox_context_aware)
+                    snippet = image[y0 : y0 + h, x0 : x0 + w :]
+                    offset, cropped = crop_to_content_box(
+                        snippet, content_aware=bbox_context_aware
+                    )
                     # cv2.imwrite(f"/tmp/fragments/snippet_{i}.png", snippet)
                     # cv2.imwrite(f"/tmp/fragments/snippet_{i}_cropped.png", cropped)
-                    adj_box = [box[0] + offset[0], box[1] + offset[1], box[2] - (offset[2] - offset[0]),
-                               box[3] - (offset[3] - offset[1])]
+                    adj_box = [
+                        box[0] + offset[0],
+                        box[1] + offset[1],
+                        box[2] - (offset[2] - offset[0]),
+                        box[3] - (offset[3] - offset[1]),
+                    ]
 
                     # print(f"Snippet {i} : {box} -> {offset} -> {adj_box}")
                     bboxes[i] = adj_box
@@ -477,9 +500,13 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def extract_bounding_boxes(
-            self, _id, key, img, psm=PSMode.SPARSE,
-            bbox_optimization: Optional[bool] = False,
-            bbox_context_aware: Optional[bool] = True,
+        self,
+        _id,
+        key,
+        img,
+        psm=PSMode.SPARSE,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -503,8 +530,9 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
-                bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(image, bbox_optimization,
-                                                                               bbox_context_aware)
+                bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(
+                    image, bbox_optimization, bbox_context_aware
+                )
             # elif psm == PSMode.WORD:
             #     bboxes, polys, scores, lines_bboxes, classes = self.psm_word(image_norm)
             elif psm == PSMode.LINE:
@@ -565,7 +593,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0: y0 + h, x0: x0 + w:]
+                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)

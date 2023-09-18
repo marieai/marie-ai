@@ -21,7 +21,6 @@ def process_file(
     storage_enabled: bool,
     storage_conf: Dict[str, str],
 ):
-
     with TimeContext(f"### extraction info"):
         filename = img_path.split("/")[-1].replace(".png", "")
         checksum = hash_file(img_path)
