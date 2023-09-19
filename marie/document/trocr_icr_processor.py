@@ -278,9 +278,6 @@ class TrOcrIcrProcessor(IcrProcessor):
             f"ICR processing : recognize_from_boxes [items, batch_size, batches] :{size}, {batch_size}, {total_batches} "
         )
 
-        for img in src_images:
-            logger.info(f"fragment shape : {img.shape}")
-
         try:
             opt = self.opt
             results = []

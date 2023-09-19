@@ -225,6 +225,11 @@ class NerExtractionExecutor(Executor, StorageMixin):
         # stride is the number of tokens to move forward, this is to handle long documents that are larger than 512 tokens
         # there will be overlap between the batches, so we will need to handle that later
 
+        self.logger.info("Named Entity Inference")
+        self.logger.info(f"Words : {len(words)} ::  {words}")
+        self.logger.info(f"Boxes : {len(boxes)}")
+        assert len(words) == len(boxes)
+
         encoding = processor(
             # fmt: off
             image,
@@ -273,6 +278,8 @@ class NerExtractionExecutor(Executor, StorageMixin):
             # The model outputs logits of shape (batch_size, seq_len, num_labels).
             logits = outputs.logits
             batch_size, seq_len, num_labels = logits.shape
+
+            self.logger.info(f"Batch Size : {batch_size}")
 
             # Get the predictions and bounding boxes by batch and convert to list
             predictions_batched = logits.argmax(-1).squeeze().tolist()
@@ -328,32 +335,37 @@ class NerExtractionExecutor(Executor, StorageMixin):
 
                 assert len(true_predictions) == len(true_boxes) == len(true_scores)
 
+                # Not sure why we have this, but we need to remove [0, 0, 0, 0] boxes
+                true_predictions = [
+                    pred
+                    for pred, box in zip(true_predictions, true_boxes)
+                    if box != [0, 0, 0, 0]
+                ]
+                true_boxes = [box for box in true_boxes if box != [0, 0, 0, 0]]
+                true_scores = [
+                    score
+                    for score, box in zip(true_scores, true_boxes)
+                    if box != [0, 0, 0, 0]
+                ]
+
                 # check if  token_boxes are same as the true_boxes and if so pick the one with the highest score
                 if batch_index > 0:
                     for idx, box in enumerate(out_boxes):
-                        if box == [0, 0, 0, 0]:
-                            continue
-                        # check if box is in last_boxes
                         if box in true_boxes:
                             current_idx = true_boxes.index(box)
                             if true_scores[current_idx] > out_scores[idx]:
                                 out_prediction[idx] = true_predictions[current_idx]
                                 out_scores[idx] = true_scores[current_idx]
-                            elif true_scores[current_idx] < out_scores[idx]:
-                                # remove the box from true_boxes
-                                true_predictions.pop(current_idx)
-                                true_boxes.pop(current_idx)
-                                true_scores.pop(current_idx)
+
+                            true_predictions.pop(current_idx)
+                            true_boxes.pop(current_idx)
+                            true_scores.pop(current_idx)
 
                 out_prediction.extend(true_predictions)
                 out_boxes.extend(true_boxes)
                 out_scores.extend(true_scores)
 
-        # everything should be labeled
-        # print(f"NER: {len(words)}")
-        # print(f"PRED: {len(out_prediction)}")
-        # assert len(out_prediction) == len(words)
-
+        assert len(out_prediction) == len(words)
         return out_prediction, out_boxes, out_scores
 
     def postprocess(self, frames, annotations, ocr_results, file_hash):
