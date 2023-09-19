@@ -209,6 +209,8 @@ def array_from_docs(
     docs: Union[DocumentArray | List[Document]], field: Optional[str] = None
 ) -> List[np.ndarray]:
     """Convert DocumentArray to Numpy Array"""
+    if docs is None:
+        raise ValueError("No documents provided to convert to array")
     frames = []
     if field is None:
         field = 'tensor'
