@@ -15,7 +15,7 @@ from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
 from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
-from marie.ocr import CoordinateFormat, DefaultOcrEngine
+from marie.ocr import CoordinateFormat, DefaultOcrEngine, VotingOcrEngine
 from marie.ocr.mock_ocr_engine import MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.overlay.overlay import OverlayProcessor
@@ -123,14 +123,24 @@ class ExtractPipeline:
         if mock_ocr:
             self.ocr_engine = MockOcrEngine(cuda=use_cuda)
         else:
-            self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+            # self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+            self.ocr_engine = VotingOcrEngine(cuda=use_cuda)
 
         self.overlay_processor = OverlayProcessor(
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
         )
 
+        if pipeline_config is None:
+            self.logger.warning("Pipeline config is None, using default config")
+            pipeline_config = {}
+
         self.document_classifiers = dict()
-        classifier_configs = pipeline_config["page_classifier"]
+        classifier_configs = (
+            pipeline_config["page_classifier"]
+            if "page_classifier" in pipeline_config
+            else []
+        )
+        # classifier_configs =  pipeline_config["page_classifier"]
 
         for classifier_config in classifier_configs:
             if "model_name_or_path" not in classifier_config:
@@ -474,6 +484,10 @@ class ExtractPipeline:
 
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
+
+        if runtime_conf is None:
+            self.logger.warning("runtime_conf is None, using default config")
+            runtime_conf = {}
 
         if regions and len(regions) > 0:
             self.execute_regions_pipeline(

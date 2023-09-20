@@ -12,6 +12,7 @@ from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
+from marie.document import TesseractOcrProcessor
 from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
@@ -64,7 +65,7 @@ if __name__ == "__main__":
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "./assets/english/Lines/004.png"
+    img_path = "./assets/english/Lines/005.png"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -74,7 +75,9 @@ if __name__ == "__main__":
         image = cv2.imread(img_path)
 
         box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
-        icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        # icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        # icr = TesseractOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        icr = CraftOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
         (
             boxes,
@@ -86,12 +89,12 @@ if __name__ == "__main__":
 
         print(lines)
         result, overlay_image = icr.recognize(
-            key, "test", image, boxes, fragments, lines
+            key, "test", image, boxes, fragments, lines, return_overlay=True
         )
 
-        cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
-
+        print("Results -----------------")
         print(result)
+        cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
         json_path = os.path.join("/tmp/fragments", "results.json")
 
         with open(json_path, "w") as json_file:
@@ -117,10 +120,17 @@ if __name__ == "__main__":
 
         output_filename = "/tmp/fragments/result.pdf"
         print("Testing pdf render")
-        result = from_json_file("/tmp/fragments/results.json")
+        results = from_json_file("/tmp/fragments/results.json")
+
+        # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+        # renderer.render(image, results, output_filename)
 
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-        renderer.render(image, result, output_filename)
+        renderer.render(
+            frames=[image],
+            results=results,
+            output_filename=output_filename
+        )
 
         # print("Testing text render")
         #

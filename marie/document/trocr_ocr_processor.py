@@ -234,6 +234,9 @@ class TrOcrProcessor(OcrProcessor):
         opt.rgb = True
         self.opt = opt
 
+    def is_available(self) -> bool:
+        return self.model is not None
+
     def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
         start = time.time()
 
@@ -246,12 +249,10 @@ class TrOcrProcessor(OcrProcessor):
                 return 0
 
         free_memory = get_free_memory()
-        batch_size = 32
+        batch_size = 16
         if free_memory > 0:
-            # batch_size = int(free_memory / 3e9 * 64)
             batch_size = int(free_memory / 8e9 * 32)  # ~100 @ 24GB
         logger.debug(f"Free memory : {free_memory}, batch_size : {batch_size}")
-        # batch_size = 12
         result = self.__recognize_from_fragments(src_images, batch_size, **kwargs)
         logger.debug("Fragments time : %s" % (time.time() - start))
         return result

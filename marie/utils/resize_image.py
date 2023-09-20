@@ -39,7 +39,7 @@ def resize_image(
                 image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
             )
             size = image.shape[:2]
-            # cv2.imwrite("/tmp/marie/box_framed_keep_max_size.png", image)
+            cv2.imwrite("/tmp/marie/box_framed_keep_max_size.png", image)
             return image, (left, top, size[1], size[0])
 
     if size[0] > desired_size[0] or size[1] > desired_size[1]:
@@ -62,4 +62,6 @@ def resize_image(
     )
     # convert top, bottom, left, right to x, y, w, h
     x, y, w, h = left, top, right - left, bottom - top
+
+    cv2.imwrite("/tmp/marie/box_framed.png", image)
     return image, (x, y, w, h)

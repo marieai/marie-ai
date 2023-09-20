@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.core.fromnumeric import size
 
-from .resize_image import resize_image
+from . import resize_image
 
 
 def plot_patches(img_arr, org_img_size, stride=None, size=None):
