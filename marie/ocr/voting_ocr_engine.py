@@ -42,6 +42,7 @@ class VotingOcrEngine(OcrEngine):
             "default": True,
             "processor": TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda),
         }
+
         self.processors["craft"] = {
             "enabled": True,
             "processor": CraftOcrProcessor(
@@ -105,9 +106,7 @@ class VotingOcrEngine(OcrEngine):
 
         return self.voting_evaluator(aggregate_results, default_results)
 
-    def voting_evaluator(
-        self, results: Dict[List[Dict]], default_results
-    ) -> List[Dict]:
+    def voting_evaluator(self, results, default_results) -> List[Dict]:
         """
         Evaluate the results and return the best result
 
