@@ -7,7 +7,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
 
-from marie.document.icr_processor import IcrProcessor
+from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
 from marie.models.icr.dataset import AlignCollate, RawDataset
 from marie.models.icr.memory_dataset import MemoryDataset
@@ -15,7 +15,7 @@ from marie.models.icr.model import Model
 from marie.models.icr.utils import AttnLabelConverter, CTCLabelConverter
 
 
-class TesseractOcrProcessor(IcrProcessor):
+class LevenshteinOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",

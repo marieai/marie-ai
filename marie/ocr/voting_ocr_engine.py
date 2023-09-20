@@ -8,9 +8,10 @@ from collections import defaultdict
 
 from marie.boxes import PSMode
 from marie.constants import __model_path__
-from marie.document import TrOcrIcrProcessor
-from marie.document.craft_icr_processor import CraftIcrProcessor
-from marie.document.tesseract_icr_processor import TesseractOcrProcessor
+from marie.document import TrOcrProcessor
+from marie.document.craft_ocr_processor import CraftOcrProcessor
+from marie.document.lev_ocr_processor import LevenshteinOcrProcessor
+from marie.document.tesseract_ocr_processor import TesseractOcrProcessor
 from marie.ocr import OcrEngine, CoordinateFormat
 from collections import OrderedDict
 
@@ -39,18 +40,24 @@ class VotingOcrEngine(OcrEngine):
         self.processors["trocr"] = {
             "enabled": True,
             "default": True,
-            "processor": TrOcrIcrProcessor(
-                work_dir=self.work_dir_icr, cuda=self.has_cuda
-            ),
+            "processor": TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda),
         }
         self.processors["craft"] = {
             "enabled": True,
-            "processor": CraftIcrProcessor(
+            "processor": CraftOcrProcessor(
                 work_dir=self.work_dir_icr, cuda=self.has_cuda
             ),
         }
-        self.processors["tesseract"] = {
+
+        self.processors["levocr"] = {
             "enabled": True,
+            "processor": LevenshteinOcrProcessor(
+                work_dir=self.work_dir_icr, cuda=self.has_cuda
+            ),
+        }
+
+        self.processors["tesseract"] = {
+            "enabled": False,
             "processor": TesseractOcrProcessor(
                 work_dir=self.work_dir_icr, cuda=self.has_cuda
             ),

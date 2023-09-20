@@ -7,7 +7,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
 
-from marie.document.icr_processor import IcrProcessor
+from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
 from marie.models.icr.dataset import AlignCollate, RawDataset
 from marie.models.icr.memory_dataset import MemoryDataset
@@ -20,7 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-class CraftIcrProcessor(IcrProcessor):
+class CraftOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",

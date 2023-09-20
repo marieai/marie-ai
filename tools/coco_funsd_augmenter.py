@@ -28,7 +28,7 @@ from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.line_processor import find_line_number
-from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.timer import Timer
 from marie.utils.utils import ensure_exists
@@ -399,7 +399,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         cuda=True,
     )
 
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+    icrp = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
@@ -1475,7 +1475,7 @@ def extract_args(args=None) -> object:
     )
 
     subparsers = parser.add_subparsers(
-        dest='command', help='Commands to run', required=True
+        dest="command", help="Commands to run", required=True
     )
 
     convert_parser = subparsers.add_parser(
@@ -1530,7 +1530,7 @@ def extract_args(args=None) -> object:
         "--config",
         required=True,
         type=str,
-        default='./config.json',
+        default="./config.json",
         help="Configuration file used for conversion",
     )
 
@@ -1638,7 +1638,7 @@ def extract_args(args=None) -> object:
     visualize_parser.add_argument(
         "--config",
         type=str,
-        default='./visualize-config.json',
+        default="./visualize-config.json",
         help="Configuration file used for conversion",
     )
 
@@ -1720,7 +1720,7 @@ def extract_args(args=None) -> object:
         "--config",
         required=True,
         type=str,
-        default='./config.json',
+        default="./config.json",
         help="Configuration file used for conversion",
     )
 

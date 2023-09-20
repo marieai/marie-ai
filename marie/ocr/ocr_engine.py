@@ -10,7 +10,7 @@ from PIL import Image
 from marie.boxes import PSMode, BoxProcessorUlimDit, BoxProcessorCraft
 from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
-from marie.document.icr_processor import IcrProcessor
+from marie.document.ocr_processor import OcrProcessor
 from marie.logging.logger import MarieLogger
 from marie.ocr.coordinate_format import CoordinateFormat
 from marie.utils.base64 import encodeToBase64
@@ -82,7 +82,7 @@ class OcrEngine(ABC):
     def process_single(
         self,
         box_processor: BoxProcessor,
-        icr_processor: IcrProcessor,
+        icr_processor: OcrProcessor,
         frames: Union[np.ndarray, List[np.ndarray], List[Image.Image]],
         pms_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
@@ -148,7 +148,7 @@ class OcrEngine(ABC):
         pms_mode: PSMode,
         coordinate_format: CoordinateFormat,
         box_processor: BoxProcessor,
-        icr_processor: IcrProcessor,
+        icr_processor: OcrProcessor,
         **kwargs,
     ):
         """Process full page extraction"""
@@ -218,7 +218,7 @@ class OcrEngine(ABC):
         pms_mode,
         regions,
         box_processor: BoxProcessor,
-        icr_processor: IcrProcessor,
+        icr_processor: OcrProcessor,
         **kwargs,
     ):
         """Process region based extract"""

@@ -12,8 +12,8 @@ from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-from marie.document.craft_icr_processor import CraftIcrProcessor
-from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.document.craft_ocr_processor import CraftOcrProcessor
+from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer.pdf_renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
@@ -57,13 +57,14 @@ def from_json_file(filename):
 
 if __name__ == "__main__":
     import faulthandler
+
     faulthandler.enable()
 
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = './assets/english/Lines/004.png'
+    img_path = "./assets/english/Lines/004.png"
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -73,7 +74,7 @@ if __name__ == "__main__":
         image = cv2.imread(img_path)
 
         box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
-        icr = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+        icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
         (
             boxes,
