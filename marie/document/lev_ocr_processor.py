@@ -1,44 +1,20 @@
 import os
-import sys
 import typing
 
-import torch
-import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
-import torch.utils.data
-
 from marie.document.ocr_processor import OcrProcessor
-from marie.lang import Object
-from marie.models.icr.dataset import AlignCollate, RawDataset
-from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.icr.model import Model
-from marie.models.icr.utils import AttnLabelConverter, CTCLabelConverter
+from marie.constants import __model_path__
 
 
 class LevenshteinOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",
-        models_dir: str = "./model_zoo/icr",
+        models_dir: str = os.path.join(__model_path__, "levocr"),
         cuda: bool = True,
     ) -> None:
         super().__init__(work_dir, cuda)
-        print("Tesseract OCR processor [cuda={}]".format(cuda))
-
-        saved_model = os.path.join(
-            models_dir, "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft", "best_accuracy.pth"
-        )
-
-        self.converter, self.model = self.__load()
-
-    def __load(self):
-        """model configuration"""
-        opt = self.opt
-
-        print("Evaluating on device")
-        model = Model(opt)
-
-        return None, model
+        print("LevenshteinOCR processor [cuda={}]".format(cuda))
 
     def recognize_from_fragments(
         self, images, **kwargs
@@ -50,11 +26,7 @@ class LevenshteinOcrProcessor(OcrProcessor):
                 (H, W, 3).
         """
 
-        print("ICR processing : recognize_from_boxes via boxes")
-        try:
-            results = []
+        raise NotImplementedError("Levenshtein OCR is not implemented yet")
 
-        except Exception as ex:
-            print(ex)
-            raise ex
-        return results
+    def is_available(self) -> bool:
+        return False

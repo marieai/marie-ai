@@ -11,5 +11,7 @@ import sys
 
 from .craft_ocr_processor import CraftOcrProcessor
 from .trocr_ocr_processor import TrOcrProcessor
+from .tesseract_ocr_processor import TesseractOcrProcessor
+from .lev_ocr_processor import LevenshteinOcrProcessor
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))

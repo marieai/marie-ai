@@ -6,6 +6,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
+from marie.constants import __model_path__
 
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
@@ -13,6 +14,7 @@ from marie.models.icr.dataset import AlignCollate, RawDataset
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.icr.model import Model
 from marie.models.icr.utils import AttnLabelConverter, CTCLabelConverter
+from marie.models.utils import torch_gc
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -24,7 +26,7 @@ class CraftOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",
-        models_dir: str = "./model_zoo/icr",
+        models_dir: str = os.path.join(__model_path__, "icr"),
         cuda: bool = True,
     ) -> None:
         super().__init__(work_dir, cuda)
@@ -90,6 +92,9 @@ class CraftOcrProcessor(OcrProcessor):
 
         cudnn.benchmark = True
         cudnn.deterministic = True
+
+    def is_available(self) -> bool:
+        return self.model is not None
 
     def __load(self):
         """model configuration"""
@@ -167,7 +172,7 @@ class CraftOcrProcessor(OcrProcessor):
             opt = self.opt
             model = self.model
             converter = self.converter
-            opt.batch_size = 192  #
+            opt.batch_size = 64  #
 
             # setup data
             AlignCollate_data = AlignCollate(
@@ -241,9 +246,9 @@ class CraftOcrProcessor(OcrProcessor):
                         confidence_score = pred_max_prob.cumprod(dim=0)[-1]
                         # get value from the TensorFloat
                         confidence = confidence_score.item()
-                        txt = pred
+                        text = pred.upper() if pred is not None else ""
                         results.append(
-                            {"confidence": confidence, "text": txt, "id": img_name}
+                            {"confidence": confidence, "text": text, "id": img_name}
                         )
 
                         print(f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}")
@@ -251,8 +256,7 @@ class CraftOcrProcessor(OcrProcessor):
                             f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n"
                         )
                     log.close()
-
         except Exception as ex:
-            print(ex)
             raise ex
+        torch_gc()
         return results

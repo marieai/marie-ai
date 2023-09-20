@@ -2,6 +2,7 @@ import base64
 import os
 import sys
 import typing
+from abc import abstractmethod
 from typing import Optional, List, Dict, Any, Tuple
 
 import PIL
@@ -41,6 +42,11 @@ class OcrProcessor(BaseHandler):
         super().__init__()
         self.cuda = cuda
         self.work_dir = work_dir
+
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Returns True if the processor is available for use"""
+        pass
 
     def extract_text(self, _id, key, image):
         """Recognize text from a single image.
@@ -119,7 +125,6 @@ class OcrProcessor(BaseHandler):
             lines
         ), "You must provide the same number of lines as boxes."
         encode_fragments = False
-        # draw_debug_overlay = True
 
         try:
             shape = img.shape
@@ -148,9 +153,13 @@ class OcrProcessor(BaseHandler):
                     "lines": [],
                 }, overlay_image
 
-            words = []
             results = self.recognize_from_fragments(fragments)
+            print("Length of results", len(results))
+            assert len(results) == len(
+                fragments
+            ), "You must provide the same number of results as fragments."
             # reindex based on their X positions LTR reading order
+            words = []
             boxes = np.array(boxes)
             lines = np.array(lines)
             results = np.array(results)

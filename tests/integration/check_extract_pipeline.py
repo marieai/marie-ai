@@ -33,8 +33,8 @@ if __name__ == "__main__":
         # "~/dev/ldt-document-dump/cache/179575453.tif"
         # "~/tmp/eob-issues/158954482_0.png"
         # "~/tmp/analysis/PID_1956_9362_0_177978797/300DPI/PID_1956_9362_0_177978797.tif"
-        # "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
-        "~/dev/ldt-document-dump/cache/181313152.tif"
+        "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
+        # "~/dev/ldt-document-dump/cache/181313152.tif"
     )
 
     # # Register VFS handlers
