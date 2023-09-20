@@ -32,6 +32,7 @@ def process_image(image):
         "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
+    print(result)
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
 

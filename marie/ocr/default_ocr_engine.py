@@ -1,17 +1,13 @@
 import os
 from typing import Any, Dict, List, Union
 
-import cv2
 import numpy as np
 from PIL import Image
 
-from marie.boxes import BoxProcessorUlimDit, PSMode, BoxProcessorCraft
+from marie.boxes import PSMode
 from marie.constants import __model_path__
 from marie.document import TrOcrIcrProcessor
-from marie.logging.logger import MarieLogger
 from marie.ocr import OcrEngine, CoordinateFormat
-from marie.utils.image_utils import hash_frames_fast
-from marie.utils.utils import ensure_exists
 
 
 class DefaultOcrEngine(OcrEngine):
@@ -43,51 +39,16 @@ class DefaultOcrEngine(OcrEngine):
         **kwargs: Any,
     ) -> List[Dict]:
         try:
-            queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
-            regions = [] if regions is None else regions
-
-            ro_frames = []  # [None] * len(frames)
-            # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
-            for idx, frame in enumerate(frames):
-                f = frame
-                if isinstance(frame, Image.Image):
-                    converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
-                    f = converted
-                ro_frames.append(f.copy())
-
-            # calculate hash based on the image frame
-            checksum = hash_frames_fast(ro_frames)
-
-            self.logger.debug(
-                "frames , regions , output_format, pms_mode, coordinate_format,"
-                f" checksum:  {len(ro_frames)}, {len(regions)}, {pms_mode},"
-                f" {coordinate_format}, {checksum}"
+            return self.process_single(
+                self.box_processor,
+                self.icr_processor,
+                frames,
+                pms_mode,
+                coordinate_format,
+                regions,
+                queue_id,
+                **kwargs,
             )
-
-            if len(regions) == 0:
-                results = self.__process_extract_fullpage(
-                    ro_frames,
-                    queue_id,
-                    checksum,
-                    pms_mode,
-                    coordinate_format,
-                    self.box_processor,
-                    self.icr_processor,
-                    **kwargs,
-                )
-            else:
-                results = self.__process_extract_regions(
-                    ro_frames,
-                    queue_id,
-                    checksum,
-                    pms_mode,
-                    regions,
-                    self.box_processor,
-                    self.icr_processor,
-                    **kwargs,
-                )
-
-            return results
         except BaseException as error:
             self.logger.error("Extract error", exc_info=True)
             raise error

@@ -1,7 +1,7 @@
 import os
 import traceback
 from abc import ABC, abstractmethod
-from typing import Union, List
+from typing import Union, List, Any, Dict
 
 import cv2
 import numpy as np
@@ -14,7 +14,7 @@ from marie.document.icr_processor import IcrProcessor
 from marie.logging.logger import MarieLogger
 from marie.ocr.coordinate_format import CoordinateFormat
 from marie.utils.base64 import encodeToBase64
-from marie.utils.image_utils import crop_to_content
+from marie.utils.image_utils import crop_to_content, hash_frames_fast
 from marie.utils.utils import ensure_exists
 
 
@@ -68,7 +68,77 @@ class OcrEngine(ABC):
         queue_id: str = None,
         **kwargs,
     ):
+        """
+        Extract text from the supplied image frames.
+        :param frames:
+        :param pms_mode:
+        :param coordinate_format:
+        :param regions:
+        :param queue_id:
+        :param kwargs:
+        """
         ...
+
+    def process_single(
+        self,
+        box_processor: BoxProcessor,
+        icr_processor: IcrProcessor,
+        frames: Union[np.ndarray, List[np.ndarray], List[Image.Image]],
+        pms_mode: PSMode = PSMode.SPARSE,
+        coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
+        regions: [] = None,
+        queue_id: str = None,
+        **kwargs: Any,
+    ) -> List[Dict]:
+        """
+        Process results from OCR engine
+        :param box_processor:
+        :param icr_processor:
+        :param frames:
+        :param pms_mode:
+        :param coordinate_format:
+        :param regions:
+        :param queue_id:
+        :param kwargs:
+        :return:
+        """
+        queue_id = "0000-0000-0000-0000" if queue_id is None else queue_id
+        regions = [] if regions is None else regions
+        ro_frames = OcrEngine.copy_frames(frames)
+        checksum = hash_frames_fast(ro_frames)
+        self.logger.debug(
+            "frames , regions , output_format, pms_mode, coordinate_format,"
+            f" checksum:  {len(ro_frames)}, {len(regions)}, {pms_mode},"
+            f" {coordinate_format}, {checksum}"
+        )
+
+        try:
+            if len(regions) == 0:
+                results = self.__process_extract_fullpage(
+                    ro_frames,
+                    queue_id,
+                    checksum,
+                    pms_mode,
+                    coordinate_format,
+                    box_processor,
+                    icr_processor,
+                    **kwargs,
+                )
+            else:
+                results = self.__process_extract_regions(
+                    ro_frames,
+                    queue_id,
+                    checksum,
+                    pms_mode,
+                    regions,
+                    box_processor,
+                    icr_processor,
+                    **kwargs,
+                )
+            return results
+        except BaseException as error:
+            self.logger.error("Extract error", exc_info=True)
+            raise error
 
     def __process_extract_fullpage(
         self,
@@ -85,7 +155,7 @@ class OcrEngine(ABC):
         # Extract each page and augment it with a page in range 1..N+1
         results = []
         # This should be requested as it might not always be desirable to perform this transform
-        is_crop_to_content_enabled = kwargs.get('crop_to_content', False)
+        is_crop_to_content_enabled = kwargs.get("crop_to_content", False)
         padding = 0
 
         for i, img in enumerate(frames):
@@ -266,3 +336,22 @@ class OcrEngine(ABC):
             extended = filter_base64(extended, filters=["fragment_b64", "overlay_b64"])
 
         return {"regions": output, "extended": extended}
+
+    @staticmethod
+    def copy_frames(
+        frames: Union[np.ndarray, List[np.ndarray], List[Image.Image]],
+    ) -> List[np.ndarray]:
+        """
+        Copies the frames (deep copy) to a new list of frames and returns it .
+        :param frames:  list of frames
+        :return:  list of frames
+        """
+        ro_frames = []  # [None] * len(frames)
+        # we don't want to modify the original Numpy/PIL image as the caller might be depended on the original type
+        for idx, frame in enumerate(frames):
+            f = frame
+            if isinstance(frame, Image.Image):
+                converted = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
+                f = converted
+            ro_frames.append(f.copy())
+        return ro_frames
