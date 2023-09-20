@@ -32,7 +32,11 @@ def encodeimg2b64(img: np.ndarray) -> str:
     return png_as_text
 
 
-class IcrProcessor(BaseHandler):
+class OcrProcessor(BaseHandler):
+    """
+    Base class for OCR processors
+    """
+
     def __init__(self, work_dir: str = "/tmp/icr", cuda: bool = True, **kwargs) -> None:
         super().__init__()
         self.cuda = cuda

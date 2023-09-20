@@ -4,7 +4,7 @@ import time
 import cv2
 
 from marie.boxes import BoxProcessorCraft
-from marie.document import CraftIcrProcessor, TrOcrIcrProcessor
+from marie.document import CraftOcrProcessor, TrOcrProcessor
 from marie.logger import setup_logger
 from marie.registry_base import RegistryHolder
 from marie.timer import Timer
@@ -26,7 +26,7 @@ if __name__ == "__main__":
 
     # print(RegistryHolder.REGISTRY[TrOcrIcrProcessor.__name__](work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True))
     # print(RegistryHolder.REGISTRY[TrOcrIcrProcessor.__name__](work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True))
-    icr = TrOcrIcrProcessor(
+    icr = TrOcrProcessor(
         work_dir=work_dir_icr, models_dir="../../model_zoo/trocr", cuda=True
     )
 

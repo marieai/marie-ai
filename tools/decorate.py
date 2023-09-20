@@ -9,7 +9,7 @@ import numpy as np
 
 from tools import from_json_file, ensure_exists, __tmp_path__
 from marie.boxes import BoxProcessorUlimDit, PSMode
-from marie.document.trocr_icr_processor import TrOcrIcrProcessor
+from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.boxes.line_processor import find_line_number
 from marie.numpyencoder import NumpyEncoder
 import logging
@@ -136,7 +136,7 @@ def __decorate_funsd(
     output_ann_dir: str,
     img_dir: str,
     boxp: BoxProcessorUlimDit,
-    icrp: TrOcrIcrProcessor,
+    icrp: TrOcrProcessor,
     debug_fragments: bool = False,
 ) -> None:
     """'Decorate' a FUNSD file with ICR extracted text from the corresponding image"""
@@ -307,7 +307,7 @@ def decorate_funsd(
         cuda=True,
     )
 
-    icrp = TrOcrIcrProcessor(work_dir=work_dir_icr, cuda=True)
+    icrp = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     items = glob.glob(os.path.join(ann_dir, "*.json"))
     if len(items) == 0:

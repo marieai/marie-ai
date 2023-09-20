@@ -6,7 +6,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.constants import __model_path__
-from marie.document import TrOcrIcrProcessor
+from marie.document import TrOcrProcessor
 from marie.ocr import OcrEngine, CoordinateFormat
 
 
@@ -25,7 +25,7 @@ class DefaultOcrEngine(OcrEngine):
         **kwargs,
     ) -> None:
         super().__init__(models_dir=models_dir, cuda=cuda, **kwargs)
-        self.icr_processor = TrOcrIcrProcessor(
+        self.icr_processor = TrOcrProcessor(
             work_dir=self.work_dir_icr, cuda=self.has_cuda
         )
 

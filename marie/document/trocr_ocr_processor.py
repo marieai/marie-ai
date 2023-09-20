@@ -15,7 +15,7 @@ from fairseq_cli import generate
 from torchvision.transforms import Compose, InterpolationMode
 
 from marie.constants import __model_path__
-from marie.document.icr_processor import IcrProcessor
+from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
 from marie.logging.predefined import default_logger
 from marie.models.icr.memory_dataset import MemoryDataset
@@ -191,7 +191,7 @@ def get_text(cfg, task, generator, model, samples, bpe):
     return predictions, scores
 
 
-class TrOcrIcrProcessor(IcrProcessor):
+class TrOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",

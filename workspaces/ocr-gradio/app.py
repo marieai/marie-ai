@@ -3,7 +3,7 @@ import torch as torch
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
-from marie.document import TrOcrIcrProcessor
+from marie.document import TrOcrProcessor
 from marie.ocr.mock_ocr_engine import MockOcrEngine
 
 use_cuda = torch.cuda.is_available()
@@ -16,7 +16,7 @@ icr_processor = (
     MockOcrEngine()
 )  # TrOcrIcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
 
-icr_processor = TrOcrIcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
+icr_processor = TrOcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
 
 
 def process_image(image):

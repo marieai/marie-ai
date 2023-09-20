@@ -11,7 +11,7 @@ from marie.utils.utils import ensure_exists
 if True:
     from marie.boxes.craft_box_processor import BoxProcessorCraft
     from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-    from marie.document.craft_icr_processor import CraftIcrProcessor
+    from marie.document.craft_ocr_processor import CraftOcrProcessor
 
 
 if __name__ == "__main__":
@@ -50,7 +50,7 @@ if __name__ == "__main__":
         )
 
         if True:
-            icr = CraftIcrProcessor(work_dir=work_dir_icr, cuda=False)
+            icr = CraftOcrProcessor(work_dir=work_dir_icr, cuda=False)
             result, overlay_image = icr.recognize(
                 key, "test", image, boxes, img_fragments, lines
             )
