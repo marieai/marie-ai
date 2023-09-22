@@ -243,6 +243,8 @@ class OcrEngine(ABC):
             ):
                 raise Exception(f"Required key missing in region : {region}")
 
+            # Additional fields are allowed (e.g. mode)
+
         # TODO : Introduce mini-batched by region to improve inference
         for region in regions:
             try:
@@ -274,6 +276,11 @@ class OcrEngine(ABC):
                     overlay = img
 
                 cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+                # each region can have its own segmentation mode
+                if "mode" in region:
+                    mode = PSMode.from_value(region["mode"])
+                else:
+                    mode = pms_mode
                 (
                     boxes,
                     img_fragments,
@@ -281,7 +288,7 @@ class OcrEngine(ABC):
                     _,
                     lines_bboxes,
                 ) = box_processor.extract_bounding_boxes(
-                    queue_id, checksum, overlay, pms_mode
+                    queue_id, checksum, overlay, psm=mode
                 )
 
                 result, overlay_image = icr_processor.recognize(
