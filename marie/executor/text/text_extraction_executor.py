@@ -166,6 +166,8 @@ class TextExtractionExecutor(Executor, StorageMixin):
             del frames
             del regions
 
+            print('metadata["ocr"]')
+            print(metadata)
             self.persist(ref_id, ref_type, metadata)
 
             # strip out ocr results from metadata
@@ -179,7 +181,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 "metadata": metadata,
             }
         except BaseException as error:
-            self.logger.error(f"Extract error : {error}", exc_info=False)
+            self.logger.error(f"Extract error : {error}", exc_info=True)
             msg = "inference exception"
             if self.show_error:
                 msg = (str(error),)

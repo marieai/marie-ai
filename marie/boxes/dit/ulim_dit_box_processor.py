@@ -33,7 +33,7 @@ def setup_cfg(args, device):
 
     # set device
     cfg.MODEL.DEVICE = device
-    # cfg.MODEL.WEIGHTS = "td-syn_dit-b_mrcnn.pth"
+    cfg.MODEL.WEIGHTS = os.path.join(__model_path__, cfg.MODEL.WEIGHTS)
     cfg.freeze()
     # default_setup(cfg, args)
     return cfg
@@ -282,7 +282,7 @@ class BoxProcessorUlimDit(BoxProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/boxes",
-        models_dir: str = os.path.join(__model_path__, "unilm/dit/text_detection"),
+        models_dir: str =__model_path__,
         cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
@@ -293,6 +293,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             args = get_parser().parse_args(
                 [
                     "--config-file",
+
                     os.path.join(
                         __config_dir__,
                         "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
@@ -308,12 +309,8 @@ class BoxProcessorUlimDit(BoxProcessor):
                 "--config-file",
                 os.path.join(
                     __config_dir__,
-                    "zoo/unilm/dit/text_detection/mask_rcnn_dit_large.yaml",
+                    "zoo/unilm/dit/text_detection/mask_rcnn_dit_prod.yaml",
                 ),
-                "--opts",
-                "MODEL.WEIGHTS",
-                # os.path.join(models_dir, "./LARGE-09132023/model_0045999.pth"),
-                os.path.join(models_dir, "./model_0038999-V3-BEST/model_0038999.pth"),
             ]
         )
 
@@ -322,6 +319,8 @@ class BoxProcessorUlimDit(BoxProcessor):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         cfg = setup_cfg(args, device)
+        print(f"CFG : {cfg}")
+        print(f"CFG : {cfg.MODEL.WEIGHTS}")
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")

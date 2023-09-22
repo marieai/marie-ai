@@ -410,28 +410,44 @@ class ExtractPipeline:
         root_asset_dir: str,
         ps_mode: PSMode = PSMode.SPARSE,
         coordinate_format: CoordinateFormat = CoordinateFormat.XYWH,
-    ) -> None:
+        job_id: str = None,
+        runtime_conf: Optional[dict[str, any]] = None,
+    ) -> dict[str, any]:
         self.logger.info(
-            f"Executing pipeline for document : {ref_id}, {ref_type} with regions : {regions}"
+            f"Executing pipeline : {ref_id}, {ref_type} with regions : {regions}"
         )
         # check if we have already processed this document and restore assets
-        self.restore_assets(
-            ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
-        )
+        # self.restore_assets(
+        #     ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
+        # )
 
         # make sure we have clean image
-        clean_frames = self.segment(ref_id, frames, root_asset_dir)
+        # clean_frames = self.segment(ref_id, frames, root_asset_dir)
+        clean_frames = frames
+
         results = self.ocr_frames(
             ref_id,
             clean_frames,
             root_asset_dir,
-            force=False,
+            force=True,
             regions=regions,
             ps_mode=ps_mode,
             coord_format=coordinate_format,
         )
 
-        self.store_assets(ref_id, ref_type, root_asset_dir)
+        # self.store_assets(ref_id, ref_type, root_asset_dir)
+        # document metadata
+        metadata = {}
+
+        metadata["ref_id"] = ref_id
+        metadata["ref_type"] = ref_type
+        metadata["job_id"] = job_id
+        metadata[
+            "pages"
+        ] = f"{len(frames)}"  # Using string to avoid type conversion issues
+        metadata["ocr"] = results
+
+        return metadata
 
     def execute(
         self,
@@ -490,7 +506,7 @@ class ExtractPipeline:
             runtime_conf = {}
 
         if regions and len(regions) > 0:
-            self.execute_regions_pipeline(
+            return self.execute_regions_pipeline(
                 ref_id,
                 ref_type,
                 frames,
@@ -498,6 +514,8 @@ class ExtractPipeline:
                 root_asset_dir,
                 pms_mode,
                 coordinate_format,
+                job_id,
+                runtime_conf,
             )
         else:
             return self.execute_frames_pipeline(
