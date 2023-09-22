@@ -124,6 +124,8 @@ class VotingOcrEngine(OcrEngine):
                 results = aggregated_result
 
             for idx, page_result in enumerate(results):
+                if selector is not None and selector == "extended":
+                    idx = page_result["id"]
                 if idx not in candidate_words_by_selector:
                     candidate_words_by_selector[idx] = {}
                 if "words" not in page_result:
@@ -136,7 +138,7 @@ class VotingOcrEngine(OcrEngine):
                         candidate_words_by_selector[idx][word_id] = []
                     candidate_words_by_selector[idx][word_id].append(word)
                     print(
-                        f"candidate_words_by_region[idx][word_id] = {len(candidate_words_by_selector[idx][word_id])}  > {idx}  {word_id}"
+                        f"candidate_words_by_selector[idx][word_id] = {len(candidate_words_by_selector[idx][word_id])}  > {idx}  {word_id}"
                     )
 
         return candidate_words_by_selector
@@ -159,7 +161,7 @@ class VotingOcrEngine(OcrEngine):
 
             for word_id, words in candidates.items():
                 word = words[0]
-                if len(words) > 1:
+                if True or len(words) > 1:
                     # pick the word with the highest confidence
                     for word_candidate in words:
                         if word_candidate["confidence"] > word["confidence"]:
@@ -188,9 +190,6 @@ class VotingOcrEngine(OcrEngine):
             if idx not in words_by_vote_by_selector:
                 words_by_vote_by_selector[idx] = []
 
-            print("***********")
-            print(candidates)
-            print("***********")
             for word_id, words in candidates.items():
                 groups = defaultdict(list)
                 for word in words:
@@ -222,9 +221,22 @@ class VotingOcrEngine(OcrEngine):
                         vote_word.pop("strategy", None)
                 else:
                     # default to the first word as this is the default processor
+                    print(f"IDX to check : {idx}")
+                    print(f"word_id to check : {word_id}")
                     selected_word = words[0]
                     selected_word["strategy"] = {"type": "default"}
-                    for word in candidate_words_by_selector[idx]:
+                    print("selected word")
+                    print(selected_word)
+
+                    print("candidate_words_by_selector) -full ")
+                    print(candidate_words_by_selector)
+                    print("candidate_words_by_selector) -idx ")
+                    print(candidate_words_by_selector[idx])
+
+                    for word in candidate_words_by_selector[idx][word_id]:
+                        print("Checking workd")
+                        print(word)
+
                         if word["id"] == word_id:
                             if word["confidence"] > selected_word["confidence"]:
                                 selected_word = word
@@ -259,26 +271,68 @@ class VotingOcrEngine(OcrEngine):
         self.logger.info("Voting evaluator")
 
         has_regions = regions is not None and len(regions) > 0
+
         if has_regions:
-            candidate_words_by_region = self.group_candidates_by_selector(
+            candidate_words_by_selector = self.group_candidates_by_selector(
                 aggregated_results, "extended"
             )
+
+            store_json_object(
+                candidate_words_by_selector, "/tmp/marie/region_step-1.json"
+            )
+
             # pick the word with the highest confidence
-            words_by_confidence_by_region = self.get_words_by_confidence_by_selector(
-                candidate_words_by_region
-            )
-            get_words_by_vote_by_selector = self.get_words_by_vote_by_selector(
-                words_by_confidence_by_region, 2
+            words_by_confidence_by_selector = self.get_words_by_confidence_by_selector(
+                candidate_words_by_selector
             )
 
-            print("TEMP OUTPUT 1")
-            print(candidate_words_by_region)
-            print("TEMP OUTPUT 2")
-            print(words_by_confidence_by_region)
-            print("TEMP OUTPUT 3")
-            print(get_words_by_vote_by_selector)
+            store_json_object(
+                words_by_confidence_by_selector, "/tmp/marie/region_step-2.json"
+            )
 
-            return regions
+            words_by_vote_by_selector = self.get_words_by_vote_by_selector(
+                candidate_words_by_selector, 2
+            )
+
+            store_json_object(
+                words_by_vote_by_selector, "/tmp/marie/region_step-3.json"
+            )
+
+            output_results = deepcopy(default_results)
+
+            store_json_object(output_results, "/tmp/marie/region_output_results.json")
+
+            # pick the words by page and update the results
+            extended = output_results["extended"]
+            for selector_key, selector_value in words_by_vote_by_selector.items():
+                for idx, extended_result in enumerate(extended):
+                    if extended_result["id"] == selector_key:
+                        extended_result["words"] = words_by_vote_by_selector[
+                            selector_key
+                        ]
+
+            # update the regions
+            for region in output_results["regions"]:
+                region_id = region["id"]
+                for idx, extended_result in enumerate(extended):
+                    if extended_result["id"] == region_id:
+                        extended_result["words"].sort(key=lambda x: x["word_index"])
+                        text = " ".join(
+                            [word["text"] for word in extended_result["words"]]
+                        )
+                        confidence = sum(
+                            [word["confidence"] for word in extended_result["words"]]
+                        ) / len(extended_result["words"])
+
+                        region["original_text"] = region["text"]
+                        region["text"] = text
+                        region["confidence"] = round(confidence, 4)
+
+            store_json_object(
+                output_results, "/tmp/marie/region_output_results-moded.json"
+            )
+
+            return output_results
 
         else:
             candidate_words_by_page = {}
@@ -300,6 +354,10 @@ class VotingOcrEngine(OcrEngine):
                             f"candidate_words[idx][word_id] = {len(candidate_words_by_page[idx][word_id])}  > {idx}  {word_id}"
                         )
 
+            print("TEMP OUTPUT 1")
+            print(candidate_words_by_page)
+
+            store_json_object(candidate_words_by_page, "/tmp/marie/page_step-1.json")
             # pick the word with the highest confidence
             words_by_confidence_by_page = {}
 
@@ -318,6 +376,13 @@ class VotingOcrEngine(OcrEngine):
                                 word = word_candidate
 
                     words_by_confidence_by_page[idx].append(word)
+
+            print("TEMP OUTPUT 2")
+            print(words_by_confidence_by_page)
+
+            store_json_object(
+                words_by_confidence_by_page, "/tmp/marie/page_step-2.json"
+            )
 
             min_vote_count = 2
             words_by_vote_by_page = {}

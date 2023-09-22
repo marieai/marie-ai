@@ -100,12 +100,16 @@ class TextExtractionExecutor(Executor, StorageMixin):
             # https://github.com/marieai/marie-ai/issues/51
             regions = payload["regions"] if "regions" in payload else []
             for region in regions:
-                region["id"] = int(region["id"])
+                region["id"] = f'{int(region["id"])}'
                 region["x"] = int(region["x"])
                 region["y"] = int(region["y"])
                 region["w"] = int(region["w"])
                 region["h"] = int(region["h"])
                 region["pageIndex"] = int(region["pageIndex"])
+
+            # for testing
+            if len(regions) == 0:
+                return {"error": "empty regions"}
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             coordinate_format = CoordinateFormat.from_value(
@@ -171,7 +175,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             self.persist(ref_id, ref_type, metadata)
 
             # strip out ocr results from metadata
-            include_ocr = False
+            include_ocr = True
             if not include_ocr and "ocr" in metadata:
                 del metadata["ocr"]
 
