@@ -52,7 +52,6 @@ def handler(context, event):
     for result in results_json:
         # convert int32 to int
         box = [int(v) for v in result]
-
         if box_format == "xywh":
             box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
