@@ -64,13 +64,6 @@ class TorchvisionDetectionFunction:
 
         return results
 
-        # convert the results into a form CVAT can understand
-        return [
-            cvataa.rectangle(label.item(), [x.item() for x in box])
-            for result in []
-            for box, label in zip(result['boxes'], result['labels'])
-        ]
-
 
 def annotate_task_frame(
     client: Client,
