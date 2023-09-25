@@ -73,7 +73,7 @@ class TesseractOcrProcessor(OcrProcessor):
                 ]
 
                 text = " ".join([w['text'] for w in words])
-                text = text.upper() if text is not None else ""
+                text = text.upper().strip() if text is not None else ""
                 confidence = (
                     sum([w['conf'] for w in words]) / len(words)
                     if len(words) > 0
