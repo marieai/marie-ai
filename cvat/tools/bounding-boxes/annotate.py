@@ -48,15 +48,12 @@ class TorchvisionDetectionFunction:
             lines_bboxes,
         ) = self.predictor.extract_bounding_boxes("cvat", "field", image, PSMode.SPARSE)
 
-        print("boxes", boxes)
-
         box_format = "xywh"
         results = []
         label_id = 0
 
         for box in boxes:
-            # convert int32 to int
-            box = [int(v) for v in box]
+            # box = [int(v) for v in box]
             if box_format == "xywh":
                 box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
                 spec = cvataa.rectangle(label_id, box)

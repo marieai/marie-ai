@@ -1,11 +1,14 @@
 import argparse
-import os
-import shutil
 import json
+import os
+from copy import deepcopy
+
 import numpy as np
 
-from tools import from_json_file, ensure_exists, copyFiles
-from copy import deepcopy
+from helpers import ensure_exists, copyFiles, from_json_file
+
+
+# from tools import from_json_file, ensure_exists, copyFiles
 
 
 def split_funsd_annotation_files(ann_dir: str, image_set):
