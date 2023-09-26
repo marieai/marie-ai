@@ -9,6 +9,9 @@ from marie.utils.docs import frames_from_file
 
 
 def setup_storage():
+    """
+    Setup storage manager
+    """
     handler = S3StorageHandler(
         config={
             "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
@@ -27,22 +30,8 @@ def setup_storage():
 
 if __name__ == "__main__":
     # setup_storage()
-    MDC.put('request_id', 'test')
-
-    img_path = (
-        # "~/dev/ldt-document-dump/cache/179575453.tif"
-        # "~/tmp/eob-issues/158954482_0.png"
-        # "~/tmp/analysis/PID_1956_9362_0_177978797/300DPI/PID_1956_9362_0_177978797.tif"
-        "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
-        # "~/dev/ldt-document-dump/cache/181313152.tif"
-    )
-
-    # # Register VFS handlers
-    # # PathManager.register_handler(VolumeHandler(volume_base_dir="/home/greg/dataset/medprov/"))
-    # PathManager.register(VolumeHandler(volume_base_dir="/home/gbugaj/datasets/medprov/"))
-    # src_file = "volume://PID/150300431/PID_576_7188_0_150300431.tif"
-    # process_workflow(src_file)
-
+    MDC.put("request_id", "test")
+    img_path = "~/tmp/txt_overlay001.jpg"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 

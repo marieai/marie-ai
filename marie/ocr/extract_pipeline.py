@@ -103,6 +103,18 @@ def s3_asset_path(
 
 
 class ExtractPipeline:
+    """
+    Extract pipeline for documents with the following steps
+
+    1. Burst the document
+    2. Segment the document
+    3. Perform OCR on the document
+    4. Extract the regions from the document pages
+    5. Classify the document
+    6. Store the results in the backend store(s3 , redis, etc.)
+
+    """
+
     def __init__(
         self,
         # models_dir: str = os.path.join(__model_path__),
@@ -756,33 +768,33 @@ class ExtractPipeline:
                     )
 
                     for idx, document in enumerate(classified_docs):
-                        assert 'classification' in document.tags
-                        classification = document.tags['classification']
-                        document.tags.pop('classification')
+                        assert "classification" in document.tags
+                        classification = document.tags["classification"]
+                        document.tags.pop("classification")
 
-                        assert 'label' in classification
-                        assert 'score' in classification
+                        assert "label" in classification
+                        assert "score" in classification
                         meta.append(
                             {
-                                'page': f"{idx}",  # Using string to avoid type conversion issues
-                                'classification': classification['label'],
-                                'score': classification['score'],
+                                "page": f"{idx}",  # Using string to avoid type conversion issues
+                                "classification": classification["label"],
+                                "score": classification["score"],
                             }
                         )
 
                     self.logger.debug(f"Classification : {meta}")
                     document_meta.append(
                         {
-                            'classifier': key,
-                            'details': meta,
+                            "classifier": key,
+                            "details": meta,
                         }
                     )
                 except Exception as e:
                     self.logger.error(f"Error classifying document : {e}")
                     document_meta.append(
                         {
-                            'classifier': key,
-                            'details': [],
+                            "classifier": key,
+                            "details": [],
                         }
                     )
         except Exception as e:
