@@ -74,10 +74,6 @@ def extract_icr(
         img_fragments = [image]
         lines = [1]
 
-    print(
-        f"BEFORE  boxes = {len(boxes)} frag = {len(img_fragments)} lines = {len(lines)}"
-    )
-
     # filter out fragments that are too small to be processed
     fragments_tmp = []
     boxes_tmp = []

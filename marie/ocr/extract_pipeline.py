@@ -146,61 +146,110 @@ class ExtractPipeline:
             self.logger.warning("Pipeline config is None, using default config")
             pipeline_config = {}
 
-        self.document_classifiers = dict()
-        classifier_configs = (
+        self.document_classifiers = self.setup_classifiers(pipeline_config)
+        self.document_indexers = self.setup_indexers(pipeline_config)
+
+        self.logger.info(
+            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
+        )
+
+        self.logger.info(
+            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
+        )
+
+    def setup_indexers(self, pipeline_config) -> dict[str, any]:
+        """
+        Setup the document indexers(Named Entity Recognition)
+        :param pipeline_config: pipeline configuration
+        :return: document indexers
+        """
+        document_indexers = dict()
+        configs = (
+            pipeline_config["page_indexer"] if "page_indexer" in pipeline_config else []
+        )
+
+        for config in configs:
+            if "model_name_or_path" not in config:
+                raise BadConfigSource(
+                    f"Missing model_name_or_path in indexer config : {config}"
+                )
+
+            if not config.get("enabled", True):
+                self.logger.warning(
+                    f"Skipping indexer : {config['model_name_or_path']}"
+                )
+                continue
+
+            model_name_or_path = config["model_name_or_path"]
+            device = config["device"] if "device" in config else "cpu"
+            name = config["name"] if "name" in config else config["model_name_or_path"]
+            model_type = config["type"] if "type" in config else "transformers"
+            self.logger.info(f"Using model : {model_name_or_path} on device : {device}")
+
+            if name in document_indexers:
+                raise BadConfigSource(f"Duplicate indexer name : {name}")
+
+            model_filter = config["filter"] if "filter" in config else "*"
+
+            if model_type == "transformers":
+                document_indexers[name] = {
+                    "indexer": TransformersDocumentClassifier(
+                        model_name_or_path=model_name_or_path,
+                        batch_size=1,
+                        use_gpu=True,
+                    ),
+                    "filter": model_filter,
+                }
+            else:
+                raise ValueError(f"Invalid indexer type : {model_type}")
+
+        return document_indexers
+
+    def setup_classifiers(self, pipeline_config: dict) -> dict[str, any]:
+        """
+        Setup the document classifiers
+        :param pipeline_config:
+        :return:
+        """
+        document_classifiers = dict()
+
+        configs = (
             pipeline_config["page_classifier"]
             if "page_classifier" in pipeline_config
             else []
         )
         # classifier_configs =  pipeline_config["page_classifier"]
-
-        for classifier_config in classifier_configs:
-            if "model_name_or_path" not in classifier_config:
+        for config in configs:
+            if "model_name_or_path" not in config:
                 raise BadConfigSource(
-                    f"Missing model_name_or_path in classifier config : {classifier_config}"
+                    f"Missing model_name_or_path in classifier config : {config}"
                 )
 
-            if not classifier_config.get("enabled", True):
+            if not config.get("enabled", True):
                 self.logger.warning(
-                    f"Skipping classifier : {classifier_config['model_name_or_path']}"
+                    f"Skipping classifier : {config['model_name_or_path']}"
                 )
                 continue
 
-            classifier_model = classifier_config["model_name_or_path"]
-            classifier_device = (
-                classifier_config["device"] if "device" in classifier_config else "cpu"
-            )
-            classifier_name = (
-                classifier_config["name"]
-                if "name" in classifier_config
-                else classifier_config["model_name_or_path"]
-            )
-            classifier_type = (
-                classifier_config["type"]
-                if "type" in classifier_config
-                else "transformers"
-            )
-            self.logger.info(
-                f"Using model : {classifier_model} on device : {classifier_device}"
-            )
+            model_name_or_path = config["model_name_or_path"]
+            device = config["device"] if "device" in config else "cpu"
+            name = config["name"] if "name" in config else config["model_name_or_path"]
+            model_type = config["type"] if "type" in config else "transformers"
+            self.logger.info(f"Using model : {model_name_or_path} on device : {device}")
 
-            if classifier_name in self.document_classifiers:
-                raise BadConfigSource(f"Duplicate classifier name : {classifier_name}")
+            if name in document_classifiers:
+                raise BadConfigSource(f"Duplicate classifier name : {name}")
 
-            if classifier_type == "transformers":
-                self.document_classifiers[
-                    classifier_name
-                ] = TransformersDocumentClassifier(
-                    model_name_or_path=classifier_model,
+            if model_type == "transformers":
+                document_classifiers[name] = TransformersDocumentClassifier(
+                    model_name_or_path=model_name_or_path,
                     batch_size=1,
                     use_gpu=True,
                 )
             else:
-                raise ValueError(f"Invalid classifier type : {classifier_type}")
+                raise ValueError(f"Invalid classifier type : {model_type}")
 
-        self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
-        )
+        return document_classifiers
 
     def segment(
         self,
