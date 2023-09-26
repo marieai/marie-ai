@@ -72,7 +72,7 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -208,7 +208,7 @@ def lines_from_bboxes(image, bboxes):
 
 
 def crop_to_content_box(
-    frame: np.ndarray, content_aware=False
+        frame: np.ndarray, content_aware=False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
@@ -262,7 +262,7 @@ def crop_to_content_box(
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
+    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
@@ -280,29 +280,15 @@ class BoxProcessorUlimDit(BoxProcessor):
     """DiT for Text Detection"""
 
     def __init__(
-        self,
-        work_dir: str = "/tmp/boxes",
-        models_dir: str =__model_path__,
-        cuda: bool = False,
+            self,
+            work_dir: str = "/tmp/boxes",
+            models_dir: str = __model_path__,
+            cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
-
-        if False:
-            args = get_parser().parse_args(
-                [
-                    "--config-file",
-
-                    os.path.join(
-                        __config_dir__,
-                        "zoo/unilm/dit/text_detection/mask_rcnn_dit_base.yaml",
-                    ),
-                    "--opts",
-                    "MODEL.WEIGHTS",
-                    os.path.join(models_dir, "td-syn_dit-b_mrcnn.pth"),
-                ]
-            )
+        self.logger.info(f"Loading model from config {__config_dir__}")
 
         args = get_parser().parse_args(
             [
@@ -331,11 +317,11 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def psm_sparse(
-        self,
-        image: np.ndarray,
-        bbox_optimization: Optional[bool] = False,
-        bbox_context_aware: Optional[bool] = True,
-        enable_visualization: Optional[bool] = False,
+            self,
+            image: np.ndarray,
+            bbox_optimization: Optional[bool] = False,
+            bbox_context_aware: Optional[bool] = True,
+            enable_visualization: Optional[bool] = False,
     ):
         try:
             self.logger.debug(f"Starting box predictions : {image.shape}")
@@ -349,8 +335,8 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             # Both height and width are smaller than the minimum size then frame the image
             if (
-                image.shape[0] < self.min_size_test[0]
-                or image.shape[1] < self.min_size_test[1]
+                    image.shape[0] < self.min_size_test[0]
+                    or image.shape[1] < self.min_size_test[1]
             ):
                 self.logger.warning(
                     f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
@@ -439,7 +425,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     x0, y0, x1, y1 = box
                     w = x1 - x0
                     h = y1 - y0
-                    snippet = image[y0 : y0 + h, x0 : x0 + w :]
+                    snippet = image[y0: y0 + h, x0: x0 + w:]
                     offset, cropped = crop_to_content_box(
                         snippet, content_aware=bbox_context_aware
                     )
@@ -499,24 +485,28 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def extract_bounding_boxes(
-        self,
-        _id,
-        key,
-        img,
-        psm=PSMode.SPARSE,
-        bbox_optimization: Optional[bool] = False,
-        bbox_context_aware: Optional[bool] = True,
+            self,
+            _id,
+            key,
+            img: Union[np.ndarray, PIL.Image.Image],
+            psm=PSMode.SPARSE,
+            bbox_optimization: Optional[bool] = False,
+            bbox_context_aware: Optional[bool] = True,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
 
-        if type(img) == PIL.Image.Image:  # convert pil to OpenCV
-            img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        if isinstance(img, PIL.Image.Image):  # convert pil to OpenCV
+            # convert PIL.TiffImagePlugin.TiffImageFile to numpy array
             self.logger.warning("PIL image received converting to ndarray")
+            img = img.convert("RGB")
+            converted = np.array(img, dtype=np.uint8)
+            img = cv2.cvtColor(converted, cv2.COLOR_RGB2BGR)
+            print(f"Converted image : {img.shape}")
 
         if not isinstance(img, np.ndarray):
             raise Exception("Expected image in numpy format")
-
+        # bbox_optimization = True
         try:
             crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
                 self.work_dir, _id, key
@@ -592,7 +582,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
+                    snippet = img[y0: y0 + h, x0: x0 + w:]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)

@@ -259,7 +259,7 @@ class OcrEngine(ABC):
                 img = frames[page_index]
                 img = img[y : y + h, x : x + w].copy()
                 # allow for small padding around the component
-                padding = 0
+                padding = 4
                 if crop_to_content_enabled:
                     img = crop_to_content(img)
                     h = img.shape[0]

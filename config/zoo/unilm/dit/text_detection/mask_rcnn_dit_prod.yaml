@@ -3,9 +3,9 @@ MODEL:
   PIXEL_MEAN: [ 127.5, 127.5, 127.5 ]
   PIXEL_STD: [ 127.5, 127.5, 127.5 ]
   # Path relative to model zoo root directory (default __model_path__)
-  # Path relative to model zoo root directory (default __model_path__)
 #  WEIGHTS: "unilm/dit/text_detection/model_0038999-V3-BEST/model_0038999.pth"
-  WEIGHTS: "unilm/dit/text_detection/tuned-2500-LARGE-v5/model_0053999.pth"
+  WEIGHTS: "unilm/dit/text_detection/tuned-2500-LARGE-v5/model_0053999.pth" # GOOD
+#  WEIGHTS: "unilm/dit/text_detection/paper-tuned-184/model_0025999.pth" # PAPER
 #  WEIGHTS: "unilm/dit/text_detection/td-syn_dit-l_mrcnn.pth"
   VIT:
     NAME: "dit_large_patch16"

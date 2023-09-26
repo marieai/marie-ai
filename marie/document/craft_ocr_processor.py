@@ -33,7 +33,9 @@ class CraftOcrProcessor(OcrProcessor):
         print("CRAFT ICR processor [cuda={}]".format(cuda))
 
         saved_model = os.path.join(
-            models_dir, "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft", "best_accuracy.pth"
+            models_dir,
+            "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft-01",
+            "best_accuracy.pth",
         )
 
         if True:
