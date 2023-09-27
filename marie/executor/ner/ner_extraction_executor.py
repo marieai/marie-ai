@@ -246,7 +246,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         )
 
         offset_mapping_batched = encoding.pop("offset_mapping")
-        overflow_to_sample_mapping = encoding.pop('overflow_to_sample_mapping')
+        overflow_to_sample_mapping = encoding.pop("overflow_to_sample_mapping")
         # encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
 
         # Debug tensor info
@@ -274,13 +274,9 @@ class NerExtractionExecutor(Executor, StorageMixin):
             probs = (
                 nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
             )
-
             # The model outputs logits of shape (batch_size, seq_len, num_labels).
             logits = outputs.logits
             batch_size, seq_len, num_labels = logits.shape
-
-            self.logger.info(f"Batch Size : {batch_size}")
-
             # Get the predictions and bounding boxes by batch and convert to list
             predictions_batched = logits.argmax(-1).squeeze().tolist()
             token_boxes_batched = encoding.bbox.squeeze().tolist()
@@ -348,12 +344,21 @@ class NerExtractionExecutor(Executor, StorageMixin):
                     if box != [0, 0, 0, 0]
                 ]
 
-                # check if  token_boxes are same as the true_boxes and if so pick the one with the highest score
+                # check if there are duplicate boxes (example : 159000444_1.png)
+                # why are there duplicate boxes??
+                for box in true_boxes:
+                    if true_boxes.count(box) > 1:
+                        self.logger.warning(f"Duplicate box found : {box}")
+                        current_idx = true_boxes.index(box)
+                        true_predictions.pop(current_idx)
+                        true_boxes.pop(current_idx)
+                        true_scores.pop(current_idx)
+
                 if batch_index > 0:
                     for idx, box in enumerate(out_boxes):
                         if box in true_boxes:
                             current_idx = true_boxes.index(box)
-                            if true_scores[current_idx] > out_scores[idx]:
+                            if true_scores[current_idx] >= out_scores[idx]:
                                 out_prediction[idx] = true_predictions[current_idx]
                                 out_scores[idx] = true_scores[current_idx]
 
@@ -365,8 +370,43 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 out_boxes.extend(true_boxes)
                 out_scores.extend(true_scores)
 
+        original_boxes = []
+        for box in boxes:
+            original_boxes.append([int(b) for b in unnormalize_box(box, width, height)])
+
+        # align words and boxes with predictions and scores
+        out_prediction, out_boxes, out_scores = self.align_predictions(
+            words, original_boxes, out_prediction, out_boxes, out_scores
+        )
+
         assert len(out_prediction) == len(words)
         return out_prediction, out_boxes, out_scores
+
+    def align_predictions(
+        self,
+        words,
+        original_boxes: [],
+        out_prediction: [],
+        out_boxes: [],
+        out_scores: [],
+    ):
+        """Align predictions with words and boxes"""
+
+        aligned_prediction = []
+        aligned_boxes = []
+        aligned_scores = []
+
+        for idx, word in enumerate(words):
+            box = original_boxes[idx]
+            if box in out_boxes:
+                current_idx = out_boxes.index(box)
+                aligned_prediction.append(out_prediction[current_idx])
+                aligned_boxes.append(out_boxes[current_idx])
+                aligned_scores.append(out_scores[current_idx])
+            else:
+                raise ValueError(f"Box not found for alignment: {box}")
+
+        return aligned_prediction, aligned_boxes, aligned_scores
 
     def postprocess(self, frames, annotations, ocr_results, file_hash):
         """Post-process extracted data"""
@@ -403,7 +443,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
         for i, (ocr, annotation, frame) in enumerate(
             zip(ocr_results, annotations, frames)
         ):
-            logger.info(f"Processing page # {i}")
+            self.logger.info(f"Processing page # {i}")
             # lines and boxes are already in the right reading order TOP->BOTTOM, LEFT-TO-RIGHT so no need to sort
             lines_bboxes = np.array(ocr["meta"]["lines_bboxes"])
             true_predictions = annotation["predictions"]
