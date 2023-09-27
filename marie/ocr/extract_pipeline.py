@@ -19,6 +19,9 @@ from marie.ocr import CoordinateFormat, DefaultOcrEngine, VotingOcrEngine
 from marie.ocr.mock_ocr_engine import MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.overlay.overlay import OverlayProcessor
+from marie.pipe.base import PipelineComponent, PipelineContext
+from marie.pipe.classifier import ClassifierPipelineComponent
+from marie.pipe.namedentity import NamedEntityPipelineComponent
 from marie.renderer import TextRenderer, PdfRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
@@ -189,7 +192,7 @@ class ExtractPipeline:
             if name in document_indexers:
                 raise BadConfigSource(f"Duplicate indexer name : {name}")
 
-            model_filter = config["filter"] if "filter" in config else "*"
+            model_filter = config["filter"] if "filter" in config else {}
 
             if model_type == "transformers":
                 document_indexers[name] = {
@@ -410,7 +413,26 @@ class ExtractPipeline:
         page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
             "enabled", True
         )
+
+        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
+
         self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
+        self.logger.info(f"page  indexer enabled : {page_classifier_enabled}")
+
+        post_processing_pipeline = []
+
+        post_processing_pipeline.append(
+            ClassifierPipelineComponent(
+                name="classifier_pipeline_component",
+                document_classifiers=self.document_classifiers,
+            )
+        )
+
+        post_processing_pipeline.append(
+            NamedEntityPipelineComponent(
+                name="ner_pipeline_component",
+            )
+        )
 
         # document metadata
         metadata = {}
@@ -437,9 +459,11 @@ class ExtractPipeline:
 
         metadata["ocr"] = ocr_results
 
+        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+
         if page_classifier_enabled:
             metadata["page_classifier"] = self.classify(
-                ref_id, ref_type, frames, ocr_results, root_asset_dir
+                ref_id, ref_type, frames, ocr_results
             )
 
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
@@ -781,7 +805,6 @@ class ExtractPipeline:
         ref_type: str,
         frames: List[np.ndarray],
         ocr_results: dict[str, any],
-        root_asset_dir: str,
     ):
         """
         Classify document at page level
@@ -790,7 +813,6 @@ class ExtractPipeline:
         :param ref_type: document reference type(e.g. document, page, process)
         :param frames: list of frames (images)
         :param ocr_results: OCR results
-        :param root_asset_dir: root asset directory
         :return: classification results
         """
 
@@ -850,3 +872,37 @@ class ExtractPipeline:
             self.logger.error(f"Error classifying document : {e}")
 
         return document_meta
+
+    def execute_pipeline(
+        self,
+        post_processing_pipeline: List[PipelineComponent],
+        frames: List,
+        ocr_results: dict,
+        metadata: dict,
+    ):
+        """Execute the post processing pipeline
+        TODO : This is temporary, we need to make this configurable
+        """
+        self.logger.info(
+            f"Executing post processing pipeline : {post_processing_pipeline}"
+        )
+        words = []
+        boxes = []
+        documents = docs_from_image(frames)
+
+        for page_idx in range(len(frames)):
+            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
+            words.append(page_words)
+            boxes.append(page_boxes)
+
+        assert len(words) == len(boxes)
+
+        context = PipelineContext()
+
+        for component in post_processing_pipeline:
+            try:
+                # create a PipelineContext and pass it to the component
+                self.logger.info(f"Executing component : {component}")
+                documents = component.run(context=context, documents=documents)
+            except Exception as e:
+                self.logger.error(f"Error executing component : {e}")
