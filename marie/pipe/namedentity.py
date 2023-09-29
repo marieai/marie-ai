@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from pprint import pprint
 from typing import Optional, List
 
 from docarray import DocumentArray
@@ -33,7 +34,7 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
 
         return PipelineResult(documents)
 
-    def extract_named_entity(self, documents, words, boxes):
+    def extract_named_entity(self, documents: DocumentArray, words, boxes):
         """
         Classify document at page level
 
@@ -50,41 +51,76 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
 
                 try:
                     self.logger.info(f"Indexers document : {key}")
-                    classified_docs = document_indexer.run(
-                        documents=documents, words=words, boxes=boxes
+                    indexer = document_indexer["indexer"]
+
+                    has_filter = "filter" in document_indexer
+                    filtered_documents = []
+                    filter_pattern = None
+                    filter_type = None
+
+                    if has_filter:
+                        indexer_filter = (
+                            document_indexer["filter"]
+                            if "filter" in document_indexer
+                            else {}
+                        )
+                        filter_type = indexer_filter["type"]
+                        filter_pattern = indexer_filter["pattern"]
+
+                    for document in documents:
+                        if "classification" not in document.tags:
+                            self.logger.warning(
+                                f"Document has no classification tag, adding to filtered documents"
+                            )
+                            filtered_documents.append(document)
+                            continue
+
+                        classification = document.tags["classification"]
+                        if filter_type == "regex":
+                            import re
+
+                            if re.search(filter_pattern, classification):
+                                self.logger.info(
+                                    f"Document classification matches filter : {classification} : {filter_pattern}"
+                                )
+                                meta.append(
+                                    {
+                                        "classification": classification,
+                                        "pattern": filter_pattern,
+                                    }
+                                )
+                                filtered_documents.append(document)
+                                continue
+
+                    # def extract(
+                    #         self, docs: DocumentArray, parameters: Optional[Dict] = None, *args, **kwargs
+                    # ):
+                    #
+                    parameters = {
+                        "ref_id": "test",
+                        "ref_type": "pid",
+                    }
+
+                    indexed_docs = indexer.extract(
+                        docs=DocumentArray(filtered_documents), parameters=parameters
                     )
 
-                    for idx, document in enumerate(classified_docs):
-                        assert "classification" in document.tags
-                        classification = document.tags["classification"]
-                        document.tags.pop("classification")
-
-                        assert "label" in classification
-                        assert "score" in classification
-                        meta.append(
-                            {
-                                "page": f"{idx}",  # Using string to avoid type conversion issues
-                                "classification": classification["label"],
-                                "score": classification["score"],
-                            }
-                        )
-
-                    self.logger.debug(f"Classification : {meta}")
+                    pprint(indexed_docs)
                     document_meta.append(
                         {
-                            "classifier": key,
-                            "details": meta,
+                            "indexer": key,
+                            "details": indexed_docs,
                         }
                     )
                 except Exception as e:
                     self.logger.error(f"Error classifying document : {e}")
                     document_meta.append(
                         {
-                            "classifier": key,
+                            "indexer": key,
                             "details": [],
                         }
                     )
         except Exception as e:
-            self.logger.error(f"Error classifying document : {e}")
+            self.logger.error(f"Error indexing document : {e}")
 
         return document_meta

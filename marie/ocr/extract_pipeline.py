@@ -421,12 +421,13 @@ class ExtractPipeline:
 
         post_processing_pipeline = []
 
-        post_processing_pipeline.append(
-            ClassifierPipelineComponent(
-                name="classifier_pipeline_component",
-                document_classifiers=self.document_classifiers,
+        if False:
+            post_processing_pipeline.append(
+                ClassifierPipelineComponent(
+                    name="classifier_pipeline_component",
+                    document_classifiers=self.document_classifiers,
+                )
             )
-        )
 
         post_processing_pipeline.append(
             NamedEntityPipelineComponent(
