@@ -45,10 +45,9 @@ from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
+from marie.logging.predefined import default_logger as logger
 
 check_min_version("4.5.0")
-
-from marie.logging.predefined import default_logger as logger
 
 
 class NerExtractionExecutor(Executor, StorageMixin):
