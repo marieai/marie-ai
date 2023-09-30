@@ -3,6 +3,7 @@ import os
 import time
 import traceback
 import typing
+from collections import namedtuple
 from typing import Any, Dict, List, Tuple
 
 import fairseq
@@ -16,10 +17,12 @@ from torchvision.transforms import Compose, InterpolationMode
 
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
+from marie.importer import ImportExtensions
 from marie.lang import Object
 from marie.logging.predefined import default_logger
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.utils import torch_gc
+from marie.serve.executors.decorators import _get_locks_root
 from marie.timer import Timer
 from marie.utils.utils import batchify
 
@@ -117,7 +120,6 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     )
 
     bpe = inference_task.build_bpe(cfg.bpe)
-
     return model, cfg, inference_task, generator, bpe, img_transform, device
 
 
@@ -191,7 +193,15 @@ def get_text(cfg, task, generator, model, samples, bpe):
     return predictions, scores
 
 
+TrOcrModelSpec = namedtuple(
+    "ModelSpec", ["model", "cfg", "task", "generator", "bpe", "img_transform", "device"]
+)
+
+
 class TrOcrProcessor(OcrProcessor):
+    MODEL_SPEC = TrOcrModelSpec(None, None, None, None, None, None, None)
+    INITIALIZED = False
+
     def __init__(
         self,
         work_dir: str = "/tmp/icr",
@@ -215,27 +225,44 @@ class TrOcrProcessor(OcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        # TODO: make this configurable
         # beam = 5
+        beam = 5
+        # create a file lock to prevent multiple processes from loading the same model at the same time3
+        logger.info(f"Model initialized : {self.__class__.INITIALIZED}")
+        if not self.__class__.INITIALIZED:
+            with ImportExtensions(
+                required=True,
+                help_text=f'FileLock is needed to guarantee single initialization of as the model is loaded. ',
+            ):
+                import filelock
 
-        beam = 1
-        (
-            self.model,
-            self.cfg,
-            self.task,
-            self.generator,
-            self.bpe,
-            self.img_transform,
-            self.device,
-        ) = init(model_path, beam, device)
+                locks_root = _get_locks_root()
+                lock_file = locks_root.joinpath(f'{self.__class__.__name__}.lock')
+                file_lock = filelock.FileLock(lock_file, timeout=-1)
+
+                with file_lock:
+                    (
+                        model,
+                        cfg,
+                        task,
+                        generator,
+                        bpe,
+                        img_transform,
+                        device,
+                    ) = init(model_path, beam, device)
+
+                    self.__class__.MODEL_SPEC = TrOcrModelSpec(
+                        model, cfg, task, generator, bpe, img_transform, device
+                    )
+                    self.__class__.INITIALIZED = True
+
         logger.info("Model load elapsed: %s" % (time.time() - start))
-
         opt = Object()
         opt.rgb = True
         self.opt = opt
 
     def is_available(self) -> bool:
-        return self.model is not None
+        return self.MODEL_SPEC.model is not None
 
     def recognize_from_fragments(self, src_images, **kwargs) -> List[Dict[str, any]]:
         start = time.time()
@@ -283,8 +310,10 @@ class TrOcrProcessor(OcrProcessor):
             opt = self.opt
             results = []
             start = time.time()
+            model_spec: TrOcrModelSpec = self.__class__.MODEL_SPEC
+
             with torch.amp.autocast(
-                device_type=self.device, enabled=True, cache_enabled=True
+                device_type=model_spec.device, enabled=True, cache_enabled=True
             ):
                 for i, batch in enumerate(batchify(src_images, batch_size)):
                     eval_data = MemoryDataset(images=batch, opt=opt)
@@ -292,15 +321,15 @@ class TrOcrProcessor(OcrProcessor):
 
                     images = [img for img, img_name in eval_data]
                     samples = preprocess_samples(
-                        images, self.img_transform, self.device
+                        images, model_spec.img_transform, model_spec.device
                     )
                     predictions, scores = get_text(
-                        self.cfg,
-                        self.task,
-                        self.generator,
-                        self.model,
+                        model_spec.cfg,
+                        model_spec.task,
+                        model_spec.generator,
+                        model_spec.model,
                         samples,
-                        self.bpe,
+                        model_spec.bpe,
                     )
 
                     for k in range(len(predictions)):

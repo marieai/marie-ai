@@ -19,6 +19,7 @@ from marie.constants import (
     __marie_home__,
     __cache_path__,
 )
+from marie.importer import ImportExtensions
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
@@ -150,19 +151,24 @@ def main(
             logger.info(
                 f"Setting up debugpy for remote debugging on port {debugpy_port}"
             )
-            import debugpy
 
-            # Required see https://github.com/microsoft/debugpy/issues/262
-            # debugpy.configure({"python": "python", "subProcess": True})
-            host = os.environ.get("MARIE_DEBUG_HOST", "0.0.0.0")
-            debugpy.listen((host, debugpy_port))
+            with ImportExtensions(
+                required=True,
+                help_text=f'debugpy is needed to enable remote debugging. Please install it with "pip install debugpy"',
+            ):
+                import debugpy
 
-            # Pause the program until a remote debugger is attached
-            if os.environ.get("MARIE_DEBUG_WAIT_FOR_CLIENT", True):
-                logger.info(
-                    f"Waiting for the debugging client to connect on port {debugpy_port}"
-                )
-                debugpy.wait_for_client()
+                # Required see https://github.com/microsoft/debugpy/issues/262
+                # debugpy.configure({"python": "python", "subProcess": True})
+                host = os.environ.get("MARIE_DEBUG_HOST", "0.0.0.0")
+                debugpy.listen((host, debugpy_port))
+
+                # Pause the program until a remote debugger is attached
+                if os.environ.get("MARIE_DEBUG_WAIT_FOR_CLIENT", True):
+                    logger.info(
+                        f"Waiting for the debugging client to connect on port {debugpy_port}"
+                    )
+                    debugpy.wait_for_client()
     except Exception as e:
         logger.error(f"Error setting up debugpy : {e}")
 

@@ -182,7 +182,9 @@ executors:
               type: 'transformers'
               device: 'cuda'
               name: 'page_indexer_patient'
-              filter: '.*'
+              filter:
+                type: 'regex'
+                pattern: '.*'
           page_splitter:
             model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
             enabled: True
