@@ -17,12 +17,13 @@ from marie.utils.json import store_json_object
 
 
 def process_file(
-        executor: NerExtractionExecutor,
-        img_path: str,
-        storage_enabled: bool,
-        storage_conf: Dict[str, str],
+    executor: NerExtractionExecutor,
+    img_path: str,
+    storage_enabled: bool,
+    storage_conf: Dict[str, str],
 ):
     with TimeContext(f"### extraction info"):
+        img_path = os.path.expanduser(img_path)
         file = img_path.split("/")[-1]
         filename = file[-1].split(".")[0]
         checksum = hash_file(img_path)
@@ -49,10 +50,10 @@ def process_file(
 
 
 def process_dir(
-        executor: NerExtractionExecutor,
-        image_dir: str,
-        storage_enabled: bool,
-        conf: Dict[str, str],
+    executor: NerExtractionExecutor,
+    image_dir: str,
+    storage_enabled: bool,
+    conf: Dict[str, str],
 ):
     for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
         try:
@@ -70,6 +71,7 @@ if __name__ == "__main__":
     _name_or_path = "/mnt/data/models/layoutlmv3-large-stride/checkpoint-1000"
     _name_or_path = "/mnt/data/marie-ai/model_zoo/rms/layoutlmv3-large-finetuned"
     _name_or_path = "/mnt/data/marie-ai/model_zoo/rms/layoutlmv3-large-patpay-ner"
+    _name_or_path = "rms/layoutlmv3-large-corr-ner"
 
     kwargs = {"__model_path__": __model_path__}
     _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
@@ -81,7 +83,7 @@ if __name__ == "__main__":
 
     storage_enabled = False
     img_path = f"~/datasets/private/medical_page_classification/raw/CORRESPONDENCE/174617756_2.tiff"
-    img_path = f"~/datasets/private/medical_page_classification/raw/CHECK-FRONT-PATPAY/178870790_0.tiff"
+    img_path = f"~/datasets/private/Data Labelling - All/EOB/159000444_1.png"
     # img_path = f"/home/gbugaj/tmp/corr-indexing/small.png"
 
     if not os.path.isdir(img_path):
