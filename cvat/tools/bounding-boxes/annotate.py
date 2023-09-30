@@ -46,7 +46,14 @@ class TorchvisionDetectionFunction:
             lines,
             _,
             lines_bboxes,
-        ) = self.predictor.extract_bounding_boxes("cvat", "field", image, PSMode.SPARSE)
+        ) = self.predictor.extract_bounding_boxes(
+            "cvat",
+            "field",
+            image,
+            PSMode.SPARSE,
+            bbox_optimization=False,
+            bbox_context_aware=False,
+        )
 
         box_format = "xywh"
         results = []
@@ -56,6 +63,8 @@ class TorchvisionDetectionFunction:
             # box = [int(v) for v in box]
             if box_format == "xywh":
                 box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+                # convert box to cvat float format
+                box = [float(v) for v in box]
                 spec = cvataa.rectangle(label_id, box)
                 results.append(spec)
 

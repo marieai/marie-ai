@@ -9,16 +9,21 @@ from typing import Union, List, Optional
 import numpy as np
 import torch
 from PIL import Image
+from docarray import DocumentArray
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
 from marie.excepts import BadConfigSource
+from marie.executor.ner import NerExtractionExecutor
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, VotingOcrEngine
 from marie.ocr.mock_ocr_engine import MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.overlay.overlay import OverlayProcessor
+from marie.pipe import PipelineComponent, PipelineContext
+from marie.pipe import ClassifierPipelineComponent
+from marie.pipe import NamedEntityPipelineComponent
 from marie.renderer import TextRenderer, PdfRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
@@ -189,14 +194,12 @@ class ExtractPipeline:
             if name in document_indexers:
                 raise BadConfigSource(f"Duplicate indexer name : {name}")
 
-            model_filter = config["filter"] if "filter" in config else "*"
-
+            model_filter = config["filter"] if "filter" in config else {}
+            # FIXME : we should not be using NerExtractionExecutor directly here
             if model_type == "transformers":
                 document_indexers[name] = {
-                    "indexer": TransformersDocumentClassifier(
-                        model_name_or_path=model_name_or_path,
-                        batch_size=1,
-                        use_gpu=True,
+                    "indexer": NerExtractionExecutor(
+                        model_name_or_path=model_name_or_path
                     ),
                     "filter": model_filter,
                 }
@@ -410,18 +413,35 @@ class ExtractPipeline:
         page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
             "enabled", True
         )
+
+        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
+
         self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
+        self.logger.info(f"page indexer enabled : {page_indexer_enabled}")
 
-        # document metadata
-        metadata = {}
+        post_processing_pipeline = []
 
-        metadata["ref_id"] = ref_id
-        metadata["ref_type"] = ref_type
-        metadata["job_id"] = job_id
+        if False:
+            post_processing_pipeline.append(
+                ClassifierPipelineComponent(
+                    name="classifier_pipeline_component",
+                    document_classifiers=self.document_classifiers,
+                )
+            )
 
-        metadata[
-            "pages"
-        ] = f"{len(frames)}"  # Using string to avoid type conversion issues
+        post_processing_pipeline.append(
+            NamedEntityPipelineComponent(
+                name="ner_pipeline_component",
+                document_indexers=self.document_indexers,
+            )
+        )
+
+        metadata = {
+            "ref_id": ref_id,
+            "ref_type": ref_type,
+            "job_id": job_id,
+            "pages": f"{len(frames)}",
+        }
         # check if we have already processed this document and restore assets
         self.restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
@@ -430,18 +450,15 @@ class ExtractPipeline:
         # burst frames into individual images
         self.burst_frames(ref_id, frames, root_asset_dir)
 
-        # make sure we have clean image
+        # make sure we have clean image clean frames are used for OCR and to generate clean document
         clean_frames = self.segment(ref_id, frames, root_asset_dir)
-        # clean frames are used for OCR and to generate clean document
         ocr_results = self.ocr_frames(ref_id, clean_frames, root_asset_dir)
 
         metadata["ocr"] = ocr_results
 
-        if page_classifier_enabled:
-            metadata["page_classifier"] = self.classify(
-                ref_id, ref_type, frames, ocr_results, root_asset_dir
-            )
+        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
 
+        # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
@@ -775,78 +792,47 @@ class ExtractPipeline:
                     self.logger.error(f"Error restoring assets {dir_to_restore} : {e}")
         return s3_root_path
 
-    def classify(
+    def execute_pipeline(
         self,
-        ref_id: str,
-        ref_type: str,
-        frames: List[np.ndarray],
-        ocr_results: dict[str, any],
-        root_asset_dir: str,
+        processing_pipeline: List[PipelineComponent],
+        frames: List,
+        ocr_results: dict,
+        metadata: dict,
     ):
+        """Execute the post processing pipeline
+        TODO : This is temporary, we need to make this configurable
         """
-        Classify document at page level
+        self.logger.info(
+            f"Executing document processing pipeline : {processing_pipeline}"
+        )
+        words = []
+        boxes = []
+        documents = docs_from_image(frames)
 
-        :param ref_id: document reference id (e.g. filename)
-        :param ref_type: document reference type(e.g. document, page, process)
-        :param frames: list of frames (images)
-        :param ocr_results: OCR results
-        :param root_asset_dir: root asset directory
-        :return: classification results
-        """
+        assert len(documents) == len(frames)
 
-        document_meta = []
-        try:
-            words = []
-            boxes = []
-            documents = docs_from_image(frames)
+        for page_idx in range(len(frames)):
+            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
+            words.append(page_words)
+            boxes.append(page_boxes)
 
-            for page_idx in range(len(frames)):
-                page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
-                words.append(page_words)
-                boxes.append(page_boxes)
+        assert len(words) == len(boxes)
 
-            assert len(words) == len(boxes) == len(frames)
+        context = PipelineContext(pipeline_id="post_processing_pipeline")
+        context['metadata'] = metadata
 
-            for key, document_classifier in self.document_classifiers.items():
-                meta = []
-
-                try:
-                    self.logger.info(f"Classifying document : {key}")
-                    classified_docs = document_classifier.run(
-                        documents=documents, words=words, boxes=boxes
-                    )
-
-                    for idx, document in enumerate(classified_docs):
-                        assert "classification" in document.tags
-                        classification = document.tags["classification"]
-                        document.tags.pop("classification")
-
-                        assert "label" in classification
-                        assert "score" in classification
-                        meta.append(
-                            {
-                                "page": f"{idx}",  # Using string to avoid type conversion issues
-                                "classification": classification["label"],
-                                "score": classification["score"],
-                            }
+        for pipe in processing_pipeline:
+            try:
+                # create a PipelineContext and pass it to the component
+                self.logger.info(f"Executing component : {pipe}")
+                pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
+                if pipe_results.state is not None:
+                    if not isinstance(pipe_results.state, DocumentArray):
+                        raise ValueError(
+                            f"Invalid state type : {type(pipe_results.state)}"
                         )
+                    documents = pipe_results.state
+            except Exception as e:
+                self.logger.error(f"Error executing pipe : {e}")
 
-                    self.logger.debug(f"Classification : {meta}")
-                    document_meta.append(
-                        {
-                            "classifier": key,
-                            "details": meta,
-                        }
-                    )
-                except Exception as e:
-                    self.logger.error(f"Error classifying document : {e}")
-                    document_meta.append(
-                        {
-                            "classifier": key,
-                            "details": [],
-                        }
-                    )
-        except Exception as e:
-            self.logger.error(f"Error classifying document : {e}")
-
-        return document_meta
+        print("Context metadata : ", context['metadata'])
