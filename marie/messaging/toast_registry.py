@@ -8,6 +8,7 @@ from typing import (
 )
 
 from marie.excepts import BadConfigSource
+from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 
 
@@ -43,7 +44,13 @@ class Toast:
         pass
 
     @staticmethod
-    async def notify(event: str, notification: Any, **kwargs: Any):
+    async def notify(event: str, notification: EventMessage, **kwargs: Any):
+        """
+        Push notification event to the client
+        :param event:
+        :param notification:
+        :param kwargs:
+        """
         if "api_key" not in notification:
             raise ValueError(f"'api_key' not present in notification : {notification}")
 

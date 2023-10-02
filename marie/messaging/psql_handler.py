@@ -4,6 +4,7 @@ from typing import Any, List
 from docarray import DocumentArray, Document
 
 from marie.logging.logger import MarieLogger
+from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 from marie.executor.mixin import StorageMixin
 
@@ -32,15 +33,18 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
         return ["*"]
 
     async def __notify_task(
-        self, notification: Any, silence_exceptions: bool = False, **kwargs: Any
+        self,
+        notification: EventMessage,
+        silence_exceptions: bool = False,
+        **kwargs: Any
     ) -> None:
         try:
             if not self.storage_enabled:
                 return
 
             await self.persist(
-                ref_id=notification.get("jobid", None),
-                ref_type=notification.get("event", "NA"),
+                ref_id=notification.job_id,
+                ref_type=notification.event if notification.event else "NA",
                 results=notification,
             )
         except Exception as e:
@@ -53,7 +57,7 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
                     "Toast enabled but config not setup correctly"
                 ) from e
 
-    async def notify(self, notification: Any, **kwargs: Any) -> bool:
+    async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
         if not self.storage_enabled:
             return False
 

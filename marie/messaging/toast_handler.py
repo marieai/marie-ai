@@ -2,6 +2,8 @@ from typing import Dict, Any, List
 
 import logging
 
+from marie.messaging.events import EventMessage
+
 
 class ToastHandler:
     """
@@ -35,7 +37,7 @@ class ToastHandler:
         """
         raise NotImplementedError()
 
-    async def notify(self, notification: Any, **kwargs: Any) -> bool:
+    async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
         """
         Send push notification
 
