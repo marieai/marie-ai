@@ -1,5 +1,6 @@
 from typing import Any, List
 
+from marie.messaging.events import EventMessage
 from marie.messaging.toast_registry import ToastHandler
 
 import logging
@@ -102,7 +103,7 @@ class NativeToastHandler(ToastHandler):
         """
         return ["*"]
 
-    async def notify(self, notification: Any, **kwargs: Any) -> bool:
+    async def notify(self, notification: EventMessage, **kwargs: Any) -> bool:
         self.event_logger.info(notification)
 
         return True

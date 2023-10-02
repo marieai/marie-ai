@@ -1,7 +1,8 @@
-from typing import Dict, Any
+from typing import Any
 
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import Toast
+from marie.messaging.events import EventMessage
 from marie.utils.json import to_json
 
 
@@ -13,17 +14,19 @@ def event_builder(
     status: str,
     timestamp: int,
     payload: Any,
-) -> Dict[str, Any]:
-    msg = {
-        "api_key": api_key,
-        "jobid": job_id,
-        "event": event_name,
-        "status": status,
-        "jobtag": job_tag,
-        "timestamp": timestamp,
-        "payload": to_json(payload),
-    }
-    return msg
+) -> EventMessage:
+    """Build the event message"""
+    return EventMessage(
+        **{
+            "api_key": api_key,
+            "jobid": job_id,
+            "event": event_name,
+            "status": status,
+            "jobtag": job_tag,
+            "timestamp": timestamp,
+            "payload": to_json(payload),
+        }
+    )
 
 
 async def mark_as_scheduled(
