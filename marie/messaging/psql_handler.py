@@ -43,7 +43,7 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
                 return
 
             await self.persist(
-                ref_id=notification.job_id,
+                ref_id=notification.jobid,
                 ref_type=notification.event if notification.event else "NA",
                 results=notification,
             )

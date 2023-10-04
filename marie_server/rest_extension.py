@@ -116,7 +116,7 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
         pass
 
     input_docs = docs_from_file(tmp_file, pages)
-
+    # this is a hack to remove the data attribute from the payload and for backward compatibility
     if clear_payload:
         key = "data"
         if "data" in payload:
@@ -127,6 +127,8 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
             key = "srcBase64"
         elif "srcFile" in payload:
             key = "srcFile"
+        elif "srcUrl" in payload:
+            key = "srcUrl"
         elif "uri" in payload:
             key = "uri"
         del payload[key]

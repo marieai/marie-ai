@@ -86,8 +86,10 @@ def extract_payload(payload, queue_id) -> tuple[str, str, str]:
         with open(path, "rb") as file:
             data = file.read()
         store_raw = True
-    elif "uri" in payload:
-        uri = payload["uri"]
+    elif "uri" in payload or "srcUrl" in payload:
+        uri = (
+            payload["uri"] if "uri" in payload else payload["srcUrl"]
+        )  # for backwards compatibility
         import tempfile
 
         if not StorageManager.can_handle(uri):
