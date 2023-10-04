@@ -381,7 +381,7 @@ class ExtractPipeline:
             json_path = os.path.join(output_dir, f"{prefix}.regions.json")
         else:
             json_path = os.path.join(output_dir, f"{prefix}.json")
-
+        force = True
         if force or not os.path.exists(json_path):
             self.logger.debug(f"Performing OCR : {json_path}")
             results = self.ocr_engine.extract(frames, ps_mode, coord_format, regions)

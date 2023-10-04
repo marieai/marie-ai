@@ -71,10 +71,10 @@ class TextExtractionExecutor(Executor, StorageMixin):
             "use_cuda": use_cuda,
         }
 
+        self.storage_enabled = False
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
-            storage_enabled = sconf.get("enabled", False)
-            self.setup_storage(storage_enabled, sconf)
+            self.setup_storage(sconf.get("enabled", False), sconf)
 
     @requests(on="/document/extract")
     @safely_encoded
@@ -106,10 +106,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 region["w"] = int(region["w"])
                 region["h"] = int(region["h"])
                 region["pageIndex"] = int(region["pageIndex"])
-
-            # for testing
-            if len(regions) == 0:
-                return {"error": "empty regions"}
 
             # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
             coordinate_format = CoordinateFormat.from_value(

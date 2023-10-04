@@ -51,7 +51,7 @@ class Toast:
         :param notification:
         :param kwargs:
         """
-        if "api_key" not in notification:
+        if notification.api_key is None:
             raise ValueError(f"'api_key' not present in notification : {notification}")
 
         tasks = [

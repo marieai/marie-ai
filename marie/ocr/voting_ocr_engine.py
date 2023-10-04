@@ -311,9 +311,10 @@ class VotingOcrEngine(OcrEngine):
                             selector_key
                         ]
 
+            # by forcing the type to string, we can avoid the issue with DataRequest parameters(self) -> Dict:
             # update the regions
             for region in output_results["regions"]:
-                region_id = region["id"]
+                region_id = region["id"] = str(region["id"])
                 for idx, extended_result in enumerate(extended):
                     if extended_result["id"] == region_id:
                         extended_result["words"].sort(key=lambda x: x["word_index"])
@@ -345,7 +346,9 @@ class VotingOcrEngine(OcrEngine):
                         self.logger.warning(f"Page has no words : {idx}")
                         continue
                     for word in page_result["words"]:
-                        word_id = word["id"]
+                        word_id = word["id"] = str(
+                            word["id"]
+                        )  # by forcing the type to string, we can avoid the issue with DataRequest parameters(self) -> Dict:
                         word["processor"] = key
                         if word_id not in candidate_words_by_page[idx]:
                             candidate_words_by_page[idx][word_id] = []
