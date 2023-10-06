@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from fastapi import HTTPException
 from fastapi import Request
 
-from marie import Client
+from marie import Client, Flow
+from marie._core.utils import run_background_task
 from marie.api import extract_payload
 from marie.api import value_from_payload_or_args
 from marie.logging.mdc import MDC
@@ -30,9 +31,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI, Request
 
 
-def extend_rest_interface(app: "FastAPI") -> "FastAPI":
+def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
     """Register executors REST endpoints that do not depend on DocumentArray
-    :param app:
+    :param flow: Marie Flow
+    :param app: FastAPI app
     :return:
     """
 
@@ -170,7 +172,6 @@ async def handle_request(
     try:
         job_id = generate_job_id()
         MDC.put("request_id", job_id)
-
         payload = await request.json()
 
         # write payload to file
@@ -187,25 +188,38 @@ async def handle_request(
 
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
+        coro = process_request(
+            api_key,
+            api_tag,
+            job_id,
+            payload,
+            partial(handler, client, endpoint=endpoint),
+        )
 
-        future = [
-            asyncio.ensure_future(
-                process_request(
-                    api_key,
-                    api_tag,
-                    job_id,
-                    payload,
-                    partial(handler, client, endpoint=endpoint),
+        task = run_background_task(coroutine=coro)
+        future = [task]
+
+        if False:
+            future = [
+                asyncio.ensure_future(
+                    process_request(
+                        api_key,
+                        api_tag,
+                        job_id,
+                        payload,
+                        partial(handler, client, endpoint=endpoint),
+                    )
                 )
-            )
-        ]
+            ]
 
-        # run the task synchronously for debugging purposes
         if sync:
             results = await asyncio.gather(*future, return_exceptions=True)
             if isinstance(results[0], Exception):
                 raise results[0]
             return results[0]
+        else:
+            # schedule the job and return immediately
+            pass
 
         return {"jobid": job_id, "status": "ok"}
     except Exception as e:
@@ -235,18 +249,23 @@ async def process_document_request(
     :param endpoint:
     :return:
     """
-    payload = {}
-    async for resp in client.post(
-        endpoint,
-        input_docs,
-        request_size=-1,
-        parameters=parameters,
-        return_responses=True,
-    ):
-        payload = parse_response_to_payload(resp, expect_return_value=False)
-        break  # we only need the first response
+    try:
+        payload = {}
+        async for resp in client.post(
+            protocol="grpc",
+            on=endpoint,
+            inputs=input_docs,
+            request_size=-1,
+            parameters=parameters,
+            return_responses=True,
+        ):
+            payload = parse_response_to_payload(resp, expect_return_value=False)
+            break  # we only need the first response
 
-    return payload
+        return payload
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        raise e
 
 
 async def process_request(
@@ -270,7 +289,6 @@ async def process_request(
 
     status = "OK"
     job_tag = ""
-    results = None
 
     try:
         logger.info(f"Starting request: {job_id}")

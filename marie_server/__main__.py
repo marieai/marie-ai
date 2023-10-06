@@ -3,6 +3,7 @@ import os
 import platform
 import sys
 import traceback
+from functools import partial
 from typing import Dict, Any, Optional
 
 import psutil
@@ -262,8 +263,6 @@ def __main__(
         for k, v in os.environ.items():
             print(f"{k} = {v}")
 
-    marie.helper.extend_rest_interface = extend_rest_interface
-
     # Load the config file and setup the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
 
@@ -280,6 +279,7 @@ def __main__(
     setup_server(config)
 
     # os.environ["JINA_MP_START_METHOD"] = "spawn"
+    marie.helper.extend_rest_interface = partial(extend_rest_interface, f)
 
     with f:
         f.block()
