@@ -111,7 +111,7 @@ class BlockingPikaClient:
             channel.basic_publish(
                 exchange, routing_key, body, properties, mandatory=True
             )
-            self.logger.info(
+            self.logger.debug(
                 f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}"
             )
         except pika.exceptions.UnroutableError as e:

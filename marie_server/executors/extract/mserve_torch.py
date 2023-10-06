@@ -4,7 +4,7 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi import HTTPException, Depends
 
-from marie import Client, DocumentArray
+from marie import Client, DocumentArray, Flow
 from marie import Document
 from marie.logging.predefined import default_logger as logger
 from marie_server.auth.auth_bearer import TokenBearer
