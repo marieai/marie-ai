@@ -166,8 +166,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
             del frames
             del regions
 
-            print('metadata["ocr"]')
-            print(metadata)
             self.persist(ref_id, ref_type, metadata)
 
             # strip out ocr results from metadata

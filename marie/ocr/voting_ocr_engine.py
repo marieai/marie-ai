@@ -83,7 +83,6 @@ class VotingOcrEngine(OcrEngine):
         aggregated_results = OrderedDict()
         for key, val in self.processors.items():
             try:
-                print(f"Processing with {key}")
                 if val["enabled"]:
                     if "default" in val and val["default"]:
                         is_default = True
@@ -117,7 +116,7 @@ class VotingOcrEngine(OcrEngine):
     ) -> Dict:
         candidate_words_by_selector = {}
         for key, aggregated_result in aggregated_results.items():
-            print(f"Result processor : {key}, selector : {selector}")
+            # print(f"Result processor : {key}, selector : {selector}")
             if selector is not None:
                 results = aggregated_result[selector]  # extended
             else:
@@ -137,9 +136,9 @@ class VotingOcrEngine(OcrEngine):
                     if word_id not in candidate_words_by_selector[idx]:
                         candidate_words_by_selector[idx][word_id] = []
                     candidate_words_by_selector[idx][word_id].append(word)
-                    print(
-                        f"candidate_words_by_selector[idx][word_id] = {len(candidate_words_by_selector[idx][word_id])}  > {idx}  {word_id}"
-                    )
+                    # print(
+                    #     f"candidate_words_by_selector[idx][word_id] = {len(candidate_words_by_selector[idx][word_id])}  > {idx}  {word_id}"
+                    # )
 
         return candidate_words_by_selector
 
@@ -155,7 +154,7 @@ class VotingOcrEngine(OcrEngine):
 
         for key, candidates in candidate_words_by_selector.items():
             idx = key
-            self.logger.info(f"Word : {idx}")
+            self.logger.debug(f"Word : {idx}")
             if idx not in words_by_confidence_by_selector:
                 words_by_confidence_by_selector[idx] = []
 
@@ -168,9 +167,9 @@ class VotingOcrEngine(OcrEngine):
                             word = word_candidate
 
                 words_by_confidence_by_selector[idx].append(word)
-                print(
-                    f"words_by_confidence_by_selector[idx][word_id] = {words_by_confidence_by_selector[idx][word_id]}  > {idx}  {word_id}"
-                )
+                # print(
+                #     f"words_by_confidence_by_selector[idx][word_id] = {words_by_confidence_by_selector[idx][word_id]}  > {idx}  {word_id}"
+                # )
         return words_by_confidence_by_selector
 
     def get_words_by_vote_by_selector(
@@ -221,22 +220,12 @@ class VotingOcrEngine(OcrEngine):
                         vote_word.pop("strategy", None)
                 else:
                     # default to the first word as this is the default processor
-                    print(f"IDX to check : {idx}")
-                    print(f"word_id to check : {word_id}")
+                    # print(f"IDX to check : {idx}")
+                    # print(f"word_id to check : {word_id}")
                     selected_word = words[0]
                     selected_word["strategy"] = {"type": "default"}
-                    print("selected word")
-                    print(selected_word)
-
-                    print("candidate_words_by_selector) -full ")
-                    print(candidate_words_by_selector)
-                    print("candidate_words_by_selector) -idx ")
-                    print(candidate_words_by_selector[idx])
 
                     for word in candidate_words_by_selector[idx][word_id]:
-                        print("Checking workd")
-                        print(word)
-
                         if word["id"] == word_id:
                             if word["confidence"] > selected_word["confidence"]:
                                 selected_word = word
@@ -269,10 +258,23 @@ class VotingOcrEngine(OcrEngine):
         """
 
         self.logger.info("Voting evaluator")
-
         has_regions = regions is not None and len(regions) > 0
 
         if has_regions:
+            # check if we have any results to evaluate
+            if len(aggregated_results) == 0:
+                self.logger.warning("No results to evaluate")
+                # create a default result set with confidence 0 for each region
+                output_results = deepcopy(default_results)
+                output_results["regions"] = []
+                for region in regions:
+                    region["confidence"] = 0
+                    region["text"] = ""
+                    region["original_text"] = ""
+                    region["words"] = []
+                    output_results["regions"].append(region)
+                return output_results
+
             candidate_words_by_selector = self.group_candidates_by_selector(
                 aggregated_results, "extended"
             )
@@ -299,7 +301,6 @@ class VotingOcrEngine(OcrEngine):
             )
 
             output_results = deepcopy(default_results)
-
             store_json_object(output_results, "/tmp/marie/region_output_results.json")
 
             # pick the words by page and update the results
@@ -321,9 +322,15 @@ class VotingOcrEngine(OcrEngine):
                         text = " ".join(
                             [word["text"] for word in extended_result["words"]]
                         )
-                        confidence = sum(
-                            [word["confidence"] for word in extended_result["words"]]
-                        ) / len(extended_result["words"])
+
+                        confidence = 0
+                        if len(extended_result["words"]) > 0:
+                            confidence = sum(
+                                [
+                                    word["confidence"]
+                                    for word in extended_result["words"]
+                                ]
+                            ) / len(extended_result["words"])
 
                         region["original_text"] = region["text"]
                         region["text"] = text

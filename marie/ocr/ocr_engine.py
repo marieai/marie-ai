@@ -257,6 +257,12 @@ class OcrEngine(ABC):
                 h = region["h"]
 
                 img = frames[page_index]
+                # Ensure we don't go out of bounds
+                if y + h > img.shape[0] or x + w > img.shape[1]:
+                    self.logger.warning(f"Region out of bounds : {region}")
+                    output.append({"id": rid, "text": "", "confidence": 0.0})
+                    continue
+
                 img = img[y : y + h, x : x + w].copy()
                 # allow for small padding around the component
                 padding = 4
@@ -281,6 +287,7 @@ class OcrEngine(ABC):
                     mode = PSMode.from_value(region["mode"])
                 else:
                     mode = pms_mode
+
                 (
                     boxes,
                     img_fragments,
@@ -309,13 +316,16 @@ class OcrEngine(ABC):
                 rendering_mode = "simple"
                 region_result = {}
                 if rendering_mode == "simple":
-                    if "lines" in result:
+                    if "lines" in result and len(result["lines"]) > 0:
                         lines = result["lines"]
                         line = lines[0]
                         region_result["id"] = rid
                         region_result["text"] = line["text"]
                         region_result["confidence"] = line["confidence"]
                         output.append(region_result)
+                    else:
+                        output.append({"id": rid, "text": "", "confidence": 0.0})
+
             except Exception as ex:
                 self.logger.error(ex)
                 raise ex

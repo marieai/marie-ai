@@ -154,7 +154,6 @@ class OcrProcessor(BaseHandler):
                 }, overlay_image
 
             results = self.recognize_from_fragments(fragments)
-            print("Length of results", len(results))
             assert len(results) == len(
                 fragments
             ), "You must provide the same number of results as fragments."

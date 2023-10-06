@@ -112,7 +112,7 @@ class BlockingPikaClient:
                 exchange, routing_key, body, properties, mandatory=True
             )
             self.logger.info(
-                f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}, Body: {body}"
+                f"Sent message. Exchange: {exchange}, Routing Key: {routing_key}"
             )
         except pika.exceptions.UnroutableError as e:
             self.logger.error(e)
