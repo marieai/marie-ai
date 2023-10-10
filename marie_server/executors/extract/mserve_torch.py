@@ -17,11 +17,14 @@ from marie_server.rest_extension import (
 extract_flow_is_ready = False
 
 
-def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
+def extend_rest_interface_extract(
+    app: FastAPI, client: Client, queue: asyncio.Queue
+) -> None:
     """
     Extends HTTP Rest endpoint to provide compatibility with existing REST endpoints
-    :param client:
-    :param app:
+    :param client: Marie Client
+    :param app: FastAPI app
+    :param queue: asyncio.Queue to handle backpressure
     :return:
     """
 
@@ -93,6 +96,7 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
         if not extract_flow_is_ready and not await client.is_flow_ready():
             raise HTTPException(status_code=503, detail="Flow is not yet ready")
         extract_flow_is_ready = True
+
         return await handle_request(
             token,
             "extract",
@@ -100,6 +104,8 @@ def extend_rest_interface_extract(app: FastAPI, client: Client) -> None:
             client,
             process_document_request,
             "/document/extract",
+            queue,
+            validate_payload_callback=None,
         )
 
     @app.get("/api/document/status", tags=["text", "rest-api"])

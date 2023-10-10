@@ -165,8 +165,6 @@ class CraftOcrProcessor(OcrProcessor):
             images: A list of input images, supplied as numpy arrays with shape
                 (H, W, 3).
         """
-
-        print("ICR processing : recognize_from_boxes via boxes")
         try:
             # debug_dir =  ensure_exists(os.path.join(self.work_dir,id,'icr',key,'debug'))
             # output_dir = ensure_exists(os.path.join(self.work_dir,id,'icr',key,'output'))
@@ -196,7 +194,6 @@ class CraftOcrProcessor(OcrProcessor):
             model.eval()
             with torch.no_grad():
                 for image_tensors, image_labels in eval_loader:
-                    print(f"OCR : {image_labels}")
                     batch_size = image_tensors.size(0)
                     image = image_tensors.to(device)
 

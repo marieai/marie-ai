@@ -13,9 +13,18 @@ from marie.ocr import OcrEngine, CoordinateFormat
 class DefaultOcrEngine(OcrEngine):
     """
     Recognizes text in an image.
-    This implementation will select best available OcrEngine based on available models and configs
+
+    This implementation will select best available OcrEngine based on available models and configs.
     Text extraction can either be executed out over the entire image or over selected regions of interests (ROIs)
     aka bounding boxes.
+
+    Args:
+        models_dir (str): Path to the directory containing the OCR models.
+        cuda (bool): Whether to use CUDA for GPU acceleration.
+        **kwargs: Additional keyword arguments to pass to the parent class.
+
+    Attributes:
+        ocr_processor (TrOcrProcessor): OCR processor for text recognition.
     """
 
     def __init__(
@@ -24,8 +33,16 @@ class DefaultOcrEngine(OcrEngine):
         cuda: bool = True,
         **kwargs,
     ) -> None:
+        """
+        Initializes a new instance of the DefaultOcrEngine class.
+
+        Args:
+            models_dir (str): Path to the directory containing the OCR models.
+            cuda (bool): Whether to use CUDA for GPU acceleration.
+            **kwargs: Additional keyword arguments to pass to the parent class.
+        """
         super().__init__(models_dir=models_dir, cuda=cuda, **kwargs)
-        self.icr_processor = TrOcrProcessor(
+        self.ocr_processor = TrOcrProcessor(
             work_dir=self.work_dir_icr, cuda=self.has_cuda
         )
 
@@ -38,10 +55,24 @@ class DefaultOcrEngine(OcrEngine):
         queue_id: str = None,
         **kwargs: Any,
     ) -> List[Dict]:
+        """
+        Extracts text from one or more images.
+
+        Args:
+            frames (Union[np.ndarray, List[np.ndarray], List[Image.Image]]): One or more images to extract text from.
+            pms_mode (PSMode): The mode to use for page segmentation.
+            coordinate_format (CoordinateFormat): The format to use for bounding box coordinates.
+            regions ([]): A list of regions of interest (ROIs) to extract text from.
+            queue_id (str): The ID of the queue to use for parallel processing.
+            **kwargs: Additional keyword arguments to pass to the parent class.
+
+        Returns:
+            A list of dictionaries containing the extracted text and its bounding box coordinates.
+        """
         try:
             return self.process_single(
                 self.box_processor,
-                self.icr_processor,
+                self.ocr_processor,
                 frames,
                 pms_mode,
                 coordinate_format,

@@ -74,6 +74,14 @@ def process_extract(
                 "page_splitter": {
                     "enabled": False,
                 },
+                "ocr": {
+                    "document": {
+                        "model": "default",
+                    },
+                    "region": {
+                        "model": "best",
+                    },
+                },
             }
         ],
     }

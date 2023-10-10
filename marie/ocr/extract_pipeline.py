@@ -109,15 +109,31 @@ def s3_asset_path(
 
 class ExtractPipeline:
     """
-    Extract pipeline for documents with the following steps
+    Extract pipeline for documents.
 
-    1. Burst the document
-    2. Segment the document
-    3. Perform OCR on the document
-    4. Extract the regions from the document pages
-    5. Classify the document
-    6. Store the results in the backend store(s3 , redis, etc.)
+    The pipeline will perform the following operations on the document:
+    - Burst the document, if it is a multi-page document into individual pages
+    - Segment the document (document cleaning)
+    - Perform OCR on the document pages or regions
+    - Extract the regions from the document pages
+    - Classify the document pages
+    - Index the document pages (Named Entity Recognition)
+    - Store the results in the backend store(s3 , redis, etc.)
 
+    Example usage:
+        .. code-block:: python
+
+            pipeline_config = load_yaml(
+                os.path.join(
+                    __config_dir__, "tests-integration", "pipeline-integration.partial.yml"
+                )
+            )
+            pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"])
+
+            with TimeContext(f"### ExtractPipeline info"):
+                results = pipeline.execute(
+                    ref_id=filename, ref_type="pid", frames=frames_from_file(img_path)
+                )
     """
 
     def __init__(
@@ -137,11 +153,13 @@ class ExtractPipeline:
 
         # TODO : add support for dependency injection
         mock_ocr = False
+        self.ocr_engines = dict()
         if mock_ocr:
-            self.ocr_engine = MockOcrEngine(cuda=use_cuda)
+            self.ocr_engines["document"] = MockOcrEngine(cuda=use_cuda)
+            self.ocr_engines["region"] = MockOcrEngine(cuda=use_cuda)
         else:
-            # self.ocr_engine = DefaultOcrEngine(cuda=use_cuda)
-            self.ocr_engine = VotingOcrEngine(cuda=use_cuda)
+            self.ocr_engines["document"] = DefaultOcrEngine(cuda=use_cuda)
+            self.ocr_engines["region"] = VotingOcrEngine(cuda=use_cuda)
 
         self.overlay_processor = OverlayProcessor(
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
@@ -361,6 +379,7 @@ class ExtractPipeline:
         ps_mode: PSMode = PSMode.SPARSE,
         coord_format: CoordinateFormat = CoordinateFormat.XYWH,
         regions: [] = None,
+        runtime_conf: Optional[dict[str, any]] = None,
     ) -> dict:
         """
         Perform OCR on the frames and return the results
@@ -371,11 +390,37 @@ class ExtractPipeline:
         :param ps_mode:  page segmentation mode(default: Sparse)
         :param coord_format: coordinate format(default: XYWH)
         :param regions: regions to perform OCR on (default: None)
+        :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
         :return:  OCR results
+
+        Example runtime_conf payload:
+
+            .. code-block:: json
+                  "features": [
+                    {
+                      "type": "pipeline",
+                      "name": "default",
+                      "ocr": {
+                        "document": {
+                          "engine": "default"
+                        },
+                        "region": {
+                          "engine": "best"
+                        }
+                      }
+                    }
+                ]
         """
 
         output_dir = ensure_exists(os.path.join(root_asset_dir, "results"))
         filename, prefix, suffix = split_filename(ref_id)
+
+        if runtime_conf is not None:
+            ocr_runtime_config = runtime_conf.get("ocr", {})
+            if "document" in ocr_runtime_config:
+                self.logger.info(
+                    f"Using document OCR engine : {ocr_runtime_config['document']['engine']}"
+                )
 
         if regions and len(regions) > 0:
             json_path = os.path.join(output_dir, f"{prefix}.regions.json")
@@ -384,7 +429,11 @@ class ExtractPipeline:
         force = True
         if force or not os.path.exists(json_path):
             self.logger.debug(f"Performing OCR : {json_path}")
-            results = self.ocr_engine.extract(frames, ps_mode, coord_format, regions)
+            ocr_engine = self.ocr_engines["document"]
+            if regions and len(regions) > 0:
+                ocr_engine = self.ocr_engines["region"]
+
+            results = ocr_engine.extract(frames, ps_mode, coord_format, regions)
             store_json_object(results, json_path)
         else:
             self.logger.debug(f"Skipping OCR : {json_path}")
@@ -401,7 +450,6 @@ class ExtractPipeline:
         job_id: str,
         runtime_conf: Optional[dict[str, any]] = None,
     ) -> dict[str, any]:
-
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -418,7 +466,6 @@ class ExtractPipeline:
 
         self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
         self.logger.info(f"page indexer enabled : {page_indexer_enabled}")
-
         post_processing_pipeline = []
 
         if False:
@@ -554,14 +601,14 @@ class ExtractPipeline:
 
         :param ref_id:  reference id of the document (e.g. file name)
         :param ref_type: reference type of the document (e.g. invoice, receipt, etc)
-        :param frames: frames to process
+        :param frames: frames to process for the document
         :param pms_mode:  Page segmentation mode for OCR default is SPARSE
         :param coordinate_format: coordinate format for OCR default is XYWH
         :param regions:  regions to extract from the document pages
         :param queue_id:  queue id to associate with the document
         :param job_id: job id to associate with the document
-        :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute)
-        :return:
+        :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
         # create local asset directory
@@ -834,5 +881,3 @@ class ExtractPipeline:
                     documents = pipe_results.state
             except Exception as e:
                 self.logger.error(f"Error executing pipe : {e}")
-
-        print("Context metadata : ", context['metadata'])

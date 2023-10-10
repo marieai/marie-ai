@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional, List, Dict
+from collections.abc import MutableMapping
+from typing import Optional
 
 from docarray import DocumentArray
-from collections.abc import MutableMapping
 
 from marie.logging.logger import MarieLogger
 

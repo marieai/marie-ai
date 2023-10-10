@@ -1,4 +1,5 @@
 import asyncio
+import multiprocessing
 import os
 import sys
 import time
@@ -31,6 +32,35 @@ if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI, Request
 
 
+async def coro_scheduler(queue: asyncio.Queue, limit: int = 2):
+    pending = set()
+
+    while True:
+        print(f"pending before : {len(pending)} : {queue.qsize()}")
+        while len(pending) < limit:
+            item = queue.get()
+            pending.add(asyncio.ensure_future(item))
+
+        if not pending:
+            continue
+
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        while done:
+            yield done.pop()
+
+
+async def coro_consumer(queue: asyncio.Queue, limit: int = 2):
+    async for scheduled_coro in coro_scheduler(queue, limit):
+        try:
+            print(f"async_consumer: {queue.qsize()} : {queue.empty()}")
+            scheduled = scheduled_coro.result()
+            await scheduled
+        except Exception as e:
+            # print traceback
+            logger.error(f"Error: {e}", exc_info=True)
+            raise e
+
+
 def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
     """Register executors REST endpoints that do not depend on DocumentArray
     :param flow: Marie Flow
@@ -55,7 +85,11 @@ def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
         host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
     )
 
-    extend_rest_interface_extract(app, client)
+    limit = multiprocessing.cpu_count()
+    backpressure_queue = asyncio.Queue()
+
+    run_background_task(coroutine=coro_consumer(queue=backpressure_queue, limit=limit))
+    extend_rest_interface_extract(app, client, queue=backpressure_queue)
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
     extend_rest_interface_classifier(app, client)
@@ -153,6 +187,7 @@ async def handle_request(
     client: Client,
     handler: callable,
     endpoint: str,
+    queue: asyncio.Queue,
     validate_payload_callback: Optional[callable] = None,
 ):
     """
@@ -164,6 +199,7 @@ async def handle_request(
     :param handler:  Handler function
     :param endpoint: Endpoint URL to call on the client
     :param validate_payload_callback: Callback function to validate payload
+    :param queue:  asyncio.Queue to handle backpressure
     :return:
     """
 
@@ -188,7 +224,7 @@ async def handle_request(
 
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
-        coro = process_request(
+        coroutine = process_request(
             api_key,
             api_tag,
             job_id,
@@ -196,34 +232,45 @@ async def handle_request(
             partial(handler, client, endpoint=endpoint),
         )
 
-        task = run_background_task(coroutine=coro)
-        future = [task]
+        # handle backpressure using asyncio.Queue
+        if queue:
+            try:
+                queue.put_nowait(coroutine)
+            except asyncio.QueueFull:
+                return {"jobid": job_id, "status": "failed", "message": "limit reached"}
+        else:
+            raise ValueError("queue is not defined in handle_request")
 
         if False:
-            future = [
-                asyncio.ensure_future(
-                    process_request(
-                        api_key,
-                        api_tag,
-                        job_id,
-                        payload,
-                        partial(handler, client, endpoint=endpoint),
-                    )
-                )
-            ]
+            task = run_background_task(coroutine=coroutine)
+            future = [task]
 
-        if sync:
-            results = await asyncio.gather(*future, return_exceptions=True)
-            if isinstance(results[0], Exception):
-                raise results[0]
-            return results[0]
-        else:
-            # schedule the job and return immediately
-            pass
+            if False:
+                future = [
+                    asyncio.ensure_future(
+                        process_request(
+                            api_key,
+                            api_tag,
+                            job_id,
+                            payload,
+                            partial(handler, client, endpoint=endpoint),
+                        )
+                    )
+                ]
+
+            if sync:
+                results = await asyncio.gather(*future, return_exceptions=True)
+                if isinstance(results[0], Exception):
+                    raise results[0]
+                return results[0]
+            else:
+                # schedule the job and return immediately
+                pass
 
         return {"jobid": job_id, "status": "ok"}
     except Exception as e:
-        logger.error(f"Error: {e}")
+        # print traceback
+        logger.error(f"Error: {e}", exc_info=True)
         code = 500
         detail = "Internal Server Error"
 
