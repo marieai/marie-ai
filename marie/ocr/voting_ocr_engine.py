@@ -87,7 +87,7 @@ class VotingOcrEngine(OcrEngine):
                     if "default" in val and val["default"]:
                         is_default = True
                     icr_processor = val["processor"]
-                    self.logger.info(
+                    self.logger.debug(
                         f"Processing with {icr_processor.__class__.__name__}"
                     )
                     results = self.process_single(
@@ -104,7 +104,7 @@ class VotingOcrEngine(OcrEngine):
                     if is_default:
                         default_results = results
 
-                    store_json_object(results, f"/tmp/marie/results_{key}.json")
+                    # store_json_object(results, f"/tmp/marie/results_{key}.json")
             except Exception as e:
                 traceback.print_exc()
                 continue

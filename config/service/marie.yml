@@ -1,6 +1,8 @@
 jtype: Flow
 version: '1'
 
+protocol: grpc
+
 # Shared configuration
 shared_config:
   storage: &storage

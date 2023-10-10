@@ -1,7 +1,7 @@
 import copy
 from typing import Any, Dict, Mapping, TypeVar, Union, cast
 
-import dagster._check as check
+from marie import check
 
 K = TypeVar("K")
 V = TypeVar("V")

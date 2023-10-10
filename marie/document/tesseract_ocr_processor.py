@@ -1,5 +1,10 @@
+import concurrent
+import multiprocessing
 import os
 import typing
+from concurrent.futures import ProcessPoolExecutor
+
+from pytesseract import image_to_data
 
 from marie.document.ocr_processor import OcrProcessor
 from marie.logging.logger import MarieLogger
@@ -24,6 +29,7 @@ class TesseractOcrProcessor(OcrProcessor):
             return
         self.models_dir = os.path.abspath(models_dir)
         self.logger.info(f"Tesseract data dir : {models_dir}")
+        self.use_multiprocessing = True
 
     def is_available(self) -> bool:
         try:
@@ -43,47 +49,58 @@ class TesseractOcrProcessor(OcrProcessor):
                 (H, W, 3).
         """
 
-        print("ICR processing : recognize_from_boxes via boxes")
         if not self.is_available():
             raise Exception("Tesseract OCR is not available, please install it")
-
-        from pytesseract import image_to_data
-
         results = []
-        config = f"--psm 8 --tessdata-dir {self.models_dir}"
+        max_workers = multiprocessing.cpu_count() // 2
 
-        for i, image in enumerate(images):
-            try:
-                data = image_to_data(
-                    image, config=config, lang="eng", output_type="dict"
-                )
-                n_boxes = len(data['text'])
-
-                words = [
-                    {
-                        'text': data['text'][i],
-                        'conf': data['conf'][i],
-                        'left': data['left'][i],
-                        'top': data['top'][i],
-                        'right': data['left'][i] + data['width'][i],
-                        'bottom': data['top'][i] + data['height'][i],
-                    }
-                    for i in range(n_boxes)
-                    if data['text'][i]
+        if self.use_multiprocessing:
+            with ProcessPoolExecutor(
+                max_workers=max_workers, mp_context=None
+            ) as executor:
+                iterable_args = [(i, image, kwargs) for i, image in enumerate(images)]
+                executor.map(self.invoke_tesseract, iterable_args)
+                futures = [
+                    executor.submit(self.invoke_tesseract, i, image)
+                    for i, image in enumerate(images)
                 ]
 
-                text = " ".join([w['text'] for w in words])
-                text = text.upper().strip() if text is not None else ""
-                confidence = (
-                    sum([w['conf'] for w in words]) / len(words)
-                    if len(words) > 0
-                    else 0
-                )
-                # scale confidence to 0-1
-                confidence = round(confidence / 100.0, 4)
-                results.append({"confidence": confidence, "text": text, "id": i})
-            except Exception as ex:
-                self.logger.warning(f"Failed to process image : {ex}")
-                results.append({"text": "", "confidence": 0, "id": i})
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    results.append(result)
+        else:
+            for idx, image in enumerate(images):
+                results.append(self.invoke_tesseract(idx, image))
 
         return results
+
+    def invoke_tesseract(self, index: int, image):
+        try:
+            config = f"--psm 8 --tessdata-dir {self.models_dir}"
+            data = image_to_data(image, config=config, lang="eng", output_type="dict")
+            n_boxes = len(data['text'])
+
+            words = [
+                {
+                    'text': data['text'][i],
+                    'conf': data['conf'][i],
+                    'left': data['left'][i],
+                    'top': data['top'][i],
+                    'right': data['left'][i] + data['width'][i],
+                    'bottom': data['top'][i] + data['height'][i],
+                }
+                for i in range(n_boxes)
+                if data['text'][i]
+            ]
+
+            text = " ".join([w['text'] for w in words])
+            text = text.upper().strip() if text is not None else ""
+            confidence = (
+                sum([w['conf'] for w in words]) / len(words) if len(words) > 0 else 0
+            )
+            # scale confidence to 0-1
+            confidence = round(confidence / 100.0, 4)
+            return {"confidence": confidence, "text": text, "id": index}
+        except Exception as ex:
+            self.logger.warning(f"Failed to process image : {ex}")
+            return {"text": "", "confidence": 0, "id": index}

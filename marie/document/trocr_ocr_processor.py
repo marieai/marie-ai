@@ -136,7 +136,7 @@ def preprocess_image(image, img_transform, device):
     return im
 
 
-@Timer(text="preprocess_samples in {:.4f} seconds")
+# @Timer(text="preprocess_samples in {:.4f} seconds")
 def preprocess_samples(src_images, img_transform, device):
     images = []
     for image in src_images:
@@ -302,7 +302,7 @@ class TrOcrProcessor(OcrProcessor):
         size = len(src_images)
         total_batches = math.ceil(size / batch_size)
 
-        logger.info(
+        logger.debug(
             f"ICR processing : recognize_from_boxes [items, batch_size, batches] :{size}, {batch_size}, {total_batches} "
         )
 

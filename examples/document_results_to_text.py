@@ -6,6 +6,16 @@ from marie.utils.utils import ensure_exists
 
 
 def process_dir(src_dir: str, output_dir: str):
+    """
+    Processes all files in the given source directory and writes the extracted text to separate text files in the output directory.
+
+    Args:
+        src_dir (str): The path to the source directory.
+        output_dir (str): The path to the output directory.
+
+    Returns:
+        None
+    """
     root_asset_dir = os.path.expanduser(src_dir)
     output_path = os.path.expanduser(output_dir)
 

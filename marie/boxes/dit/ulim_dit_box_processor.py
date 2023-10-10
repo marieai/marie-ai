@@ -463,8 +463,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             bboxes = bboxes[ind]
             lines = lines_from_bboxes(image, bboxes)
 
-            print(f"Lines : {len(lines)}")
-            print(f"Bboxes : {len(bboxes)}")
             return bboxes, classes, scores, lines, classes
         except Exception as e:
             raise e

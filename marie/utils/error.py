@@ -5,11 +5,11 @@ from typing import Any, NamedTuple, Optional, Sequence, Tuple, Type, Union
 from typing_extensions import TypeAlias
 
 import marie.check as check
-from marie.serdes import whitelist_for_serdes
+from marie.excepts import BaseMarieException
 
 
 # mypy does not support recursive types, so "cause" has to be typed `Any`
-@whitelist_for_serdes
+# @whitelist_for_serdes
 class SerializableErrorInfo(
     NamedTuple(
         "SerializableErrorInfo",
@@ -100,11 +100,10 @@ def serializable_error_info_from_exc_info(
     exc_type = check.not_none(exc_type, additional_message=additional_message)
     e = check.not_none(e, additional_message=additional_message)
     tb = check.not_none(tb, additional_message=additional_message)
-    from dagster._core.errors import DagsterUserCodeProcessError
 
     if (
         hoist_user_code_error
-        and isinstance(e, DagsterUserCodeProcessError)
+        and isinstance(e, BaseMarieException)
         and len(e.user_code_process_error_infos) == 1
     ):
         return e.user_code_process_error_infos[0]

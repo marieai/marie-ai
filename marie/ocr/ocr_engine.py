@@ -257,7 +257,12 @@ class OcrEngine(ABC):
                 h = region["h"]
 
                 img = frames[page_index]
-                # Ensure we don't go out of bounds
+
+                if w == 0 or h == 0:
+                    self.logger.warning(f"Region has zero width or height : {region}")
+                    output.append({"id": rid, "text": "", "confidence": 0.0})
+                    continue
+
                 if y + h > img.shape[0] or x + w > img.shape[1]:
                     self.logger.warning(f"Region out of bounds : {region}")
                     output.append({"id": rid, "text": "", "confidence": 0.0})
