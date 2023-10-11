@@ -277,7 +277,31 @@ class CompiledDefaultPredictor(DefaultPredictor):
 
 
 class BoxProcessorUlimDit(BoxProcessor):
-    """DiT for Text Detection"""
+    """DiT for Textbox Detection
+
+    EXAMPLE USAGE
+
+    .. code-block:: python
+
+        from marie.boxes import BoxProcessorUlimDit
+        from marie.boxes.box_processor import PSMode
+
+        box = BoxProcessorUlimDit(
+            models_dir="../../model_zoo/unilm/dit/text_detection",
+            cuda=True,
+        )
+        (
+            boxes,
+            fragments,
+            lines,
+            _,
+            lines_bboxes,
+        ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
+
+        bboxes_img = visualize_bboxes(image, boxes, format="xywh")
+        lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
+
+    """
 
     def __init__(
             self,

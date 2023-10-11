@@ -33,6 +33,7 @@ from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object, load_json_file
 from marie.utils.tiff_ops import burst_tiff_frames, merge_tiff, save_frame_as_tiff_g4
+from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
 
@@ -151,15 +152,10 @@ class ExtractPipeline:
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
 
-        # TODO : add support for dependency injection
-        mock_ocr = False
         self.ocr_engines = dict()
-        if mock_ocr:
-            self.ocr_engines["document"] = MockOcrEngine(cuda=use_cuda)
-            self.ocr_engines["region"] = MockOcrEngine(cuda=use_cuda)
-        else:
-            self.ocr_engines["document"] = DefaultOcrEngine(cuda=use_cuda)
-            self.ocr_engines["region"] = VotingOcrEngine(cuda=use_cuda)
+        self.ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
+        self.ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
+        self.ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
 
         self.overlay_processor = OverlayProcessor(
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
@@ -402,10 +398,12 @@ class ExtractPipeline:
                       "name": "default",
                       "ocr": {
                         "document": {
-                          "engine": "default"
+                          "engine": "default|best|google|amazon|azure|mock"
+                          "force": true,
                         },
                         "region": {
-                          "engine": "best"
+                          "engine": "default|best|google|amazon|azure|mock",
+                          "force": true,
                         }
                       }
                     }
@@ -415,12 +413,31 @@ class ExtractPipeline:
         output_dir = ensure_exists(os.path.join(root_asset_dir, "results"))
         filename, prefix, suffix = split_filename(ref_id)
 
+        engine = self.ocr_engines["default"]
+        if regions and len(regions) > 0:
+            engine = self.ocr_engines["best"]
+
         if runtime_conf is not None:
             ocr_runtime_config = runtime_conf.get("ocr", {})
+
+            node = "document"
             if "document" in ocr_runtime_config:
-                self.logger.info(
-                    f"Using document OCR engine : {ocr_runtime_config['document']['engine']}"
-                )
+                node = "document"
+            elif "region" in ocr_runtime_config:
+                node = "region"
+
+            if node in ocr_runtime_config:
+                if "engine" in ocr_runtime_config[node]:
+                    engine_name = ocr_runtime_config[node]["engine"]
+                    if engine_name in self.ocr_engines:
+                        engine = self.ocr_engines[engine_name]
+                    else:
+                        self.logger.warning(
+                            f"Invalid OCR engine : {engine_name}, using default"
+                        )
+                # check if we need to force OCR
+                if "force" in ocr_runtime_config[node]:
+                    force = strtobool(ocr_runtime_config[node]["force"])
 
         if regions and len(regions) > 0:
             json_path = os.path.join(output_dir, f"{prefix}.regions.json")
@@ -429,11 +446,7 @@ class ExtractPipeline:
         force = True
         if force or not os.path.exists(json_path):
             self.logger.debug(f"Performing OCR : {json_path}")
-            ocr_engine = self.ocr_engines["document"]
-            if regions and len(regions) > 0:
-                ocr_engine = self.ocr_engines["region"]
-
-            results = ocr_engine.extract(frames, ps_mode, coord_format, regions)
+            results = engine.extract(frames, ps_mode, coord_format, regions)
             store_json_object(results, json_path)
         else:
             self.logger.debug(f"Skipping OCR : {json_path}")
