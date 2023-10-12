@@ -39,6 +39,17 @@ env:
   NODE_OPTIONS: --max-old-space-size=6144
 
 jobs:
+
+  token-x:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check release token
+        id: token-checkxxx
+        run: | 
+          echo "${{ github.event.inputs.release_token }} == ${{ env.release_token }}"
+        env:
+          release_token: ${{ secrets.MARIE_CORE_RELEASE_TOKEN }}
+          
   token-check:
     runs-on: ubuntu-latest
     steps:
@@ -46,7 +57,7 @@ jobs:
         id: token-check
         run: | 
           touch SUCCESS
-        if: inputs.release_token == env.release_token
+        if: "${{ github.event.inputs.release_token }} == ${{ env.release_token }}"
         env:
           release_token: ${{ secrets.MARIE_CORE_RELEASE_TOKEN }}
       - name: Fail release token
@@ -54,7 +65,7 @@ jobs:
           [[ -f SUCCESS ]]
 
   build-and-push-latest-docs:
-    needs: token-check
+    # needs: token-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3

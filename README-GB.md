@@ -484,3 +484,25 @@ https://cloud.google.com/document-ai
 
 LLaMA2 turning
 https://blog.ovhcloud.com/fine-tuning-llama-2-models-using-a-single-gpu-qlora-and-ai-notebooks/
+
+
+
+ACT Testing
+
+```bash
+act -P ubuntu-20.04=catthehacker/ubuntu:act-20.04  -j build-and-push-latest-docs --secret-file act.secrets -e event.json -W .github/workflows/force-docs-build.yml --insecure-secrets
+```
+
+event.json
+```json
+{
+    "inputs": {
+        "release_token": "ghp_ABC",
+        "SOME_VALUE": "ABC"
+    }
+}
+```
+act.secrets
+```
+MARIE_CORE_RELEASE_TOKEN=ghp_ABC
+```
