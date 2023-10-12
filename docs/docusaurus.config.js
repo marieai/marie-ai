@@ -71,7 +71,7 @@ const config = {
         title: 'Marie-AI',
         logo: {
           alt: 'Marie-AI',
-          src: 'img/logo.svg',
+          src: 'img/logo.png',
         },
         items: [
           {

@@ -5,7 +5,7 @@ def _build_lookup_table():
     all_keywords = {}
     import copy
 
-    def build_invert_index(d, usage='jina'):
+    def build_invert_index(d, usage='marie'):
         for k in d['methods']:
             usg = f'{usage} {k["name"]}'
             if 'methods' in k:
