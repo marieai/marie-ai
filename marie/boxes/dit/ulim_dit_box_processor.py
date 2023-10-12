@@ -277,7 +277,8 @@ class CompiledDefaultPredictor(DefaultPredictor):
 
 
 class BoxProcessorUlimDit(BoxProcessor):
-    """DiT for Textbox Detection
+    """
+    Document text box processor using DIT model from ULIM.
 
     EXAMPLE USAGE
 

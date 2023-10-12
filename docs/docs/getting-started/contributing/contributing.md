@@ -39,7 +39,7 @@ The solution in this case is to instruct users how to download the file before s
 
 
 ## Development environment
-If you wish to run and develop `Marie-AI` directly, [install it from source](../getting-started/installation.md#installing-from-source):
+If you wish to run and develop `Marie-AI` directly, [install it from source](../installation.md#installing-from-source):
 
 ```shell
 git clone https://github.com/marieai/marie-ai.git

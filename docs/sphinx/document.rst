@@ -5,5 +5,9 @@ marie.document
 
 .. autosummary::
     :toctree: generated
-    ::
+    :nosignatures:
 
+    TrOcrProcessor
+    CraftOcrProcessor
+    TesseractOcrProcessor
+    LevenshteinOcrProcessor

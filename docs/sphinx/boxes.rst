@@ -7,16 +7,12 @@ marie.boxes
     :toctree: generated
     :nosignatures:
 
+    BoxProcessorUlimDit
+    PSMode
 
-Thitefsddsffldsfsdf
-sd f
-sdf
-sdf
-
-.. autoclass:: PSMode    
+.. autoclass:: PSMode
 
 .. autoclass:: BoxProcessorUlimDit
-
 
 .. .. autoclass:: BoxProcessorUlimDit
 ..     :show-inheritance:

@@ -15,3 +15,11 @@ from .tesseract_ocr_processor import TesseractOcrProcessor
 from .lev_ocr_processor import LevenshteinOcrProcessor
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
+
+
+__all__ = [
+    "CraftOcrProcessor",
+    "TrOcrProcessor",
+    "TesseractOcrProcessor",
+    "LevenshteinOcrProcessor",
+]  # noqa
