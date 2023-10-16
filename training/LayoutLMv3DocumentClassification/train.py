@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from fsspec.core import url_to_fs
+from imblearn.over_sampling import RandomOverSampler
 from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from sklearn.metrics import (
@@ -28,6 +29,7 @@ from transformers import (
     LayoutLMv3ImageProcessor,
     AutoConfig,
 )
+from pytorch_lightning.loggers import WandbLogger
 
 from marie.logging.profile import TimeContext
 from training.LayoutLMv3DocumentClassification.llmv3_dataset import (
@@ -35,6 +37,7 @@ from training.LayoutLMv3DocumentClassification.llmv3_dataset import (
     scale_bounding_box,
 )
 
+wandb_logger = WandbLogger(log_model="all")
 pl.seed_everything(42)
 
 dataset_pathXX = os.path.expanduser(
@@ -44,6 +47,7 @@ dataset_pathXX = os.path.expanduser(
 dataset_path = os.path.expanduser(
     "~/datasets/private/payer-determination/output/images"
 )
+dataset_path = os.path.expanduser("~/datasets/corr-routing/output/images")
 
 
 def load_data():
@@ -76,12 +80,14 @@ def load_data():
 
 
 model_name_or_path = "microsoft/layoutlmv3-base"
+
+
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
 
 def create_processor():
     feature_extractor = LayoutLMv3ImageProcessor(
-        apply_ocr=False, do_resize=True, resample=Image.LANCZOS
+        apply_ocr=False, do_resize=True, resample=Image.BICUBIC
     )
     tokenizer = LayoutLMv3Tokenizer.from_pretrained(model_name_or_path)
     processor = LayoutLMv3Processor(feature_extractor, tokenizer)
@@ -90,7 +96,7 @@ def create_processor():
 
 def create_split_data(data):
     train_data, test_data = train_test_split(
-        data, test_size=0.2, random_state=42, stratify=data["label"]
+        data, test_size=0.25, random_state=42, stratify=data["label"]
     )
 
     train_data = train_data.reset_index(drop=True)
@@ -101,13 +107,61 @@ def create_split_data(data):
     return train_data, test_data, valid_data
 
 
+from imblearn.under_sampling import RandomUnderSampler
+
+
+def create_split_data_strat(data):
+    print(data)
+    X = data  # .drop(columns=["label"])
+    y = data["label"]
+
+    # perform under-sampling.
+    # rus = RandomUnderSampler(random_state=42)
+    rus = RandomOverSampler(random_state=42)
+    X_resampled, y_resampled = rus.fit_resample(X, y)
+
+    # split data into train, test, and validation sets
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_resampled, y_resampled, test_size=0.2, random_state=42, stratify=y_resampled
+    )
+
+    train_data = X_train.reset_index(drop=True)
+    test_data = X_test.reset_index(drop=True)
+
+    return train_data, test_data
+
+
 def create_dataset(data, labels, processor):
+    X_train, X_test = create_split_data_strat(data)
+
+    print(
+        f"STRAT DS: {len(X_train)} training examples, {len(X_test)} test examples, {len(X_test)}"
+    )
+
+    train_dataset = DocumentClassificationDataset(False, X_train, labels, processor)
+    test_dataset = DocumentClassificationDataset(False, X_test, labels, processor)
+    validation_dataset = test_dataset  # TODO : need to have proper validation dataset
+
+    print(
+        f"{len(train_dataset)} training examples, {len(test_dataset)} test examples, {len(validation_dataset)} validation examples"
+    )
+    return train_dataset, test_dataset, validation_dataset
+
+
+def create_datasetZZZZ(data, labels, processor):
     train_data, test_data, valid_data = create_split_data(data)
+
+    print(
+        f"{len(train_data)} training examples, {len(test_data)} test examples, {len(valid_data)} validation examples"
+    )
 
     train_dataset = DocumentClassificationDataset(False, train_data, labels, processor)
     test_dataset = DocumentClassificationDataset(False, valid_data, labels, processor)
     validation_dataset = test_dataset  # TODO : need to have proper validation dataset
 
+    print(
+        f"{len(train_dataset)} training examples, {len(test_dataset)} test examples, {len(validation_dataset)} validation examples"
+    )
     return train_dataset, test_dataset, validation_dataset
 
 
@@ -134,6 +188,7 @@ class HfModelCheckpoint(ModelCheckpoint):
 class ModelModule(pl.LightningModule):
     def __init__(self, classes: list):
         super().__init__()
+        self.save_hyperparameters()
         n_classes = len(classes)
 
         config = AutoConfig.from_pretrained(
@@ -214,10 +269,10 @@ def train():
         data, labels, processor=processor
     )
     train_data_loader = DataLoader(
-        train_dataset, batch_size=12, shuffle=True, num_workers=12
+        train_dataset, batch_size=4, shuffle=True, num_workers=12
     )
     test_data_loader = DataLoader(
-        test_dataset, batch_size=4, shuffle=False, num_workers=4
+        test_dataset, batch_size=2, shuffle=False, num_workers=4
     )
 
     # train
@@ -236,10 +291,11 @@ def train():
 
     trainer = pl.Trainer(
         accelerator="gpu",
-        precision=16,
+        precision="32-true",
         devices=1,
         max_epochs=50,
         callbacks=[model_checkpoint],
+        logger=wandb_logger,
     )
 
     trainer.fit(
@@ -324,7 +380,9 @@ def infer_single_image(label, image_path, model, processor, device):
 
 def inference():
     # load ckpt for inference
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_0/checkpoints/epoch=34-step=7175-val_loss=0.3972.ckpt.dir"
+    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/73iwjztj/checkpoints/epoch=16-step=2584-val_loss=0.3548.ckpt.dir"
+    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/cel8siqm/checkpoints/epoch=8-step=4104-val_loss=0.2761.ckpt.dir"
+    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/qnxp5lj8/checkpoints/epoch=4-step=150-val_loss=2.9924.ckpt.dir"
 
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
@@ -332,7 +390,7 @@ def inference():
 
     # load model
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    # device = "cpu"
+    device = "cpu"
 
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
@@ -405,11 +463,15 @@ def inference():
     cm_display.ax_.set_xticklabels(labels, rotation=45)
     cm_display.figure_.set_size_inches(16, 8)
 
+    # save the confusion matrix
+    plt.savefig("confusion_matrix.png")
     plt.show()
 
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    # train()
+    train()
 
-    inference()
+    # inference()
+# export QT_QPA_PLATFORM=offscreen
+# ref : https://github.com/NVlabs/instant-ngp/discussions/300
