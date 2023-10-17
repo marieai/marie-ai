@@ -15,6 +15,7 @@ from psycopg2 import pool  # noqa: F401
 from marie import Document, DocumentArray
 from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
+from marie.utils.json import to_json
 
 
 def doc_without_embedding(d: Document):
@@ -32,18 +33,6 @@ def doc_without_embedding(d: Document):
     #
     # new_doc.ClearField('embedding')
     # return new_doc.SerializeToString()
-
-
-def serialize_to_json(content: Any):
-    serialized = json.dumps(
-        content,
-        sort_keys=True,
-        separators=(",", ": "),
-        ensure_ascii=False,
-        indent=2,
-        cls=NumpyEncoder,
-    )
-    return serialized
 
 
 SCHEMA_VERSION = 4
@@ -238,19 +227,18 @@ class PostgreSQLHandler:
                             ref_id,
                             ref_type,
                             store_mode,
-                            serialize_to_json(doc.tags)
-                            if doc.tags is not None
-                            else None,
+                            to_json(doc.tags) if doc.tags is not None else None,
                             doc.embedding.astype(self.dump_dtype).tobytes()
                             if store_mode == "embedding" and doc.embedding is not None
                             else None,
                             doc.blob
                             if store_mode == "blob" and doc.blob is not None
                             else None,
-                            serialize_to_json(doc.content)
+                            to_json(doc.content)
                             if store_mode == "content" and doc.content is not None
                             else None,
-                            None,  # TODO : Need to make serialization much faster than what JSON serializer can provider
+                            None,
+                            # TODO : Need to make serialization much faster than what JSON serializer can provider
                             # doc_without_embedding(doc),
                             self._get_next_shard(doc.id),
                         )

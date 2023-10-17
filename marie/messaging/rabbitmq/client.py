@@ -1,21 +1,12 @@
-import dataclasses
 import ssl
 from typing import Dict, Any
-
-import json
 from typing import Optional
 
 import pika
 from pika.exchange_type import ExchangeType
 
 from marie.logging.predefined import default_logger as logger
-
-
-class EnhancedJSONEncoder(json.JSONEncoder):
-    def default(self, o):
-        if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
-        return super().default(o)
+from marie.utils.json import to_json
 
 
 class BlockingPikaClient:
@@ -96,14 +87,7 @@ class BlockingPikaClient:
             delivery_mode=pika.DeliveryMode.Transient,
         )
         # body = json.dumps(message, ensure_ascii=False)
-        body = json.dumps(
-            message,
-            sort_keys=True,
-            separators=(",", ": "),
-            ensure_ascii=False,
-            indent=2,
-            cls=EnhancedJSONEncoder,
-        )
+        body = to_json(message)
         body = body.encode("utf-8")
 
         # Send a message

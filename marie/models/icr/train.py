@@ -214,7 +214,9 @@ def train(opt):
 
                     predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
                 predicted_result_log += f'{dashed_line}'
+
                 print(predicted_result_log)
+
                 log.write(predicted_result_log + '\n')
 
         # save model per 1e+5 iter.
