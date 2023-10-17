@@ -1,16 +1,19 @@
 import os
 import sys
 import typing
+from typing import Callable
 
 import torch
-import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
-from marie.constants import __model_path__
+from torch import nn, Module
 
+from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
-from marie.models.icr.dataset import AlignCollate, RawDataset
+from marie.logging.logger import MarieLogger
+from marie.logging.profile import TimeContext
+from marie.models.icr.dataset import AlignCollate
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.icr.model import Model
 from marie.models.icr.utils import AttnLabelConverter, CTCLabelConverter
@@ -30,7 +33,8 @@ class CraftOcrProcessor(OcrProcessor):
         cuda: bool = True,
     ) -> None:
         super().__init__(work_dir, cuda)
-        print("CRAFT ICR processor [cuda={}]".format(cuda))
+        self.logger = MarieLogger(context=self.__class__.__name__)
+        self.logger.info("CRAFT ICR processor [cuda={}]".format(cuda))
 
         saved_model = os.path.join(
             models_dir,
@@ -92,9 +96,6 @@ class CraftOcrProcessor(OcrProcessor):
         self.opt = opt
         self.converter, self.model = self.__load()
 
-        cudnn.benchmark = True
-        cudnn.deterministic = True
-
     def is_available(self) -> bool:
         return self.model is not None
 
@@ -133,8 +134,6 @@ class CraftOcrProcessor(OcrProcessor):
 
         # GPU only
         model = torch.nn.DataParallel(model, device_ids=None).to(device)
-        # load model
-        print("loading pretrained model from %s" % opt.saved_model)
         model.load_state_dict(torch.load(opt.saved_model, map_location=device))
 
         if False:
@@ -154,7 +153,28 @@ class CraftOcrProcessor(OcrProcessor):
             state_dict = torch.load(opt.saved_model, map_location=device)
             model.load_state_dict(state_dict)
 
+        model = self.optimize_model(model)
         return converter, model
+
+    def optimize_model(self, model: nn.Module) -> Callable | Module:
+        """Optimizes the model for inference. This method is called by the __init__ method."""
+        try:
+            with TimeContext("Compiling model [craft]", logger=self.logger):
+                import torchvision.models as modelsf
+                import torch._dynamo as dynamo
+
+                # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
+                torch._dynamo.config.verbose = False
+                torch._dynamo.config.suppress_errors = True
+                # torch.backends.cudnn.benchmark = True
+                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
+                model = torch.compile(
+                    model, backend="inductor", mode="default", fullgraph=False
+                )
+                return model
+        except Exception as err:
+            self.logger.warning(f"Model compile not supported: {err}")
+            return model
 
     def recognize_from_fragments(
         self, images, **kwargs
@@ -221,12 +241,10 @@ class CraftOcrProcessor(OcrProcessor):
                         _, preds_index = preds.max(2)
                         preds_str = converter.decode(preds_index, length_for_pred)
 
-                    log = open(f"./log_eval_result.txt", "a")
                     dashed_line = "-" * 120
                     head = f'{"key":25s}\t{"predicted_labels":32s}\tconfidence score'
 
                     print(f"{dashed_line}\n{head}\n{dashed_line}")
-                    log.write(f"{dashed_line}\n{head}\n{dashed_line}\n")
 
                     preds_prob = F.softmax(preds, dim=2)
                     preds_max_prob, _ = preds_prob.max(dim=2)
@@ -251,10 +269,6 @@ class CraftOcrProcessor(OcrProcessor):
                         )
 
                         print(f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}")
-                        log.write(
-                            f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}\n"
-                        )
-                    log.close()
         except Exception as ex:
             raise ex
         torch_gc()
