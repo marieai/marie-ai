@@ -408,7 +408,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 return [], [], [], [], []
 
             bboxes = _convert_boxes(boxes)
-            self.logger.info(f"Predicted boxes : {len(boxes)}")
+            self.logger.debug(f"Predicted boxes : {len(boxes)}")
             # adjust the boxes to original image size
             if adj_x != 0 or adj_y != 0:
                 bboxes[:, 0] = bboxes[:, 0] - adj_x

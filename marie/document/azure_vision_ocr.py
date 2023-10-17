@@ -5,7 +5,7 @@ from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 
 
-class GoogleVisionOcrProcessor(OcrProcessor):
+class AzureVisionOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",

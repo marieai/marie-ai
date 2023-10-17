@@ -6,7 +6,7 @@ from typing import Callable
 import torch
 import torch.nn.functional as F
 import torch.utils.data
-from torch import nn, Module
+from torch import nn
 
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
@@ -109,7 +109,6 @@ class CraftOcrProcessor(OcrProcessor):
             converter = AttnLabelConverter(opt.character)
         opt.num_class = len(converter.character)
 
-        print("Evaluating on device : %s" % (device))
         if opt.rgb:
             opt.input_channel = 3
         model = Model(opt)
@@ -153,14 +152,13 @@ class CraftOcrProcessor(OcrProcessor):
             state_dict = torch.load(opt.saved_model, map_location=device)
             model.load_state_dict(state_dict)
 
-        model = self.optimize_model(model)
+        # model = self.optimize_model(model)
         return converter, model
 
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
+    def optimize_model(self, model: nn.Module) -> Callable | nn.Module:
         """Optimizes the model for inference. This method is called by the __init__ method."""
         try:
             with TimeContext("Compiling model [craft]", logger=self.logger):
-                import torchvision.models as modelsf
                 import torch._dynamo as dynamo
 
                 # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
@@ -214,6 +212,7 @@ class CraftOcrProcessor(OcrProcessor):
             model.eval()
             with torch.no_grad():
                 for image_tensors, image_labels in eval_loader:
+
                     batch_size = image_tensors.size(0)
                     image = image_tensors.to(device)
 
@@ -248,28 +247,33 @@ class CraftOcrProcessor(OcrProcessor):
 
                     preds_prob = F.softmax(preds, dim=2)
                     preds_max_prob, _ = preds_prob.max(dim=2)
+                    try:
+                        for img_name, pred, pred_max_prob in zip(
+                            image_labels, preds_str, preds_max_prob
+                        ):
+                            if "Attn" in opt.Prediction:
+                                pred_EOS = pred.find("[s]")
+                                pred = pred[
+                                    :pred_EOS
+                                ]  # prune after "end of sentence" token ([s])
+                                pred_max_prob = pred_max_prob[:pred_EOS]
 
-                    for img_name, pred, pred_max_prob in zip(
-                        image_labels, preds_str, preds_max_prob
-                    ):
-                        if "Attn" in opt.Prediction:
-                            pred_EOS = pred.find("[s]")
-                            pred = pred[
-                                :pred_EOS
-                            ]  # prune after "end of sentence" token ([s])
-                            pred_max_prob = pred_max_prob[:pred_EOS]
-
-                        # calculate confidence score (= multiply of pred_max_prob)
-                        confidence_score = pred_max_prob.cumprod(dim=0)[-1]
-                        # get value from the TensorFloat
-                        confidence = confidence_score.item()
-                        text = pred.upper() if pred is not None else ""
-                        results.append(
-                            {"confidence": confidence, "text": text, "id": img_name}
-                        )
-
-                        print(f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}")
+                            # calculate confidence score (= multiply of pred_max_prob)
+                            confidence_score = pred_max_prob.cumprod(dim=0)[-1]
+                            # get value from the TensorFloat
+                            confidence = confidence_score.item()
+                            text = pred.upper() if pred is not None else ""
+                            results.append(
+                                {"confidence": confidence, "text": text, "id": img_name}
+                            )
+                            print(
+                                f"{img_name:25s}\t{pred:32s}\t{confidence_score:0.4f}"
+                            )
+                    except Exception as ex:
+                        self.logger.error(f"Error processing image: {ex}")
+                        results.append({"confidence": 0, "text": "", "id": img_name})
         except Exception as ex:
             raise ex
+
         torch_gc()
         return results

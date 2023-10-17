@@ -1,3 +1,4 @@
+import traceback
 from typing import Dict, Optional
 
 from docarray import DocumentArray
@@ -104,4 +105,5 @@ class StorageMixin:
                     docs, store_mode, {"ref_id": ref_id, "ref_type": ref_type}
                 )
         except Exception as e:
+            traceback.print_exc()
             self.logger.error(f"Unable to store documents : {e}")

@@ -1,9 +1,17 @@
+import dataclasses
 import io
 import json
 import os.path
 from typing import Any
 
 from marie.numpyencoder import NumpyEncoder
+
+
+class EnhancedJSONEncoder(NumpyEncoder):
+    def default(self, o):
+        if dataclasses.is_dataclass(o):
+            return dataclasses.asdict(o)
+        return super().default(o)
 
 
 def store_json_object(results, json_path) -> None:
@@ -16,7 +24,7 @@ def store_json_object(results, json_path) -> None:
             separators=(",", ": "),
             ensure_ascii=True,
             indent=2,
-            cls=NumpyEncoder,
+            cls=EnhancedJSONEncoder,
         )
 
 
@@ -44,6 +52,6 @@ def to_json(results, **json_kwargs) -> str:
         separators=(",", ": "),
         ensure_ascii=True,
         indent=2,
-        cls=NumpyEncoder,
+        cls=EnhancedJSONEncoder,
         **json_kwargs
     )
