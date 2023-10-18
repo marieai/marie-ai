@@ -2,7 +2,6 @@ import os
 from typing import Dict, Union, Optional, Any
 
 import numpy as np
-import psutil
 import torch
 from docarray import DocumentArray, Document
 
@@ -11,8 +10,9 @@ from marie.api import value_from_payload_or_args
 from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
+from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
-from marie.models.utils import enable_tf32, openmp_setup
+from marie.models.utils import setup_torch_optimizations
 from marie.ocr import CoordinateFormat
 from marie.ocr.extract_pipeline import ExtractPipeline
 from marie.utils.docs import array_from_docs
@@ -47,13 +47,14 @@ class TextExtractionExecutor(Executor, StorageMixin):
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
 
-        setup_torch_optimizations()
-
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
+
+        setup_torch_optimizations()
+
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=use_cuda)
 
@@ -85,6 +86,13 @@ class TextExtractionExecutor(Executor, StorageMixin):
         :param kwargs:
         :return:
         """
+        if parameters is None or "job_id" not in parameters:
+            self.logger.warning(f"Job ID is not present in parameters")
+            raise ValueError("Job ID is not present in parameters")
+
+        job_id = parameters.get("job_id")
+        MDC.put("request_id", job_id)
+
         self.logger.info("Starting ICR processing request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
@@ -188,6 +196,8 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 "runtime_info": self.runtime_info,
                 "error": msg,
             }
+        finally:
+            MDC.remove("request_id")
 
     @requests(on="/document/status")
     def status(self, parameters, **kwargs):
@@ -251,7 +261,6 @@ class TextExtractionExecutorMock(Executor):
         import time
 
         logger.info(f"Starting mock executor : {time.time()}")
-        setup_torch_optimizations()
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -322,29 +331,3 @@ class TextExtractionExecutorMock(Executor):
 
         meta = get_ip_address()
         return out
-
-
-def setup_torch_optimizations():
-    logger.info(f"Setting up torch optimizations")
-
-    # Optimizations for PyTorch
-    core_count = psutil.cpu_count(logical=False)
-
-    torch_versions = torch.__version__.split(".")
-    torch_major_version = int(torch_versions[0])
-    torch_minor_version = int(torch_versions[1])
-    if torch_major_version > 1 or (
-        torch_major_version == 1 and torch_minor_version >= 12
-    ):
-        # Gives a large speedup on Ampere-class GPUs
-        torch.set_float32_matmul_precision("high")
-
-    logger.info(f"Setting up TF32")
-    enable_tf32()
-
-    logger.info(f"Setting up OpenMP with {core_count} threads")
-    openmp_setup(core_count)
-    torch.set_num_threads(core_count)
-
-    # Enable oneDNN Graph
-    torch.jit.enable_onednn_fusion(True)

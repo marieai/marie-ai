@@ -8,6 +8,8 @@ from marie.numpyencoder import NumpyEncoder
 
 
 class EnhancedJSONEncoder(NumpyEncoder):
+    """Enhanced JSON Encoder for dataclasses and numpy arrays"""
+
     def default(self, o):
         if dataclasses.is_dataclass(o):
             return dataclasses.asdict(o)

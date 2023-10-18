@@ -103,7 +103,6 @@ class VotingOcrEngine(OcrEngine):
                     aggregated_results[key] = results
                     if is_default:
                         default_results = results
-
                     # store_json_object(results, f"/tmp/marie/results_{key}.json")
             except Exception as e:
                 traceback.print_exc()
