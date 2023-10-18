@@ -17,6 +17,7 @@ from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
 from marie.boxes.line_processor import find_line_number, line_merge
 from marie.constants import __model_path__, __config_dir__
 from marie.logging.logger import MarieLogger
+from marie.models.utils import torch_gc
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.overlap import merge_boxes
 from marie.utils.resize_image import resize_image
@@ -491,6 +492,8 @@ class BoxProcessorUlimDit(BoxProcessor):
             return bboxes, classes, scores, lines, classes
         except Exception as e:
             raise e
+        finally:
+            torch_gc()
 
     def psm_line(self, image):
         if self.strict_box_segmentation:
@@ -507,6 +510,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_MULTILINE")
         return self.psm_sparse(image)
 
+    @torch.no_grad()
     def extract_bounding_boxes(
             self,
             _id,
@@ -525,7 +529,6 @@ class BoxProcessorUlimDit(BoxProcessor):
             img = img.convert("RGB")
             converted = np.array(img, dtype=np.uint8)
             img = cv2.cvtColor(converted, cv2.COLOR_RGB2BGR)
-            print(f"Converted image : {img.shape}")
 
         if not isinstance(img, np.ndarray):
             raise Exception("Expected image in numpy format")

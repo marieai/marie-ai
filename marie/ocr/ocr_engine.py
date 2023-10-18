@@ -205,7 +205,6 @@ class OcrEngine(ABC):
 
                 results.append(result)
             except Exception as ex:
-                print(traceback.format_exc())
                 self.logger.error(ex)
                 raise ex
         return results
@@ -286,7 +285,7 @@ class OcrEngine(ABC):
                 else:
                     overlay = img
 
-                cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
+                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
                 # each region can have its own segmentation mode
                 if "mode" in region:
                     mode = PSMode.from_value(region["mode"])
@@ -306,6 +305,11 @@ class OcrEngine(ABC):
                 result, overlay_image = icr_processor.recognize(
                     queue_id, checksum, overlay, boxes, img_fragments, lines
                 )
+
+                del boxes
+                del img_fragments
+                del lines
+                del lines_bboxes
 
                 if not filter_snippets:
                     result["overlay_b64"] = encodeToBase64(overlay_image)

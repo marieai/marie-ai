@@ -4,7 +4,7 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi import HTTPException, Depends
 
-from marie import Client, DocumentArray, Flow
+from marie import Client, DocumentArray
 from marie import Document
 from marie.logging.predefined import default_logger as logger
 from marie_server.auth.auth_bearer import TokenBearer
@@ -24,14 +24,13 @@ def extend_rest_interface_extract(
     Extends HTTP Rest endpoint to provide compatibility with existing REST endpoints
     :param client: Marie Client
     :param app: FastAPI app
-    :param queue: asyncio.Queue to handle backpressure
+    :param queue: asyncio.Queue to handle backpressure,
     :return:
     """
 
     @app.post("/api/document/extract-test", tags=["text", "rest-api"])
     async def text_extract_post_test(request: Request):
-        logger.info("Executing text_extract_post")
-
+        logger.debug("Executing text_extract_post")
         payload = await request.json()
         print(payload.keys())
         inputs = DocumentArray.empty(6)
@@ -90,7 +89,7 @@ def extend_rest_interface_extract(
         :return:
         """
 
-        logger.info(f"text_extract_post : {token}")
+        logger.debug(f"text_extract_post : {token}")
 
         global extract_flow_is_ready
         if not extract_flow_is_ready and not await client.is_flow_ready():

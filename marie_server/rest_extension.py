@@ -36,7 +36,6 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2):
     pending = set()
 
     while True:
-        print(f"pending before : {len(pending)} : {queue.qsize()}")
         while len(pending) < limit:
             item = queue.get()
             pending.add(asyncio.ensure_future(item))
@@ -85,11 +84,12 @@ def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
         host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
     )
 
-    limit = multiprocessing.cpu_count()
+    limit = 1  # multiprocessing.cpu_count()
     backpressure_queue = asyncio.Queue()
 
     run_background_task(coroutine=coro_consumer(queue=backpressure_queue, limit=limit))
     extend_rest_interface_extract(app, client, queue=backpressure_queue)
+
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
     extend_rest_interface_classifier(app, client)
@@ -233,6 +233,8 @@ async def handle_request(
         )
 
         # handle backpressure using asyncio.Queue
+        # This is a temporary solution to handle backpressure
+        # TODO :  replace this with a job_distributor class
         if queue:
             try:
                 queue.put_nowait(coroutine)

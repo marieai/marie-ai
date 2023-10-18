@@ -186,17 +186,36 @@ class BasePod(ABC):
 
         timeout_ns = 1e9 * _timeout if _timeout else None
         now = time.time_ns()
+        check_protocol = getattr(self.args, 'protocol', ["grpc"])[0]
+
+        async def check_readiness_server():
+            self.logger.debug(
+                f'Checking readiness to {self.runtime_ctrl_address} with protocol {check_protocol}'
+            )
+            ready = await BaseServer.async_is_ready(
+                ctrl_address=self.runtime_ctrl_address,
+                timeout=_timeout,
+                protocol=check_protocol,
+                logger=self.logger,
+                # Executor does not have protocol yet
+            )
+            if ready:
+                self.logger.debug(
+                    f'Server on {self.runtime_ctrl_address} with protocol {check_protocol} is ready'
+                )
+            else:
+                self.logger.debug(
+                    f'Server on {self.runtime_ctrl_address} with protocol {check_protocol} is not yet ready'
+                )
+            return ready
+
         while timeout_ns is None or time.time_ns() - now < timeout_ns:
-            if self.ready_or_shutdown.event.is_set() and (  # submit the health check to the pod, if it is
-                self.is_shutdown.is_set()  # a worker and not shutdown
-                or not self.args.pod_role == PodRoleType.WORKER
-                or (
-                    await BaseServer.async_is_ready(
-                        ctrl_address=self.runtime_ctrl_address,
-                        timeout=_timeout,
-                        protocol=getattr(self.args, 'protocol', ["grpc"])[0]
-                        # Executor does not have protocol yet
-                    )
+            if (
+                self.ready_or_shutdown.event.is_set()
+                and (  # submit the health check to the pod, if it is
+                    self.is_shutdown.is_set()  # a worker and not shutdown
+                    or not self.args.pod_role == PodRoleType.WORKER
+                    or (await check_readiness_server())
                 )
             ):
                 self._check_failed_to_start()

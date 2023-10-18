@@ -29,7 +29,6 @@ from marie.messaging import (
     RabbitMQToastHandler,
     PsqlToastHandler,
 )
-from marie.models.utils import enable_tf32, openmp_setup
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
 from marie.utils.types import strtobool

@@ -387,7 +387,7 @@ class ExtractPipeline:
         :param coord_format: coordinate format(default: XYWH)
         :param regions: regions to perform OCR on (default: None)
         :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
-        :return:  OCR results
+        :return: OCR results
 
         Example runtime_conf payload:
 

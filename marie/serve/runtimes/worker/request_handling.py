@@ -834,13 +834,10 @@ class WorkerRequestHandler:
     def _log_data_request(self, request: DataRequest):
         from marie.logging.mdc import MDC
 
-        MDC.put('request_id', request.header.request_id)
+        MDC.put('real_request_id', request.header.request_id)
         self.logger.debug(
             f'recv DataRequest at {request.header.exec_endpoint} with id: {request.header.request_id}'
         )
-        # rid = MDC.get('request_id')
-        # print(f'rid: {rid}')
-        # print(request)
 
     async def process_data(self, requests: List[DataRequest], context) -> DataRequest:
         """
