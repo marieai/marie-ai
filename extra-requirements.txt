@@ -105,7 +105,9 @@ natsort:                      standard,core
 celery:                       standard,core
 
 # opencv-python==4.5.4.60:      standard,core
-opencv-python==4.7.0.68:      standard,core
+#opencv-python==4.7.0.68:      standard,core
+# MEMORY LEAK FIXED RELATED TO  https://github.com/opencv/opencv/issues/23633
+opencv-python==4.8.1.78:      standard,core
 
 imagecodecs:                  standard,core
 imutils:                      standard,core

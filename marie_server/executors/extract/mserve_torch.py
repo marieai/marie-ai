@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import uuid
 
 from fastapi import FastAPI, Request
@@ -92,8 +93,8 @@ def extend_rest_interface_extract(
         logger.debug(f"text_extract_post : {token}")
 
         global extract_flow_is_ready
-        if not extract_flow_is_ready and not await client.is_flow_ready():
-            raise HTTPException(status_code=503, detail="Flow is not yet ready")
+        # if not extract_flow_is_ready and not await client.is_flow_ready():
+        #     raise HTTPException(status_code=503, detail="Flow is not yet ready")
         extract_flow_is_ready = True
 
         return await handle_request(
