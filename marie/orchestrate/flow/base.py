@@ -60,7 +60,6 @@ from marie.excepts import (
 from marie.helper import (
     GATEWAY_NAME,
     ArgNamespace,
-    CatchAllCleanupContextManager,
     download_mermaid_url,
     get_internal_ip,
     get_public_ip,
@@ -192,7 +191,6 @@ class Flow(
         docker_kwargs: Optional[dict] = None,
         entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
-        env_from_secret: Optional[dict] = None,
         expose_endpoints: Optional[str] = None,
         expose_graphql_endpoint: Optional[bool] = False,
         floating: Optional[bool] = False,
@@ -213,6 +211,7 @@ class Flow(
         port_monitoring: Optional[int] = None,
         prefetch: Optional[int] = 1000,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
+        provider: Optional[str] = ['NONE'],
         proxy: Optional[bool] = False,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -251,7 +250,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
         :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -284,6 +282,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -442,7 +441,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
         :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -475,6 +473,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -855,7 +854,6 @@ class Flow(
         docker_kwargs: Optional[dict] = None,
         entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
-        env_from_secret: Optional[dict] = None,
         exit_on_exceptions: Optional[List[str]] = [],
         external: Optional[bool] = False,
         floating: Optional[bool] = False,
@@ -880,6 +878,7 @@ class Flow(
         port_monitoring: Optional[int] = None,
         prefer_platform: Optional[str] = None,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
+        provider: Optional[str] = ['NONE'],
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
         quiet_error: Optional[bool] = False,
@@ -929,7 +928,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
         :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -980,6 +978,7 @@ class Flow(
         :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
@@ -1092,7 +1091,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param exit_on_exceptions: List of exceptions that will cause the Executor to shut down.
         :param external: The Deployment will be considered an external Deployment that has been started independently from the Flow.This Deployment will not be context managed by the Flow.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -1143,6 +1141,7 @@ class Flow(
         :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
@@ -1315,7 +1314,6 @@ class Flow(
         docker_kwargs: Optional[dict] = None,
         entrypoint: Optional[str] = None,
         env: Optional[dict] = None,
-        env_from_secret: Optional[dict] = None,
         expose_endpoints: Optional[str] = None,
         expose_graphql_endpoint: Optional[bool] = False,
         floating: Optional[bool] = False,
@@ -1336,6 +1334,7 @@ class Flow(
         port_monitoring: Optional[int] = None,
         prefetch: Optional[int] = 1000,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
+        provider: Optional[str] = ['NONE'],
         proxy: Optional[bool] = False,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -1374,7 +1373,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
         :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -1407,6 +1405,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -1474,7 +1473,6 @@ class Flow(
           More details can be found in the Docker SDK docs:  https://docker-py.readthedocs.io/en/stable/
         :param entrypoint: The entrypoint command overrides the ENTRYPOINT in Docker image. when not set then the Docker image ENTRYPOINT takes effective.
         :param env: The map of environment variables that are available inside runtime
-        :param env_from_secret: The map of environment variables that are read from kubernetes cluster secrets
         :param expose_endpoints: A JSON string that represents a map from executor endpoints (`@requests(on=...)`) to HTTP endpoints.
         :param expose_graphql_endpoint: If set, /graphql endpoint is added to HTTP interface.
         :param floating: If set, the current Pod/Deployment can not be further chained, and the next `.add()` will chain after the last Pod/Deployment not this current one.
@@ -1507,6 +1505,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -1676,9 +1675,7 @@ class Flow(
         )
 
     @allowed_levels([FlowBuildLevel.EMPTY])
-    def build(
-        self, copy_flow: bool = False, disable_build_sandbox: bool = False
-    ) -> 'Flow':
+    def build(self, copy_flow: bool = False, **kwargs) -> 'Flow':
         """
         Build the current Flow and make it ready to use
 
@@ -1688,7 +1685,7 @@ class Flow(
             context manager, or using :meth:`start`, :meth:`build` will be invoked.
 
         :param copy_flow: when set to true, then always copy the current Flow and do the modification on top of it then return, otherwise, do in-line modification
-        :param disable_build_sandbox: when set to true, the sandbox building part will be skipped, will be used by `plot`
+        :param kwargs: kwargs for backward compatibility
         :return: the current Flow (by default)
 
         .. note::
@@ -1714,10 +1711,6 @@ class Flow(
 
         if op_flow.args.inspect == FlowInspectType.COLLECT:
             op_flow.gather_inspect(copy_flow=False)
-
-        if not disable_build_sandbox:
-            for deployment in self._deployment_nodes.values():
-                deployment.update_sandbox_args()
 
         if GATEWAY_NAME not in op_flow._deployment_nodes:
             op_flow._add_gateway(
@@ -1905,6 +1898,7 @@ class Flow(
                             results[_deployment_name] = 'done'
                 except Exception as ex:
                     results[_deployment_name] = repr(ex)
+                    raise ex
 
             def _wait_ready(_deployment_name, _deployment):
                 try:
@@ -1940,6 +1934,7 @@ class Flow(
                     while True:
                         num_done = 0
                         pendings = []
+                        one_failing = False
                         with results_lock:
                             for _k, _v in results.items():
                                 sys.stdout.flush()
@@ -1948,11 +1943,17 @@ class Flow(
                                 elif _v == 'done':
                                     num_done += 1
                                 else:
+                                    one_failing = True
                                     if 'JINA_EARLY_STOP' in os.environ:
                                         self.logger.error(
                                             f'Flow is aborted due to {_k} {_v}.'
                                         )
                                         os._exit(1)
+                                    else:
+                                        break
+
+                        if one_failing:
+                            break
 
                         pending_str = ' '.join(pendings)
 
@@ -1969,7 +1970,21 @@ class Flow(
                 wait_for_ready_coros.append(_async_wait_ready(k, v))
 
             async def _async_wait_all():
-                await asyncio.gather(*wait_for_ready_coros)
+                wrapped_tasks = [
+                    asyncio.create_task(coro) for coro in wait_for_ready_coros
+                ]
+                done, pending = await asyncio.wait(
+                    wrapped_tasks, return_when=asyncio.FIRST_EXCEPTION
+                )
+                try:
+                    for task in done:
+                        try:
+                            task.result()  # This raises an exception if the task had an exception
+                        except Exception as e:
+                            self.logger.error(f"An exception occurred: {str(e)}")
+                finally:
+                    for task in pending:
+                        task.cancel()
 
             # kick off spinner thread
             polling_status_thread = threading.Thread(
@@ -2203,7 +2218,7 @@ class Flow(
         )
 
         if build and op_flow._build_level.value == FlowBuildLevel.EMPTY:
-            op_flow.build(copy_flow=False, disable_build_sandbox=True)
+            op_flow.build(copy_flow=False)
 
         mermaid_str = op_flow._mermaid_str
         if vertical_layout:
@@ -2336,22 +2351,6 @@ class Flow(
             return self[GATEWAY_NAME].args.port_monitoring
         else:
             return self._gateway_kwargs.get('port_monitoring', None)
-
-    @property
-    def address_private(self) -> str:
-        """Return the private IP address of the gateway for connecting from other machine in the same network
-
-
-        .. # noqa: DAR201"""
-        return get_internal_ip()
-
-    @property
-    def address_public(self) -> str:
-        """Return the public IP address of the gateway for connecting from other machine in the public network
-
-
-        .. # noqa: DAR201"""
-        return get_public_ip()
 
     def __iter__(self):
         return self._deployment_nodes.items().__iter__()

@@ -1,6 +1,16 @@
 import asyncio
 import time
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    AsyncGenerator,
+)
 
 import grpc
 from grpc.aio import AioRpcError
@@ -21,6 +31,7 @@ from marie.serve.networking.instrumentation import (
 from marie.serve.networking.replica_list import _ReplicaList
 from marie.serve.networking.utils import DEFAULT_MINIMUM_RETRIES
 from marie.types.request import Request
+from marie.types.request.data import SingleDocumentRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     import threading
@@ -205,7 +216,7 @@ class GrpcConnectionPool:
         shard_id: Optional[int] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
-    ) -> Optional[asyncio.Task]:
+    ):
         """Sends a discover Endpoint call to target.
 
         :param deployment: name of the Jina deployment to send the request to
@@ -213,7 +224,7 @@ class GrpcConnectionPool:
         :param shard_id: Send to a specific shard of the deployment, ignored for polling ALL
         :param timeout: timeout for sending the requests
         :param retries: number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
-        :return: asyncio.Task items to send call
+        :return: coroutine items to send call
         """
         connection_list = self._connections.get_replicas(
             deployment, head, shard_id, True
@@ -266,6 +277,42 @@ class GrpcConnectionPool:
             self._logger.debug(
                 f'no available connections for deployment {deployment} and shard {shard_id}'
             )
+            return None
+
+    def send_single_document_request(
+        self,
+        request: SingleDocumentRequest,
+        deployment: str,
+        metadata: Optional[Dict[str, str]] = None,
+        head: bool = False,
+        endpoint: Optional[str] = None,
+        timeout: Optional[float] = None,
+        retries: Optional[int] = -1,
+    ) -> Optional[AsyncGenerator]:
+        """Send a request to target via only one of the pooled connections
+
+        :param request: request to send
+        :param deployment: name of the Jina deployment to send the request to
+        :param metadata: metadata to send with the request
+        :param head: If True it is send to the head, otherwise to the worker pods
+        :param endpoint: endpoint to target with the requests
+        :param timeout: timeout for sending the requests
+        :param retries: number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :return: asyncio.Task representing the send call
+        """
+        replicas = self._connections.get_replicas(deployment, head)
+        if replicas:
+            result_async_generator = self._send_single_doc_request(
+                request,
+                replicas,
+                endpoint=endpoint,
+                metadata=metadata,
+                timeout=timeout,
+                retries=retries,
+            )
+            return result_async_generator
+        else:
+            self._logger.debug(f'no available connections for deployment {deployment}')
             return None
 
     def add_connection(
@@ -332,6 +379,7 @@ class GrpcConnectionPool:
         current_address: str = '',  # the specific address that was contacted during this attempt
         current_deployment: str = '',  # the specific deployment that was contacted during this attempt
         connection_list: Optional[_ReplicaList] = None,
+        task_type: str = 'DataRequest',
     ) -> 'Optional[Union[AioRpcError, InternalNetworkError]]':
         # connection failures, cancelled requests, and timed out requests should be retried
         # all other cases should not be retried and will be raised immediately
@@ -341,6 +389,7 @@ class GrpcConnectionPool:
         # if an Executor is down behind an API gateway, grpc.StatusCode.NOT_FOUND is returned
         # requests usually gets cancelled when the server shuts down
         # retries for cancelled requests will hit another replica in K8s
+        skip_resetting = False
         if (
             error.code() == grpc.StatusCode.UNAVAILABLE
             and 'not the leader' in error.details()
@@ -348,9 +397,10 @@ class GrpcConnectionPool:
             self._logger.debug(
                 f'RAFT node of {current_deployment} is not the leader. Trying next replica, if available.'
             )
+            skip_resetting = True  # no need to reset, no problem with channel
         else:
             self._logger.debug(
-                f'gRPC call to {current_deployment} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
+                f'gRPC call to {current_deployment} for {task_type} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
             )
         errors_to_retry = [
             grpc.StatusCode.UNAVAILABLE,
@@ -373,7 +423,7 @@ class GrpcConnectionPool:
 
             # after connection failure the gRPC `channel` gets stuck in a failure state for a few seconds
             # removing and re-adding the connection (stub) is faster & more reliable than just waiting
-            if connection_list:
+            if connection_list and not skip_resetting:
                 await connection_list.reset_connection(
                     current_address, current_deployment
                 )
@@ -385,19 +435,84 @@ class GrpcConnectionPool:
                 details=error.details(),
             )
         else:
-            if (
-                error.code() == grpc.StatusCode.UNAVAILABLE
-                and 'not the leader' in error.details()
-            ):
-                self._logger.debug(
-                    f'RAFT node of {current_deployment} is not the leader. Trying next replica, if available.'
-                )
-            else:
-                self._logger.debug(
-                    f'gRPC call to deployment {current_deployment} failed with error {format_grpc_error(error)}, for retry attempt {retry_i + 1}/{total_num_tries - 1}.'
-                    f' Trying next replica, if available.'
+            if connection_list and not skip_resetting:
+                await connection_list.reset_connection(
+                    current_address, current_deployment
                 )
             return None
+
+    def _send_single_doc_request(
+        self,
+        request: SingleDocumentRequest,
+        connections: _ReplicaList,
+        endpoint: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
+        retries: Optional[int] = -1,
+    ) -> 'asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]':
+        # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
+        # the grpc call function is not a coroutine but some _AioCall
+
+        if endpoint:
+            metadata = metadata or {}
+            metadata['endpoint'] = endpoint
+
+        if metadata:
+            metadata = tuple(metadata.items())
+
+        async def async_generator_wrapper():
+            tried_addresses = set()
+            num_replicas = len(connections.get_all_connections())
+            if retries is None or retries < 0:
+                total_num_tries = (
+                    max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
+                    + 1
+                )
+            else:
+                total_num_tries = 1 + retries  # try once, then do all the retries
+            for i in range(total_num_tries):
+                current_connection = None
+                while (
+                    current_connection is None
+                    or current_connection.address in tried_addresses
+                ):
+                    current_connection = await connections.get_next_connection(
+                        num_retries=total_num_tries
+                    )
+                    # if you request to retry more than the amount of replicas, we just skip, we could balance the
+                    # retries in the future
+                    if len(tried_addresses) >= num_replicas:
+                        break
+                tried_addresses.add(current_connection.address)
+                try:
+                    async for resp, metadata_resp in current_connection.send_single_doc_request(
+                        request=request,
+                        metadata=metadata,
+                        compression=self.compression,
+                        timeout=timeout,
+                    ):
+                        yield resp, metadata_resp
+                    return
+                except AioRpcError as e:
+                    error = await self._handle_aiorpcerror(
+                        error=e,
+                        retry_i=i,
+                        request_id=request.request_id,
+                        tried_addresses=tried_addresses,
+                        total_num_tries=total_num_tries,
+                        current_address=current_connection.address,
+                        current_deployment=current_connection.deployment_name,
+                        connection_list=connections,
+                        task_type='SingleDocumentRequest',
+                    )
+                    if error:
+                        yield error, None
+                        return
+                except Exception as e:
+                    yield e, None
+                    return
+
+        return async_generator_wrapper()
 
     def _send_requests(
         self,
@@ -460,6 +575,7 @@ class GrpcConnectionPool:
                         current_address=current_connection.address,
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,
+                        task_type='DataRequest',
                     )
                     if error:
                         return error
@@ -476,11 +592,10 @@ class GrpcConnectionPool:
         connection_list: _ReplicaList,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
-    ) -> asyncio.Task:
+    ):
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
-        async def task_wrapper():
-
+        async def task_coroutine():
             tried_addresses = set()
             if retries is None or retries < 0:
                 total_num_tries = (
@@ -510,13 +625,14 @@ class GrpcConnectionPool:
                         current_deployment=connection.deployment_name,
                         connection_list=connection_list,
                         total_num_tries=total_num_tries,
+                        task_type='EndpointDiscovery',
                     )
                     if error:
                         raise error
                 except AttributeError:
                     return default_endpoints_proto, None
 
-        return asyncio.create_task(task_wrapper())
+        return task_coroutine()
 
     async def warmup(
         self,
@@ -534,6 +650,10 @@ class GrpcConnectionPool:
                 call_result = stub.send_info_rpc(timeout=0.5)
                 await call_result
                 target_warmup_responses[stub.address] = True
+            except asyncio.CancelledError:
+                self._logger.debug(f'warmup task got cancelled')
+                target_warmup_responses[stub.address] = False
+                raise
             except Exception:
                 target_warmup_responses[stub.address] = False
 
@@ -569,6 +689,7 @@ class GrpcConnectionPool:
                         return
                     await asyncio.sleep(0.2)
                 except asyncio.CancelledError:
+                    self._logger.debug(f'warmup task got cancelled')
                     if tasks:
                         for task in tasks:
                             task.cancel()

@@ -17,7 +17,7 @@ class WebSocketServer(BaseServer):
         ssl_certfile: Optional[str] = None,
         uvicorn_kwargs: Optional[dict] = None,
         proxy: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ):
         """Initialize the gateway
         :param ssl_keyfile: the path to the key file
@@ -40,13 +40,16 @@ class WebSocketServer(BaseServer):
         """
         Setup WebSocket Server
         """
+        self.logger.debug(f'Setting up Websocket server')
         if docarray_v2:
             from marie.serve.runtimes.gateway.request_handling import (
                 GatewayRequestHandler,
             )
 
             if isinstance(self._request_handler, GatewayRequestHandler):
-                await self._request_handler.streamer._get_endpoints_input_output_models()
+                await self._request_handler.streamer._get_endpoints_input_output_models(
+                    is_cancel=self.is_cancel
+                )
                 self._request_handler.streamer._validate_flow_docarray_compatibility()
         self.app = self._request_handler._websocket_fastapi_default_app(
             tracing=self.tracing, tracer_provider=self.tracer_provider
@@ -108,8 +111,9 @@ class WebSocketServer(BaseServer):
                 **uvicorn_kwargs,
             )
         )
-
+        self.logger.debug(f'UviServer server setup')
         await self.server.setup()
+        self.logger.debug(f'Websocket server setup successful')
 
     @property
     def _should_exit(self):
@@ -127,9 +131,11 @@ class WebSocketServer(BaseServer):
 
     async def shutdown(self):
         """Free other resources allocated with the server, e.g, gateway object, ..."""
+        self.logger.debug(f'Shutting down server')
         await super().shutdown()
         self.server.should_exit = True
         await self.server.shutdown()
+        self.logger.debug(f'Server shutdown finished')
 
     async def run_server(self):
         """Run WebSocket server forever"""

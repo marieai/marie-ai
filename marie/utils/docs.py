@@ -253,8 +253,8 @@ def docs_from_file(
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
-            docs.append(Document(content=frame))
-            # docs.append(Document(content=path))
+            # docs.append(Document(content=frame))
+            docs.append(Document(content=path))
     return docs
 
 

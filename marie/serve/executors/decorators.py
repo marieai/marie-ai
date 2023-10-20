@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Type, Union, Any
 
 from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.constants import __cache_path__
-from marie.helper import iscoroutinefunction
+from marie.helper import is_generator, iscoroutinefunction
 from marie.importer import ImportExtensions
 
 
@@ -230,7 +230,7 @@ def requests(
     *,
     on: Optional[Union[str, Sequence[str]]] = None,
     request_schema: Optional[Type[DocumentArray]] = None,
-    response_schema: Optional[Type[DocumentArray]] = None,
+    response_schema: Optional[Union[Type[DocumentArray], Type[Document]]] = None,
 ):
     """
     `@requests` defines the endpoints of an Executor. It has a keyword `on=` to
@@ -285,8 +285,14 @@ def requests(
     """
     from marie.constants import __args_executor_func__, __default_endpoint__
 
+    if func:
+        setattr(func, '__is_generator__', is_generator(func))
+
     class FunctionMapper:
         def __init__(self, fn):
+
+            if fn:
+                setattr(fn, '__is_generator__', is_generator(fn))
             self._batching_decorator = None
             self._write_decorator = None
             fn = self._unwrap_batching_decorator(fn)
@@ -355,8 +361,16 @@ def requests(
             )
 
             fn_with_schema = _FunctionWithSchema(
-                fn_with_schema.fn, request_schema_arg, response_schema_arg
+                fn=fn_with_schema.fn,
+                is_generator=fn_with_schema.is_generator,
+                is_singleton_doc=fn_with_schema.is_singleton_doc,
+                is_batch_docs=fn_with_schema.is_batch_docs,
+                parameters_is_pydantic_model=fn_with_schema.parameters_is_pydantic_model,
+                parameters_model=fn_with_schema.parameters_model,
+                request_schema=request_schema_arg,
+                response_schema=response_schema_arg,
             )
+            fn_with_schema.validate()
 
             if isinstance(on, (list, tuple)):
                 for o in on:
