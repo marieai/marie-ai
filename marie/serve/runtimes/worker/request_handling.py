@@ -581,7 +581,7 @@ class WorkerRequestHandler:
                 docs_map=docs_map,
                 tracing_context=tracing_context,
             )
-
+            docs = None
             _ = self._set_result(requests, return_data, docs)
 
         for req in requests:

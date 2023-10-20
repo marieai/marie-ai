@@ -141,13 +141,14 @@ def convert_frames(frames, img_format):
         # cv to pil
         if isinstance(frame, np.ndarray):
             if len(frame.shape) == 2:
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-
+                conv = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+            else:
+                conv = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if img_format == "pil":
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = Image.fromarray(frame)
-
-        converted.append(frame)
+                conv = Image.fromarray(frame.copy())
+            converted.append(conv)
+        else:
+            converted.append(frame.copy())
     return converted
 
 
@@ -181,6 +182,7 @@ def load_image(img_path, img_format: str = "cv"):
     # each frame needs to be converted to RGB format to keep proper shape [x,y,c]
     if loaded:
         converted = convert_frames(frames, img_format)
+        del frames
         return loaded, converted
 
     img = skio.imread(img_path)  # RGB order
@@ -198,10 +200,10 @@ def load_image(img_path, img_format: str = "cv"):
     # if we converted with np.array then the PIl image get converted to ndarray
     if img_format == "pil":
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(img)
+        img = Image.fromarray(img.copy())
         return True, [img]
 
-    img = np.array(img)
+    # img = np.array(img)
     return True, [img]
 
 
@@ -241,16 +243,18 @@ def docs_from_file(
         raise FileNotFoundError(f"File not found : {path}")
 
     loaded, frames = load_image(path)
-    docs = DocumentArray()
     # no pages specified, we will use all pages as documents
     if pages is None or len(pages) == 0:
         pages = [i for i in range(len(frames))]
+
+    docs = DocumentArray()
 
     if loaded:
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
             docs.append(Document(content=frame))
+            # docs.append(Document(content=path))
     return docs
 
 

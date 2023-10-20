@@ -387,6 +387,7 @@ class GatewayStreamer:
 
                 await asyncio.gather(*deployment_warmup_tasks, return_exceptions=True)
             except asyncio.CancelledError:
+                self.logger.debug(f'Warmup task got cancelled')
                 if deployment_warmup_tasks:
                     for task in deployment_warmup_tasks:
                         task.cancel()
@@ -410,6 +411,8 @@ class _ExecutorStreamer:
         return_type: Type[DocumentArray] = DocumentArray,
         **kwargs,
     ):
+        if not parameters:
+            parameters = {}
         if not docarray_v2:
             reqs = []
             for docs_batch in inputs.batch(batch_size=request_size, shuffle=False):
