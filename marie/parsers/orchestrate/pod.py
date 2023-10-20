@@ -4,13 +4,13 @@ import argparse
 from dataclasses import dataclass
 from typing import Dict
 
-from marie.enums import PodRoleType, ProtocolType
+from marie.enums import PodRoleType, ProtocolType, ProviderType
 from marie.helper import random_port
 
 from marie.parsers.helper import (
     _SHOW_ALL_ARGS,
-    CastToIntAction,
     CastPeerPorts,
+    CastToIntAction,
     KVAppendAction,
     add_arg_group,
 )
@@ -69,7 +69,18 @@ def mixin_pod_parser(parser, pod_type: str = 'worker'):
         action=KVAppendAction,
         metavar='KEY: VALUE',
         nargs='*',
-        help='The map of environment variables that are read from kubernetes cluster secrets',
+        help='The map of environment variables that are read from kubernetes cluster secrets'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
+    )
+    gp.add_argument(
+        '--image-pull-secrets',
+        type=str,
+        nargs='+',
+        default=None,
+        help='List of ImagePullSecrets that the Kubernetes Pods need to have access to in order to pull the image. Used in `to_kubernetes_yaml`'
+        if _SHOW_ALL_ARGS
+        else argparse.SUPPRESS,
     )
 
     # hidden CLI used for internal only
@@ -184,6 +195,14 @@ def mixin_pod_runtime_args_parser(arg_group, pod_type='worker'):
         choices=list(ProtocolType),
         default=[ProtocolType.GRPC],
         help=f'Communication protocol of the server exposed by the {server_name}. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: {[protocol.to_string() for protocol in list(ProtocolType)]}.',
+    )
+
+    arg_group.add_argument(
+        '--provider',
+        type=ProviderType.from_string,
+        choices=list(ProviderType),
+        default=[ProviderType.NONE],
+        help=f'If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: {[provider.to_string() for provider in list(ProviderType)]}.',
     )
 
     arg_group.add_argument(

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Tuple, An
 import grpc
 
 from marie.enums import PollingType
+from marie.constants import __default_endpoint__
 from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.proto import jina_pb2
@@ -291,7 +292,10 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         response_request = worker_results[0]
         found = False
         if docarray_v2:
-            model = self._pydantic_models_by_endpoint[endpoint]['output']
+            check_endpoint = endpoint
+            if endpoint not in self._pydantic_models_by_endpoint:
+                check_endpoint = __default_endpoint__
+            model = self._pydantic_models_by_endpoint[check_endpoint]['output']
         for i, worker_result in enumerate(worker_results):
             if docarray_v2:
                 worker_result.document_array_cls = DocList[model]
@@ -448,9 +452,11 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
     async def close(self):
         """Close the data request handler, by closing the executor and the batch queues."""
+        self.logger.debug(f'Closing Request Handler')
         self.cancel_warmup_task()
         self.cancel_endpoint_discovery_from_workers_task()
         await self.connection_pool.close()
+        self.logger.debug(f'Request Handler closed')
 
     async def process_single_data(self, request: DataRequest, context) -> DataRequest:
         """
@@ -533,6 +539,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         :param context: grpc context
         :returns: the response request
         """
+        self.logger.debug('got an endpoint discovery request')
         response = jina_pb2.EndpointsProto()
         try:
             if self.uses_before_address:

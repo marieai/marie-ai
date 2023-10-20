@@ -502,6 +502,7 @@ class ExtractPipeline:
             "job_id": job_id,
             "pages": f"{len(frames)}",
         }
+
         # check if we have already processed this document and restore assets
         self.restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
@@ -865,6 +866,7 @@ class ExtractPipeline:
         self.logger.info(
             f"Executing document processing pipeline : {processing_pipeline}"
         )
+
         words = []
         boxes = []
         documents = docs_from_image(frames)

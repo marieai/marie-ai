@@ -131,7 +131,7 @@ def create_split_data_strat(data):
     return train_data, test_data
 
 
-def create_dataset(data, labels, processor):
+def create_datasetSTRAT(data, labels, processor):
     X_train, X_test = create_split_data_strat(data)
 
     print(
@@ -148,7 +148,7 @@ def create_dataset(data, labels, processor):
     return train_dataset, test_dataset, validation_dataset
 
 
-def create_datasetZZZZ(data, labels, processor):
+def create_dataset(data, labels, processor):
     train_data, test_data, valid_data = create_split_data(data)
 
     print(
@@ -378,12 +378,7 @@ def infer_single_image(label, image_path, model, processor, device):
     return predict_document_image(image_path, model, processor, device)
 
 
-def inference():
-    # load ckpt for inference
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/73iwjztj/checkpoints/epoch=16-step=2584-val_loss=0.3548.ckpt.dir"
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/cel8siqm/checkpoints/epoch=8-step=4104-val_loss=0.2761.ckpt.dir"
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/qnxp5lj8/checkpoints/epoch=4-step=150-val_loss=2.9924.ckpt.dir"
-
+def inference(model_checkpoint_path: str):
     data, labels, idx2label, label2idx = load_data()
     processor = create_processor()
     train_data, test_data, valid_data = create_split_data(data)
@@ -470,8 +465,11 @@ def inference():
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    train()
+    # train()
 
-    # inference()
+    # load ckpt for inference
+    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/l579hdim/checkpoints/epoch=41-step=114870-val_loss=0.0223.ckpt.dir"
+    inference(model_checkpoint_path)
+
 # export QT_QPA_PLATFORM=offscreen
 # ref : https://github.com/NVlabs/instant-ngp/discussions/300

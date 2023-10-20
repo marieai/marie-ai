@@ -1,3 +1,4 @@
+import gc
 import os
 from typing import Dict, Union, Optional, Any
 
@@ -98,6 +99,12 @@ class TextExtractionExecutor(Executor, StorageMixin):
             self.logger.info("The value of {} is {}".format(key, value))
 
         queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
+
+        return {
+            "status": "succeeded",
+            "runtime_info": self.runtime_info,
+            "metadata": {},
+        }
 
         try:
             if "payload" not in parameters or parameters["payload"] is None:
