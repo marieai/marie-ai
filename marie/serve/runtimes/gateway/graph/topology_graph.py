@@ -3,23 +3,25 @@ import copy
 import re
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Type
 
 import grpc.aio
 
+from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import __default_endpoint__
 from marie.excepts import InternalNetworkError
 from marie.logging.logger import MarieLogger
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.helper import _parse_specific_params
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.types.request.data import DataRequest
-from marie._docarray import docarray_v2
+from marie.types.request.data import DataRequest, SingleDocumentRequest
+
 
 if docarray_v2:
-    from marie.serve.runtimes.helper import _create_pydantic_model_from_schema
     from docarray import DocList
     from docarray.documents.legacy import LegacyDocument
+
+    from marie.serve.runtimes.helper import _create_pydantic_model_from_schema
 
     legacy_doc_schema = LegacyDocument.schema()
 
@@ -74,12 +76,40 @@ class TopologyGraph:
             return len(self.outgoing_nodes) == 0
 
         def _validate_against_outgoing_nodes(self):
+            def _check_schema_equality(schema_1, schema_2):
+                from collections import OrderedDict
+
+                # Naive check of compatibility
+                schema_1_properties = OrderedDict(
+                    sorted(schema_1.get('properties', {}).items())
+                )
+                schema_2_properties = OrderedDict(
+                    sorted(schema_2.get('properties', {}).items())
+                )
+                if len(schema_1_properties) != len(schema_2_properties):
+                    return False
+
+                for property_1, property_2 in zip(
+                    schema_1_properties.keys(), schema_2_properties.keys()
+                ):
+                    if property_1 != property_2:
+                        return False
+
+                    if schema_1_properties[property_1].get(
+                        'type', None
+                    ) != schema_2_properties[property_2].get('type', None):
+                        return False
+
+                    # TODO: Add more complex check for nested definitions
+
+                return True
+
             for node in self.outgoing_nodes:
                 # here validate for each endpoint that output of self matches input of node
                 if node._pydantic_models_by_endpoint is not None:  # gateway end
 
                     for endp in self._pydantic_models_by_endpoint.keys():
-                        outgoing_enp = endp
+                        outgoing_endp = endp
                         incoming_endp = (
                             endp
                             if endp in node._pydantic_models_by_endpoint
@@ -89,21 +119,28 @@ class TopologyGraph:
                         if incoming_endp in node._pydantic_models_by_endpoint:
 
                             if endp in node._pydantic_models_by_endpoint:
-                                if (
-                                    self._pydantic_models_by_endpoint[outgoing_enp][
+                                if not _check_schema_equality(
+                                    self._pydantic_models_by_endpoint[outgoing_endp][
                                         'output'
-                                    ].schema()
-                                    != node._pydantic_models_by_endpoint[incoming_endp][
+                                    ].schema(),
+                                    node._pydantic_models_by_endpoint[incoming_endp][
                                         'input'
-                                    ].schema()
+                                    ].schema(),
                                 ):
                                     raise Exception(
-                                        f'The output schema of {self.name} is incompatible with the input schema of {node.name}'
+                                        f'The output schema of {self.name} at {outgoing_endp} endpoint is incompatible with the input schema of {node.name} at {incoming_endp} endpoint'
                                     )
                         else:
-                            raise Exception(
-                                f'{node.name} does not expose {incoming_endp} which makes it impossible to be chained with {self.name} on {outgoing_enp}'
-                            )
+                            if (
+                                outgoing_endp != __default_endpoint__
+                            ):  # It could happen that there is an Encoder with default followed by an indexer with [index, search]
+                                raise Exception(
+                                    f'{node.name} does not expose {incoming_endp} which makes it impossible to be chained with {self.name} on {outgoing_endp}'
+                                )
+                            else:
+                                self.logger.warning(
+                                    f'{node.name} does not expose {incoming_endp} which could lead to incompatibility when calling non-explicitly bound endpoints'
+                                )
                 return node._validate_against_outgoing_nodes()
             return True
 
@@ -206,7 +243,7 @@ class TopologyGraph:
                                                 _create_pydantic_model_from_schema(
                                                     input_model_schema,
                                                     input_model_name,
-                                                    {},
+                                                    models_created_by_name,
                                                 )
                                             )
                                         models_created_by_name[
@@ -235,7 +272,7 @@ class TopologyGraph:
                                                 _create_pydantic_model_from_schema(
                                                     output_model_schema,
                                                     output_model_name,
-                                                    {},
+                                                    models_created_by_name,
                                                 )
                                             )
                                         models_created_by_name[
@@ -245,18 +282,104 @@ class TopologyGraph:
                                         output_model_name
                                     ]
                                     models_schema_list.append(output_model)
-                                    models_list.append(input_model)
+                                    models_list.append(output_model)
+
+                                parameters_model_name = inner_dict['parameters']['name']
+                                parameters_model_schema = inner_dict['parameters'][
+                                    'model'
+                                ]
+                                if parameters_model_schema is not None:
+                                    if parameters_model_schema in models_schema_list:
+                                        parameters_model = models_list[
+                                            models_schema_list.index(
+                                                parameters_model_schema
+                                            )
+                                        ]
+                                        models_created_by_name[
+                                            parameters_model_name
+                                        ] = parameters_model
+                                    else:
+                                        if (
+                                            parameters_model_name
+                                            not in models_created_by_name
+                                        ):
+                                            from pydantic import BaseModel
+
+                                            parameters_model = (
+                                                _create_pydantic_model_from_schema(
+                                                    parameters_model_schema,
+                                                    parameters_model_name,
+                                                    models_created_by_name,
+                                                    base_class=BaseModel,
+                                                )
+                                            )
+                                            models_created_by_name[
+                                                parameters_model_name
+                                            ] = parameters_model
+                                    parameters_model = models_created_by_name[
+                                        parameters_model_name
+                                    ]
+                                    models_schema_list.append(parameters_model_schema)
+                                    models_list.append(parameters_model)
+                                else:
+                                    parameters_model = None
 
                                 self._pydantic_models_by_endpoint[endpoint] = {
                                     'input': input_model,
                                     'output': output_model,
+                                    'is_generator': inner_dict['is_generator'],
+                                    'is_singleton_doc': inner_dict['is_singleton_doc'],
+                                    'parameters': parameters_model,
                                 }
                         self._endpoints_proto = endpoints_proto
                     else:
-                        raise Exception(' Failed to get endpoints')
+                        raise Exception('Failed to get endpoints')
                 return self._endpoints_proto
 
             return asyncio.create_task(task())
+
+        async def stream_single_doc(
+            self,
+            request: SingleDocumentRequest,
+            connection_pool: GrpcConnectionPool,
+            endpoint: Optional[str],
+            return_type: Type[DocumentArray] = DocumentArray,
+        ):
+            if docarray_v2:
+                if self.endpoints and endpoint in self.endpoints:
+                    request.document_cls = self._pydantic_models_by_endpoint[endpoint][
+                        'input'
+                    ]
+
+            async for resp, _ in connection_pool.send_single_document_request(
+                request=request,
+                deployment=self.name,
+                metadata=self._metadata,
+                head=True,
+                endpoint=endpoint,
+                timeout=self._timeout_send,
+                retries=self._retries,
+            ):
+                if issubclass(type(resp), BaseException):
+                    raise resp
+                else:
+                    if docarray_v2:
+                        if self.endpoints and endpoint in self.endpoints:
+                            from docarray.base_doc import AnyDoc
+
+                            # if return_type is not specified or if it is a default type, cast using retrieved
+                            # schemas
+                            if (
+                                not return_type
+                                or not return_type.doc_type
+                                or return_type.doc_type is AnyDoc
+                            ):
+                                resp.document_cls = self._pydantic_models_by_endpoint[
+                                    endpoint
+                                ]['output']
+                            else:
+                                resp.document_array_cls = return_type
+                    yield resp
 
         async def _wait_previous_and_send(
             self,
@@ -268,6 +391,7 @@ class TopologyGraph:
             request_input_parameters: Dict = {},
             copy_request_at_send: bool = False,
             init_task: Optional[asyncio.Task] = None,
+            return_type: Type[DocumentArray] = None,
         ):
             # Check my condition and send request with the condition
             metadata = {}
@@ -335,12 +459,30 @@ class TopologyGraph:
                             resp, metadata = result
 
                         if docarray_v2:
-                            if self.endpoints and endpoint in self.endpoints:
-                                resp.document_array_cls = DocList[
-                                    self._pydantic_models_by_endpoint[endpoint][
-                                        'output'
+                            if self.endpoints and (
+                                endpoint in self.endpoints
+                                or __default_endpoint__ in self.endpoints
+                            ):
+                                from docarray.base_doc import AnyDoc
+
+                                # if return_type is not specified or if it is a default type, cast using retrieved
+                                # schemas
+                                if (
+                                    not return_type
+                                    or not return_type.doc_type
+                                    or return_type.doc_type is AnyDoc
+                                ):
+                                    pydantic_models = (
+                                        self._pydantic_models_by_endpoint.get(endpoint)
+                                        or self._pydantic_models_by_endpoint.get(
+                                            __default_endpoint__
+                                        )
+                                    )
+                                    resp.document_array_cls = DocList[
+                                        pydantic_models['output']
                                     ]
-                                ]
+                                else:
+                                    resp.document_array_cls = return_type
 
                         if WorkerRequestHandler._KEY_RESULT in resp.parameters:
                             # Accumulate results from each Node and then add them to the original
@@ -366,49 +508,108 @@ class TopologyGraph:
             return None, {}
 
         def _get_input_output_model_for_endpoint(
-            self, previous_input, previous_output, endpoint
+            self,
+            previous_input,
+            previous_output,
+            previous_is_generator,
+            previous_is_singleton_doc,
+            previous_parameters,
+            endpoint,
         ):
+            if self._pydantic_models_by_endpoint is not None:
 
-            if endpoint in self.endpoints:
-                # update output
-                new_input = previous_input
-                if previous_input is None:
-                    new_input = self._pydantic_models_by_endpoint[endpoint]['input']
+                if endpoint in self.endpoints:
+                    # update output
+                    # the only important for the gateway to know if is singleton is the first (so the last/ ignore previous is_singleton)
+                    # the only important for the gateway to know if is generator is the last (so the first/previous precedence)
+                    new_input = previous_input
+                    if previous_input is None:
+                        new_input = self._pydantic_models_by_endpoint[endpoint]['input']
 
-                if (
-                    previous_output
-                    and previous_output.schema()
-                    == self._pydantic_models_by_endpoint[endpoint]["output"].schema()
-                ):
-                    # this is needed to not mix model IDs, otherwise FastAPI gets crazy
-                    return {
-                        'input': new_input,
-                        'output': previous_output,
-                    }
+                    is_generator = previous_is_generator
+                    if previous_is_generator is None:
+                        is_generator = self._pydantic_models_by_endpoint[endpoint][
+                            'is_generator'
+                        ]
+
+                    if (
+                        previous_output
+                        and previous_output.schema()
+                        == self._pydantic_models_by_endpoint[endpoint][
+                            "output"
+                        ].schema()
+                    ):
+                        # this is needed to not mix model IDs, otherwise FastAPI gets crazy
+                        return {
+                            'input': new_input,
+                            'output': previous_output,
+                            'is_generator': is_generator,
+                            'is_singleton_doc': self._pydantic_models_by_endpoint[
+                                endpoint
+                            ]['is_singleton_doc'],
+                            'parameters': self._pydantic_models_by_endpoint[endpoint][
+                                'parameters'
+                            ],
+                        }
+                    else:
+                        return {
+                            'input': new_input,
+                            'output': self._pydantic_models_by_endpoint[endpoint][
+                                'output'
+                            ],
+                            'is_generator': is_generator,
+                            'is_singleton_doc': self._pydantic_models_by_endpoint[
+                                endpoint
+                            ]['is_singleton_doc'],
+                            'parameters': self._pydantic_models_by_endpoint[endpoint][
+                                'parameters'
+                            ],
+                        }
                 else:
                     return {
-                        'input': new_input,
-                        'output': self._pydantic_models_by_endpoint[endpoint]['output'],
+                        'input': previous_input,
+                        'output': previous_output,
+                        'is_generator': previous_is_generator,
+                        'is_singleton_doc': False,
+                        'parameters': previous_parameters,
                     }
-            else:
-                return {'input': previous_input, 'output': previous_output}
+            return None
 
         def _get_leaf_input_output_model(
             self,
             previous_input,
             previous_output,
+            previous_is_generator,
+            previous_is_singleton_doc,
+            previous_parameters,
             endpoint: Optional[str] = None,
         ):
             new_map = self._get_input_output_model_for_endpoint(
-                previous_input, previous_output, endpoint
+                previous_input,
+                previous_output,
+                previous_is_generator,
+                previous_is_singleton_doc,
+                previous_parameters,
+                endpoint,
             )
             if self.leaf:  # I am like a leaf
-                return list([new_map])  # I am the last in the chain
+                return list(
+                    [new_map] if new_map is not None else []
+                )  # I am the last in the chain
             list_of_outputs = []
             for outgoing_node in self.outgoing_nodes:
                 list_of_maps = outgoing_node._get_leaf_input_output_model(
-                    previous_input=new_map['input'],
-                    previous_output=new_map['output'],
+                    previous_input=new_map['input'] if new_map is not None else None,
+                    previous_output=new_map['output'] if new_map is not None else None,
+                    previous_is_generator=new_map['is_generator']
+                    if new_map is not None
+                    else None,
+                    previous_is_singleton_doc=new_map['is_singleton_doc']
+                    if new_map is not None
+                    else None,
+                    previous_parameters=new_map['parameters']
+                    if new_map is not None
+                    else None,
                     endpoint=endpoint,
                 )
                 # We are interested in the last one, that will be the task that awaits all the previous
@@ -427,6 +628,7 @@ class TopologyGraph:
             request_input_has_specific_params: bool = False,
             copy_request_at_send: bool = False,
             init_task: Optional[asyncio.Task] = None,
+            return_type: Type[DocumentArray] = DocumentArray,
         ) -> List[Tuple[bool, asyncio.Task]]:
             """
             Gets all the tasks corresponding from all the subgraphs born from this node
@@ -459,6 +661,7 @@ class TopologyGraph:
 
                 When the caller of these methods await them, they will fire the logic of sending requests and responses from and to every deployment
 
+            :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
             :return: Return a list of tuples, where tasks corresponding to the leafs of all the subgraphs born from this node are in each tuple.
                 These tasks will be based on awaiting for the task from previous_node and sending a request to the corresponding node. The other member of the pair
                 is a flag indicating if the task is to be awaited by the gateway or not.
@@ -473,6 +676,7 @@ class TopologyGraph:
                     request_input_parameters=request_input_parameters,
                     copy_request_at_send=copy_request_at_send,
                     init_task=init_task,
+                    return_type=return_type,
                 )
             )
             if self.leaf:  # I am like a leaf
@@ -492,6 +696,7 @@ class TopologyGraph:
                     request_input_has_specific_params=request_input_has_specific_params,
                     copy_request_at_send=num_outgoing_nodes > 1
                     and request_input_has_specific_params,
+                    return_type=return_type,
                 )
                 # We are interested in the last one, that will be the task that awaits all the previous
                 hanging_tasks_tuples.extend(t)
@@ -552,9 +757,20 @@ class TopologyGraph:
             self,
             previous_input,
             previous_output,
+            previous_is_generator,
+            previous_is_singleton_doc,
+            previous_parameters,
             endpoint: Optional[str] = None,
         ):
-            return [{'input': previous_input, 'output': previous_output}]
+            return [
+                {
+                    'input': previous_input,
+                    'output': previous_output,
+                    'is_generator': previous_is_generator,
+                    'is_singleton_doc': previous_is_singleton_doc,
+                    'parameters': previous_parameters,
+                }
+            ]
 
     def __init__(
         self,
@@ -570,9 +786,6 @@ class TopologyGraph:
     ):
         self.logger = logger or MarieLogger(self.__class__.__name__)
         num_parts_per_node = defaultdict(int)
-
-        print("graph_representation--------------")
-        print(graph_representation)
         if 'start-gateway' in graph_representation:
             origin_node_names = graph_representation['start-gateway']
         else:
@@ -621,9 +834,20 @@ class TopologyGraph:
         self.has_filter_conditions = bool(graph_conditions)
         self._all_endpoints = None
 
-    async def _get_all_endpoints(self, connection_pool, retry_forever=False):
+    async def _get_all_endpoints(
+        self, connection_pool, retry_forever=False, is_cancel=None
+    ):
+        def _condition():
+            if is_cancel is not None:
+                is_cancelled = is_cancel.is_set()
+                if is_cancelled:
+                    self.logger.debug(f'cancel get all endpoints')
+                return not is_cancelled
+            else:
+                return True
+
         if not self._all_endpoints:
-            while True:
+            while _condition():
                 try:
                     models_schemas_list = []
                     models_list = []
@@ -636,10 +860,8 @@ class TopologyGraph:
                     await asyncio.gather(*tasks_to_get_endpoints)
                     endpoints = set()
                     for node in self.all_nodes:
-                        if node._pydantic_models_by_endpoint is not None:
-                            endpoints.update(
-                                list(node._pydantic_models_by_endpoint.keys())
-                            )
+                        if node.endpoints is not None:
+                            endpoints.update(list(node.endpoints))
                     self._all_endpoints = endpoints
                     break
                 except Exception as exc:

@@ -1,6 +1,6 @@
 import asyncio
 import copy
-from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, AsyncGenerator, Callable, List, Optional, Tuple, Type
 
 import grpc.aio
 
@@ -75,7 +75,9 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                     raise exc
                 self._endpoint_discovery_finished = True
 
-        def _handle_request(request: 'Request') -> 'Tuple[Future, Optional[Future]]':
+        def _handle_request(
+            request: 'Request', return_type: Type[DocumentArray]
+        ) -> 'Tuple[Future, Optional[Future]]':
             self._update_start_request_metrics(request)
             # important that the gateway needs to have an instance of the graph per request
             request_graph = copy.deepcopy(graph)
@@ -137,6 +139,7 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                     request_input_has_specific_params=has_specific_params,
                     copy_request_at_send=num_outgoing_nodes > 1 and has_specific_params,
                     init_task=init_task,
+                    return_type=return_type,
                 )
                 # Every origin node returns a set of tasks that are the ones corresponding to the leafs of each of their
                 # subtrees that unwrap all the previous tasks. It starts like a chain of waiting for tasks from previous
@@ -203,6 +206,44 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                 if len(floating_tasks) > 0
                 else None,
             )
+
+        return _handle_request
+
+    def handle_single_document_request(
+        self, graph: 'TopologyGraph', connection_pool: 'GrpcConnectionPool'
+    ) -> Callable[['Request', Type[DocumentArray]], 'AsyncGenerator']:
+        """
+        Function that handles the requests arriving to the gateway. This will be passed to the streamer.
+
+        :param graph: The TopologyGraph of the Flow.
+        :param connection_pool: The connection pool to be used to send messages to specific nodes of the graph
+        :return: Return a Function that given a Request will return a Future from where to extract the response
+        """
+
+        async def _handle_request(
+            request: 'Request', return_type: Type[DocumentArray] = DocumentArray
+        ) -> 'Tuple[Future, Optional[Future]]':
+            self._update_start_request_metrics(request)
+            # important that the gateway needs to have an instance of the graph per request
+            request_graph = copy.deepcopy(graph)
+            r = request.routes.add()
+            r.executor = 'gateway'
+            r.start_time.GetCurrentTime()
+            # If the request is targeting a specific deployment, we can send directly to the deployment instead of
+            # querying the graph
+            # reset it in case we send to an external gateway
+            exec_endpoint = request.header.exec_endpoint
+
+            node = request_graph.all_nodes[
+                0
+            ]  # this assumes there is only one Executor behind this Gateway
+            async for resp in node.stream_single_doc(
+                request=request,
+                connection_pool=connection_pool,
+                endpoint=exec_endpoint,
+                return_type=return_type,
+            ):
+                yield resp
 
         return _handle_request
 

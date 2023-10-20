@@ -18,13 +18,15 @@ from marie._docarray import docarray_v2
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
-
+    from marie._docarray import Document
     from marie.logging.logger import MarieLogger
 
 if docarray_v2:
     from docarray.base_doc.io.json import orjson_dumps
 
     class JinaJsonPayload(BytesPayload):
+        """A JSON payload for Jina Requests"""
+
         def __init__(
             self,
             value,
@@ -149,6 +151,8 @@ class AioHttpClientlet(ABC):
 class HTTPClientlet(AioHttpClientlet):
     """HTTP Client to be used with the streamer"""
 
+    UPDATE_EVENT_PREFIX = 14  # the update event has the following format: "event: update: {document_json}"
+
     async def send_message(self, request: 'Request'):
         """Sends a POST request to the server
 
@@ -184,6 +188,34 @@ class HTTPClientlet(AioHttpClientlet):
                     initial_backoff=self.initial_backoff,
                     max_backoff=self.max_backoff,
                 )
+
+    async def send_streaming_message(self, doc: 'Document', on: str):
+        """Sends a GET SSE request to the server
+
+        :param doc: Request Document
+        :param on: Request endpoint
+        :yields: responses
+        """
+        if docarray_v2:
+            req_dict = doc.dict()
+        else:
+            req_dict = doc.to_dict()
+
+        request_kwargs = {
+            'url': self.url,
+            'headers': {'Accept': 'text/event-stream'},
+        }
+        req_dict = {key: value for key, value in req_dict.items() if value is not None}
+        request_kwargs['params'] = req_dict
+
+        async with self.session.get(**request_kwargs) as response:
+            async for chunk in response.content.iter_any():
+                events = chunk.split(b'event: ')[1:]
+                for event in events:
+                    if event.startswith(b'update'):
+                        yield event[self.UPDATE_EVENT_PREFIX :].decode()
+                    elif event.startswith(b'end'):
+                        pass
 
     async def send_dry_run(self, **kwargs):
         """Query the dry_run endpoint from Gateway

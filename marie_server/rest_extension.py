@@ -1,5 +1,5 @@
 import asyncio
-import multiprocessing
+import gc
 import os
 import sys
 import time
@@ -7,6 +7,7 @@ import traceback
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional
 
+from docarray import DocumentArray
 from fastapi import HTTPException
 from fastapi import Request
 
@@ -38,6 +39,7 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2):
     while True:
         while len(pending) < limit:
             item = queue.get()
+            # pending.add(run_background_task(item))
             pending.add(asyncio.ensure_future(item))
 
         if not pending:
@@ -52,8 +54,15 @@ async def coro_consumer(queue: asyncio.Queue, limit: int = 2):
     async for scheduled_coro in coro_scheduler(queue, limit):
         try:
             print(f"async_consumer: {queue.qsize()} : {queue.empty()}")
+            print(
+                f"Tasks referenced by asyncio internals: count={len(asyncio.all_tasks())}"
+            )
+
             scheduled = scheduled_coro.result()
             await scheduled
+
+            del scheduled
+            del scheduled_coro
         except Exception as e:
             # print traceback
             logger.error(f"Error: {e}", exc_info=True)
@@ -80,14 +89,45 @@ def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
         extend_rest_interface_classifier,
     )
 
-    client = Client(
-        host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
-    )
+    try:
+        import gc
+
+        # gc.set_debug(gc.DEBUG_LEAK)
+        # gc.set_debug(gc.DEBUG_SAVEALL)
+        def f(phase, info):
+            if phase == "start":
+                print("starting garbage collection....")
+            else:
+                print(
+                    "Finished garbage collection.... \n{}".format(
+                        "".join(["{}: {}\n".format(*tup) for tup in info.items()])
+                    )
+                )
+
+                print(
+                    "Unreachable objects: \n{}".format(
+                        "\n".join([str(garb) for garb in gc.garbage])
+                    )
+                )
+                print()
+
+        # gc.callbacks.append(f)
+    except Exception as e:
+        raise e
+
+    # gc.disable()
+    client = None
+    #
+    # client = Client(
+    #     host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
+    # )
 
     limit = 1  # multiprocessing.cpu_count()
     backpressure_queue = asyncio.Queue()
-
-    run_background_task(coroutine=coro_consumer(queue=backpressure_queue, limit=limit))
+    # run_background_task(coroutine=coro_consumer(queue=backpressure_queue, limit=limit))
+    receive_task = asyncio.create_task(
+        coro_consumer(queue=backpressure_queue, limit=limit)
+    )
     extend_rest_interface_extract(app, client, queue=backpressure_queue)
 
     extend_rest_interface_ner(app, client)
@@ -210,13 +250,6 @@ async def handle_request(
         MDC.put("request_id", job_id)
         payload = await request.json()
 
-        # write payload to file
-        # TODO : remove this
-        if True:
-            ensure_exists("/tmp/payloads")
-            with open(f"/tmp/payloads/{api_tag}.json", "w") as f:
-                f.write(str(payload))
-
         if validate_payload_callback:
             status, msg = validate_payload_callback(payload)
             if not status:
@@ -224,41 +257,52 @@ async def handle_request(
 
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
-        coroutine = process_request(
-            api_key,
-            api_tag,
-            job_id,
-            payload,
-            partial(handler, client, endpoint=endpoint),
-        )
+
+        if True:
+            coroutine = process_request(
+                api_key,
+                api_tag,
+                job_id,
+                payload,
+                # partial(handler, client, endpoint=endpoint),
+                handler,
+                client,
+                endpoint,
+            )
 
         # handle backpressure using asyncio.Queue
         # This is a temporary solution to handle backpressure
         # TODO :  replace this with a job_distributor class
-        if queue:
-            try:
-                queue.put_nowait(coroutine)
-            except asyncio.QueueFull:
-                return {"jobid": job_id, "status": "failed", "message": "limit reached"}
-        else:
-            raise ValueError("queue is not defined in handle_request")
+        if True:
+            if queue:
+                try:
+                    queue.put_nowait(coroutine)
+                except asyncio.QueueFull:
+                    return {
+                        "jobid": job_id,
+                        "status": "failed",
+                        "message": "limit reached",
+                    }
+            else:
+                raise ValueError("queue is not defined in handle_request")
 
         if False:
-            task = run_background_task(coroutine=coroutine)
-            future = [task]
-
-            if False:
-                future = [
-                    asyncio.ensure_future(
-                        process_request(
-                            api_key,
-                            api_tag,
-                            job_id,
-                            payload,
-                            partial(handler, client, endpoint=endpoint),
-                        )
+            # task = run_background_task(coroutine=coroutine)
+            #  = [task]
+            future = [
+                asyncio.ensure_future(
+                    process_request(
+                        api_key,
+                        api_tag,
+                        job_id,
+                        payload,
+                        # partial(handler, client, endpoint=endpoint),
+                        handler,
+                        client,
+                        endpoint,
                     )
-                ]
+                )
+            ]
 
             if sync:
                 results = await asyncio.gather(*future, return_exceptions=True)
@@ -288,7 +332,7 @@ async def handle_request(
 
 
 async def process_document_request(
-    client: Client, input_docs, parameters: dict, endpoint: str
+    client: Client, input_docs: DocumentArray, parameters: dict, endpoint: str
 ):
     """
     Process document request
@@ -300,15 +344,23 @@ async def process_document_request(
     """
     try:
         payload = {}
-        async for resp in client.post(
+
+        print("trace # payload ZZ")
+        clientzz = Client(
+            host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
+        )
+
+        async for resp in clientzz.post(
             protocol="grpc",
             on=endpoint,
             inputs=input_docs,
             request_size=-1,
             parameters=parameters,
             return_responses=True,
+            continue_on_error=True,
         ):
             payload = parse_response_to_payload(resp, expect_return_value=False)
+            del resp
             break  # we only need the first response
 
         return payload
@@ -318,7 +370,13 @@ async def process_document_request(
 
 
 async def process_request(
-    api_key: str, api_tag: str, job_id: str, payload: Any, handler: callable
+    api_key: str,
+    api_tag: str,
+    job_id: str,
+    payload: Any,
+    handler: callable,
+    client: Client,
+    endpoint: str,
 ):
     """
     When request is processed, it will be marked as  `STARTED` and then `COMPLETED` or `FAILED`.
@@ -357,14 +415,19 @@ async def process_request(
             api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
         )
 
-        async def run(op, _docs, _param):
-            return await op(_docs, _param)
+        # async def run(op, _docs, _param):
+        #     return await op(_docs, _param)
+        # results = await run(handler, input_docs, parameters)
+        results = await handler(client, input_docs, parameters, endpoint)
 
-        results = await run(handler, input_docs, parameters)
-
+        # client: Client, input_docs, parameters: dict, endpoint: str
         await mark_as_complete(
             api_key, job_id, api_tag, job_tag, status, int(time.time()), results
         )
+
+        del payload
+        del parameters
+        del input_docs
 
         return results
     except BaseException as e:

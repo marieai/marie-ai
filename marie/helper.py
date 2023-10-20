@@ -1673,6 +1673,12 @@ def send_telemetry_event(event: str, obj_cls_name: Any, **kwargs) -> None:
     threading.Thread(target=_telemetry, daemon=True).start()
 
 
+def is_generator(func):
+    import inspect
+
+    return inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
+
+
 def make_iterable(o: object) -> Iterable:
     """
     Make an object an iterable by wrapping it as a singleton list.

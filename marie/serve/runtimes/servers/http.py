@@ -3,9 +3,10 @@ import os
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Optional
 
+from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.servers import BaseServer
-from marie._docarray import docarray_v2
+
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -77,6 +78,7 @@ class FastAPIBaseServer(BaseServer):
         """
         Initialize and return GRPC server
         """
+        self.logger.debug(f'Setting up HTTP server')
         with ImportExtensions(required=True):
             from uvicorn import Config, Server
 
@@ -121,7 +123,9 @@ class FastAPIBaseServer(BaseServer):
             )
 
             if isinstance(self._request_handler, GatewayRequestHandler):
-                await self._request_handler.streamer._get_endpoints_input_output_models()
+                await self._request_handler.streamer._get_endpoints_input_output_models(
+                    is_cancel=self.is_cancel
+                )
                 self._request_handler.streamer._validate_flow_docarray_compatibility()
 
         # app property will generate a new fastapi app each time called
@@ -136,16 +140,19 @@ class FastAPIBaseServer(BaseServer):
                 **self.uvicorn_kwargs,
             )
         )
-
+        self.logger.debug(f'UviServer server setup on port {self.port}')
         await self.server.setup()
+        self.logger.debug(f'HTTP server setup successful')
 
     async def shutdown(self):
         """
         Free resources allocated when setting up HTTP server
         """
+        self.logger.debug(f'Shutting down server')
         await super().shutdown()
         self.server.should_exit = True
         await self.server.shutdown()
+        self.logger.debug(f'Server shutdown finished')
 
     async def run_server(self):
         """Run HTTP server forever"""
@@ -166,11 +173,14 @@ class FastAPIBaseServer(BaseServer):
         return self._should_exit
 
     @staticmethod
-    def is_ready(ctrl_address: str, timeout: float = 1.0, **kwargs) -> bool:
+    def is_ready(
+        ctrl_address: str, timeout: float = 1.0, logger=None, **kwargs
+    ) -> bool:
         """
         Check if status is ready.
         :param ctrl_address: the address where the control request needs to be sent
         :param timeout: timeout of the health check in seconds
+        :param logger: MarieLogger to be used
         :param kwargs: extra keyword arguments
         :return: True if status is ready else False.
         """
@@ -180,19 +190,25 @@ class FastAPIBaseServer(BaseServer):
         try:
             conn = urllib.request.urlopen(url=f'http://{ctrl_address}', timeout=timeout)
             return conn.code == HTTPStatus.OK
-        except:
+        except Exception as exc:
+            if logger:
+                logger.debug(f'Exception: {exc}')
+
             return False
 
     @staticmethod
-    async def async_is_ready(ctrl_address: str, timeout: float = 1.0, **kwargs) -> bool:
+    async def async_is_ready(
+        ctrl_address: str, timeout: float = 1.0, logger=None, **kwargs
+    ) -> bool:
         """
         Async Check if status is ready.
         :param ctrl_address: the address where the control request needs to be sent
         :param timeout: timeout of the health check in seconds
+        :param logger: MarieLogger to be used
         :param kwargs: extra keyword arguments
         :return: True if status is ready else False.
         """
-        return FastAPIBaseServer.is_ready(ctrl_address, timeout)
+        return FastAPIBaseServer.is_ready(ctrl_address, timeout, logger=logger)
 
 
 def _install_health_check(app: 'FastAPI', logger):
@@ -243,4 +259,42 @@ class HTTPServer(FastAPIBaseServer):
             tracing=self.tracing,
             tracer_provider=self.tracer_provider,
             cors=self.cors,
+            logger=self.logger,
+        )
+
+
+class SagemakerHTTPServer(FastAPIBaseServer):
+    """
+    :class:`SagemakerHTTPServer` is a FastAPIBaseServer that uses a custom FastAPI app for sagemaker endpoints
+
+    """
+
+    @property
+    def port(self):
+        """Get the port for the sagemaker server
+        :return: Return the port for the sagemaker server, always 8080"""
+        return 8080
+
+    @property
+    def ports(self):
+        """Get the port for the sagemaker server
+        :return: Return the port for the sagemaker server, always 8080"""
+        return [8080]
+
+    @property
+    def app(self):
+        """Get the sagemaker fastapi app
+        :return: Return a FastAPI app for the sagemaker container
+        """
+        return self._request_handler._http_fastapi_sagemaker_app(
+            title=self.title,
+            description=self.description,
+            no_crud_endpoints=self.no_crud_endpoints,
+            no_debug_endpoints=self.no_debug_endpoints,
+            expose_endpoints=self.expose_endpoints,
+            expose_graphql_endpoint=self.expose_graphql_endpoint,
+            tracing=self.tracing,
+            tracer_provider=self.tracer_provider,
+            cors=self.cors,
+            logger=self.logger,
         )

@@ -3,14 +3,16 @@ import itertools
 import threading
 from typing import TYPE_CHECKING, AsyncIterator, Dict
 
+from marie.enums import ProtocolType
 from marie.helper import get_full_version
 from marie.proto import jina_pb2
-from marie.types.request.data import DataRequest
+from marie.types.request.data import DataRequest, SingleDocumentRequest
 from marie.types.request.status import StatusMessage
-from marie.enums import ProtocolType
 
 if TYPE_CHECKING:  # pragma: no cover
     from types import SimpleNamespace
+
+    import grpc
 
     from marie.logging.logger import MarieLogger
     from marie.serve.runtimes.gateway.streamer import GatewayStreamer
@@ -129,8 +131,10 @@ class GatewayRequestHandler:
         """
         Gratefully closes the object making sure all the floating requests are taken care and the connections are closed gracefully
         """
+        self.logger.debug(f'Closing Request Handler')
         self.cancel_warmup_task()
         await self.streamer.close()
+        self.logger.debug(f'Request Handler closed')
 
     def _http_fastapi_default_app(
         self,
@@ -143,9 +147,11 @@ class GatewayRequestHandler:
         cors,
         tracing,
         tracer_provider,
+        **kwargs,
     ):
-        from marie.helper import extend_rest_interface
+
         from marie._docarray import docarray_v2
+        from marie.helper import extend_rest_interface
 
         if not docarray_v2:
             from marie.serve.runtimes.gateway.http_fastapi_app import get_fastapi_app
@@ -181,12 +187,23 @@ class GatewayRequestHandler:
             async with aiohttp.ClientSession() as session:
                 if request.method == 'GET':
                     async with session.get(target_url) as response:
-                        content = await response.read()
-                        return web.Response(
-                            body=content,
+                        # Create a StreamResponse with the same headers and status as the target response
+                        stream_response = web.StreamResponse(
                             status=response.status,
-                            content_type=response.content_type,
+                            headers=response.headers,
                         )
+
+                        # Prepare the response to send headers
+                        await stream_response.prepare(request)
+
+                        # Stream the response from the target server to the client
+                        async for chunk in response.content.iter_any():
+                            await stream_response.write(chunk)
+
+                        # Close the stream response once all chunks are sent
+                        await stream_response.write_eof()
+                        return stream_response
+
                 elif request.method == 'POST':
                     d = await request.read()
                     import json
@@ -224,6 +241,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :returns: the response request
         """
+        self.logger.debug('recv a dry_run request')
         from marie._docarray import Document, DocumentArray
         from marie.serve.executors import __dry_run_endpoint__
 
@@ -249,6 +267,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :returns: the response request
         """
+        self.logger.debug('recv a _status request')
         info_proto = jina_pb2.JinaInfoProto()
         version, env_info = get_full_version()
         for k, v in version.items():
@@ -269,10 +288,27 @@ class GatewayRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request after streaming to Executors in Flow
         """
+        self.logger.debug('recv a stream request')
         async for resp in self.streamer.rpc_stream(
             request_iterator=request_iterator, context=context, *args, **kwargs
         ):
             yield resp
+
+    async def stream_doc(
+        self, request: SingleDocumentRequest, context: 'grpc.aio.ServicerContext'
+    ) -> SingleDocumentRequest:
+        """
+        Process the received requests and return the result as a new request
+
+        :param request: the data request to process
+        :param context: grpc context
+        :yields: the response request
+        """
+        self.logger.debug('recv a stream_doc request')
+        async for result in self.streamer.rpc_stream_doc(
+            request=request,
+        ):
+            yield result
 
     async def process_single_data(
         self, request: DataRequest, context=None
@@ -282,6 +318,38 @@ class GatewayRequestHandler:
         :param context: grpc context
         :return: response DataRequest
         """
+        self.logger.debug(f'recv a process_single_data request')
         return await self.streamer.process_single_data(request, context)
+
+    async def endpoint_discovery(self, empty, context) -> jina_pb2.EndpointsProto:
+        """
+        Uses the connection pool to send a discover endpoint call to the Executors
+
+        :param empty: The service expects an empty protobuf message
+        :param context: grpc context
+        :returns: the response request
+        """
+        from google.protobuf import json_format
+
+        self.logger.debug('got an endpoint discovery request')
+        response = jina_pb2.EndpointsProto()
+        await self.streamer._get_endpoints_input_output_models(is_cancel=None)
+        request_models_map = self.streamer._endpoints_models_map
+        if request_models_map is not None and len(request_models_map) > 0:
+            schema_maps = {}
+            for k, v in request_models_map.items():
+                schema_maps[k] = {}
+                schema_maps[k]['input'] = v['input'].schema()
+                schema_maps[k]['output'] = v['output'].schema()
+                schema_maps[k]['is_generator'] = v['is_generator']
+                schema_maps[k]['is_singleton_doc'] = v['is_singleton_doc']
+            response.endpoints.extend(schema_maps.keys())
+            json_format.ParseDict(schema_maps, response.schemas)
+        else:
+            endpoints = await self.streamer.topology_graph._get_all_endpoints(
+                self.streamer._connection_pool, retry_forever=True, is_cancel=None
+            )
+            response.endpoints.extend(list(endpoints))
+        return response
 
     Call = stream
