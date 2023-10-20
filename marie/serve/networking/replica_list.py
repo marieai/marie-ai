@@ -67,20 +67,21 @@ class _ReplicaList:
         :param deployment_name: Target deployment of this connection
         """
         self._logger.debug(f'resetting connection for {deployment_name} to {address}')
-
+        parsed_address = urlparse(address)
+        resolved_address = parsed_address.netloc if parsed_address.netloc else address
         if (
-            address in self._address_to_connection_idx
-            and self._address_to_connection_idx[address] is not None
+            resolved_address in self._address_to_connection_idx
+            and self._address_to_connection_idx[resolved_address] is not None
         ):
             # remove connection:
             # in contrast to remove_connection(), we don't 'shorten' the data structures below, instead
             # update the data structure with the new connection and let the old connection be colleced by
             # the GC
-            id_to_reset = self._address_to_connection_idx[address]
+            id_to_reset = self._address_to_connection_idx[resolved_address]
             # re-add connection:
-            self._address_to_connection_idx[address] = id_to_reset
+            self._address_to_connection_idx[resolved_address] = id_to_reset
             stubs, channel = self._create_connection(address, deployment_name)
-            self._address_to_channel[address] = channel
+            self._address_to_channel[resolved_address] = channel
             self._connections[id_to_reset] = stubs
             self.load_balancer.update_connections(self._connections)
 
@@ -90,10 +91,13 @@ class _ReplicaList:
         :param address: Target address of this connection
         :param deployment_name: Target deployment of this connection
         """
-        if address not in self._address_to_connection_idx:
-            self._address_to_connection_idx[address] = len(self._connections)
+        parsed_address = urlparse(address)
+        resolved_address = parsed_address.netloc if parsed_address.netloc else address
+
+        if resolved_address not in self._address_to_connection_idx:
+            self._address_to_connection_idx[resolved_address] = len(self._connections)
             stubs, channel = self._create_connection(address, deployment_name)
-            self._address_to_channel[address] = channel
+            self._address_to_channel[resolved_address] = channel
             self._connections.append(stubs)
             # create a new set of stubs and channels for warmup to avoid
             # loosing channel during remove_connection or reset_connection
@@ -113,16 +117,26 @@ class _ReplicaList:
 
         :param address: Remove connection for this address
         """
-        if address in self._address_to_connection_idx:
-            idx_to_delete = self._address_to_connection_idx.pop(address)
+        parsed_address = urlparse(address)
+        resolved_address = parsed_address.netloc if parsed_address.netloc else address
+        if resolved_address in self._address_to_connection_idx:
+            self._rr_counter = (
+                self._rr_counter % (len(self._connections) - 1)
+                if (len(self._connections) - 1)
+                else 0
+            )
+            idx_to_delete = self._address_to_connection_idx.pop(resolved_address)
             self._connections.pop(idx_to_delete)
             # update the address/idx mapping
-            for address in self._address_to_connection_idx:
-                if self._address_to_connection_idx[address] > idx_to_delete:
-                    self._address_to_connection_idx[address] -= 1
+            for a in self._address_to_connection_idx:
+                if self._address_to_connection_idx[a] > idx_to_delete:
+                    self._address_to_connection_idx[a] -= 1
         self.load_balancer.update_connections(self._connections)
 
     def _create_connection(self, address, deployment_name: str):
+        self._logger.debug(
+            f'create_connection connection for {deployment_name} to {address}'
+        )
         parsed_address = urlparse(address)
         address = parsed_address.netloc if parsed_address.netloc else address
         use_tls = parsed_address.scheme in TLS_PROTOCOL_SCHEMES
@@ -159,7 +173,9 @@ class _ReplicaList:
         :param address: The address to check
         :returns: True if a connection for the ip exists in the list
         """
-        return address in self._address_to_connection_idx
+        parsed_address = urlparse(address)
+        resolved_address = parsed_address.netloc if parsed_address.netloc else address
+        return resolved_address in self._address_to_connection_idx
 
     def has_connections(self) -> bool:
         """

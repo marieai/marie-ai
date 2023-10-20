@@ -89,7 +89,7 @@ MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai memray run --live ./marie/__main__.py ser
 
 **Module based profiling:**
 ```shell
- JINA_MP_START_METHOD=fork PYTHONMALLOC=malloc MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai memray run --follow-fork  -o ~/tmp/memray/marie.bin -m marie server --start --uses /mnt/data/marie-ai/config/service/marie.yml 
+ JINA_MP_START_METHOD=fork PYTHONMALLOC=malloc MARIE_DEFAULT_MOUNT=/mnt/data/marie-ai memray run --follow-fork  -o ~/tmp/memray/marie.bin -m marie server --start --uses /mnt/data/marie-ai/config/service/marie.yml
 ```
 
 **Profiling with a live remote:**

@@ -10,11 +10,11 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    Union,
     Type,
+    Union,
 )
 
-from marie._docarray import DocumentArray
+from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.excepts import ExecutorError
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2
@@ -25,8 +25,8 @@ from marie.serve.runtimes.gateway.async_request_response_handling import (
 from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.serve.stream import RequestStreamer
 from marie.types.request import Request
-from marie.types.request.data import DataRequest
-from marie._docarray import docarray_v2
+from marie.types.request.data import DataRequest, SingleDocumentRequest
+
 
 if docarray_v2:
     from docarray import DocList
@@ -119,7 +119,11 @@ class GatewayStreamer:
         request_handler = AsyncRequestResponseHandler(
             metrics_registry, meter, runtime_name, logger
         )
-
+        self._single_doc_request_handler = (
+            request_handler.handle_single_document_request(
+                graph=self.topology_graph, connection_pool=self._connection_pool
+            )
+        )
         self._streamer = RequestStreamer(
             request_handler=request_handler.handle_request(
                 graph=self.topology_graph, connection_pool=self._connection_pool
@@ -173,17 +177,28 @@ class GatewayStreamer:
         """
         return self._streamer.stream(*args, **kwargs)
 
-    async def _get_endpoints_input_output_models(self):
+    def rpc_stream_doc(self, *args, **kwargs):
+        """
+        stream requests from client iterator and stream responses back.
+
+        :param args: positional arguments to be passed to inner RequestStreamer
+        :param kwargs: keyword arguments to be passed to inner RequestStreamer
+        :return: An iterator over the responses from the Executors
+        """
+        return self._single_doc_request_handler(*args, **kwargs)
+
+    async def _get_endpoints_input_output_models(self, is_cancel):
         """
         Return a Dictionary with endpoints as keys and values as a dictionary of input and output schemas and names
-        taken from the endpoints proto endpoint of Executors
+        taken from the endpoints proto endpoint of Executors.
+        :param is_cancel: event signal to show that you should stop trying
         """
         # The logic should be to get the response of all the endpoints protos schemas from all the nodes. Then do a
         # logic that for every endpoint fom every Executor computes what is the input and output schema seen by the
         # Flow.
         self._endpoints_models_map = (
             await self._streamer._get_endpoints_input_output_models(
-                self.topology_graph, self._connection_pool
+                self.topology_graph, self._connection_pool, is_cancel
             )
         )
 
@@ -202,6 +217,7 @@ class GatewayStreamer:
         target_executor: Optional[str] = None,
         parameters: Optional[Dict] = None,
         results_in_order: bool = False,
+        return_type: Type[DocumentArray] = DocumentArray,
     ) -> AsyncIterator[Tuple[Union[DocumentArray, 'Request'], 'ExecutorError']]:
         """
         stream Documents and yield Documents or Responses and unpacked Executor error if any.
@@ -213,6 +229,7 @@ class GatewayStreamer:
         :param target_executor: A regex expression indicating the Executors that should receive the Request
         :param parameters: Parameters to be attached to the Requests
         :param results_in_order: return the results in the same order as the request_iterator
+        :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
         :yield: tuple of Documents or Responses and unpacked error from Executors if any
         """
         async for result in self.stream_docs(
@@ -223,6 +240,7 @@ class GatewayStreamer:
             target_executor=target_executor,
             parameters=parameters,
             results_in_order=results_in_order,
+            return_type=return_type,
         ):
             error = None
             if jina_pb2.StatusProto.ERROR == result.status.code:
@@ -238,6 +256,55 @@ class GatewayStreamer:
             else:
                 yield result.data.docs, error
 
+    async def stream_doc(
+        self,
+        doc: 'Document',
+        return_results: bool = False,
+        exec_endpoint: Optional[str] = None,
+        target_executor: Optional[str] = None,
+        parameters: Optional[Dict] = None,
+        request_id: Optional[str] = None,
+        return_type: Type[DocumentArray] = DocumentArray,
+    ) -> AsyncIterator[Tuple[Union[DocumentArray, 'Request'], 'ExecutorError']]:
+        """
+        stream Documents and yield Documents or Responses and unpacked Executor error if any.
+
+        :param doc: The Documents to be sent to all the Executors
+        :param return_results: If set to True, the generator will yield Responses and not `DocumentArrays`
+        :param exec_endpoint: The Executor endpoint to which to send the Documents
+        :param target_executor: A regex expression indicating the Executors that should receive the Request
+        :param parameters: Parameters to be attached to the Requests
+        :param request_id: Request ID to add to the request streamed to Executor. Only applicable if request_size is equal or less to the length of the docs
+        :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
+        :yield: tuple of Documents or Responses and unpacked error from Executors if any
+        """
+        req = SingleDocumentRequest()
+        req.document_cls = doc.__class__
+        req.data.doc = doc
+        if request_id:
+            req.header.request_id = request_id
+        if exec_endpoint:
+            req.header.exec_endpoint = exec_endpoint
+        if target_executor:
+            req.header.target_executor = target_executor
+        if parameters:
+            req.parameters = parameters
+
+        async for result in self.rpc_stream_doc(request=req, return_type=return_type):
+            error = None
+            if jina_pb2.StatusProto.ERROR == result.status.code:
+                exception = result.status.exception
+                error = ExecutorError(
+                    name=exception.name,
+                    args=exception.args,
+                    stacks=exception.stacks,
+                    executor=exception.executor,
+                )
+            if return_results:
+                yield result, error
+            else:
+                yield result.data.doc, error
+
     async def stream_docs(
         self,
         docs: DocumentArray,
@@ -248,6 +315,7 @@ class GatewayStreamer:
         parameters: Optional[Dict] = None,
         results_in_order: bool = False,
         request_id: Optional[str] = None,
+        return_type: Type[DocumentArray] = DocumentArray,
     ):
         """
         stream documents and stream responses back.
@@ -260,10 +328,9 @@ class GatewayStreamer:
         :param parameters: Parameters to be attached to the Requests
         :param results_in_order: return the results in the same order as the request_iterator
         :param request_id: Request ID to add to the request streamed to Executor. Only applicable if request_size is equal or less to the length of the docs
+        :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
         :yield: Yields DocumentArrays or Responses from the Executors
         """
-        from marie.types.request.data import DataRequest
-
         request_id = request_id if len(docs) <= request_size else None
 
         def _req_generator():
@@ -317,7 +384,9 @@ class GatewayStreamer:
                     yield req
 
         async for resp in self.rpc_stream(
-            request_iterator=_req_generator(), results_in_order=results_in_order
+            request_iterator=_req_generator(),
+            results_in_order=results_in_order,
+            return_type=return_type,
         ):
             if return_results:
                 yield resp
@@ -469,3 +538,21 @@ class _ExecutorStreamer:
                 resp.document_array_cls = return_type
                 docs.extend(resp.docs)
         return docs
+
+    async def stream_doc(
+        self,
+        inputs: 'Document',
+        on: Optional[str] = None,
+        parameters: Optional[Dict] = None,
+        **kwargs,
+    ):
+        req: SingleDocumentRequest = SingleDocumentRequest(inputs.to_protobuf())
+        req.header.exec_endpoint = on
+        req.header.target_executor = self.executor_name
+        req.parameters = parameters
+        async_generator = self._connection_pool.send_single_document_request(
+            request=req, deployment=self.executor_name, head=True, endpoint=on
+        )
+
+        async for resp, _ in async_generator:
+            yield resp
