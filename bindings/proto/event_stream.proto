@@ -1,0 +1,14 @@
+syntax = "proto3";
+// import "google/protobuf/any.proto";
+
+package marieai;
+
+message EventMessage {
+  string api_key = 1;
+  string job_id = 2;
+  string event = 3;
+  string job_tag = 4;
+  string status = 5;
+  int64 timestamp = 6;
+//   google.protobuf.Any payload = 7;
+}
