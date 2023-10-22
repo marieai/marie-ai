@@ -1,0 +1,2 @@
+class OutputContext:
+    pass
