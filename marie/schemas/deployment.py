@@ -1,5 +1,5 @@
-from marie_cli.export import api_to_dict
 from marie.schemas.helper import _cli_to_schema
+from marie_cli.export import api_to_dict
 
 schema_deployment = _cli_to_schema(
     api_to_dict(),

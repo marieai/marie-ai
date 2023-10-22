@@ -1,0 +1,274 @@
+jtype: Flow
+version: '1'
+
+protocol: grpc
+
+# Shared configuration
+shared_config:
+  storage: &storage
+    psql: &psql_conf_shared
+      provider: postgresql
+      hostname: 127.0.0.1
+      port: 5432
+      username: postgres
+      password: 123456
+      database: postgres
+      default_table: shared_docs
+
+  message: &message
+    amazon_mq :  &amazon_mq_conf_shared
+      provider: amazon-rabbitmq
+      hostname: ${{ ENV.AWS_MQ_HOSTNAME }}
+      port: 15672
+      username: ${{ ENV.AWS_MQ_USERNAME }}
+      password: ${{ ENV.AWS_MQ_PASSWORD }}
+      tls: True
+      virtualhost: /
+
+
+    rabbitmq :  &rabbitmq_conf_shared
+      provider: rabbitmq
+      hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+      port: ${{ ENV.RABBIT_MQ_PORT }}
+      username: ${{ ENV.RABBIT_MQ_USERNAME }}
+      password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+      tls: False
+      virtualhost: /
+
+
+# Toast event tracking system
+# It can be backed by Message Queue and Database backed
+toast:
+  native:
+    enabled: True
+    path: /tmp/marie/events.json
+  rabbitmq:
+    <<: *rabbitmq_conf_shared
+    enabled : True
+  psql:
+    <<: *psql_conf_shared
+    default_table: event_tracking
+    enabled : True
+
+# Document Storage
+# The storage service is used to store the data that is being processed
+# Storage can be backed by S3 compatible
+
+storage:
+  # S3 configuration. Will be used only if value of backend is "s3"
+  s3:
+    enabled: True
+    metadata_only: False # If True, only metadata will be stored in the storage backend
+    # api endpoint to connect to. use AWS S3 or any S3 compatible object storage endpoint.
+    endpoint_url: ${{ ENV.S3_ENDPOINT_URL }}
+    # optional.
+    # access key id when using static credentials.
+    access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+    # optional.
+    # secret key when using static credentials.
+    secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+    # Bucket name in s3
+    bucket_name: ${{ ENV.S3_BUCKET_NAME }}
+    # optional.
+    # Example: "region: us-east-2"
+    region: ${{ ENV.S3_REGION }}
+    # optional.
+    # enable if endpoint is http
+    insecure: True
+    # optional.
+    # enable if you want to use path style requests
+    addressing_style: path
+
+  # postgresql configuration. Will be used only if value of backend is "psql"
+  psql:
+    <<: *psql_conf_shared
+    default_table: store_metadata
+    enabled : False
+
+# Job Queue scheduler
+scheduler:
+  psql:
+    <<: *psql_conf_shared
+    default_table: job_queue
+    enabled : True
+
+# FLOW / GATEWAY configuration
+
+with:
+  port:
+    - 51000
+    - 52000
+  protocol:
+    - http
+    - grpc
+  discovery: True
+  discovery_host: 127.0.0.1
+  discovery_port: 8500
+
+  # monitoring
+  monitoring: true
+  port_monitoring: 57843
+
+  event_tracking: True
+
+  expose_endpoints:
+    /document/extract:
+      methods: ["POST"]
+      summary: Extract data-POC
+      tags:
+        - extract
+    /status:
+      methods: ["POST"]
+      summary: Status
+      tags:
+        - extract
+
+    /text/status:
+      methods: ["POST"]
+      summary: Extract data
+      tags:
+        - extract
+
+    /ner/extract:
+      methods: ["POST"]
+      summary: Extract NER
+      tags:
+        - ner
+
+    /document/classify:
+      methods: ["POST"]
+      summary: Classify document at page level
+      tags:
+        - classify
+
+executors:
+#  - name: extract_executor
+#    uses:
+#      jtype: TextExtractionExecutorMock
+#      metas:
+#        py_modules:
+#          - marie.executor.text
+#    timeout_ready: 3000000
+#    replicas: 1
+##    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
+
+  - name: extract_t
+    uses:
+#      jtype: TextExtractionExecutor
+      jtype: TextExtractionExecutorMock
+      with:
+        storage:
+          # postgresql configuration. Will be used only if value of backend is "psql"
+          psql:
+            <<: *psql_conf_shared
+            default_table: extract_metadata
+            enabled: True
+        pipeline:
+          name: 'default'
+          page_classifier:
+            - model_name_or_path: 'marie/lmv3-medical-document-classification'
+              type: 'transformers'
+              device: 'cuda'
+              enabled: True
+              name: 'medical_page_classifier'
+            - model_name_or_path: 'marie/lmv3-medical-document-payer'
+              type: 'transformers'
+              enabled: True
+              device: 'cuda'
+              name: 'medical_payer_classifier'
+          page_indexer:
+            - model_name_or_path: 'marie/layoutlmv3-medical-document-indexer'
+              enabled: True
+              type: 'transformers'
+              device: 'cuda'
+              name: 'page_indexer_patient'
+              filter:
+                type: 'regex'
+                pattern: '.*'
+          page_splitter:
+            model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
+            enabled: True
+      metas:
+        py_modules:
+          - marie.executor.text
+    timeout_ready: 3000000
+    replicas: 4
+    #    replicas: ${{ CONTEXT.gpu_device_count }}
+    env:
+      CUDA_VISIBLE_DEVICES: RR
+
+#  - name: extract_xyz
+#    uses:
+#      jtype: TextExtractionExecutorMock
+#      metas:
+#        py_modules:
+#          - marie.executor.text
+#    timeout_ready: 3000000
+#    replicas: 1
+##    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
+
+#  - name: ner_t
+#    uses:
+#      jtype: NerExtractionExecutor
+#      with:
+#        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
+#        <<: *psql_conf_shared
+#        storage_enabled : False
+#      metas:
+#        py_modules:
+##          - marie_server.executors.ner.mserve_torch
+#          - marie.executor.ner
+#    timeout_ready: 3000000
+##    replicas: 1
+#    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
+
+#  - name: document_classifier
+#    uses:
+#      jtype: DocumentClassificationExecutor
+#      with:
+#        model_name_or_path :
+#          - 'marie/layoutlmv3-document-classification'
+#          - 'marie/layoutlmv3-document-classification'
+#        <<: *psql_conf_shared
+#        storage_enabled : False
+#      metas:
+#        py_modules:
+#          - marie.executor.classifier
+#    timeout_ready: 3000000
+##    replicas: 1
+#    replicas: ${{ CONTEXT.gpu_device_count }}
+#    env :
+#      CUDA_VISIBLE_DEVICES: RR
+##
+#  - name: overlay_t
+#    uses:
+#      jtype: OverlayExecutor
+#      with:
+#        model_name_or_path : 'rms/holder'
+#        <<: *storage_conf
+#        storage_enabled : True
+#      metas:
+#        py_modules:
+#          - marie.executor.overlay
+#    timeout_ready: 3000000
+#    replicas: 1
+
+# Authentication and Authorization configuration
+
+auth:
+  keys:
+    - name : service-A
+      api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
+      enabled : True
+      roles : [admin, user]
+
+    - name : service-B
+      api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
+      enabled : True
+      roles : [admin, user]
