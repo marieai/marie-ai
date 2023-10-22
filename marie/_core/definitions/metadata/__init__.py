@@ -21,11 +21,12 @@ from typing_extensions import Self, TypeAlias
 import marie.check as check
 from marie._annotations import PublicAttr, deprecated, experimental, public
 from marie._core.errors import DagsterInvalidMetadata
-from marie.serdes.serdes import (
-    PackableValue,
-    WhitelistMap,
-    pack_value,
-)
+
+# from marie.serdes.serdes import (
+#     PackableValue,
+#     WhitelistMap,
+#     pack_value,
+# )
 from marie.utils.backcompat import (
     canonicalize_backcompat_args,
     deprecation_warning,
@@ -66,10 +67,12 @@ RawMetadataValue = Union[
 MetadataMapping: TypeAlias = Mapping[str, "MetadataValue"]
 MetadataUserInput: TypeAlias = Mapping[str, RawMetadataValue]
 
+#
+# T_Packable = TypeVar(
+#     "T_Packable", bound=PackableValue, default=PackableValue, covariant=True
+# )
 
-T_Packable = TypeVar(
-    "T_Packable", bound=PackableValue, default=PackableValue, covariant=True
-)
+T_Packable = TypeVar("T_Packable")
 
 # ########################
 # ##### NORMALIZATION
