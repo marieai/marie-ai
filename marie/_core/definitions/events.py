@@ -31,13 +31,16 @@ from .metadata import (
     RawMetadataValue,
     normalize_metadata,
 )
-from .utils import DEFAULT_OUTPUT, check_valid_name
-from ...serdes import deserialize_value
-from ...utils.json import to_json
+
+# from .utils import DEFAULT_OUTPUT
+
+# from ...serdes import deserialize_value
+from ...utils.json import deserialize_value, to_json
 
 if TYPE_CHECKING:
     from marie._core.execution.context.output import OutputContext
 
+DEFAULT_OUTPUT = "result"
 
 ASSET_KEY_SPLIT_REGEX = re.compile("[^a-zA-Z0-9_]")
 ASSET_KEY_DELIMITER = "/"
