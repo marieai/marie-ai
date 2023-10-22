@@ -278,7 +278,7 @@ class TextExtractionExecutorMock(Executor):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.runtime_info = {
             "name": self.__class__.__name__,
-            "instance_name": kwargs.get("runtime_args").get("name", "not_defined"),
+            "instance_name": kwargs.get("runtime_args", {}).get("name", "not_defined"),
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
@@ -302,7 +302,7 @@ class TextExtractionExecutorMock(Executor):
 
     @requests(on="/document/extract")
     @safely_encoded
-    def extract(self, parameters, docs: Optional[DocumentArray] = None, **kwargs):
+    def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
         logger.info(f"Executing extract : {len(docs)}")
         logger.info(kwargs)
         logger.info(parameters)

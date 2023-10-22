@@ -230,7 +230,8 @@ def docs_from_file(
     path: StrOrBytesPath, pages: Optional[List[int]] = None
 ) -> DocumentArray:
     """
-    Create DocumentArray from image file
+    Create DocumentArray from image file. This will create one document per page in the image file, if the image
+    is large and has many pages this can be very memory intensive.
 
     :param path:  path to image file
     :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
@@ -253,8 +254,7 @@ def docs_from_file(
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
-            # docs.append(Document(content=frame))
-            docs.append(Document(content=path))
+            docs.append(Document(content=frame))
     return docs
 
 
