@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, AsyncGenerator, Callable, List, Optional, Tupl
 
 import grpc.aio
 
-from marie._docarray import DocumentArray
+from marie._docarray import DocumentArray, docarray_v2
 from marie.excepts import InternalNetworkError
 from marie.helper import GATEWAY_NAME
 from marie.logging.logger import MarieLogger
@@ -13,7 +13,7 @@ from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.serve.runtimes.helper import _is_param_for_specific_executor
 from marie.serve.runtimes.monitoring import MonitoringRequestMixin
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie._docarray import docarray_v2
+
 
 if TYPE_CHECKING:  # pragma: no cover
     from asyncio import Future

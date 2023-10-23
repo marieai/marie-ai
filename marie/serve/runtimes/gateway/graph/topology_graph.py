@@ -16,7 +16,6 @@ from marie.serve.runtimes.helper import _parse_specific_params
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types.request.data import DataRequest, SingleDocumentRequest
 
-
 if docarray_v2:
     from docarray import DocList
     from docarray.documents.legacy import LegacyDocument
@@ -81,10 +80,10 @@ class TopologyGraph:
 
                 # Naive check of compatibility
                 schema_1_properties = OrderedDict(
-                    sorted(schema_1.get('properties', {}).items())
+                    sorted(schema_1.get("properties", {}).items())
                 )
                 schema_2_properties = OrderedDict(
-                    sorted(schema_2.get('properties', {}).items())
+                    sorted(schema_2.get("properties", {}).items())
                 )
                 if len(schema_1_properties) != len(schema_2_properties):
                     return False
@@ -96,8 +95,8 @@ class TopologyGraph:
                         return False
 
                     if schema_1_properties[property_1].get(
-                        'type', None
-                    ) != schema_2_properties[property_2].get('type', None):
+                        "type", None
+                    ) != schema_2_properties[property_2].get("type", None):
                         return False
 
                     # TODO: Add more complex check for nested definitions
@@ -121,25 +120,25 @@ class TopologyGraph:
                             if endp in node._pydantic_models_by_endpoint:
                                 if not _check_schema_equality(
                                     self._pydantic_models_by_endpoint[outgoing_endp][
-                                        'output'
+                                        "output"
                                     ].schema(),
                                     node._pydantic_models_by_endpoint[incoming_endp][
-                                        'input'
+                                        "input"
                                     ].schema(),
                                 ):
                                     raise Exception(
-                                        f'The output schema of {self.name} at {outgoing_endp} endpoint is incompatible with the input schema of {node.name} at {incoming_endp} endpoint'
+                                        f"The output schema of {self.name} at {outgoing_endp} endpoint is incompatible with the input schema of {node.name} at {incoming_endp} endpoint"
                                     )
                         else:
                             if (
                                 outgoing_endp != __default_endpoint__
                             ):  # It could happen that there is an Encoder with default followed by an indexer with [index, search]
                                 raise Exception(
-                                    f'{node.name} does not expose {incoming_endp} which makes it impossible to be chained with {self.name} on {outgoing_endp}'
+                                    f"{node.name} does not expose {incoming_endp} which makes it impossible to be chained with {self.name} on {outgoing_endp}"
                                 )
                             else:
                                 self.logger.warning(
-                                    f'{node.name} does not expose {incoming_endp} which could lead to incompatibility when calling non-explicitly bound endpoints'
+                                    f"{node.name} does not expose {incoming_endp} which could lead to incompatibility when calling non-explicitly bound endpoints"
                                 )
                 return node._validate_against_outgoing_nodes()
             return True
@@ -177,23 +176,23 @@ class TopologyGraph:
             if err_code == grpc.StatusCode.UNAVAILABLE:
                 err._details = (
                     err.details()
-                    + f' |Gateway: Communication error with deployment {self.name} at address(es) {err.dest_addr}. '
-                    f'Head or worker(s) may be down.'
+                    + f" |Gateway: Communication error with deployment {self.name} at address(es) {err.dest_addr}. "
+                    f"Head or worker(s) may be down."
                 )
                 raise err
             elif err_code == grpc.StatusCode.DEADLINE_EXCEEDED:
                 err._details = (
                     err.details()
-                    + f'|Gateway: Connection with deployment {self.name} at address(es) {err.dest_addr} could be established, but timed out.'
-                    f' You can increase the allowed time by setting `timeout_send` in your Flow YAML `with` block or Flow `__init__()` method.'
+                    + f"|Gateway: Connection with deployment {self.name} at address(es) {err.dest_addr} could be established, but timed out."
+                    f" You can increase the allowed time by setting `timeout_send` in your Flow YAML `with` block or Flow `__init__()` method."
                 )
                 raise err
             elif err_code == grpc.StatusCode.NOT_FOUND:
                 err._details = (
                     err.details()
-                    + f'\n|Gateway: Connection error with deployment `{self.name}` at address(es) {err.dest_addr}.'
-                    f' Connection with {err.dest_addr} succeeded, but `{self.name}` was not found.'
-                    f' Possibly `{self.name}` is behind an API gateway but not reachable.'
+                    + f"\n|Gateway: Connection error with deployment `{self.name}` at address(es) {err.dest_addr}."
+                    f" Connection with {err.dest_addr} succeeded, but `{self.name}` was not found."
+                    f" Possibly `{self.name}` is behind an API gateway but not reachable."
                 )
                 raise err
             else:
@@ -210,7 +209,7 @@ class TopologyGraph:
 
             async def task():
                 if self._endpoints_proto is None:
-                    self.logger.debug(f'Getting Endpoints data from {self.name}')
+                    self.logger.debug(f"Getting Endpoints data from {self.name}")
                     endpoints_proto = await connection_pool.send_discover_endpoint(
                         self.name, retries=self._retries
                     )
@@ -225,8 +224,8 @@ class TopologyGraph:
                             self._pydantic_models_by_endpoint = {}
                             models_created_by_name = {}
                             for endpoint, inner_dict in schemas.items():
-                                input_model_name = inner_dict['input']['name']
-                                input_model_schema = inner_dict['input']['model']
+                                input_model_name = inner_dict["input"]["name"]
+                                input_model_schema = inner_dict["input"]["model"]
                                 if input_model_schema in models_schema_list:
                                     input_model = models_list[
                                         models_schema_list.index(input_model_schema)
@@ -254,8 +253,9 @@ class TopologyGraph:
                                     ]
                                     models_schema_list.append(input_model_schema)
                                     models_list.append(input_model)
-                                output_model_name = inner_dict['output']['name']
-                                output_model_schema = inner_dict['output']['model']
+
+                                output_model_name = inner_dict["output"]["name"]
+                                output_model_schema = inner_dict["output"]["model"]
                                 if output_model_schema in models_schema_list:
                                     output_model = models_list[
                                         models_schema_list.index(output_model_schema)
@@ -284,9 +284,9 @@ class TopologyGraph:
                                     models_schema_list.append(output_model)
                                     models_list.append(output_model)
 
-                                parameters_model_name = inner_dict['parameters']['name']
-                                parameters_model_schema = inner_dict['parameters'][
-                                    'model'
+                                parameters_model_name = inner_dict["parameters"]["name"]
+                                parameters_model_schema = inner_dict["parameters"][
+                                    "model"
                                 ]
                                 if parameters_model_schema is not None:
                                     if parameters_model_schema in models_schema_list:
@@ -325,15 +325,15 @@ class TopologyGraph:
                                     parameters_model = None
 
                                 self._pydantic_models_by_endpoint[endpoint] = {
-                                    'input': input_model,
-                                    'output': output_model,
-                                    'is_generator': inner_dict['is_generator'],
-                                    'is_singleton_doc': inner_dict['is_singleton_doc'],
-                                    'parameters': parameters_model,
+                                    "input": input_model,
+                                    "output": output_model,
+                                    "is_generator": inner_dict["is_generator"],
+                                    "is_singleton_doc": inner_dict["is_singleton_doc"],
+                                    "parameters": parameters_model,
                                 }
                         self._endpoints_proto = endpoints_proto
                     else:
-                        raise Exception('Failed to get endpoints')
+                        raise Exception("Failed to get endpoints")
                 return self._endpoints_proto
 
             return asyncio.create_task(task())
@@ -348,7 +348,7 @@ class TopologyGraph:
             if docarray_v2:
                 if self.endpoints and endpoint in self.endpoints:
                     request.document_cls = self._pydantic_models_by_endpoint[endpoint][
-                        'input'
+                        "input"
                     ]
 
             async for resp, _ in connection_pool.send_single_document_request(
@@ -376,7 +376,7 @@ class TopologyGraph:
                             ):
                                 resp.document_cls = self._pydantic_models_by_endpoint[
                                     endpoint
-                                ]['output']
+                                ]["output"]
                             else:
                                 resp.document_array_cls = return_type
                     yield resp
@@ -400,9 +400,10 @@ class TopologyGraph:
             if previous_task is not None:
                 result = await previous_task
                 request, metadata = result[0], result[1]
-            if metadata and 'is-error' in metadata:
+            if metadata and "is-error" in metadata:
                 return request, metadata
             elif request is not None:
+
                 request.parameters = _parse_specific_params(
                     request.parameters, self.name
                 )
@@ -412,7 +413,7 @@ class TopologyGraph:
                 if docarray_v2:
                     if self.endpoints and endpoint in self.endpoints:
                         req_to_send.document_array_cls = DocList[
-                            self._pydantic_models_by_endpoint[endpoint]['input']
+                            self._pydantic_models_by_endpoint[endpoint]["input"]
                         ]
 
                 self.parts_to_send.append(req_to_send)
@@ -479,7 +480,7 @@ class TopologyGraph:
                                         )
                                     )
                                     resp.document_array_cls = DocList[
-                                        pydantic_models['output']
+                                        pydantic_models["output"]
                                     ]
                                 else:
                                     resp.document_array_cls = return_type
@@ -496,12 +497,12 @@ class TopologyGraph:
                         self._handle_internalnetworkerror(err)
                     except Exception as err:
                         self.logger.error(
-                            f'Exception sending requests to {self.name}: {err}'
+                            f"Exception sending requests to {self.name}: {err}"
                         )
                         raise err
 
                     self.end_time = datetime.utcnow()
-                    if metadata and 'is-error' in metadata:
+                    if metadata and "is-error" in metadata:
                         self.status = resp.header.status
                     return resp, metadata
 
@@ -524,12 +525,12 @@ class TopologyGraph:
                     # the only important for the gateway to know if is generator is the last (so the first/previous precedence)
                     new_input = previous_input
                     if previous_input is None:
-                        new_input = self._pydantic_models_by_endpoint[endpoint]['input']
+                        new_input = self._pydantic_models_by_endpoint[endpoint]["input"]
 
                     is_generator = previous_is_generator
                     if previous_is_generator is None:
                         is_generator = self._pydantic_models_by_endpoint[endpoint][
-                            'is_generator'
+                            "is_generator"
                         ]
 
                     if (
@@ -541,37 +542,37 @@ class TopologyGraph:
                     ):
                         # this is needed to not mix model IDs, otherwise FastAPI gets crazy
                         return {
-                            'input': new_input,
-                            'output': previous_output,
-                            'is_generator': is_generator,
-                            'is_singleton_doc': self._pydantic_models_by_endpoint[
+                            "input": new_input,
+                            "output": previous_output,
+                            "is_generator": is_generator,
+                            "is_singleton_doc": self._pydantic_models_by_endpoint[
                                 endpoint
-                            ]['is_singleton_doc'],
-                            'parameters': self._pydantic_models_by_endpoint[endpoint][
-                                'parameters'
+                            ]["is_singleton_doc"],
+                            "parameters": self._pydantic_models_by_endpoint[endpoint][
+                                "parameters"
                             ],
                         }
                     else:
                         return {
-                            'input': new_input,
-                            'output': self._pydantic_models_by_endpoint[endpoint][
-                                'output'
+                            "input": new_input,
+                            "output": self._pydantic_models_by_endpoint[endpoint][
+                                "output"
                             ],
-                            'is_generator': is_generator,
-                            'is_singleton_doc': self._pydantic_models_by_endpoint[
+                            "is_generator": is_generator,
+                            "is_singleton_doc": self._pydantic_models_by_endpoint[
                                 endpoint
-                            ]['is_singleton_doc'],
-                            'parameters': self._pydantic_models_by_endpoint[endpoint][
-                                'parameters'
+                            ]["is_singleton_doc"],
+                            "parameters": self._pydantic_models_by_endpoint[endpoint][
+                                "parameters"
                             ],
                         }
                 else:
                     return {
-                        'input': previous_input,
-                        'output': previous_output,
-                        'is_generator': previous_is_generator,
-                        'is_singleton_doc': False,
-                        'parameters': previous_parameters,
+                        "input": previous_input,
+                        "output": previous_output,
+                        "is_generator": previous_is_generator,
+                        "is_singleton_doc": False,
+                        "parameters": previous_parameters,
                     }
             return None
 
@@ -599,15 +600,15 @@ class TopologyGraph:
             list_of_outputs = []
             for outgoing_node in self.outgoing_nodes:
                 list_of_maps = outgoing_node._get_leaf_input_output_model(
-                    previous_input=new_map['input'] if new_map is not None else None,
-                    previous_output=new_map['output'] if new_map is not None else None,
-                    previous_is_generator=new_map['is_generator']
+                    previous_input=new_map["input"] if new_map is not None else None,
+                    previous_output=new_map["output"] if new_map is not None else None,
+                    previous_is_generator=new_map["is_generator"]
                     if new_map is not None
                     else None,
-                    previous_is_singleton_doc=new_map['is_singleton_doc']
+                    previous_is_singleton_doc=new_map["is_singleton_doc"]
                     if new_map is not None
                     else None,
-                    previous_parameters=new_map['parameters']
+                    previous_parameters=new_map["parameters"]
                     if new_map is not None
                     else None,
                     endpoint=endpoint,
@@ -703,7 +704,7 @@ class TopologyGraph:
 
             return hanging_tasks_tuples
 
-        def add_route(self, request: 'DataRequest'):
+        def add_route(self, request: "DataRequest"):
             """
              Add routes to the DataRequest based on the state of request processing
 
@@ -764,11 +765,11 @@ class TopologyGraph:
         ):
             return [
                 {
-                    'input': previous_input,
-                    'output': previous_output,
-                    'is_generator': previous_is_generator,
-                    'is_singleton_doc': previous_is_singleton_doc,
-                    'parameters': previous_parameters,
+                    "input": previous_input,
+                    "output": previous_output,
+                    "is_generator": previous_is_generator,
+                    "is_singleton_doc": previous_is_singleton_doc,
+                    "parameters": previous_parameters,
                 }
             ]
 
@@ -786,19 +787,19 @@ class TopologyGraph:
     ):
         self.logger = logger or MarieLogger(self.__class__.__name__)
         num_parts_per_node = defaultdict(int)
-        if 'start-gateway' in graph_representation:
-            origin_node_names = graph_representation['start-gateway']
+        if "start-gateway" in graph_representation:
+            origin_node_names = graph_representation["start-gateway"]
         else:
             origin_node_names = set()
         floating_deployment_set = set()
         node_set = set()
         for node_name, outgoing_node_names in graph_representation.items():
-            if node_name not in {'start-gateway', 'end-gateway'}:
+            if node_name not in {"start-gateway", "end-gateway"}:
                 node_set.add(node_name)
             if len(outgoing_node_names) == 0:
                 floating_deployment_set.add(node_name)
             for out_node_name in outgoing_node_names:
-                if out_node_name not in {'start-gateway', 'end-gateway'}:
+                if out_node_name not in {"start-gateway", "end-gateway"}:
                     node_set.add(out_node_name)
                     num_parts_per_node[out_node_name] += 1
 
@@ -821,13 +822,13 @@ class TopologyGraph:
             )
 
         for node_name, outgoing_node_names in graph_representation.items():
-            if node_name not in ['start-gateway', 'end-gateway']:
+            if node_name not in ["start-gateway", "end-gateway"]:
                 for out_node_name in outgoing_node_names:
-                    if out_node_name not in ['start-gateway', 'end-gateway']:
+                    if out_node_name not in ["start-gateway", "end-gateway"]:
                         nodes[node_name].outgoing_nodes.append(nodes[out_node_name])
-                    if out_node_name == 'end-gateway':
+                    if out_node_name == "end-gateway":
                         nodes[node_name].outgoing_nodes.append(
-                            self._EndGatewayNode(name='__end_gateway__', floating=False)
+                            self._EndGatewayNode(name="__end_gateway__", floating=False)
                         )
 
         self._origin_nodes = [nodes[node_name] for node_name in origin_node_names]
@@ -841,7 +842,7 @@ class TopologyGraph:
             if is_cancel is not None:
                 is_cancelled = is_cancel.is_set()
                 if is_cancelled:
-                    self.logger.debug(f'cancel get all endpoints')
+                    self.logger.debug(f"cancel get all endpoints")
                 return not is_cancelled
             else:
                 return True
@@ -865,15 +866,17 @@ class TopologyGraph:
                     self._all_endpoints = endpoints
                     break
                 except Exception as exc:
+                    retry_forever = False
                     if not retry_forever:
                         raise exc
                     self.logger.warning(
-                        f'Getting endpoints failed: {exc}. Waiting for another trial'
+                        f"Getting endpoints failed: {exc}. Waiting for another trial"
                     )
                     await asyncio.sleep(1)
+
         return self._all_endpoints
 
-    def add_routes(self, request: 'DataRequest'):
+    def add_routes(self, request: "DataRequest"):
         """
         Add routes to the DataRequest based on the state of request processing
 

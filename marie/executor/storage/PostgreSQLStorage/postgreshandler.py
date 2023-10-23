@@ -30,9 +30,6 @@ def doc_without_embedding(d: Document):
             cls=NumpyEncoder,
         )
         return serialized
-    #
-    # new_doc.ClearField('embedding')
-    # return new_doc.SerializeToString()
 
 
 SCHEMA_VERSION = 4

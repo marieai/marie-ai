@@ -9,7 +9,7 @@ from typing import Union, List, Optional
 import numpy as np
 import torch
 from PIL import Image
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
@@ -881,7 +881,7 @@ class ExtractPipeline:
         assert len(words) == len(boxes)
 
         context = PipelineContext(pipeline_id="post_processing_pipeline")
-        context['metadata'] = metadata
+        context["metadata"] = metadata
 
         for pipe in processing_pipeline:
             try:

@@ -3,7 +3,7 @@ import glob
 import os
 
 from marie.executor.ner import NerExtractionExecutor
-from marie.utils.docs import docs_from_file, array_from_docs
+from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.tiff_ops import merge_tiff_frames
@@ -22,7 +22,7 @@ def process_image(img_path):
     name = os.path.splitext(name)[0]
 
     docs = docs_from_file(img_path)
-    arr = array_from_docs(docs)
+    arr = frames_from_docs(docs)
     checksum = hash_frames_fast(arr)
     kwa = {}
     results = executor.extract(docs, **kwa)

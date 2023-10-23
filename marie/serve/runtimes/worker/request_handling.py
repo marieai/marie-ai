@@ -4,8 +4,6 @@ import functools
 import json
 import os
 import tempfile
-
-from typing import TYPE_CHECKING, AsyncIterator, List, Optional, Dict, Tuple
 import threading
 import uuid
 import warnings
@@ -20,20 +18,11 @@ from typing import (
     Union,
 )
 
+
 from google.protobuf.struct_pb2 import Struct
 
-from marie._docarray import docarray_v2
-
-from marie._docarray import DocumentArray
+from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import __default_endpoint__
-from marie.excepts import BadConfigSource
-from marie.serve.executors import BaseExecutor
-from marie.serve.runtimes.worker.batch_queue import BatchQueue
-import argparse
-import asyncio
-from typing import TYPE_CHECKING, AsyncIterator, List, Optional
-
-
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
@@ -61,18 +50,18 @@ if TYPE_CHECKING:  # pragma: no cover
 class WorkerRequestHandler:
     """Object to encapsulate the code related to handle the data requests passing to executor and its returned values"""
 
-    _KEY_RESULT = '__results__'
+    _KEY_RESULT = "__results__"
 
     def __init__(
         self,
-        args: 'argparse.Namespace',
-        logger: 'MarieLogger',
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        tracer_provider: Optional['trace.TracerProvider'] = None,
-        meter_provider: Optional['metrics.MeterProvider'] = None,
+        args: "argparse.Namespace",
+        logger: "MarieLogger",
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        tracer_provider: Optional["trace.TracerProvider"] = None,
+        meter_provider: Optional["metrics.MeterProvider"] = None,
         meter=None,
         tracer=None,
-        deployment_name: str = '',
+        deployment_name: str = "",
         **kwargs,
     ):
         """Initialize private parameters and execute private loading functions.
@@ -97,32 +86,32 @@ class WorkerRequestHandler:
         if self.metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the montitoring functionality of marie',
+                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
             ):
                 from prometheus_client import Counter, Summary
 
             self._summary = Summary(
-                'receiving_request_seconds',
-                'Time spent processing request',
+                "receiving_request_seconds",
+                "Time spent processing request",
                 registry=self.metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(self.args.name)
 
             self._failed_requests_metrics = Counter(
-                'failed_requests',
-                'Number of failed requests',
+                "failed_requests",
+                "Number of failed requests",
                 registry=self.metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(self.args.name)
 
             self._successful_requests_metrics = Counter(
-                'successful_requests',
-                'Number of successful requests',
+                "successful_requests",
+                "Number of successful requests",
                 registry=self.metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(self.args.name)
 
         else:
@@ -132,23 +121,23 @@ class WorkerRequestHandler:
 
         if self.meter:
             self._receiving_request_seconds = self.meter.create_histogram(
-                name='marie_receiving_request_seconds',
-                description='Time spent processing request',
+                name="marie_receiving_request_seconds",
+                description="Time spent processing request",
             )
             self._failed_requests_counter = self.meter.create_counter(
-                name='marie_failed_requests',
-                description='Number of failed requests',
+                name="marie_failed_requests",
+                description="Number of failed requests",
             )
 
             self._successful_requests_counter = self.meter.create_counter(
-                name='marie_successful_requests',
-                description='Number of successful requests',
+                name="marie_successful_requests",
+                description="Number of successful requests",
             )
         else:
             self._receiving_request_seconds = None
             self._failed_requests_counter = None
             self._successful_requests_counter = None
-        self._metric_attributes = {'runtime_name': self.args.name}
+        self._metric_attributes = {"runtime_name": self.args.name}
         self._load_executor(
             metrics_registry=metrics_registry,
             tracer_provider=tracer_provider,
@@ -187,7 +176,7 @@ class WorkerRequestHandler:
 
         def call_handle(request):
             is_generator = request_models_map[request.header.exec_endpoint][
-                'is_generator'
+                "is_generator"
             ]
 
             return self.process_single_data(request, None, is_generator=is_generator)
@@ -196,7 +185,7 @@ class WorkerRequestHandler:
             request_models_map=request_models_map, caller=call_handle, **kwargs
         )
 
-        @app.on_event('shutdown')
+        @app.on_event("shutdown")
         async def _shutdown():
             await self.close()
 
@@ -209,7 +198,7 @@ class WorkerRequestHandler:
 
         def call_handle(request):
             is_generator = request_models_map[request.header.exec_endpoint][
-                'is_generator'
+                "is_generator"
             ]
 
             return self.process_single_data(request, None, is_generator=is_generator)
@@ -218,7 +207,7 @@ class WorkerRequestHandler:
             request_models_map=request_models_map, caller=call_handle, **kwargs
         )
 
-        @app.on_event('shutdown')
+        @app.on_event("shutdown")
         async def _shutdown():
             await self.close()
 
@@ -235,25 +224,25 @@ class WorkerRequestHandler:
             for path, subdirs, files in os.walk(executor_base_path)
             for name in files
         ]
-        extra_python_paths = list(filter(lambda x: x.endswith('.py'), extra_paths))
+        extra_python_paths = list(filter(lambda x: x.endswith(".py"), extra_paths))
         for extra_python_file in extra_python_paths:
             watched_files.add(extra_python_file)
 
         with ImportExtensions(
             required=True,
             logger=self.logger,
-            help_text='''hot reload requires watchfiles dependency to be installed. You can do `pip install 
-                watchfiles''',
+            help_text="""hot reload requires watchfiles dependency to be installed. You can do `pip install 
+                watchfiles""",
         ):
             from watchfiles import awatch
 
         async for changes in awatch(*watched_files):
             changed_files = [changed_file for _, changed_file in changes]
             self.logger.info(
-                f'detected changes in: {changed_files}. Refreshing the Executor'
+                f"detected changes in: {changed_files}. Refreshing the Executor"
             )
             self._refresh_executor(changed_files)
-            self.logger.info(f'Executor refreshed')
+            self.logger.info(f"Executor refreshed")
 
     def _all_batch_queues(self) -> List[BatchQueue]:
         """Returns a list of all batch queue instances
@@ -271,13 +260,13 @@ class WorkerRequestHandler:
             * _batchqueue_instances of "shape" exec_endpoint_name -> parameters_key -> batch_queue
             * _batchqueue_config mapping each exec_endpoint_name to a dynamic batching configuration
         """
-        if getattr(self._executor, 'dynamic_batching', None) is not None:
+        if getattr(self._executor, "dynamic_batching", None) is not None:
             # We need to sort the keys into endpoints and functions
             # Endpoints allow specific configurations while functions allow configs to be applied to all endpoints of the function
             dbatch_endpoints = []
             dbatch_functions = []
             for key, dbatch_config in self._executor.dynamic_batching.items():
-                if key.startswith('/'):
+                if key.startswith("/"):
                     dbatch_endpoints.append((key, dbatch_config))
                 else:
                     dbatch_functions.append((key, dbatch_config))
@@ -298,10 +287,10 @@ class WorkerRequestHandler:
                         self._batchqueue_config[endpoint] = dbatch_config
 
             self.logger.debug(
-                f'Executor Dynamic Batching configs: {self._executor.dynamic_batching}'
+                f"Executor Dynamic Batching configs: {self._executor.dynamic_batching}"
             )
             self.logger.debug(
-                f'Endpoint Batch Queue Configs: {self._batchqueue_config}'
+                f"Endpoint Batch Queue Configs: {self._batchqueue_config}"
             )
 
             self._batchqueue_instances = {
@@ -310,42 +299,42 @@ class WorkerRequestHandler:
 
     def _init_monitoring(
         self,
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        meter: Optional['metrics.Meter'] = None,
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        meter: Optional["metrics.Meter"] = None,
     ):
 
         if metrics_registry:
 
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the montitoring functionality of marie',
+                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
             ):
                 from prometheus_client import Counter, Summary
 
                 from marie.serve.monitoring import _SummaryDeprecated
 
                 self._document_processed_metrics = Counter(
-                    'document_processed',
-                    'Number of Documents that have been processed by the executor',
-                    namespace='marie',
-                    labelnames=('executor_endpoint', 'executor', 'runtime_name'),
+                    "document_processed",
+                    "Number of Documents that have been processed by the executor",
+                    namespace="marie",
+                    labelnames=("executor_endpoint", "executor", "runtime_name"),
                     registry=metrics_registry,
                 )
 
                 self._request_size_metrics = _SummaryDeprecated(
-                    old_name='request_size_bytes',
-                    name='received_request_bytes',
-                    documentation='The size in bytes of the request returned to the gateway',
-                    namespace='marie',
-                    labelnames=('executor_endpoint', 'executor', 'runtime_name'),
+                    old_name="request_size_bytes",
+                    name="received_request_bytes",
+                    documentation="The size in bytes of the request returned to the gateway",
+                    namespace="marie",
+                    labelnames=("executor_endpoint", "executor", "runtime_name"),
                     registry=metrics_registry,
                 )
 
                 self._sent_response_size_metrics = Summary(
-                    'sent_response_bytes',
-                    'The size in bytes of the response sent to the gateway',
-                    namespace='marie',
-                    labelnames=('executor_endpoint', 'executor', 'runtime_name'),
+                    "sent_response_bytes",
+                    "The size in bytes of the response sent to the gateway",
+                    namespace="marie",
+                    labelnames=("executor_endpoint", "executor", "runtime_name"),
                     registry=metrics_registry,
                 )
         else:
@@ -355,18 +344,18 @@ class WorkerRequestHandler:
 
         if meter:
             self._document_processed_counter = meter.create_counter(
-                name='marie_document_processed',
-                description='Number of Documents that have been processed by the executor',
+                name="marie_document_processed",
+                description="Number of Documents that have been processed by the executor",
             )
 
             self._request_size_histogram = meter.create_histogram(
-                name='marie_received_request_bytes',
-                description='The size in bytes of the request returned to the gateway',
+                name="marie_received_request_bytes",
+                description="The size in bytes of the request returned to the gateway",
             )
 
             self._sent_response_size_histogram = meter.create_histogram(
-                name='marie_sent_response_bytes',
-                description='The size in bytes of the response sent to the gateway',
+                name="marie_sent_response_bytes",
+                description="The size in bytes of the response sent to the gateway",
             )
         else:
             self._document_processed_counter = None
@@ -375,9 +364,9 @@ class WorkerRequestHandler:
 
     def _load_executor(
         self,
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        tracer_provider: Optional['trace.TracerProvider'] = None,
-        meter_provider: Optional['metrics.MeterProvider'] = None,
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        tracer_provider: Optional["trace.TracerProvider"] = None,
+        meter_provider: Optional["metrics.MeterProvider"] = None,
     ):
         """
         Load the executor to this runtime, specified by ``uses`` CLI argument.
@@ -393,29 +382,29 @@ class WorkerRequestHandler:
                 uses_requests=self.args.uses_requests,
                 uses_dynamic_batching=self.args.uses_dynamic_batching,
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
-                    'workspace': self.args.workspace,
-                    'shard_id': self.args.shard_id,
-                    'shards': self.args.shards,
-                    'replicas': self.args.replicas,
-                    'name': self.args.name,
-                    'provider': self.args.provider,
-                    'metrics_registry': metrics_registry,
-                    'tracer_provider': tracer_provider,
-                    'meter_provider': meter_provider,
+                    "workspace": self.args.workspace,
+                    "shard_id": self.args.shard_id,
+                    "shards": self.args.shards,
+                    "replicas": self.args.replicas,
+                    "name": self.args.name,
+                    "provider": self.args.provider,
+                    "metrics_registry": metrics_registry,
+                    "tracer_provider": tracer_provider,
+                    "meter_provider": meter_provider,
                 },
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
             )
-            self.logger.debug(f'{self._executor} is successfully loaded!')
+            self.logger.debug(f"{self._executor} is successfully loaded!")
 
         except BadConfigSource:
-            self.logger.error(f'fail to load config from {self.args.uses}')
+            self.logger.error(f"fail to load config from {self.args.uses}")
             raise
         except FileNotFoundError:
-            self.logger.error(f'fail to load file dependency')
+            self.logger.error(f"fail to load file dependency")
             raise
         except Exception:
-            self.logger.critical(f'can not load the executor from {self.args.uses}')
+            self.logger.critical(f"can not load the executor from {self.args.uses}")
             raise
 
     def _refresh_executor(self, changed_files):
@@ -426,7 +415,7 @@ class WorkerRequestHandler:
 
         try:
             sys_mod_files_modules = {
-                getattr(module, '__file__', ''): module
+                getattr(module, "__file__", ""): module
                 for module in sys.modules.values()
             }
 
@@ -435,12 +424,12 @@ class WorkerRequestHandler:
                     file_module = sys_mod_files_modules[file]
                     # TODO: unable to reload main module (for instance, Executor implementation and Executor.serve are
                     #  in the same file). Raising a warning for now
-                    if file_module.__name__ == '__main__':
+                    if file_module.__name__ == "__main__":
                         self.logger.warning(
-                            'The main module file was changed, cannot reload Executor, please restart '
-                            'the application'
+                            "The main module file was changed, cannot reload Executor, please restart "
+                            "the application"
                         )
-                    self.logger.debug(f'Reloading {file_module}')
+                    self.logger.debug(f"Reloading {file_module}")
                     try:
                         importlib.reload(file_module)
                     except ModuleNotFoundError:
@@ -449,14 +438,14 @@ class WorkerRequestHandler:
                         )
                         spec.loader.exec_module(file_module)
 
-                    self.logger.debug(f'Reloaded {file_module} successfully')
+                    self.logger.debug(f"Reloaded {file_module} successfully")
                 else:
                     self.logger.debug(
-                        f'Changed file {file} was not previously imported.'
+                        f"Changed file {file} was not previously imported."
                     )
         except Exception as exc:
             self.logger.error(
-                f'Exception when refreshing Executor when changes detected in {changed_files}: {exc}'
+                f"Exception when refreshing Executor when changes detected in {changed_files}: {exc}"
             )
             raise exc
 
@@ -492,9 +481,9 @@ class WorkerRequestHandler:
     @staticmethod
     def _metric_attributes(executor_endpoint, executor, runtime_name):
         return {
-            'executor_endpoint': executor_endpoint,
-            'executor': executor,
-            'runtime_name': runtime_name,
+            "executor_endpoint": executor_endpoint,
+            "executor": executor,
+            "runtime_name": runtime_name,
         }
 
     def _record_request_size_monitoring(self, requests):
@@ -569,8 +558,8 @@ class WorkerRequestHandler:
 
             else:
                 raise TypeError(
-                    f'The return type must be DocList / Dict / `None`, '
-                    f'but getting {return_data!r}'
+                    f"The return type must be DocList / Dict / `None`, "
+                    f"but getting {return_data!r}"
                 )
 
         WorkerRequestHandler.replace_docs(
@@ -611,7 +600,7 @@ class WorkerRequestHandler:
 
     def _setup_requests(
         self,
-        requests: List['DataRequest'],
+        requests: List["DataRequest"],
         exec_endpoint: str,
     ):
         """Execute a request using the executor.
@@ -628,7 +617,7 @@ class WorkerRequestHandler:
         return requests, params
 
     async def handle_generator(
-        self, requests: List['DataRequest'], tracing_context: Optional['Context'] = None
+        self, requests: List["DataRequest"], tracing_context: Optional["Context"] = None
     ) -> Generator:
         """Prepares and executes a request for generator endpoints.
 
@@ -643,13 +632,13 @@ class WorkerRequestHandler:
                 exec_endpoint = __default_endpoint__
             else:
                 raise RuntimeError(
-                    f'Request endpoint must match one of the available endpoints.'
+                    f"Request endpoint must match one of the available endpoints."
                 )
 
         requests, params = self._setup_requests(requests, exec_endpoint)
         if exec_endpoint in self._batchqueue_config:
             warnings.warn(
-                'Batching is not supported for generator executors endpoints. Ignoring batch size.'
+                "Batching is not supported for generator executors endpoints. Ignoring batch size."
             )
         doc = requests[0].docs[0]
         docs_matrix, docs_map = None, None
@@ -663,7 +652,7 @@ class WorkerRequestHandler:
         )
 
     async def handle(
-        self, requests: List['DataRequest'], tracing_context: Optional['Context'] = None
+        self, requests: List["DataRequest"], tracing_context: Optional["Context"] = None
     ) -> DataRequest:
         """Initialize private parameters and execute private loading functions.
 
@@ -679,9 +668,9 @@ class WorkerRequestHandler:
                 exec_endpoint = __default_endpoint__
             else:
                 self.logger.debug(
-                    f'skip executor: endpoint mismatch. '
-                    f'Request endpoint: `{exec_endpoint}`. '
-                    'Available endpoints: '
+                    f"skip executor: endpoint mismatch. "
+                    f"Request endpoint: `{exec_endpoint}`. "
+                    "Available endpoints: "
                     f'{", ".join(list(self._executor.requests.keys()))}'
                 )
                 return requests[0]
@@ -689,7 +678,7 @@ class WorkerRequestHandler:
         requests, params = self._setup_requests(requests, exec_endpoint)
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
         if exec_endpoint in self._batchqueue_config:
-            assert len(requests) == 1, 'dynamic batching does not support no_reduce'
+            assert len(requests) == 1, "dynamic batching does not support no_reduce"
 
             param_key = json.dumps(params, sort_keys=True)
             if param_key not in self._batchqueue_instances[exec_endpoint]:
@@ -742,7 +731,7 @@ class WorkerRequestHandler:
 
     @staticmethod
     def replace_docs(
-        request: List['DataRequest'], docs: 'DocumentArray', ndarray_type: str = None
+        request: List["DataRequest"], docs: "DocumentArray", ndarray_type: str = None
     ) -> None:
         """Replaces the docs in a message with new Documents.
 
@@ -753,7 +742,7 @@ class WorkerRequestHandler:
         request.data.set_docs_convert_arrays(docs, ndarray_type=ndarray_type)
 
     @staticmethod
-    def replace_parameters(request: List['DataRequest'], parameters: Dict) -> None:
+    def replace_parameters(request: List["DataRequest"], parameters: Dict) -> None:
         """Replaces the parameters in a message with new Documents.
 
         :param request: The request object
@@ -762,7 +751,7 @@ class WorkerRequestHandler:
         request.parameters = parameters
 
     @staticmethod
-    def merge_routes(requests: List['DataRequest']) -> None:
+    def merge_routes(requests: List["DataRequest"]) -> None:
         """Merges all routes found in requests into the first message
 
         :param requests: The messages containing the requests with the routes to merge
@@ -778,20 +767,20 @@ class WorkerRequestHandler:
 
     async def close(self):
         """Close the data request handler, by closing the executor and the batch queues."""
-        self.logger.debug(f'Closing Request Handler')
+        self.logger.debug(f"Closing Request Handler")
         if self._hot_reload_task is not None:
             self._hot_reload_task.cancel()
         if not self._is_closed:
-            self.logger.debug(f'Await closing all the batching queues')
+            self.logger.debug(f"Await closing all the batching queues")
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
             self._executor.close()
             self._is_closed = True
-        self.logger.debug(f'Request Handler closed')
+        self.logger.debug(f"Request Handler closed")
 
     @staticmethod
     def _get_docs_matrix_from_request(
-        requests: List['DataRequest'],
-    ) -> Tuple[Optional[List['DocumentArray']], Optional[Dict[str, 'DocumentArray']]]:
+        requests: List["DataRequest"],
+    ) -> Tuple[Optional[List["DocumentArray"]], Optional[Dict[str, "DocumentArray"]]]:
         """
         Returns a docs matrix from a list of DataRequest objects.
 
@@ -814,8 +803,8 @@ class WorkerRequestHandler:
 
     @staticmethod
     def get_parameters_dict_from_request(
-        requests: List['DataRequest'],
-    ) -> 'Dict':
+        requests: List["DataRequest"],
+    ) -> "Dict":
         """
         Returns a parameters dict from a list of DataRequest objects.
         :param requests: List of DataRequest objects
@@ -834,8 +823,8 @@ class WorkerRequestHandler:
 
     @staticmethod
     def get_docs_from_request(
-        requests: List['DataRequest'],
-    ) -> 'DocumentArray':
+        requests: List["DataRequest"],
+    ) -> "DocumentArray":
         """
         Gets a field from the message
 
@@ -844,14 +833,14 @@ class WorkerRequestHandler:
         :returns: DocumentArray extracted from the field from all messages
         """
         if len(requests) > 1:
-            result = DocumentArray(d for r in requests for d in getattr(r, 'docs'))
+            result = DocumentArray(d for r in requests for d in getattr(r, "docs"))
         else:
-            result = getattr(requests[0], 'docs')
+            result = getattr(requests[0], "docs")
 
         return result
 
     @staticmethod
-    def reduce(docs_matrix: List['DocumentArray']) -> Optional['DocumentArray']:
+    def reduce(docs_matrix: List["DocumentArray"]) -> Optional["DocumentArray"]:
         """
         Reduces a list of DocumentArrays into one DocumentArray. Changes are applied to the first
         DocumentArray in-place.
@@ -884,7 +873,7 @@ class WorkerRequestHandler:
             return da
 
     @staticmethod
-    def reduce_requests(requests: List['DataRequest']) -> 'DataRequest':
+    def reduce_requests(requests: List["DataRequest"]) -> "DataRequest":
         """
         Reduces a list of requests containing DocumentArrays into one request object. Changes are applied to the first
         request object in-place.
@@ -924,11 +913,11 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        self.logger.debug('recv a process_single_data request')
+        self.logger.debug("recv a process_single_data request")
         return await self.process_data([request], context, is_generator=is_generator)
 
     async def stream_doc(
-        self, request: SingleDocumentRequest, context: 'grpc.aio.ServicerContext'
+        self, request: SingleDocumentRequest, context: "grpc.aio.ServicerContext"
     ) -> SingleDocumentRequest:
         """
         Process the received requests and return the result as a new request, used for streaming behavior, one doc IN, several out
@@ -937,27 +926,27 @@ class WorkerRequestHandler:
         :param context: grpc context
         :yields: the response request
         """
-        self.logger.debug('recv an stream_doc request')
+        self.logger.debug("recv an stream_doc request")
         request_endpoint = self._executor.requests.get(
             request.header.exec_endpoint
         ) or self._executor.requests.get(__default_endpoint__)
 
         if request_endpoint is None:
             self.logger.debug(
-                f'skip executor: endpoint mismatch. '
-                f'Request endpoint: `{request.header.exec_endpoint}`. '
-                'Available endpoints: '
+                f"skip executor: endpoint mismatch. "
+                f"Request endpoint: `{request.header.exec_endpoint}`. "
+                "Available endpoints: "
                 f'{", ".join(list(self._executor.requests.keys()))}'
             )
             yield request
 
-        is_generator = getattr(request_endpoint.fn, '__is_generator__', False)
+        is_generator = getattr(request_endpoint.fn, "__is_generator__", False)
         if not is_generator:
-            ex = ValueError('endpoint must be generator')
+            ex = ValueError("endpoint must be generator")
             self.logger.error(
-                f'{ex!r}' + f'\n add "--quiet-error" to suppress the exception details'
+                f"{ex!r}" + f'\n add "--quiet-error" to suppress the exception details'
                 if not self.args.quiet_error
-                else '',
+                else "",
                 exc_info=not self.args.quiet_error,
             )
             request.add_exception(ex)
@@ -986,13 +975,13 @@ class WorkerRequestHandler:
             async for doc in result:
                 if not isinstance(doc, request_endpoint.response_schema):
                     ex = ValueError(
-                        f'output document type {doc.__class__.__name__} does not match the endpoint output type {request_endpoint.response_schema.__name__}'
+                        f"output document type {doc.__class__.__name__} does not match the endpoint output type {request_endpoint.response_schema.__name__}"
                     )
                     self.logger.error(
-                        f'{ex!r}'
+                        f"{ex!r}"
                         + f'\n add "--quiet-error" to suppress the exception details'
                         if not self.args.quiet_error
-                        else '',
+                        else "",
                         exc_info=not self.args.quiet_error,
                     )
                     req = SingleDocumentRequest()
@@ -1002,7 +991,7 @@ class WorkerRequestHandler:
                     req.document_cls = doc.__class__
                     req.data.doc = doc
 
-                self.logger.debug('yielding response')
+                self.logger.debug("yielding response")
                 yield req
 
     async def endpoint_discovery(self, empty, context) -> jina_pb2.EndpointsProto:
@@ -1015,7 +1004,7 @@ class WorkerRequestHandler:
         """
         from google.protobuf import json_format
 
-        self.logger.debug('got an endpoint discovery request')
+        self.logger.debug('recv an endpoint discovery request')
         endpoints_proto = jina_pb2.EndpointsProto()
         endpoints_proto.endpoints.extend(list(self._executor.requests.keys()))
         endpoints_proto.write_endpoints.extend(list(self._executor.write_endpoints))
@@ -1026,35 +1015,35 @@ class WorkerRequestHandler:
 
             legacy_doc_schema = LegacyDocument.schema()
             for endpoint_name, inner_dict in schemas.items():
-                if inner_dict['input']['model'].schema() == legacy_doc_schema:
-                    inner_dict['input']['model'] = legacy_doc_schema
+                if inner_dict["input"]["model"].schema() == legacy_doc_schema:
+                    inner_dict["input"]["model"] = legacy_doc_schema
                 else:
-                    inner_dict['input']['model'] = _create_aux_model_doc_list_to_list(
-                        inner_dict['input']['model']
+                    inner_dict["input"]["model"] = _create_aux_model_doc_list_to_list(
+                        inner_dict["input"]["model"]
                     ).schema()
 
-                if inner_dict['output']['model'].schema() == legacy_doc_schema:
-                    inner_dict['output']['model'] = legacy_doc_schema
+                if inner_dict["output"]["model"].schema() == legacy_doc_schema:
+                    inner_dict["output"]["model"] = legacy_doc_schema
                 else:
-                    inner_dict['output']['model'] = _create_aux_model_doc_list_to_list(
-                        inner_dict['output']['model']
+                    inner_dict["output"]["model"] = _create_aux_model_doc_list_to_list(
+                        inner_dict["output"]["model"]
                     ).schema()
 
-                if inner_dict['parameters']['model'] is not None:
-                    inner_dict['parameters']['model'] = inner_dict['parameters'][
-                        'model'
+                if inner_dict["parameters"]["model"] is not None:
+                    inner_dict["parameters"]["model"] = inner_dict["parameters"][
+                        "model"
                     ].schema()
         else:
             for endpoint_name, inner_dict in schemas.items():
-                inner_dict['input']['model'] = inner_dict['input']['model'].schema()
-                inner_dict['output']['model'] = inner_dict['output']['model'].schema()
-                inner_dict['parameters'] = {}
+                inner_dict["input"]["model"] = inner_dict["input"]["model"].schema()
+                inner_dict["output"]["model"] = inner_dict["output"]["model"].schema()
+                inner_dict["parameters"] = {}
         json_format.ParseDict(schemas, endpoints_proto.schemas)
         return endpoints_proto
 
     def _extract_tracing_context(
-        self, metadata: 'grpc.aio.Metadata'
-    ) -> Optional['Context']:
+        self, metadata: "grpc.aio.Metadata"
+    ) -> Optional["Context"]:
         if self.tracer:
             from opentelemetry.propagate import extract
 
@@ -1074,14 +1063,14 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        self.logger.debug('recv a process_data request')
+        self.logger.debug("recv a process_data request")
         with MetricsTimer(
             self._summary, self._receiving_request_seconds, self._metric_attributes
         ):
             try:
                 if self.logger.debug_enabled:
                     self.logger.debug(
-                        f'recv DataRequest at {requests[0].header.exec_endpoint} with id: {requests[0].header.request_id}'
+                        f"recv DataRequest at {requests[0].header.exec_endpoint} with id: {requests[0].header.request_id}"
                     )
 
                 if context is not None:
@@ -1109,21 +1098,21 @@ class WorkerRequestHandler:
                 if self.logger.debug_enabled:
                     if isinstance(result, DataRequest):
                         self.logger.debug(
-                            f'return DataRequest from {result.header.exec_endpoint} with id: {result.header.request_id}'
+                            f"return DataRequest from {result.header.exec_endpoint} with id: {result.header.request_id}"
                         )
                 return result
             except (RuntimeError, Exception) as ex:
                 self.logger.error(
-                    f'{ex!r}'
+                    f"{ex!r}"
                     + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
-                    else '',
+                    else "",
                     exc_info=not self.args.quiet_error,
                 )
 
                 requests[0].add_exception(ex, self._executor)
                 if context is not None:
-                    context.set_trailing_metadata((('is-error', 'true'),))
+                    context.set_trailing_metadata((("is-error", "true"),))
                 if self._failed_requests_metrics:
                     self._failed_requests_metrics.inc()
                 if self._failed_requests_counter:
@@ -1147,7 +1136,7 @@ class WorkerRequestHandler:
         :param context: grpc context
         :returns: the response request
         """
-        self.logger.debug('recv _status request')
+        self.logger.debug("recv _status request")
         info_proto = jina_pb2.JinaInfoProto()
         version, env_info = get_full_version()
         for k, v in version.items():
@@ -1158,7 +1147,7 @@ class WorkerRequestHandler:
 
     async def stream(
         self, request_iterator, context=None, *args, **kwargs
-    ) -> AsyncIterator['Request']:
+    ) -> AsyncIterator["Request"]:
         """
         stream requests from client iterator and stream responses back.
 
@@ -1168,7 +1157,7 @@ class WorkerRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request
         """
-        self.logger.debug('recv a stream request')
+        self.logger.debug("recv a stream request")
         async for request in request_iterator:
             yield await self.process_data([request], context)
 
@@ -1177,28 +1166,28 @@ class WorkerRequestHandler:
     def _create_snapshot_status(
         self,
         snapshot_directory: str,
-    ) -> 'jina_pb2.SnapshotStatusProto':
+    ) -> "jina_pb2.SnapshotStatusProto":
         _id = str(uuid.uuid4())
-        self.logger.debug(f'Generated snapshot id: {_id}')
+        self.logger.debug(f"Generated snapshot id: {_id}")
         return jina_pb2.SnapshotStatusProto(
             id=jina_pb2.SnapshotId(value=_id),
             status=jina_pb2.SnapshotStatusProto.Status.RUNNING,
             snapshot_file=os.path.join(
-                os.path.join(snapshot_directory, _id), 'state.bin'
+                os.path.join(snapshot_directory, _id), "state.bin"
             ),
         )
 
     def _create_restore_status(
         self,
-    ) -> 'jina_pb2.SnapshotStatusProto':
+    ) -> "jina_pb2.SnapshotStatusProto":
         _id = str(uuid.uuid4())
-        self.logger.debug(f'Generated restore id: {_id}')
+        self.logger.debug(f"Generated restore id: {_id}")
         return jina_pb2.RestoreSnapshotStatusProto(
             id=jina_pb2.RestoreId(value=_id),
             status=jina_pb2.RestoreSnapshotStatusProto.Status.RUNNING,
         )
 
-    async def snapshot(self, request, context) -> 'jina_pb2.SnapshotStatusProto':
+    async def snapshot(self, request, context) -> "jina_pb2.SnapshotStatusProto":
         """
         method to start a snapshot process of the Executor
         :param request: the empty request
@@ -1206,14 +1195,14 @@ class WorkerRequestHandler:
 
         :return: the status of the snapshot
         """
-        self.logger.debug('Calling snapshot')
+        self.logger.debug("Calling snapshot")
         if (
             self._snapshot
             and self._snapshot_thread
             and self._snapshot_thread.is_alive()
         ):
             raise RuntimeError(
-                f'A snapshot with id {self._snapshot.id.value} is currently in progress. Cannot start another.'
+                f"A snapshot with id {self._snapshot.id.value} is currently in progress. Cannot start another."
             )
         else:
             self._snapshot = self._create_snapshot_status(
@@ -1228,8 +1217,8 @@ class WorkerRequestHandler:
             return self._snapshot
 
     async def snapshot_status(
-        self, request: 'jina_pb2.SnapshotId', context
-    ) -> 'jina_pb2.SnapshotStatusProto':
+        self, request: "jina_pb2.SnapshotId", context
+    ) -> "jina_pb2.SnapshotStatusProto":
         """
         method to start a snapshot process of the Executor
         :param request: the snapshot Id to get the status from
@@ -1265,7 +1254,7 @@ class WorkerRequestHandler:
             status=jina_pb2.SnapshotStatusProto.Status.NOT_FOUND,
         )
 
-    async def restore(self, request: 'jina_pb2.RestoreSnapshotCommand', context):
+    async def restore(self, request: "jina_pb2.RestoreSnapshotCommand", context):
         """
         method to start a restore process of the Executor
         :param request: the command request with the path from where to restore the Executor
@@ -1273,10 +1262,10 @@ class WorkerRequestHandler:
 
         :return: the status of the snapshot
         """
-        self.logger.debug(f'Calling restore')
+        self.logger.debug(f"Calling restore")
         if self._restore and self._restore_thread and self._restore_thread.is_alive():
             raise RuntimeError(
-                f'A restore with id {self._restore.id.value} is currently in progress. Cannot start another.'
+                f"A restore with id {self._restore.id.value} is currently in progress. Cannot start another."
             )
         else:
             self._restore = self._create_restore_status()
@@ -1290,7 +1279,7 @@ class WorkerRequestHandler:
 
     async def restore_status(
         self, request, context
-    ) -> 'jina_pb2.RestoreSnapshotStatusProto':
+    ) -> "jina_pb2.RestoreSnapshotStatusProto":
         """
         method to start a snapshot process of the Executor
         :param request: the request with the Restore ID from which to get status

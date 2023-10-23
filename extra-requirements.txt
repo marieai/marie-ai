@@ -154,4 +154,8 @@ Pillow-SIMD:                  standard,core
 # https://github.com/facebookresearch/detectron2/issues/5010
 pillow~=9.5:                  standard,core
 
+pytesseract:                  standard,core
+
+
+
 

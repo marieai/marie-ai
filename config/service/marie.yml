@@ -1,6 +1,5 @@
 jtype: Flow
 version: '1'
-
 protocol: grpc
 
 # Shared configuration
@@ -102,7 +101,7 @@ with:
     - http
     - grpc
   discovery: True
-  discovery_host: 172.16.11.162
+  discovery_host: 127.0.0.1
   discovery_port: 8500
 
   # monitoring

@@ -2,7 +2,7 @@ import multiprocessing
 import os
 
 import psutil
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.components import TransformersDocumentClassifier
 from marie.logging.mdc import MDC

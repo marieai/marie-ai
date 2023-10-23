@@ -32,6 +32,9 @@ from .metadata import (
     normalize_metadata,
 )
 
+from typing import List, Tuple
+from pydantic import BaseModel
+
 # from .utils import DEFAULT_OUTPUT
 
 # from ...serdes import deserialize_value
@@ -50,7 +53,15 @@ def parse_asset_key_string(s: str) -> Sequence[str]:
     return list(filter(lambda x: x, re.split(ASSET_KEY_SPLIT_REGEX, s)))
 
 
-class AssetKey(NamedTuple("_AssetKey", [("path", PublicAttr[Sequence[str]])])):
+class AssetKey(BaseModel):
+    path: List[str]
+
+    class Config:
+        arbitrary_types_allowed = False
+
+
+class AssetKeyDAG(NamedTuple("_AssetKey", [("path", Sequence[str])])):
+    # class AssetKey(NamedTuple("_AssetKey", [("path", PublicAttr[Sequence[str]])])):
     """Object representing the structure of an asset key.  Takes in a sanitized string, list of
     strings, or tuple of strings.
 

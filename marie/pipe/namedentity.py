@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from pprint import pprint
 from typing import Optional, List
 
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineResult, PipelineContext
@@ -28,7 +28,7 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
     ) -> PipelineResult:
         print("NamedEntityPipelineComponent.predict()")
 
-        context['metadata']["page_indexer"] = self.extract_named_entity(
+        context["metadata"]["page_indexer"] = self.extract_named_entity(
             documents, words, boxes
         )
 

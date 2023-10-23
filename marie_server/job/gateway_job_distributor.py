@@ -6,8 +6,8 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request.data import DataRequest
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.job_distributor import JobDistributor
-from docarray import Document
-from docarray import DocumentArray
+from m import Document
+from marie import DocumentArray
 
 
 class GatewayJobDistributor(JobDistributor):
@@ -44,7 +44,7 @@ class GatewayJobDistributor(JobDistributor):
         request.header.target_executor = job_info.entrypoint
         request.parameters = job_info.metadata
 
-        request.data.docs = DocumentArray([Document(text='sample text')])
+        request.data.docs = DocumentArray([Document(text="sample text")])
         response = await self.gateway_streamer.process_single_data(request=request)
 
         return response

@@ -7,7 +7,7 @@ import torch.nn.functional as nn
 from PIL import Image, ImageDraw
 
 # Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
-from docarray import DocumentArray, Document
+from marie import DocumentArray, Document
 from transformers import (
     AutoModelForTokenClassification,
     LayoutLMv3FeatureExtractor,
@@ -38,7 +38,7 @@ from marie.ocr import DefaultOcrEngine, CoordinateFormat
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import (
     convert_frames,
-    array_from_docs,
+    frames_from_docs,
 )
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
@@ -922,7 +922,7 @@ class NerExtractionExecutor(Executor, StorageMixin):
     def extract(
         self, docs: DocumentArray, parameters: Optional[Dict] = None, *args, **kwargs
     ):
-        frames = array_from_docs(docs)
+        frames = frames_from_docs(docs)
 
         if parameters:
             for key, value in parameters.items():

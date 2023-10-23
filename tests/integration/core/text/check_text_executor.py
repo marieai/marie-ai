@@ -4,9 +4,10 @@ import uuid
 
 from marie import Client
 from marie.executor.text import TextExtractionExecutor
+from marie.executor.text import TextExtractionExecutorMock
 from marie.storage import S3StorageHandler, StorageManager
-from marie.utils.docs import array_from_docs, docs_from_file
-from marie.utils.json import load_json_file
+from marie.utils.docs import frames_from_docs, docs_from_file
+from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 from marie_server.rest_extension import (
     parse_payload_to_docs_sync,
@@ -19,8 +20,7 @@ def setup_storage():
             "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
             "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
             "S3_STORAGE_BUCKET_NAME": "marie",
-            "S3_ENDPOINT_URLXX": "http://localhost:8000",
-            "S3_ENDPOINT_URL": "http://64.62.141.143:8000",
+            "S3_ENDPOINT_URL": "http://localhost:8000",
             "S3_ADDRESSING_STYLE": "path",
         }
     )
@@ -30,18 +30,8 @@ def setup_storage():
     StorageManager.ensure_connection()
 
 
-def check_executor():
-    work_dir_boxes = ensure_exists("/tmp/boxes")
-    work_dir_icr = ensure_exists("/tmp/icr")
-    ensure_exists("/tmp/fragments")
-
-    img_path = "~/tmp/marie-cleaner/169150505/PID_1898_9172_0_169150505.tif"
+def check_executor(img_path: str):
     img_path = os.path.expanduser(img_path)
-
-    mode = "sparse"
-    docs = docs_from_file(img_path)
-    frames = array_from_docs(docs)
-    kwa = {"payload": {"output": "json", "mode": "line", "format": "xyxy"}}
 
     # Prepare file for upload
     with open(img_path, "rb") as file:
@@ -65,19 +55,22 @@ def check_executor():
     # output['json']=> json,text,pdf
 
     uid = str(uuid.uuid4())
-    json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
-    # json_payload = {"data": base64_str, "mode": mode, "output": "assets"}
 
     payload = {
         "queue_id": uid,
         "data": base64_str,
         # "uri": "s3://marie/incoming/ocr-0001.tif",
-        "mode": mode,
+        "mode": "sparse",
         "output": "json",
-        "doc_id": f"greg-{uid}",
+        "doc_id": f"exec-{uid}",
         "doc_type": "overlay",
         # "features": [{"type": "LABEL_DETECTION", "maxResults": 1}],
     }
+
+    store_json_object(
+        payload,
+        os.path.expanduser(os.path.join("~/tmp/payloads", f"extract-{uid}.json")),
+    )
 
     # load payload from file
     if False:
@@ -91,7 +84,7 @@ def check_executor():
     kwa = parameters
 
     if True:
-        executor = TextExtractionExecutor()
+        executor = TextExtractionExecutorMock()
         results = executor.extract(docs, parameters=kwa)
         print(results)
 
@@ -120,7 +113,7 @@ async def check_executor_via_client():
 
 if __name__ == "__main__":
     # setup_storage()
-    check_executor()
+    check_executor("~/tmp/4007/176080625.tif")
 
     if False:
         print("Main")

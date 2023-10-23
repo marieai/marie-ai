@@ -2,7 +2,7 @@ import gradio as gr
 from PIL import Image
 
 from marie.executor.ner import NerExtractionExecutor
-from marie.utils.docs import docs_from_file, array_from_docs
+from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
@@ -22,7 +22,7 @@ def process_image(image):
 
     # checksum = hash_file()
     docs = docs_from_file(img_path)
-    arr = array_from_docs(docs)
+    arr = frames_from_docs(docs)
     checksum = hash_frames_fast(arr)
     kwa = {}
     results = executor.extract(docs, **kwa)

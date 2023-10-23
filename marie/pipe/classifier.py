@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, List, Iterable
 
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineResult, PipelineContext
@@ -27,7 +27,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
         boxes: List[List[List[int]]] = None,
     ) -> PipelineResult:
 
-        context['metadata']["page_classifier"] = self.classify(documents, words, boxes)
+        context["metadata"]["page_classifier"] = self.classify(documents, words, boxes)
 
         return PipelineResult(documents)
 

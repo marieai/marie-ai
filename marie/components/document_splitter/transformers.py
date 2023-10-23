@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
-from docarray import DocumentArray
+from marie import DocumentArray
 from torch.nn import Module
 from tqdm import tqdm
 from transformers import (

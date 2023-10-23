@@ -1,13 +1,15 @@
-import gc
 import os
 from typing import Dict, Union, Optional, Any
 
 import numpy as np
 import torch
-from docarray import DocumentArray, Document
+from docarray import DocList
+
+from marie import DocumentArray, Document
 
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
+from marie.api.docs import AssetKeyDoc, OutputDoc
 from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
@@ -16,7 +18,7 @@ from marie.logging.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
 from marie.ocr import CoordinateFormat
 from marie.ocr.extract_pipeline import ExtractPipeline
-from marie.utils.docs import array_from_docs
+from marie.utils.docs import frames_from_docs, docs_from_asset
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 
@@ -80,11 +82,14 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
     @requests(on="/document/extract")
     @safely_encoded
-    def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
-        """Load the image from `uri`, extract text and bounding boxes.
+    # def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
+    def extract(self, docs: DocList[AssetKeyDoc], parameters: Dict, *args, **kwargs):
+        """
+        Process a document via specified pipeline.
+
         :param parameters:
-        :param docs: Documents to process
-        :param kwargs:
+        :param doc Document to process
+        :param kwargs: additional keyword arguments
         :return:
         """
         if parameters is None or "job_id" not in parameters:
@@ -106,6 +111,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             "metadata": {},
         }
 
+        doc = None
         try:
             if "payload" not in parameters or parameters["payload"] is None:
                 return {"error": "empty payload"}
@@ -134,7 +140,9 @@ class TextExtractionExecutor(Executor, StorageMixin):
             #     value_from_payload_or_args(payload, "output", default="json")
             # )
 
-            frames = array_from_docs(docs)
+            # load documents from specified document asset key
+            docs = docs_from_asset(doc.asset, doc.pages)
+            frames = frames_from_docs(docs)
             frame_len = len(frames)
 
             if parameters:
@@ -290,24 +298,55 @@ class TextExtractionExecutorMock(Executor):
         logger.info(f"Pipeline : {pipeline}")
         print("TEXT-START")
 
-    @requests(on="/document/status")
-    def status(self, parameters, **kwargs):
-        use_cuda = torch.cuda.is_available()
-        print(f"{use_cuda=}")
-        return {"index": "complete", "use_cuda": use_cuda}
+    # @requests(on="/document/status")
+    # def status(self, parameters, **kwargs):
+    #     use_cuda = torch.cuda.is_available()
+    #     print(f"{use_cuda=}")
+    #     return {"index": "complete", "use_cuda": use_cuda}
+    #
+    # @requests(on="/document/validate")
+    # def validate(self, parameters, **kwargs):
+    #     return {"valid": True}
 
-    @requests(on="/document/validate")
-    def validate(self, parameters, **kwargs):
-        return {"valid": True}
-
+    # @safely_encoded
     @requests(on="/document/extract")
-    @safely_encoded
-    def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
-        logger.info(f"Executing extract : {len(docs)}")
+    def extract(
+        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
+    ) -> DocList[OutputDoc]:
+        print("TEXT-EXTRACT")
+        print(parameters)
+        print(docs)
+
         logger.info(kwargs)
         logger.info(parameters)
 
-        import threading
+        if len(docs) == 0:
+            return {"error": "empty payload"}
+        if len(docs) > 1:
+            return {"error": "expected single document"}
+
+        doc = docs[0]
+        # load documents from specified document asset key
+        docs = docs_from_asset(doc.asset_key, doc.pages)
+
+        print(docs)
+        for doc in docs:
+            print(doc.id)
+
+        frames = frames_from_docs(docs)
+        frame_len = len(frames)
+
+        print(f"{frame_len=}")
+
+        return DocList[OutputDoc](
+            [
+                OutputDoc(
+                    jobid="ABCDEF",
+                    status="OK",
+                )
+            ]
+        )
+
         import time
 
         if "payload" not in parameters or parameters["payload"] is None:
@@ -322,19 +361,14 @@ class TextExtractionExecutorMock(Executor):
             region["id"] = int(region["id"])
             region["pageIndex"] = int(region["pageIndex"])
 
-        print("AFTER")
-        print(payload)
-        time.sleep(5)
-
-        for doc in docs:
-            doc.text = f"{doc.text} : >> {threading.get_ident()}"
-
         np_arr = np.array([1, 2, 3])
 
         out = [
             {"sample": 112, "complex": ["a", "b"]},
             {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
         ]
+
+        time.sleep(1)
 
         meta = get_ip_address()
         return out
