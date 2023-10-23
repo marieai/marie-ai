@@ -149,7 +149,10 @@ if __name__ == "__main__":
         "extract",
         "extract.#",
         stop_event,
-        ["extract.completed", "extract.failed"],
+        [
+            "extract.completedXXX",
+            "extract.failedXXX",
+        ],  # this will not work if we have multiple requests
         # lambda x: print(f"callback: {x}"),
         message_handler,
     )

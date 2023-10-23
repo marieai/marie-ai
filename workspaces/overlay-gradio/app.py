@@ -18,14 +18,15 @@ def process_image(src_img_path):
     docId = "segment"
     real, fake, blended = overlay_processor.segment(docId, src_img_path)
 
-    # debug image
-    if True:
-        stack_dir = ensure_exists("/tmp/overlay-stack")
-        # stacked = np.hstack((real, fake, blended))
-        stacked = np.hstack((real, blended))
-        save_path = os.path.join(stack_dir, f"{docId}.png")
-        imwrite(save_path, stacked)
-        print(f"Saving  document : {save_path}")
+    stack_dir = ensure_exists("/tmp/overlay")
+    print(f"Saving  documents in : {stack_dir}")
+    stacked = np.hstack((real, fake, blended))
+    # stacked = np.hstack((real, blended))
+
+    imwrite(os.path.join(stack_dir, f"{docId}.png"), stacked)
+    imwrite(os.path.join(stack_dir, f"{docId}-real.png"), real)
+    imwrite(os.path.join(stack_dir, f"{docId}-fake.png"), fake)
+    imwrite(os.path.join(stack_dir, f"{docId}-blended.png"), blended)
 
     return fake, blended
 
@@ -39,16 +40,12 @@ def interface():
         # image_file will be of tempfile._TemporaryFileWrapper type
         filename = image_src.name
         frames = frames_from_file(filename)
-
         return frames
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
         filename = selection["name"]
-        # docId = "segment"
-        real, blended = process_image(filename)
-        # real, fake, blended = overlay_processor.segment(docId, filename)
-        return fake, blended
+        return process_image(filename)
 
     with gr.Blocks() as iface:
         gr.Markdown(article)
@@ -76,9 +73,9 @@ def interface():
 
         with gr.Row():
             with gr.Column():
-                fake = gr.components.Image(type="pil", label="fake")
+                fake = gr.components.Image(type="numpy", label="fake")
             with gr.Column():
-                blended = gr.components.Image(type="pil", label="blended")
+                blended = gr.components.Image(type="numpy", label="blended")
 
         btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
         btn_submit.click(process_image, inputs=[src], outputs=[fake, blended])
@@ -99,5 +96,4 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
 
-    # print(torch._dynamo.list_backends())
     interface()

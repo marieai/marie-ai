@@ -3,15 +3,16 @@ from typing import Any, Optional
 from docarray import BaseDoc
 from docarray.typing import AnyTensor
 
-from marie._core.definitions.events import AssetKey
+
+# from marie._core.definitions.events import AssetKey
+
+
+# It is important to note that if the documents are not serializable we can get number or wierd exceptions
 
 
 class AssetKeyDoc(BaseDoc):
-    asset_key: str  # AssetKey
+    asset_key: str
     pages: Optional[list[int]]
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class StorageDoc(BaseDoc):
