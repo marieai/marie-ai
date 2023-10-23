@@ -59,7 +59,6 @@ async def async_consumer():
             priority, item = item.result()
             retval = await item(idx)
             print(f"async_consumer: {queue.qsize()} : {queue.empty()} : item: {priority} -> {item} -> {retval}")
-
             idx += 1
         except Exception as e:
             raise e

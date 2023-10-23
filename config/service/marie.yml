@@ -140,6 +140,8 @@ with:
       tags:
         - classify
 
+prefetch: 4
+
 executors:
 #  - name: extract_executor
 #    uses:

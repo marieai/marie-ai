@@ -81,17 +81,28 @@ class TextExtractionExecutor(Executor, StorageMixin):
             self.setup_storage(sconf.get("enabled", False), sconf)
 
     @requests(on="/document/extract")
-    @safely_encoded
-    # def extract(self, docs: DocumentArray, parameters: Dict, *args, **kwargs):
-    def extract(self, docs: DocList[AssetKeyDoc], parameters: Dict, *args, **kwargs):
-        """
-        Process a document via specified pipeline.
+    # @safely_encoded # BREAKS WITH docarray 0.39
+    def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+        logger.info(kwargs)
+        logger.info(parameters)
 
-        :param parameters:
-        :param doc Document to process
-        :param kwargs: additional keyword arguments
-        :return:
-        """
+        if len(docs) == 0:
+            return {"error": "empty payload"}
+        if len(docs) > 1:
+            return {"error": "expected single document"}
+
+        doc = docs[0]
+        # load documents from specified document asset key
+        docs = docs_from_asset(doc.asset_key, doc.pages)
+
+        for doc in docs:
+            print(doc.id)
+
+        frames = frames_from_docs(docs)
+        frame_len = len(frames)
+
+        print(f"{frame_len=}")
+
         if parameters is None or "job_id" not in parameters:
             self.logger.warning(f"Job ID is not present in parameters")
             raise ValueError("Job ID is not present in parameters")
@@ -105,13 +116,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
         queue_id: str = parameters.get("queue_id", "0000-0000-0000-0000")
 
-        return {
-            "status": "succeeded",
-            "runtime_info": self.runtime_info,
-            "metadata": {},
-        }
-
-        doc = None
         try:
             if "payload" not in parameters or parameters["payload"] is None:
                 return {"error": "empty payload"}
@@ -296,7 +300,6 @@ class TextExtractionExecutorMock(Executor):
 
         logger.info(f"Runtime info: {self.runtime_info}")
         logger.info(f"Pipeline : {pipeline}")
-        print("TEXT-START")
 
     # @requests(on="/document/status")
     # def status(self, parameters, **kwargs):
@@ -308,11 +311,9 @@ class TextExtractionExecutorMock(Executor):
     # def validate(self, parameters, **kwargs):
     #     return {"valid": True}
 
-    # @safely_encoded
     @requests(on="/document/extract")
-    def extract(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ) -> DocList[OutputDoc]:
+    # @safely_encoded # BREAKS WITH docarray 0.39
+    def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         print("TEXT-EXTRACT")
         print(parameters)
         print(docs)
@@ -329,7 +330,6 @@ class TextExtractionExecutorMock(Executor):
         # load documents from specified document asset key
         docs = docs_from_asset(doc.asset_key, doc.pages)
 
-        print(docs)
         for doc in docs:
             print(doc.id)
 
@@ -337,15 +337,16 @@ class TextExtractionExecutorMock(Executor):
         frame_len = len(frames)
 
         print(f"{frame_len=}")
+        # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
 
-        return DocList[OutputDoc](
-            [
-                OutputDoc(
-                    jobid="ABCDEF",
-                    status="OK",
-                )
-            ]
-        )
+        # return DocList[OutputDoc](
+        #     [
+        #         OutputDoc(
+        #             jobid="ABCDEF",
+        #             status="OK",
+        #         )
+        #     ]
+        # )
 
         import time
 
@@ -371,4 +372,5 @@ class TextExtractionExecutorMock(Executor):
         time.sleep(1)
 
         meta = get_ip_address()
-        return out
+        #  DocList / Dict / `None`
+        return self.runtime_info

@@ -262,8 +262,9 @@ def __main__(
         for k, v in os.environ.items():
             print(f"{k} = {v}")
 
-    # Load the config file and setup the toast events
+    # Load the config file and set up the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
+    prefetch = config.get("prefetch", 0)
 
     f = Flow.load_config(
         config,
@@ -273,12 +274,11 @@ def __main__(
         include_gateway=True,
         # noblock_on_start=True,
     )
-
     filter_endpoint()
     setup_server(config)
 
     # os.environ["JINA_MP_START_METHOD"] = "spawn"
-    marie.helper.extend_rest_interface = partial(extend_rest_interface, f)
+    marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
 
     with f:
         f.block()

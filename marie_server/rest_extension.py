@@ -1,24 +1,19 @@
 import asyncio
-import gc
 import os
 import sys
 import time
 import traceback
-from functools import partial
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, AsyncIterator
 
 from docarray import DocList
-
-from marie import DocumentArray, Document
 from fastapi import HTTPException
 from fastapi import Request
 
 from marie import Client, Flow
-from marie._core.definitions.events import AssetKey
 from marie._core.utils import run_background_task
-from marie.api import extract_payload, extract_payload_to_uri
+from marie.api import extract_payload_to_uri
 from marie.api import value_from_payload_or_args
-from marie.api.docs import AssetKeyDoc, OutputDoc
+from marie.api.docs import AssetKeyDoc
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
@@ -28,19 +23,18 @@ from marie.messaging import (
 )
 from marie.messaging.publisher import mark_as_scheduled
 from marie.types.request.data import DataRequest
-from marie.utils.docs import docs_from_file
 from marie.utils.types import strtobool
-from marie.utils.utils import ensure_exists
 from marie_server.job.job_manager import generate_job_id
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI, Request
 
 
-async def coro_scheduler(queue: asyncio.Queue, limit: int = 2):
+async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
     pending = set()
-
+    print("limit = ", limit)
     while True:
+        # print("size of pending = ", len(pending))
         while len(pending) < limit:
             item = queue.get()
             # pending.add(run_background_task(item))
@@ -50,32 +44,31 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2):
             continue
 
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        # print("size of done = ", len(done), len(pending))
         while done:
-            yield done.pop()
+            val = done.pop()
+            yield val.result()
 
 
 async def coro_consumer(queue: asyncio.Queue, limit: int = 2):
+    limit = 4
     async for scheduled_coro in coro_scheduler(queue, limit):
         try:
             print(f"async_consumer: {queue.qsize()} : {queue.empty()}")
             print(
                 f"Tasks referenced by asyncio internals: count={len(asyncio.all_tasks())}"
             )
-
-            scheduled = scheduled_coro.result()
-            await scheduled
-
-            del scheduled
-            del scheduled_coro
+            await scheduled_coro
+            # run_background_task(coroutine=scheduled)
         except Exception as e:
-            # print traceback
             logger.error(f"Error: {e}", exc_info=True)
             raise e
 
 
-def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
+def extend_rest_interface(flow: Flow, prefetch: int, app: "FastAPI") -> "FastAPI":
     """Register executors REST endpoints that do not depend on DocumentArray
     :param flow: Marie Flow
+    :param prefetch: Prefetch
     :param app: FastAPI app
     :return:
     """
@@ -119,21 +112,21 @@ def extend_rest_interface(flow: Flow, app: "FastAPI") -> "FastAPI":
     except Exception as e:
         raise e
 
-    # gc.disable()
-    client = None
-    #
-    # client = Client(
-    #     host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
-    # )
-
-    limit = 1  # multiprocessing.cpu_count()
-    backpressure_queue = asyncio.Queue()
-    # run_background_task(coroutine=coro_consumer(queue=backpressure_queue, limit=limit))
-    receive_task = asyncio.create_task(
-        coro_consumer(queue=backpressure_queue, limit=limit)
+    client = Client(
+        host="0.0.0.0",
+        port=52000,
+        protocol="grpc",
+        request_size=-1,
+        asyncio=True,
+        prefetch=prefetch,
     )
-    extend_rest_interface_extract(app, client, queue=backpressure_queue)
 
+    backpressure_queue = asyncio.Queue()
+    run_background_task(
+        coroutine=coro_consumer(queue=backpressure_queue, limit=prefetch)
+    )
+
+    extend_rest_interface_extract(app, client, queue=backpressure_queue)
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
     extend_rest_interface_classifier(app, client)
@@ -264,22 +257,23 @@ async def handle_request(
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
 
-        if True:
-            coroutine = process_request(
-                api_key,
-                api_tag,
-                job_id,
-                payload,
-                # partial(handler, client, endpoint=endpoint),
-                handler,
-                client,
-                endpoint,
-            )
+        use_queue = False
 
-        # handle backpressure using asyncio.Queue
-        # This is a temporary solution to handle backpressure
-        # TODO :  replace this with a job_distributor class
-        if True:
+        coroutine = process_request(
+            api_key,
+            api_tag,
+            job_id,
+            payload,
+            # partial(handler, client, endpoint=endpoint),
+            handler,
+            client,
+            endpoint,
+        )
+
+        if use_queue:
+            # handle backpressure using asyncio.Queue
+            # This is a temporary solution to handle backpressure
+            # TODO :  replace this with a job_distributor class
             if queue:
                 try:
                     queue.put_nowait(coroutine)
@@ -292,24 +286,10 @@ async def handle_request(
             else:
                 raise ValueError("queue is not defined in handle_request")
 
-        if False:
+        else:
             # task = run_background_task(coroutine=coroutine)
             #  = [task]
-            future = [
-                asyncio.ensure_future(
-                    process_request(
-                        api_key,
-                        api_tag,
-                        job_id,
-                        payload,
-                        # partial(handler, client, endpoint=endpoint),
-                        handler,
-                        client,
-                        endpoint,
-                    )
-                )
-            ]
-
+            future = [asyncio.ensure_future(coroutine)]
             if sync:
                 results = await asyncio.gather(*future, return_exceptions=True)
                 if isinstance(results[0], Exception):
@@ -351,18 +331,14 @@ async def process_document_request(
     try:
         payload = {}
         print("trace # payload process_document_request")
-        clientzz = Client(
-            host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
-        )
         # TODO :  add prefetch
-
-        async for resp in clientzz.post(
+        async for resp in client.post(
             on=endpoint,
             inputs=input_docs,
-            request_size=-1,
             parameters=parameters,
+            request_size=-1,
             return_responses=True,
-            continue_on_error=True,
+            prefetch=4
             # return_type=OutputDoc,
         ):
             payload = parse_response_to_payload(resp, expect_return_value=False)
@@ -430,10 +406,6 @@ async def process_request(
         await mark_as_complete(
             api_key, job_id, api_tag, job_tag, status, int(time.time()), results
         )
-
-        del payload
-        del parameters
-        del input_docs
 
         return results
     except BaseException as e:
