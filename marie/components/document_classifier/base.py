@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import Optional, List
 
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.base_handler import BaseHandler
 from marie.logging.logger import MarieLogger

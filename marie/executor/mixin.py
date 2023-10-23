@@ -1,7 +1,10 @@
 import traceback
 from typing import Dict, Optional
 
-from docarray import DocumentArray
+from docarray import DocList
+
+from marie import DocumentArray
+from marie.api.docs import StorageDoc
 
 from marie.excepts import BadConfigSource
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
@@ -47,7 +50,7 @@ class StorageMixin:
 
     # @Timer(text="stored in {:.4f} seconds")
     def store(
-        self, ref_id: str, ref_type: str, store_mode: str, docs: DocumentArray
+        self, ref_id: str, ref_type: str, store_mode: str, docs: DocList[StorageDoc]
     ) -> None:
         """Store results in configured storage provider
         EXAMPLE USAGE

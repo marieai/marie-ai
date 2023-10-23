@@ -11,9 +11,14 @@ import skimage.io as skio
 from PIL import Image
 from PyPDF4 import PdfFileReader
 from PyPDF4.utils import PdfReadError
+from docarray import DocList
+from docarray.documents import ImageDoc
 
 from marie import Document, DocumentArray
+from marie._core.definitions.events import AssetKey
 from marie.common.file_io import StrOrBytesPath
+from marie.storage import StorageManager
+from marie.utils.utils import ensure_exists
 
 ALLOWED_TYPES = {"png", "jpeg", "tiff", "pdf"}
 TYPES_TO_EXT = {"png": "png", "jpeg": "jpg", "tiff": "tif", "pdf": "pdf"}
@@ -207,8 +212,8 @@ def load_image(img_path, img_format: str = "cv"):
     return True, [img]
 
 
-def array_from_docs(
-    docs: Union[DocumentArray | List[Document]], field: Optional[str] = None
+def frames_from_docs(
+    docs: DocList[ImageDoc], field: Optional[str] = None
 ) -> List[np.ndarray]:
     """Convert DocumentArray to Numpy Array"""
     if docs is None:
@@ -255,6 +260,67 @@ def docs_from_file(
             if idx not in pages:
                 continue
             docs.append(Document(content=frame))
+    return docs
+
+
+def docs_from_asset(
+    asset_key: str, pages: Optional[List[int]] = None
+) -> DocList[ImageDoc]:
+    """
+    Create DocumentArray from image file. This will create one document per page in the image file, if the image
+    is large and has many pages this can be very memory intensive.
+
+    :param asset_key:  asset key to the resource
+    :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
+    :return: DocList with tensor content
+    """
+
+    uri = asset_key
+    import tempfile
+
+    if not StorageManager.can_handle(uri, allow_native=True):
+        raise Exception(
+            f"Unable to read file from {uri} no suitable storage manager configured"
+        )
+
+    # make sure the directory exists
+    ensure_exists(f"/tmp/marie")
+    # Read remote file to a byte array
+    with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
+        # with open("/tmp/sample.tiff", "w") as temp_file_out:
+        # print(f"Reading file from {uri} to {temp_file_out.name}")
+        if not StorageManager.exists(uri):
+            raise Exception(f"Remote file does not exist : {uri}")
+
+        StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
+        # Read the file to a byte array
+        temp_file_out.seek(0)
+        data = temp_file_out.read()
+        path = temp_file_out.name
+
+        with io.BytesIO(data) as memfile:
+            file_type = imghdr.what(memfile)
+
+        if file_type not in ALLOWED_TYPES:
+            raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found : {path}")
+
+    loaded, frames = load_image(path)
+    # no pages specified, we will use all pages as documents
+    if pages is None or len(pages) == 0:
+        pages = [i for i in range(len(frames))]
+
+    docs = DocList[ImageDoc]()
+
+    if loaded:
+        for idx, frame in enumerate(frames):
+            if idx not in pages:
+                continue
+            doc = ImageDoc(tensor=frame)
+            docs.append(doc)
+
     return docs
 
 

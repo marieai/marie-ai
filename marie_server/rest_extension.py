@@ -7,14 +7,18 @@ import traceback
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional
 
-from docarray import DocumentArray
+from docarray import DocList
+
+from marie import DocumentArray, Document
 from fastapi import HTTPException
 from fastapi import Request
 
 from marie import Client, Flow
+from marie._core.definitions.events import AssetKey
 from marie._core.utils import run_background_task
-from marie.api import extract_payload
+from marie.api import extract_payload, extract_payload_to_uri
 from marie.api import value_from_payload_or_args
+from marie.api.docs import AssetKeyDoc, OutputDoc
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
@@ -165,11 +169,15 @@ def parse_response_to_payload(
     return {}
 
 
-async def parse_payload_to_docs(payload: Any, clear_payload: Optional[bool] = True):
+async def parse_payload_to_docs(
+    payload: Any, clear_payload: Optional[bool] = True
+) -> tuple:
     return parse_payload_to_docs_sync(payload, clear_payload)
 
 
-def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = True):
+def parse_payload_to_docs_sync(
+    payload: Any, clear_payload: Optional[bool] = True
+) -> tuple:
     """
     Parse payload request, extract file and return list of Document objects
 
@@ -181,7 +189,8 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
     queue_id = value_from_payload_or_args(
         payload, "queue_id", default="0000-0000-0000-0000"
     )
-    tmp_file, checksum, file_type = extract_payload(payload, queue_id)
+
+    asset_uri = extract_payload_to_uri(payload, queue_id)
     pages = []
 
     try:
@@ -191,7 +200,6 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
     except:
         pass
 
-    input_docs = docs_from_file(tmp_file, pages)
     # this is a hack to remove the data attribute from the payload and for backward compatibility
     if clear_payload:
         key = "data"
@@ -209,15 +217,13 @@ def parse_payload_to_docs_sync(payload: Any, clear_payload: Optional[bool] = Tru
             key = "uri"
         del payload[key]
 
-    doc_id = value_from_payload_or_args(payload, "doc_id", default=checksum)
+    doc_id = value_from_payload_or_args(payload, "doc_id", default="")
     doc_type = value_from_payload_or_args(payload, "doc_type", default="")
+    # asset_doc = AssetKeyDoc(asset=AssetKey(path=[asset_uri]), pages=pages)
+    asset_doc = AssetKeyDoc(asset_key=asset_uri, pages=pages)
+    parameters = {"queue_id": queue_id, "ref_id": doc_id, "ref_type": doc_type}
 
-    parameters = {
-        "queue_id": queue_id,
-        "ref_id": doc_id,
-        "ref_type": doc_type,
-    }
-    return parameters, input_docs
+    return parameters, asset_doc
 
 
 async def handle_request(
@@ -332,7 +338,7 @@ async def handle_request(
 
 
 async def process_document_request(
-    client: Client, input_docs: DocumentArray, parameters: dict, endpoint: str
+    client: Client, input_docs: DocList[AssetKeyDoc], parameters: dict, endpoint: str
 ):
     """
     Process document request
@@ -344,23 +350,22 @@ async def process_document_request(
     """
     try:
         payload = {}
-
-        print("trace # payload ZZ")
+        print("trace # payload process_document_request")
         clientzz = Client(
             host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
         )
+        # TODO :  add prefetch
 
         async for resp in clientzz.post(
-            protocol="grpc",
             on=endpoint,
             inputs=input_docs,
             request_size=-1,
             parameters=parameters,
             return_responses=True,
             continue_on_error=True,
+            # return_type=OutputDoc,
         ):
             payload = parse_response_to_payload(resp, expect_return_value=False)
-            del resp
             break  # we only need the first response
 
         return payload
@@ -399,11 +404,12 @@ async def process_request(
 
     try:
         logger.info(f"Starting request: {job_id}")
-        parameters, input_docs = await parse_payload_to_docs(payload)
+        parameters, asset_doc = await parse_payload_to_docs(payload)
         job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
         parameters["job_id"] = job_id
         # payload data attribute should be stripped at this time
         parameters["payload"] = payload  # THIS IS TEMPORARY HERE
+        input_docs = DocList[AssetKeyDoc]([asset_doc])
 
         # Currently we are scheduling the job before we start processing the request to avoid out of order jobs
         # When we start processing the request, we will mark the job as `STARTED` in the worker node

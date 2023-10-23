@@ -1,7 +1,12 @@
 import asyncio
+from pydoc import TextDoc
 from typing import Any, List
 
-from docarray import DocumentArray, Document
+from docarray import DocList
+from docarray.documents import ImageDoc
+
+from marie import DocumentArray, Document
+from marie.api.docs import StorageDoc
 
 from marie.logging.logger import MarieLogger
 from marie.messaging.events import EventMessage
@@ -74,9 +79,9 @@ class PsqlToastHandler(ToastHandler, StorageMixin):
         :return:
         """
         if self.storage_enabled:
-            docs = DocumentArray(
+            docs = DocList[StorageDoc](
                 [
-                    Document(
+                    StorageDoc(
                         content=results,
                         tags={
                             "action": "job",

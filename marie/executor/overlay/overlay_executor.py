@@ -3,13 +3,13 @@ from typing import Dict, Union, Optional, Any
 
 import numpy as np
 import torch
-from docarray import DocumentArray, Document
+from marie import DocumentArray, Document
 
 from marie import Executor, requests, safely_encoded
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
-from marie.utils.docs import array_from_docs
+from marie.utils.docs import frames_from_docs
 from marie.utils.image_utils import (
     hash_frames_fast,
     convert_to_bytes,
@@ -90,7 +90,7 @@ class OverlayExecutor(Executor, StorageMixin):
         self.logger.info("Starting segment request")
 
         try:
-            frames = array_from_docs(docs)
+            frames = frames_from_docs(docs)
             self.logger.info(f"Processing total frames : {len(frames)}")
 
             if parameters:

@@ -1,11 +1,11 @@
-from typing import Dict, List, Optional
+from typing import Dict
 
 import numpy as np
 
-from marie import DocumentArray, Executor, requests
+from marie import DocumentArray, Executor
 from marie.logging.logger import MarieLogger
-
 from .postgreshandler import PostgreSQLHandler
+
 
 # https://github.com/jina-ai/executor-hnsw-postgres/blob/main/executor/postgres_indexer.py
 
@@ -97,12 +97,9 @@ class PostgreSQLStorage(Executor):
         """
         if docs is None:
             return
-        traversal_paths = parameters.get(
-            "traversal_paths", self.default_traversal_paths
-        )
 
         self.handler.add(
-            docs[traversal_paths],
+            docs,
             store_mode,
             **{
                 "ref_id": parameters.get("ref_id"),

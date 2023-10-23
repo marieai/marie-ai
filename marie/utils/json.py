@@ -48,12 +48,17 @@ def deserialize_value(json_str) -> Any:
 
 def to_json(results, **json_kwargs) -> str:
     """Convert object to a JSON object"""
-    return json.dumps(
-        results,
-        sort_keys=False,
-        separators=(",", ": "),
-        ensure_ascii=True,
-        indent=2,
-        cls=EnhancedJSONEncoder,
-        **json_kwargs
-    )
+    try:
+        return json.dumps(
+            results,
+            sort_keys=False,
+            separators=(",", ": "),
+            ensure_ascii=True,
+            indent=2,
+            cls=EnhancedJSONEncoder,
+            **json_kwargs,
+        )
+    except TypeError as e:
+        raise TypeError(
+            f"Object of type {type(results)} with value of {str(results)} is not JSON serializable"
+        ) from e

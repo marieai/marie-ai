@@ -11,7 +11,7 @@ import torch
 from rich.traceback import install
 
 import marie.helper
-from marie import Flow
+from marie import Flow, Deployment
 from marie import __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (

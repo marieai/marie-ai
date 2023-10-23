@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import MutableMapping
 from typing import Optional
 
-from docarray import DocumentArray
+from marie import DocumentArray
 
 from marie.logging.logger import MarieLogger
 

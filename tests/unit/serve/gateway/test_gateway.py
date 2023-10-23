@@ -20,9 +20,9 @@ from tests.unit.yaml.dummy_gateway import DummyGateway
 from tests.unit.yaml.dummy_gateway_get_streamer import DummyGatewayGetStreamer
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
-_dummy_gateway_yaml_path = os.path.join(cur_dir, '../../yaml/test-custom-gateway.yml')
+_dummy_gateway_yaml_path = os.path.join(cur_dir, "../../yaml/test-custom-gateway.yml")
 _dummy_fastapi_gateway_yaml_path = os.path.join(
-    cur_dir, '../../yaml/test-fastapi-gateway.yml'
+    cur_dir, "../../yaml/test-fastapi-gateway.yml"
 )
 
 
@@ -31,22 +31,23 @@ def _create_gateway_runtime(port, uses, uses_with, worker_port):
     pod_addresses = f'{{"pod0": ["0.0.0.0:{worker_port}"]}}'
     deployments_metadata = '{"pod0": {"key1": "value1", "key2": "value2"}}'
     with AsyncNewLoopRuntime(
-            set_gateway_parser().parse_args(
-                [
-                    '--port',
-                    str(port),
-                    '--uses',
-                    uses,
-                    '--uses-with',
-                    json.dumps(uses_with),
-                    '--graph-description',
-                    graph_description,
-                    '--deployments-addresses',
-                    pod_addresses,
-                    '--deployments-metadata',
-                    deployments_metadata,
-                ]
-            ), req_handler_cls=GatewayRequestHandler
+        set_gateway_parser().parse_args(
+            [
+                "--port",
+                str(port),
+                "--uses",
+                uses,
+                "--uses-with",
+                json.dumps(uses_with),
+                "--graph-description",
+                graph_description,
+                "--deployments-addresses",
+                pod_addresses,
+                "--deployments-metadata",
+                deployments_metadata,
+            ]
+        ),
+        req_handler_cls=GatewayRequestHandler,
     ) as runtime:
         runtime.run_forever()
 
@@ -65,7 +66,7 @@ def _start_gateway_runtime(uses, uses_with, worker_port):
 
 
 def _create_worker_runtime(port, uses):
-    args = _generate_pod_args(['--uses', uses, '--port', str(port)])
+    args = _generate_pod_args(["--uses", uses, "--port", str(port)])
 
     with AsyncNewLoopRuntime(args, req_handler_cls=WorkerRequestHandler) as runtime:
         runtime.run_forever()
@@ -85,72 +86,72 @@ def _start_worker_runtime(uses):
 
 
 @pytest.mark.parametrize(
-    'uses,uses_with,expected',
+    "uses,uses_with,expected",
     [
-        ('DummyGateway', {}, {'arg1': None, 'arg2': None, 'arg3': 'default-arg3'}),
+        ("DummyGateway", {}, {"arg1": None, "arg2": None, "arg3": "default-arg3"}),
         (
-                'DummyGatewayGetStreamer',
-                {},
-                {'arg1': None, 'arg2': None, 'arg3': 'default-arg3'},
+            "DummyGatewayGetStreamer",
+            {},
+            {"arg1": None, "arg2": None, "arg3": "default-arg3"},
         ),
         (
-                _dummy_gateway_yaml_path,
-                {},
-                {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'},
+            _dummy_gateway_yaml_path,
+            {},
+            {"arg1": "hello", "arg2": "world", "arg3": "default-arg3"},
         ),
         (
-                _dummy_fastapi_gateway_yaml_path,
-                {},
-                {'arg1': 'hello', 'arg2': 'world', 'arg3': 'default-arg3'},
+            _dummy_fastapi_gateway_yaml_path,
+            {},
+            {"arg1": "hello", "arg2": "world", "arg3": "default-arg3"},
         ),
         (
-                'DummyGateway',
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
+            "DummyGateway",
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
         ),
         (
-                'DummyGatewayGetStreamer',
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
+            "DummyGatewayGetStreamer",
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
         ),
         (
-                _dummy_gateway_yaml_path,
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
+            _dummy_gateway_yaml_path,
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
         ),
         (
-                _dummy_fastapi_gateway_yaml_path,
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
-                {'arg1': 'arg1', 'arg2': 'arg2', 'arg3': 'arg3'},
+            _dummy_fastapi_gateway_yaml_path,
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
+            {"arg1": "arg1", "arg2": "arg2", "arg3": "arg3"},
         ),
         (
-                'DummyGateway',
-                {'arg1': 'arg1'},
-                {'arg1': 'arg1', 'arg2': None, 'arg3': 'default-arg3'},
+            "DummyGateway",
+            {"arg1": "arg1"},
+            {"arg1": "arg1", "arg2": None, "arg3": "default-arg3"},
         ),
         (
-                'DummyGatewayGetStreamer',
-                {'arg1': 'arg1'},
-                {'arg1': 'arg1', 'arg2': None, 'arg3': 'default-arg3'},
+            "DummyGatewayGetStreamer",
+            {"arg1": "arg1"},
+            {"arg1": "arg1", "arg2": None, "arg3": "default-arg3"},
         ),
         (
-                _dummy_gateway_yaml_path,
-                {'arg1': 'arg1'},
-                {'arg1': 'arg1', 'arg2': 'world', 'arg3': 'default-arg3'},
+            _dummy_gateway_yaml_path,
+            {"arg1": "arg1"},
+            {"arg1": "arg1", "arg2": "world", "arg3": "default-arg3"},
         ),
         (
-                _dummy_fastapi_gateway_yaml_path,
-                {'arg1': 'arg1'},
-                {'arg1': 'arg1', 'arg2': 'world', 'arg3': 'default-arg3'},
+            _dummy_fastapi_gateway_yaml_path,
+            {"arg1": "arg1"},
+            {"arg1": "arg1", "arg2": "world", "arg3": "default-arg3"},
         ),
     ],
 )
 def test_custom_gateway_no_executors(uses, uses_with, expected):
-    worker_port, worker_process = _start_worker_runtime('ProcessExecutor')
+    worker_port, worker_process = _start_worker_runtime("ProcessExecutor")
     gateway_port, gateway_process = _start_gateway_runtime(uses, uses_with, worker_port)
     _validate_dummy_custom_gateway_response(gateway_port, expected)
     _validate_custom_gateway_process(
-        gateway_port, 'hello', {'text': 'helloworld', 'tags': {'processed': True}}
+        gateway_port, "hello", {"text": "helloworld", "tags": {"processed": True}}
     )
     gateway_process.terminate()
     gateway_process.join()
@@ -162,25 +163,30 @@ def test_custom_gateway_no_executors(uses, uses_with, expected):
 
 
 def test_stream_individual_executor_simple():
-    from docarray import DocumentArray, Document
+    from marie import DocumentArray, Document
 
     from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
     from marie import Flow, Executor, requests
 
-    PARAMETERS = {'dog': 'woof'}
+    PARAMETERS = {"dog": "woof"}
 
     class MyGateway(FastAPIBaseGateway):
         @property
         def app(self):
             from fastapi import FastAPI
 
-            app = FastAPI(title='Custom FastAPI Gateway')
+            app = FastAPI(title="Custom FastAPI Gateway")
 
-            @app.get('/endpoint')
+            @app.get("/endpoint")
             async def get(text: str):
-                docs = await self.executor['executor1'].post(on='/', inputs=DocumentArray(
-                    [Document(text=text), Document(text=text.upper())]), parameters=PARAMETERS)
-                return {'result': docs.texts}
+                docs = await self.executor["executor1"].post(
+                    on="/",
+                    inputs=DocumentArray(
+                        [Document(text=text), Document(text=text.upper())]
+                    ),
+                    parameters=PARAMETERS,
+                )
+                return {"result": docs.texts}
 
             return app
 
@@ -188,29 +194,33 @@ def test_stream_individual_executor_simple():
         @requests
         def func(self, docs, **kwargs):
             for doc in docs:
-                doc.text += ' THIS SHOULD NOT HAVE HAPPENED!'
+                doc.text += " THIS SHOULD NOT HAVE HAPPENED!"
 
     class SecondExec(Executor):
         @requests
         def func(self, docs, parameters, **kwargs):
             for doc in docs:
-                doc.text += f' Second(parameters={str(parameters)})'
+                doc.text += f" Second(parameters={str(parameters)})"
 
-    with Flow().config_gateway(uses=MyGateway, protocol='http').add(uses=FirstExec, name='executor0').add(
-            uses=SecondExec, name='executor1') as flow:
+    with Flow().config_gateway(uses=MyGateway, protocol="http").add(
+        uses=FirstExec, name="executor0"
+    ).add(uses=SecondExec, name="executor1") as flow:
         import requests
-        r = requests.get(f'http://localhost:{flow.port}/endpoint?text=meow')
-        assert r.json()['result'] == [f'meow Second(parameters={str(PARAMETERS)})',
-                                      f'MEOW Second(parameters={str(PARAMETERS)})']
+
+        r = requests.get(f"http://localhost:{flow.port}/endpoint?text=meow")
+        assert r.json()["result"] == [
+            f"meow Second(parameters={str(PARAMETERS)})",
+            f"MEOW Second(parameters={str(PARAMETERS)})",
+        ]
 
 
 @pytest.mark.parametrize(
-    'n_replicas, n_shards',
+    "n_replicas, n_shards",
     [
         (2, 1),
         (1, 2),
         (2, 2),
-    ]
+    ],
 )
 def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int):
     N_DOCS: int = 100
@@ -222,22 +232,27 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
     from marie import Flow, Executor, requests
     import os
 
-    PARAMETERS = {'dog': 'woof'}
+    PARAMETERS = {"dog": "woof"}
 
     class MyGateway(FastAPIBaseGateway):
         @property
         def app(self):
             from fastapi import FastAPI
 
-            app = FastAPI(title='Custom FastAPI Gateway')
+            app = FastAPI(title="Custom FastAPI Gateway")
 
-            @app.get('/endpoint')
+            @app.get("/endpoint")
             async def get(text: str):
-                docs = await self.executor['executor1'].post(on='/', inputs=DocumentArray(
-                    [Document(text=f'{text} {i}') for i in range(N_DOCS)]), parameters=PARAMETERS,
-                                                             request_size=BATCH_SIZE)
-                pids = set([doc.tags['pid'] for doc in docs])
-                return {'result': docs.texts, 'pids': pids}
+                docs = await self.executor["executor1"].post(
+                    on="/",
+                    inputs=DocumentArray(
+                        [Document(text=f"{text} {i}") for i in range(N_DOCS)]
+                    ),
+                    parameters=PARAMETERS,
+                    request_size=BATCH_SIZE,
+                )
+                pids = set([doc.tags["pid"] for doc in docs])
+                return {"result": docs.texts, "pids": pids}
 
             return app
 
@@ -245,25 +260,29 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
         @requests
         def func(self, docs, **kwargs):
             for doc in docs:
-                doc.text += ' THIS SHOULD NOT HAVE HAPPENED!'
+                doc.text += " THIS SHOULD NOT HAVE HAPPENED!"
 
     class SecondExec(Executor):
         @requests
         def func(self, docs, parameters, **kwargs):
             for doc in docs:
-                doc.text += f' Second(parameters={str(parameters)})'
-                doc.tags['pid'] = os.getpid()
+                doc.text += f" Second(parameters={str(parameters)})"
+                doc.tags["pid"] = os.getpid()
 
-    with Flow().config_gateway(uses=MyGateway, protocol='http').add(uses=FirstExec, name='executor0').add(
-            uses=SecondExec, name='executor1', replicas=n_replicas, shards=n_shards
+    with Flow().config_gateway(uses=MyGateway, protocol="http").add(
+        uses=FirstExec, name="executor0"
+    ).add(
+        uses=SecondExec, name="executor1", replicas=n_replicas, shards=n_shards
     ) as flow:
 
         import requests
-        r = requests.get(f'http://localhost:{flow.port}/endpoint?text=meow')
+
+        r = requests.get(f"http://localhost:{flow.port}/endpoint?text=meow")
 
         # Make sure the results are correct
-        assert set(r.json()['result']) == set([f'meow {i} Second(parameters={str(PARAMETERS)})' for i in range(N_DOCS)])
+        assert set(r.json()["result"]) == set(
+            [f"meow {i} Second(parameters={str(PARAMETERS)})" for i in range(N_DOCS)]
+        )
         # Make sure we are sending to all replicas and shards
-        assert len(r.json()['pids']) == n_replicas * n_shards
+        assert len(r.json()["pids"]) == n_replicas * n_shards
         flow.block()
-

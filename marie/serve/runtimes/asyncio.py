@@ -11,7 +11,7 @@ from marie.helper import ArgNamespace, is_port_free, random_ports, send_telemetr
 from marie.logging.logger import MarieLogger
 from marie.parsers import set_gateway_parser
 from marie.parsers.helper import _set_gateway_uses
-from marie.serve.networking.utils import send_health_check_async
+
 
 # Keep these imports even if not used, since YAML parser needs to find them in imported modules
 from marie.serve.runtimes.gateway.composite import CompositeGateway
@@ -19,6 +19,7 @@ from marie.serve.runtimes.gateway.gateway import BaseGateway
 from marie.serve.runtimes.gateway.grpc import GRPCGateway
 from marie.serve.runtimes.gateway.http import HTTPGateway
 from marie.serve.runtimes.gateway.websocket import WebSocketGateway
+from marie.serve.runtimes.servers import BaseServer
 
 if TYPE_CHECKING:  # pragma: no cover
     import multiprocessing
@@ -42,6 +43,9 @@ class AsyncNewLoopRuntime:
         cancel_event: Optional[
             Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
         ] = None,
+        signal_handlers_installed_event: Optional[
+            Union['asyncio.Event', 'multiprocessing.Event', 'threading.Event']
+        ] = None,
         req_handler_cls=None,
         gateway_load_balancer: bool = False,
         **kwargs,
@@ -57,6 +61,11 @@ class AsyncNewLoopRuntime:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self.is_cancel = cancel_event or asyncio.Event()
+        self.is_signal_handlers_installed = (
+            signal_handlers_installed_event or asyncio.Event()
+        )
+
+        self.logger.debug(f'Setting signal handlers')
 
         if not __windows__:
 
@@ -78,6 +87,8 @@ class AsyncNewLoopRuntime:
             for sig in HANDLED_SIGNALS:
                 signal.signal(sig, _cancel)
 
+        self.logger.debug(f'Signal handlers already set')
+        self.is_signal_handlers_installed.set()
         self._start_time = time.time()
         self._loop.run_until_complete(self.async_setup())
         self._send_telemetry_event(event='start')
@@ -131,7 +142,7 @@ class AsyncNewLoopRuntime:
 
     def _get_server(self):
         # construct server type based on protocol (and potentially req handler class to keep backwards compatibility)
-        from marie.enums import ProtocolType
+        from marie.enums import ProtocolType, ProviderType
 
         if self.req_handler_cls.__name__ == 'GatewayRequestHandler':
             self.timeout_send = self.args.timeout_send
@@ -160,7 +171,7 @@ class AsyncNewLoopRuntime:
                 uses_with['expose_graphql_endpoint'] = self.args.expose_graphql_endpoint
             if 'cors' not in non_defaults:
                 uses_with['cors'] = self.args.cors
-            return BaseGateway.load_config(
+            server = BaseGateway.load_config(
                 self.args.uses,
                 uses_with=dict(
                     **non_defaults,
@@ -176,7 +187,26 @@ class AsyncNewLoopRuntime:
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
             )
+            if isinstance(server, BaseServer):
+                server.is_cancel = self.is_cancel
+            return server
+        elif (
+            hasattr(self.args, 'provider')
+            and self.args.provider == ProviderType.SAGEMAKER
+        ):
+            from marie.serve.runtimes.servers.http import SagemakerHTTPServer
 
+            return SagemakerHTTPServer(
+                name=self.args.name,
+                runtime_args=self.args,
+                req_handler_cls=self.req_handler_cls,
+                proxy=getattr(self.args, 'proxy', None),
+                uvicorn_kwargs=getattr(self.args, 'uvicorn_kwargs', None),
+                ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
+                ssl_certfile=getattr(self.args, 'ssl_certfile', None),
+                cors=getattr(self.args, 'cors', None),
+                is_cancel=self.is_cancel,
+            )
         elif not hasattr(self.args, 'protocol') or (
             len(self.args.protocol) == 1 and self.args.protocol[0] == ProtocolType.GRPC
         ):
@@ -189,6 +219,7 @@ class AsyncNewLoopRuntime:
                 grpc_server_options=self.args.grpc_server_options,
                 ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
                 ssl_certfile=getattr(self.args, 'ssl_certfile', None),
+                proxy=getattr(self.args, 'proxy', None),
             )
 
         elif (
@@ -207,6 +238,7 @@ class AsyncNewLoopRuntime:
                 ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
                 ssl_certfile=getattr(self.args, 'ssl_certfile', None),
                 cors=getattr(self.args, 'cors', None),
+                is_cancel=self.is_cancel,
             )
         elif (
             len(self.args.protocol) == 1
@@ -224,6 +256,7 @@ class AsyncNewLoopRuntime:
                 uvicorn_kwargs=getattr(self.args, 'uvicorn_kwargs', None),
                 ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
                 ssl_certfile=getattr(self.args, 'ssl_certfile', None),
+                is_cancel=self.is_cancel,
             )
         elif len(self.args.protocol) > 1:
             from marie.serve.runtimes.servers.composite import (
@@ -236,6 +269,7 @@ class AsyncNewLoopRuntime:
                 req_handler_cls=self.req_handler_cls,
                 ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
                 ssl_certfile=getattr(self.args, 'ssl_certfile', None),
+                is_cancel=self.is_cancel,
             )
 
     def _send_telemetry_event(self, event, extra_kwargs=None):

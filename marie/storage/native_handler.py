@@ -1,6 +1,9 @@
+import io
 import os
+import tempfile
 from typing import Optional, Any, List
 
+import shutil
 from marie.storage import PathHandler
 
 
@@ -11,7 +14,7 @@ class NativePathHandler(PathHandler):
     """
 
     def _get_supported_prefixes(self) -> List[str]:
-        return None
+        return [None, "file://"]
 
     def _copy(
         self,
@@ -29,9 +32,6 @@ class NativePathHandler(PathHandler):
         :param kwargs:  additional arguments
         """
 
-        print(src_path)
-        print(dst_path)
-
         # if handler is present then use the handler to copy the file otherwise use the default copy
         if handler is None:
             os.shutil.copy(src_path, dst_path)  # type: ignore
@@ -46,4 +46,25 @@ class NativePathHandler(PathHandler):
 
     def _exists(self, path: str, **kwargs: Any) -> bool:
         self._check_kwargs(kwargs)
+        # check if path starts with file:// and remove it
+        if path.startswith("file://"):
+            path = path[7:]
         return os.path.exists(path)
+
+    def _read_to_file(
+        self,
+        path: str,
+        dst_path: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
+    ) -> None:
+
+        self._check_kwargs(kwargs)
+        # check if path starts with file:// and remove it
+        if path.startswith("file://"):
+            path = path[7:]
+        if isinstance(dst_path, (io.BytesIO, tempfile._TemporaryFileWrapper)):
+            with open(path, "rb") as f:
+                dst_path.write(f.read())
+        else:
+            shutil.copy(path, dst_path)
