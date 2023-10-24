@@ -1213,7 +1213,7 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
 
             await asyncio.gather(*coros)
             self.logger.debug("Deployment started successfully")
-        except:
+        except Exception as ex:
             self.close()
             raise
 

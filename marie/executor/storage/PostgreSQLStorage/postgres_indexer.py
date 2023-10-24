@@ -1,8 +1,10 @@
 from typing import Dict
 
 import numpy as np
+from docarray import DocList
 
 from marie import DocumentArray, Executor
+from marie.api.docs import StorageDoc
 from marie.logging.logger import MarieLogger
 from .postgreshandler import PostgreSQLHandler
 
@@ -89,7 +91,9 @@ class PostgreSQLStorage(Executor):
         """
         return self.handler.get_snapshot_size()
 
-    def add(self, docs: DocumentArray, store_mode: str, parameters: Dict, **kwargs):
+    def add(
+        self, docs: DocList[StorageDoc], store_mode: str, parameters: Dict, **kwargs
+    ):
         """Add Documents to Postgres
         :param store_mode: how to store the document, valid options content|blob|embedding|doc
         :param docs: list of Documents

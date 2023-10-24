@@ -271,9 +271,11 @@ def __main__(
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
-        include_gateway=True,
-        # noblock_on_start=True,
-    )
+        include_gateway=False,
+        noblock_on_start=False,
+        prefetch=prefetch,
+    ).config_gateway(prefetch=prefetch)
+
     filter_endpoint()
     setup_server(config)
 

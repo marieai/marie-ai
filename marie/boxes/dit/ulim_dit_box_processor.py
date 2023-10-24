@@ -314,7 +314,7 @@ class BoxProcessorUlimDit(BoxProcessor):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
-        self.logger.info(f"Loading model from config {__config_dir__}")
+        self.logger.info(f"Loading model from config dir {__config_dir__}")
 
         args = get_parser().parse_args(
             [
@@ -331,8 +331,6 @@ class BoxProcessorUlimDit(BoxProcessor):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         cfg = setup_cfg(args, device)
-        print(f"CFG : {cfg}")
-        print(f"CFG : {cfg.MODEL.WEIGHTS}")
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
         self.predictor = DefaultPredictor(cfg)
         self.cpu_device = torch.device("cpu")
@@ -364,7 +362,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     image.shape[0] < self.min_size_test[0]
                     or image.shape[1] < self.min_size_test[1]
             ):
-                self.logger.warning(
+                self.logger.debug(
                     f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
                 )
                 image, coord = resize_image(
@@ -372,7 +370,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     (self.min_size_test[0], self.min_size_test[1]),
                     keep_max_size=True,
                 )
-                self.logger.warning(f"Resized image  : {image.shape}, {coord}")
+                self.logger.debug(f"Resized image  : {image.shape}, {coord}")
                 # cv2.imwrite(f"/tmp/marie/bbox_framed.png", image)
                 adj_x = coord[0]
                 adj_y = coord[1]

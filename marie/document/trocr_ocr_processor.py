@@ -20,6 +20,7 @@ from marie.document.ocr_processor import OcrProcessor
 from marie.importer import ImportExtensions
 from marie.lang import Object
 from marie.logging.predefined import default_logger
+from marie.logging.profile import TimeContext
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.utils import torch_gc
 from marie.serve.executors.decorators import _get_locks_root
@@ -82,10 +83,9 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     # Process time 85.9748 seconds : With no compile
 
     # try to compile the model with torch.compile - cudagraphs
-    if True:
-        try:
-            # Optimize model for Inference time
-            logger.info("**** COMPILING TROCR Model***")
+    try:
+        # Optimize model for Inference time
+        with TimeContext("Compiling TROCR model", logger=logger):
             import torch._dynamo as dynamo
 
             # model[0] = torch.compile(model[0])
@@ -96,10 +96,8 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
                 backend="inductor",
                 options={"max_autotune": True, "triton.cudagraphs": True},
             )
-            logger.info("**** COMPILED TROCR ***")
-        except Exception as e:
-            logger.error(f"Failed to compile model : {e}")
-            raise e
+    except Exception as e:
+        logger.error(f"Failed to compile model : {e}")
 
     img_transform = transforms.Compose(
         [

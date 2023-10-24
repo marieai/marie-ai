@@ -124,26 +124,29 @@ def openmp_setup(threads: int):
 
 
 def setup_torch_optimizations():
-    logger.info(f"Setting up torch optimizations")
+    try:
+        logger.info(f"Setting up torch optimizations")
 
-    # Optimizations for PyTorch
-    core_count = psutil.cpu_count(logical=False)
+        # Optimizations for PyTorch
+        core_count = psutil.cpu_count(logical=False)
 
-    torch_versions = torch.__version__.split(".")
-    torch_major_version = int(torch_versions[0])
-    torch_minor_version = int(torch_versions[1])
-    if torch_major_version > 1 or (
-        torch_major_version == 1 and torch_minor_version >= 12
-    ):
-        # Gives a large speedup on Ampere-class GPUs
-        torch.set_float32_matmul_precision("high")
+        torch_versions = torch.__version__.split(".")
+        torch_major_version = int(torch_versions[0])
+        torch_minor_version = int(torch_versions[1])
+        if torch_major_version > 1 or (
+                torch_major_version == 1 and torch_minor_version >= 12
+        ):
+            # Gives a large speedup on Ampere-class GPUs
+            torch.set_float32_matmul_precision("high")
 
-    logger.info(f"Setting up TF32")
-    enable_tf32()
+        logger.info(f"Setting up TF32")
+        enable_tf32()
 
-    logger.info(f"Setting up OpenMP with {core_count} threads")
-    openmp_setup(core_count)
-    torch.set_num_threads(core_count)
+        logger.info(f"Setting up OpenMP with {core_count} threads")
+        openmp_setup(core_count)
+        torch.set_num_threads(core_count)
 
-    # Enable oneDNN Graph
-    torch.jit.enable_onednn_fusion(True)
+        # Enable oneDNN Graph
+        torch.jit.enable_onednn_fusion(True)
+    except Exception as e:
+        raise e

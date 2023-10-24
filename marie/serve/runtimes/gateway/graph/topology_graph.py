@@ -866,7 +866,6 @@ class TopologyGraph:
                     self._all_endpoints = endpoints
                     break
                 except Exception as exc:
-                    retry_forever = False
                     if not retry_forever:
                         raise exc
                     self.logger.warning(

@@ -44,7 +44,6 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
             continue
 
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        # print("size of done = ", len(done), len(pending))
         while done:
             val = done.pop()
             yield val.result()
@@ -85,32 +84,6 @@ def extend_rest_interface(flow: Flow, prefetch: int, app: "FastAPI") -> "FastAPI
     from .executors.classifier.mserve_torch import (
         extend_rest_interface_classifier,
     )
-
-    try:
-        import gc
-
-        # gc.set_debug(gc.DEBUG_LEAK)
-        # gc.set_debug(gc.DEBUG_SAVEALL)
-        def f(phase, info):
-            if phase == "start":
-                print("starting garbage collection....")
-            else:
-                print(
-                    "Finished garbage collection.... \n{}".format(
-                        "".join(["{}: {}\n".format(*tup) for tup in info.items()])
-                    )
-                )
-
-                print(
-                    "Unreachable objects: \n{}".format(
-                        "\n".join([str(garb) for garb in gc.garbage])
-                    )
-                )
-                print()
-
-        # gc.callbacks.append(f)
-    except Exception as e:
-        raise e
 
     client = Client(
         host="0.0.0.0",
@@ -330,7 +303,6 @@ async def process_document_request(
     """
     try:
         payload = {}
-        print("trace # payload process_document_request")
         # TODO :  add prefetch
         async for resp in client.post(
             on=endpoint,
@@ -397,9 +369,6 @@ async def process_request(
             api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
         )
 
-        # async def run(op, _docs, _param):
-        #     return await op(_docs, _param)
-        # results = await run(handler, input_docs, parameters)
         results = await handler(client, input_docs, parameters, endpoint)
 
         # client: Client, input_docs, parameters: dict, endpoint: str
