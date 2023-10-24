@@ -18,7 +18,6 @@ from typing import (
     Union,
 )
 
-
 from google.protobuf.struct_pb2 import Struct
 
 from marie._docarray import DocumentArray, docarray_v2

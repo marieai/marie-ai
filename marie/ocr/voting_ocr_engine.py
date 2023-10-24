@@ -258,13 +258,19 @@ class VotingOcrEngine(OcrEngine):
 
         self.logger.info("Voting evaluator")
         has_regions = regions is not None and len(regions) > 0
+        debug_results = False
 
         if has_regions:
             # check if we have any results to evaluate
             if len(aggregated_results) == 0:
                 self.logger.warning("No results to evaluate")
+
                 # create a default result set with confidence 0 for each region
-                output_results = deepcopy(default_results)
+                if default_results is None:
+                    output_results = {}
+                else:
+                    output_results = deepcopy(default_results)
+
                 output_results["regions"] = []
                 for region in regions:
                     region["confidence"] = 0
@@ -278,29 +284,36 @@ class VotingOcrEngine(OcrEngine):
                 aggregated_results, "extended"
             )
 
-            store_json_object(
-                candidate_words_by_selector, "/tmp/marie/region_step-1.json"
-            )
+            if debug_results:
+                store_json_object(
+                    candidate_words_by_selector, "/tmp/marie/region_step-1.json"
+                )
 
             # pick the word with the highest confidence
             words_by_confidence_by_selector = self.get_words_by_confidence_by_selector(
                 candidate_words_by_selector
             )
 
-            store_json_object(
-                words_by_confidence_by_selector, "/tmp/marie/region_step-2.json"
-            )
+            if debug_results:
+                store_json_object(
+                    words_by_confidence_by_selector, "/tmp/marie/region_step-2.json"
+                )
 
             words_by_vote_by_selector = self.get_words_by_vote_by_selector(
                 candidate_words_by_selector, 2
             )
 
-            store_json_object(
-                words_by_vote_by_selector, "/tmp/marie/region_step-3.json"
-            )
+            if debug_results:
+                store_json_object(
+                    words_by_vote_by_selector, "/tmp/marie/region_step-3.json"
+                )
 
             output_results = deepcopy(default_results)
-            store_json_object(output_results, "/tmp/marie/region_output_results.json")
+
+            if debug_results:
+                store_json_object(
+                    output_results, "/tmp/marie/region_output_results.json"
+                )
 
             # pick the words by page and update the results
             extended = output_results["extended"]

@@ -2015,6 +2015,7 @@ class Flow(
             if not running_in_event_loop:
                 asyncio.get_event_loop().run_until_complete(_async_wait_all())
             else:
+                # TODO: the same logic that one fails all other fail should be done also here
                 for k, v in self:
                     wait_ready_threads.append(
                         threading.Thread(target=_wait_ready, args=(k, v), daemon=True)
@@ -2117,8 +2118,7 @@ class Flow(
       "tertiaryBorderColor": "none",
       "lineColor": "#a6d8da"
       }
-}}%%
-            '''.replace(
+}}%%'''.replace(
                 '\n', ''
             ),
             'flowchart LR;',

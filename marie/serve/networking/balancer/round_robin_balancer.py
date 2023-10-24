@@ -21,7 +21,7 @@ class RoundRobinLoadBalancer(LoadBalancer):
         :returns: A connection from the pool
         """
         self._logger.debug(
-            f'round_robin_balancer.py: self._connections: {self._connections}'
+            f'round_robin_balancer.py: self._connections: {self._connections} , {num_retries}'
         )
         try:
             connection = None

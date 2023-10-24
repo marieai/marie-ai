@@ -1,15 +1,14 @@
 import os
-from typing import Dict, Union, Optional, Any
+from typing import Union, Optional, Any
 
 import numpy as np
 import torch
 from docarray import DocList
 
-from marie import DocumentArray, Document
-
-from marie import Executor, requests, safely_encoded
+from marie import DocumentArray, Document, safely_encoded
+from marie import Executor, requests
 from marie.api import value_from_payload_or_args
-from marie.api.docs import AssetKeyDoc, OutputDoc
+from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
@@ -81,10 +80,8 @@ class TextExtractionExecutor(Executor, StorageMixin):
             self.setup_storage(sconf.get("enabled", False), sconf)
 
     @requests(on="/document/extract")
-    # @safely_encoded # BREAKS WITH docarray 0.39
+    # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supported
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
-        logger.info(kwargs)
-        logger.info(parameters)
 
         if len(docs) == 0:
             return {"error": "empty payload"}
@@ -95,13 +92,8 @@ class TextExtractionExecutor(Executor, StorageMixin):
         # load documents from specified document asset key
         docs = docs_from_asset(doc.asset_key, doc.pages)
 
-        for doc in docs:
-            print(doc.id)
-
         frames = frames_from_docs(docs)
         frame_len = len(frames)
-
-        print(f"{frame_len=}")
 
         if parameters is None or "job_id" not in parameters:
             self.logger.warning(f"Job ID is not present in parameters")
@@ -143,11 +135,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
             # output_format = OutputFormat.from_value(
             #     value_from_payload_or_args(payload, "output", default="json")
             # )
-
-            # load documents from specified document asset key
-            docs = docs_from_asset(doc.asset, doc.pages)
-            frames = frames_from_docs(docs)
-            frame_len = len(frames)
 
             if parameters:
                 for key, value in parameters.items():
@@ -200,11 +187,13 @@ class TextExtractionExecutor(Executor, StorageMixin):
             if not include_ocr and "ocr" in metadata:
                 del metadata["ocr"]
 
-            return {
+            response = {
                 "status": "succeeded",
                 "runtime_info": self.runtime_info,
                 "metadata": metadata,
             }
+            converted = safely_encoded(lambda x: x)(response)
+            return converted
         except BaseException as error:
             self.logger.error(f"Extract error : {error}", exc_info=True)
             msg = "inference exception"
@@ -242,9 +231,10 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
         if self.storage_enabled:
             # frame_checksum = hash_frames_fast(frames=[frame])
-            docs = DocumentArray(
+
+            docs = DocList[StorageDoc](
                 [
-                    Document(
+                    StorageDoc(
                         content=results,
                         tags=_tags(-1, "metadata", ref_id),
                     )
@@ -370,7 +360,8 @@ class TextExtractionExecutorMock(Executor):
         ]
 
         time.sleep(1)
-
+        # invoke the safely_encoded decorator as a function
         meta = get_ip_address()
         #  DocList / Dict / `None`
-        return self.runtime_info
+        converted = safely_encoded(lambda x: x)(self.runtime_info)
+        return converted
