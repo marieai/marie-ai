@@ -1,12 +1,14 @@
-/.git
-/.env
-/.vscode
-/keys
-.cache/
-/dist/
-/node_modules/
-/model_zoo/
-./model_zoo/
-./docs/
-venv/
-/venv
+# ignore everything
+**
+.*
+
+# Allow files and directories
+!marie/**
+!setup.py
+!*requirements.txt
+!README.md
+!MANIFEST.in
+!marie_cli/**
+!daemon/**
+!docarray/**
+!fastentrypoints.py
