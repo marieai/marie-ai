@@ -71,9 +71,10 @@ class DocumentClassificationDataset(Dataset):
         # validate that all images have an annotation file
         image_paths_valid = []
         for image_path in self.image_paths:
-            annotation_path = image_path.replace("images", "annotations").replace(
-                ".png", ".json"
-            )
+            annotation_path = image_path.replace("images", "annotations")
+            last = annotation_path.rfind(".")
+            annotation_path = annotation_path[:last] + ".json"
+
             if not os.path.exists(annotation_path):
                 print(
                     f"Missing annotation file for {annotation_path} for image {image_path}"
@@ -90,9 +91,9 @@ class DocumentClassificationDataset(Dataset):
     def __getitem__(self, item):
         # print(f"Loading item {item} of {len(self.image_paths)}")
         image_path = self.image_paths[item]
-        annotation_path = image_path.replace("images", "annotations").replace(
-            ".png", ".json"
-        )
+        annotation_path = image_path.replace("images", "annotations")
+        last = annotation_path.rfind(".")
+        annotation_path = annotation_path[:last] + ".json"
 
         if not os.path.exists(annotation_path):
             raise ValueError(
