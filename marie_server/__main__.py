@@ -264,14 +264,14 @@ def __main__(
 
     # Load the config file and set up the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
-    prefetch = config.get("prefetch", 0)
+    prefetch = config.get("prefetch", 1)
 
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
         substitute=True,
         context=context,
-        include_gateway=False,
+        include_gateway=True,
         noblock_on_start=False,
         prefetch=prefetch,
     ).config_gateway(prefetch=prefetch)
