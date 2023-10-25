@@ -32,7 +32,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
     pending = set()
-    print("limit = ", limit)
     while True:
         # print("size of pending = ", len(pending))
         while len(pending) < limit:
@@ -50,13 +49,8 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
 
 
 async def coro_consumer(queue: asyncio.Queue, limit: int = 2):
-    limit = 4
     async for scheduled_coro in coro_scheduler(queue, limit):
         try:
-            print(f"async_consumer: {queue.qsize()} : {queue.empty()}")
-            print(
-                f"Tasks referenced by asyncio internals: count={len(asyncio.all_tasks())}"
-            )
             await scheduled_coro
             # run_background_task(coroutine=scheduled)
         except Exception as e:
