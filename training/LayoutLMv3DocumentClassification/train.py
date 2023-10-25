@@ -47,7 +47,9 @@ dataset_pathXX = os.path.expanduser(
 dataset_path = os.path.expanduser(
     "~/datasets/private/payer-determination/output/images"
 )
-dataset_path = os.path.expanduser("~/datasets/corr-routing/output/images")
+dataset_path = os.path.expanduser(
+    "~/datasets/private/assets-private/corr-routing/ready/images"
+)
 
 
 def load_data():
@@ -80,8 +82,6 @@ def load_data():
 
 
 model_name_or_path = "microsoft/layoutlmv3-base"
-
-
 # model_name_or_path = "microsoft/layoutlmv3-large"
 
 
@@ -96,7 +96,7 @@ def create_processor():
 
 def create_split_data(data):
     train_data, test_data = train_test_split(
-        data, test_size=0.25, random_state=42, stratify=data["label"]
+        data, test_size=0.20, random_state=42, stratify=data["label"]
     )
 
     train_data = train_data.reset_index(drop=True)
@@ -194,7 +194,7 @@ class ModelModule(pl.LightningModule):
         config = AutoConfig.from_pretrained(
             model_name_or_path,
             num_labels=n_classes,
-            finetuning_task="payer-classification",
+            finetuning_task="corr-classification",
             cache_dir="/mnt/data/cache",
             input_size=224,
             hidden_dropout_prob=0.1,
@@ -269,7 +269,7 @@ def train():
         data, labels, processor=processor
     )
     train_data_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=12
+        train_dataset, batch_size=4, shuffle=True, num_workers=4
     )
     test_data_loader = DataLoader(
         test_dataset, batch_size=2, shuffle=False, num_workers=4
@@ -465,11 +465,12 @@ def inference(model_checkpoint_path: str):
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    # train()
+    torch.set_grad_enabled(True)
+    train()
 
     # load ckpt for inference
-    model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/l579hdim/checkpoints/epoch=41-step=114870-val_loss=0.0223.ckpt.dir"
-    inference(model_checkpoint_path)
+    # model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/l579hdim/checkpoints/epoch=41-step=114870-val_loss=0.0223.ckpt.dir"
+    # inference(model_checkpoint_path)
 
 # export QT_QPA_PLATFORM=offscreen
 # ref : https://github.com/NVlabs/instant-ngp/discussions/300
