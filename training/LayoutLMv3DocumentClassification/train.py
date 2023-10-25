@@ -47,9 +47,7 @@ dataset_pathXX = os.path.expanduser(
 dataset_path = os.path.expanduser(
     "~/datasets/private/payer-determination/output/images"
 )
-dataset_path = os.path.expanduser(
-    "~/datasets/private/assets-private/corr-routing/ready/images"
-)
+dataset_path = os.path.expanduser("~/datasets/private/corr-routing/ready/images")
 
 
 def load_data():
@@ -81,8 +79,8 @@ def load_data():
     return data, labels, idx2label, label2idx
 
 
-model_name_or_path = "microsoft/layoutlmv3-base"
-# model_name_or_path = "microsoft/layoutlmv3-large"
+# model_name_or_path = "microsoft/layoutlmv3-base"
+model_name_or_path = "microsoft/layoutlmv3-large"
 
 
 def create_processor():
@@ -95,6 +93,9 @@ def create_processor():
 
 
 def create_split_data(data):
+    # limit data for testing / debugging
+    # data = data.sample(frac=0.1, random_state=42)
+
     train_data, test_data = train_test_split(
         data, test_size=0.20, random_state=42, stratify=data["label"]
     )
@@ -269,10 +270,10 @@ def train():
         data, labels, processor=processor
     )
     train_data_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=4
+        train_dataset, batch_size=4, shuffle=True, num_workers=0
     )
     test_data_loader = DataLoader(
-        test_dataset, batch_size=2, shuffle=False, num_workers=4
+        test_dataset, batch_size=2, shuffle=False, num_workers=0
     )
 
     # train
@@ -303,7 +304,7 @@ def train():
         train_data_loader,
         test_data_loader,
         # ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_2/checkpoints/epoch=4-step=10020-val_loss=0.1739.ckpt",
-        # ckpt_path="/home/greg/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/version_10/checkpoints/epoch=14-step=2460-val_loss=0.9631.ckpt",
+        # ckpt_path="/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/9ymwbfy4/checkpoints/epoch=3-step=11380-val_loss=0.3742.ckpt",
     )
 
 
@@ -313,9 +314,10 @@ def predict_document_image(
     processor: LayoutLMv3Processor,
     device: str = "cuda",
 ):
-    annotation_path = (
-        str(image_path).replace("images", "annotations").replace(".png", ".json")
-    )
+    annotation_path = image_path.replace("images", "annotations")
+    last = annotation_path.rfind(".")
+    annotation_path = annotation_path[:last] + ".json"
+
     if not os.path.exists(annotation_path):
         print(f"Missing annotation file for {annotation_path} for image {image_path}")
         return -1, -1
@@ -368,9 +370,9 @@ def predict_document_image(
 
 
 def infer_single_image(label, image_path, model, processor, device):
-    annotation_path = image_path.replace("images", "annotations").replace(
-        ".png", ".json"
-    )
+    annotation_path = image_path.replace("images", "annotations")
+    last = annotation_path.rfind(".")
+    annotation_path = annotation_path[:last] + ".json"
     if not os.path.exists(annotation_path):
         print(f"Missing annotation file for {annotation_path} for image {image_path}")
         return -1, -1
@@ -402,24 +404,23 @@ def inference(model_checkpoint_path: str):
     # Without compile :
     #   Inference time  takes 1 minute and 1 second (61.28s)
 
+    print(model.config.id2label)
     print(torch._dynamo.list_backends())
 
-    if False:
+    if True:
         try:
             with TimeContext("Compile model"):
                 import torchvision.models as models
                 import torch._dynamo as dynamo
 
-                torch._dynamo.config.verbose = True
-                torch.backends.cudnn.benchmark = True
-                model = torch.compile(model, backend="inductor", mode="max-autotune")
+                # model = torch.compile(model, backend="inductor", mode="max-autotune")
+                model = torch.compile(model)
                 # model = torch.compile(model, backend="onnxrt", fullgraph=False)
                 # model = torch.compile(model)
                 print("Model compiled set")
         except Exception as err:
             print(f"Model compile not supported: {err}")
 
-    print(model.config.id2label)
     true_labels = []
     pred_labels = []
 
@@ -444,6 +445,13 @@ def inference(model_checkpoint_path: str):
                 f"Expected / predicted label: {label} , {predicted_label} with probabilities: {probabilities}"
             )
 
+            # write detailed results to a csv file
+            matched = label == predicted_label
+            with open("results.csv", "a") as f:
+                f.write(
+                    f"{matched},{label},{predicted_label},{probabilities},{image_path}\n"
+                )
+
     print("Classification report")
     print(labels)
     print(true_labels)
@@ -466,11 +474,13 @@ def inference(model_checkpoint_path: str):
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
     torch.set_grad_enabled(True)
-    train()
+    # train()
 
     # load ckpt for inference
-    # model_checkpoint_path = "~/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/l579hdim/checkpoints/epoch=41-step=114870-val_loss=0.0223.ckpt.dir"
-    # inference(model_checkpoint_path)
+    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/d0b6fxoa/checkpoints/epoch=2-step=8535-val_loss=0.3906.ckpt.dir"
+    inference(model_checkpoint_path)
 
+# set this to avoid error
 # export QT_QPA_PLATFORM=offscreen
+# QObject::moveToThread: Current thread (0xa476410) is not the object's thread (0xc2504e0).
 # ref : https://github.com/NVlabs/instant-ngp/discussions/300
