@@ -14,7 +14,7 @@ from marie.boxes import PSMode
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent
+from marie.pipe import ClassifierPipelineComponent, PipelineResult
 from marie.pipe import PipelineComponent, PipelineContext
 from marie.pipe.components import (
     setup_classifiers,
@@ -38,6 +38,38 @@ class ClassifierPipelineScoringComponent(PipelineComponent, ABC):
         """
         super().__init__(name, logger=logger)
         self.strategy = strategy
+
+    def predict(
+        self,
+        documents: DocList[MarieDoc],
+        context: Optional[PipelineContext] = None,
+        *,  # force users to use keyword arguments
+        words: List[List[str]] = None,
+        boxes: List[List[List[int]]] = None,
+    ) -> PipelineResult:
+        context["metadata"]["document_classification"] = self.classify(
+            documents, words, boxes
+        )
+
+        return PipelineResult(documents)
+
+    def classify(
+        self,
+        documents: DocList[MarieDoc],
+        words: List[List[str]],
+        boxes: List[List[List[int]]],
+    ):
+        """
+        Classify document at by aggregating page level classification results
+
+        :param documents: documents to classify
+        :param words: words
+        :param boxes: boxes
+        :return: classification results
+        """
+
+        document_meta = []
+        return document_meta
 
 
 class ClassificationPipeline:
