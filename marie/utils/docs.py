@@ -16,6 +16,7 @@ from docarray.documents import ImageDoc
 
 from marie import Document, DocumentArray
 from marie._core.definitions.events import AssetKey
+from marie.api.docs import MarieDoc
 from marie.common.file_io import StrOrBytesPath
 from marie.storage import StorageManager
 from marie.utils.utils import ensure_exists
@@ -157,15 +158,15 @@ def convert_frames(frames, img_format):
     return converted
 
 
-def load_image(img_path, img_format: str = "cv"):
+def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
     """
     Load image, if the image is a TIFF, we will load the image as a multipage tiff, otherwise we return an
     array with image as first element. If the document is a PDF we will extract images from the document and
     return them as frames
 
-    Args:
-        img_path: source image path
-        img_format: cv or pil
+    :param img_path: source image path
+    :param img_format: cv or pil
+    :return (bool, List[np.ndarray]): loaded, frames
     """
 
     if img_path is None:
@@ -213,9 +214,9 @@ def load_image(img_path, img_format: str = "cv"):
 
 
 def frames_from_docs(
-    docs: DocList[ImageDoc], field: Optional[str] = None
+    docs: DocList[MarieDoc], field: Optional[str] = None
 ) -> List[np.ndarray]:
-    """Convert DocumentArray to Numpy Array"""
+    """Convert DocList[MarieDoc] to Numpy Array"""
     if docs is None:
         raise ValueError("No documents provided to convert to array")
     frames = []
@@ -233,7 +234,7 @@ def frames_from_docs(
 
 def docs_from_file(
     path: StrOrBytesPath, pages: Optional[List[int]] = None
-) -> DocumentArray:
+) -> DocList[MarieDoc]:
     """
     Create DocumentArray from image file. This will create one document per page in the image file, if the image
     is large and has many pages this can be very memory intensive.
@@ -253,26 +254,26 @@ def docs_from_file(
     if pages is None or len(pages) == 0:
         pages = [i for i in range(len(frames))]
 
-    docs = DocumentArray()
-
+    docs = DocList[MarieDoc]()
     if loaded:
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
-            docs.append(Document(content=frame))
+            doc = MarieDoc(tensor=frame)
+            docs.append(doc)
     return docs
 
 
 def docs_from_asset(
     asset_key: str, pages: Optional[List[int]] = None
-) -> DocList[ImageDoc]:
+) -> DocList[MarieDoc]:
     """
     Create DocumentArray from image file. This will create one document per page in the image file, if the image
     is large and has many pages this can be very memory intensive.
 
     :param asset_key:  asset key to the resource
     :param pages:  list of pages to extract from document NONE or empty list will extract all pages from document
-    :return: DocList with tensor content
+    :return: DocList[MarieDoc] with tensor content
     """
 
     uri = asset_key
@@ -312,15 +313,14 @@ def docs_from_asset(
     if pages is None or len(pages) == 0:
         pages = [i for i in range(len(frames))]
 
-    docs = DocList[ImageDoc]()
+    docs = DocList[MarieDoc]()
 
     if loaded:
         for idx, frame in enumerate(frames):
             if idx not in pages:
                 continue
-            doc = ImageDoc(tensor=frame)
+            doc = MarieDoc(tensor=frame)
             docs.append(doc)
-
     return docs
 
 
@@ -341,7 +341,7 @@ def is_array_like(obj: Any) -> bool:
     return False
 
 
-def docs_from_image(src: Union[Any, List]) -> DocumentArray:
+def docs_from_image(src: Union[Any, List]) -> DocList[MarieDoc]:
     """Create DocumentArray from image or array like object
     Numpy ndarray or PIl Image ar supported
     """
@@ -349,11 +349,11 @@ def docs_from_image(src: Union[Any, List]) -> DocumentArray:
     if not is_array_like(src):
         arr = [src]
 
-    docs = DocumentArray()
+    docs = DocList[MarieDoc]()
     for img in arr:
         if isinstance(img, Image.Image):
             img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        document = Document(content=img)
-        docs.append(document)
+        doc = MarieDoc(tensor=img)
+        docs.append(doc)
 
     return docs

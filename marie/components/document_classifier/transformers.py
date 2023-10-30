@@ -1,12 +1,12 @@
 import os
-from typing import Optional, Union, List, Callable, Dict, Any
+from typing import Optional, Union, List, Callable, Any
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
-from marie import DocumentArray
+from docarray import DocList
 from torch.nn import Module
 from tqdm import tqdm
 from transformers import (
@@ -16,11 +16,12 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from marie.constants import __model_path__
 
+from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from ..document_classifier.base import BaseDocumentClassifier
+from ...api.docs import MarieDoc
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
@@ -173,11 +174,11 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
-    ) -> DocumentArray:
+    ) -> DocList[MarieDoc]:
 
         if batch_size is None:
             batch_size = self.batch_size

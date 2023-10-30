@@ -1,21 +1,14 @@
 import os
 
-import numpy as np
 import pandas as pd
+import torch
+from PIL import Image
+from datasets import Dataset, Features, Sequence, ClassLabel, Value, Array2D, Array3D
+from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from tqdm import trange
-
 from tqdm.auto import tqdm
-from sklearn.model_selection import train_test_split
-
-from PIL import Image, ImageDraw, ImageFont
-
-import torch
-
-import torch
-from datasets import Dataset, Features, Sequence, ClassLabel, Value, Array2D, Array3D
 from transformers import (
-    LayoutLMv3FeatureExtractor,
     LayoutLMv3Tokenizer,
     LayoutLMv3Processor,
     LayoutLMv3ForSequenceClassification,
