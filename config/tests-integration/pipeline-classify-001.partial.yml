@@ -1,0 +1,23 @@
+pipeline:
+  name: 'default-corr'
+  page_classifier:
+    - model_name_or_path: 'marie/lmv3-medical-document-classification'
+      type: 'transformers'
+      device: 'cuda'
+      enabled: True
+      name: 'corr_page_classifier'
+    - model_name_or_path: 'marie/lmv3-medical-document-payer'
+      type: 'transformers'
+      enabled: True
+      device: 'cuda'
+      name: 'longformer_corr_page_classifier'
+  sub_classifier:
+    - model_name_or_path: 'rms/layoutlmv3-large-patpay-ner'
+      enabled: True
+      type: 'transformers'
+      device: 'cuda'
+      name: 'subclassifier_corr_auth'
+      filter:
+        type: 'regex'
+        pattern: '.*'
+

@@ -3,6 +3,7 @@ from marie.constants import __model_path__, __config_dir__
 from marie.conf.helper import load_yaml
 from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
+from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.pipe.extract_pipeline import ExtractPipeline, split_filename, s3_asset_path
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
@@ -44,8 +45,8 @@ if __name__ == "__main__":
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
 
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
-    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"])
+    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-classify-001.partial.yml"))
+    pipeline = ClassificationPipeline(pipeline_config=pipeline_config["pipeline"])
 
-    with TimeContext(f"### ExtractPipeline info"):
+    with TimeContext(f"### ClassificationPipeline info"):
         results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))

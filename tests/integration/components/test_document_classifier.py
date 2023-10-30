@@ -32,9 +32,6 @@ def test_sequence_classifier():
     # set to core-count of your CPU
     torch.set_num_threads(psutil.cpu_count(logical=False))
 
-    # Only this extra line of code is required to use oneDNN Graph
-    # torch.jit.enable_onednn_fusion(True)
-
     # return
     model_name_or_path = "marie/layoutlmv3-document-classification"
     # model_name_or_path = "hf://microsoft/layoutlmv3-base"
@@ -63,7 +60,7 @@ def test_sequence_classifier():
 
         with TimeContext(f"Eval # {i}"):
             results = classifier.run(
-                documents=DocumentArray(documents), words=[words], boxes=[boxes]
+                documents=documents, words=[words], boxes=[boxes]
             )
 
             for document in results:

@@ -387,7 +387,7 @@ def inference(model_checkpoint_path: str):
 
     # load model
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    # device = "cpu"
 
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
@@ -477,7 +477,7 @@ if __name__ == "__main__":
     # train()
 
     # load ckpt for inference
-    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/d0b6fxoa/checkpoints/epoch=2-step=8535-val_loss=0.3906.ckpt.dir"
+    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/model_zoo/rms/corr_classification/page_level_layoutlmv3/epoch=6-step=4984-val_loss=0.3505.ckpt.dir"
     inference(model_checkpoint_path)
 
 # set this to avoid error

@@ -1,6 +1,7 @@
 from typing import Any, Optional
 
 from docarray import BaseDoc
+from docarray.documents import ImageDoc
 from docarray.typing import AnyTensor
 
 
@@ -19,6 +20,10 @@ class StorageDoc(BaseDoc):
     content: Optional[Any]
     blob: Optional[Any]
     tensor: Optional[AnyTensor]
+    tags: Optional[dict]  # type: ignore
+
+
+class MarieDoc(ImageDoc):
     tags: Optional[dict]  # type: ignore
 
 
