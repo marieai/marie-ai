@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import DocumentArray, Document, safely_encoded
 from marie import Executor, requests
+from marie import safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
@@ -16,7 +16,7 @@ from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
 from marie.ocr import CoordinateFormat
-from marie.ocr.extract_pipeline import ExtractPipeline
+from marie.pipe import ExtractPipeline
 from marie.utils.docs import frames_from_docs, docs_from_asset
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address

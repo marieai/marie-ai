@@ -1,8 +1,9 @@
-from abc import ABC, abstractmethod
-from typing import Optional, List, Iterable
+from abc import ABC
+from typing import Optional, List
 
-from marie import DocumentArray
+from docarray import DocList
 
+from marie.api.docs import MarieDoc
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineResult, PipelineContext
 
@@ -20,7 +21,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
 
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         context: Optional[PipelineContext] = None,
         *,  # force users to use keyword arguments
         words: List[List[str]] = None,
@@ -33,7 +34,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
 
     def classify(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         words: List[List[str]],
         boxes: List[List[List[int]]],
     ):

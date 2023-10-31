@@ -49,9 +49,7 @@ dataset_path = os.path.expanduser(
 )
 dataset_path = os.path.expanduser("~/datasets/private/corr-routing/ready/images")
 
-dataset_path = os.path.expanduser(
-    "~/datasets/private/assets-private/corr-routing/ready/images"
-)
+dataset_path = os.path.expanduser("~/datasets/private/corr-routing/ready/images")
 
 
 def load_data():
@@ -482,7 +480,9 @@ if __name__ == "__main__":
     # train()
 
     # load ckpt for inference
-    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/model_zoo/rms/epoch=6-step=4984-val_loss=0.3505.ckpt.dir"
+    model_checkpoint_path = (
+        "/home/greg/dev/marieai/marie-ai/model_zoo/rms/corr-layoutlmv3"
+    )
     inference(model_checkpoint_path)
 
 # set this to avoid error

@@ -1,9 +1,13 @@
 import os
-from marie.constants import __model_path__, __config_dir__
+
+from transformers import LongformerTokenizer, AutoTokenizer
+
 from marie.conf.helper import load_yaml
+from marie.constants import __config_dir__
 from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
-from marie.pipe.extract_pipeline import ExtractPipeline, split_filename, s3_asset_path
+from marie.pipe.classification_pipeline import ClassificationPipeline
+from marie.pipe.extract_pipeline import split_filename
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
 from marie.utils.docs import frames_from_file
@@ -32,7 +36,7 @@ def setup_storage():
 if __name__ == "__main__":
     # setup_storage()
     MDC.put("request_id", "test")
-    img_path = "~/tmp/address-001.png"
+    img_path = "~/tmp/PID_1925_9289_0_157186264.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -43,9 +47,25 @@ if __name__ == "__main__":
 
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
+    # https://stackoverflow.com/questions/70119500/how-to-re-download-tokenizer-for-huggingface
+    tokenizer = AutoTokenizer.from_pretrained(
+        "allenai/longformer-base-4096",
+        max_length=4096,
+    )
 
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
-    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"])
+    # res = tokenizer.save_pretrained(os.path.expanduser("~/tmp/models/transformers"))
 
-    with TimeContext(f"### ExtractPipeline info"):
-        results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
+    print(tokenizer)
+    exit(0)
+
+    pipeline_config = load_yaml(
+        os.path.join(
+            __config_dir__, "tests-integration", "pipeline-classify-001.partial.yml"
+        )
+    )
+    pipeline = ClassificationPipeline(pipeline_config=pipeline_config["pipeline"])
+
+    with TimeContext(f"### ClassificationPipeline info"):
+        results = pipeline.execute(
+            ref_id=filename, ref_type="pid", frames=frames_from_file(img_path)
+        )

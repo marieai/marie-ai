@@ -13,6 +13,7 @@ env.bak/
 venv.bak/
 src/venv
 venv
+wandb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

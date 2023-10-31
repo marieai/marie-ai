@@ -38,7 +38,7 @@ class CraftOcrProcessor(OcrProcessor):
 
         saved_model = os.path.join(
             models_dir,
-            "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft-01",
+            "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft",
             "best_accuracy.pth",
         )
 
