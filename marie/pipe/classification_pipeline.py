@@ -1,6 +1,5 @@
 import os
 import shutil
-from abc import ABC
 from datetime import datetime
 from typing import Union, List, Optional
 
@@ -14,7 +13,7 @@ from marie.boxes import PSMode
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent, PipelineResult
+from marie.pipe import ClassifierPipelineComponent
 from marie.pipe import PipelineComponent, PipelineContext
 from marie.pipe.components import (
     setup_classifiers,
@@ -29,47 +28,6 @@ from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
-
-
-class ClassifierPipelineScoringComponent(PipelineComponent, ABC):
-    def __init__(self, name: str, strategy: str, logger: MarieLogger = None) -> None:
-        """
-        :param name: Will be passed to base class
-        """
-        super().__init__(name, logger=logger)
-        self.strategy = strategy
-
-    def predict(
-        self,
-        documents: DocList[MarieDoc],
-        context: Optional[PipelineContext] = None,
-        *,  # force users to use keyword arguments
-        words: List[List[str]] = None,
-        boxes: List[List[List[int]]] = None,
-    ) -> PipelineResult:
-        context["metadata"]["document_classification"] = self.classify(
-            documents, words, boxes
-        )
-
-        return PipelineResult(documents)
-
-    def classify(
-        self,
-        documents: DocList[MarieDoc],
-        words: List[List[str]],
-        boxes: List[List[List[int]]],
-    ):
-        """
-        Classify document at by aggregating page level classification results
-
-        :param documents: documents to classify
-        :param words: words
-        :param boxes: boxes
-        :return: classification results
-        """
-
-        document_meta = []
-        return document_meta
 
 
 class ClassificationPipeline:
@@ -109,12 +67,21 @@ class ClassificationPipeline:
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
+        self.pipeline_config = pipeline_config
 
         self.ocr_engines = get_known_ocr_engines(use_cuda=use_cuda)
-        self.document_classifiers = setup_classifiers(pipeline_config)
+        self.document_classifiers = setup_classifiers(
+            pipeline_config, key="page_classifier"
+        )
+        self.document_sub_classifiers = setup_classifiers(
+            pipeline_config, key="sub_classifier"
+        )
 
         self.logger.info(
             f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
+        )
+        self.logger.info(
+            f"Loaded sub-classifiers : {len(self.document_sub_classifiers)},  {self.document_sub_classifiers.keys()}"
         )
 
     def execute_frames_pipeline(
@@ -139,14 +106,16 @@ class ClassificationPipeline:
         )
 
         self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
+
         processing_pipeline = [
             ClassifierPipelineComponent(
-                name="classifier_pipeline_component",
+                name="classifier_pipeline",
                 document_classifiers=self.document_classifiers,
             ),
-            ClassifierPipelineScoringComponent(
-                "scoring_pipeline_component", strategy="max"
-            ),
+            # ClassifierPipelineComponent(
+            #     name="sub_classifier_pipeline",
+            #     document_classifiers=self.document_sub_classifiers,
+            # )
         ]
 
         metadata = {
@@ -267,7 +236,7 @@ class ClassificationPipeline:
 
         assert len(words) == len(boxes)
 
-        context = PipelineContext(pipeline_id="post_processing_pipeline")
+        context = PipelineContext(pipeline_id="classification_pipeline")
         context["metadata"] = metadata
 
         for pipe in processing_pipeline:
@@ -285,5 +254,73 @@ class ClassificationPipeline:
                 self.logger.error(f"Error executing pipe : {e}")
 
         # TODO : This is temporary, we need to make this configurable
+        print("### ClassificationPipeline results")
+        print(context["metadata"]["page_classifier"])
+        # page_classifier
 
+        print("### ClassificationPipeline info")
+
+        sub_classifier_pipeline = ClassifierPipelineComponent(
+            name="sub_classifier_pipeline",
+            document_classifiers=self.document_sub_classifiers,
+        )
+
+        # FIXME : This is a total hack
+        page_classifier = context["metadata"]["page_classifier"]
+        pipeline_config = self.pipeline_config
+
+        has_filter = "filter" in pipeline_config
+        filter_pattern = None
+        filter_type = None
+
+        if has_filter:
+            filter_type = pipeline_config["filter"]["type"]
+            filter_pattern = pipeline_config["filter"]["pattern"]
+
+        print(f"Filter : {has_filter}, {filter_type}, {filter_pattern}")
+
+        for idx, page_classifier_result in enumerate(page_classifier):
+            print(f"Page : {page_classifier_result}")
+            for detail in page_classifier_result["details"]:
+                page = int(detail["page"])
+                classification = detail["classification"]
+
+                if classification == filter_pattern:
+                    print(f"Running sub-classifier for page : {page}")
+
+                    ctx = PipelineContext(pipeline_id="sub_classification_pipeline")
+                    ctx["metadata"] = {}
+                    pipe_results = sub_classifier_pipeline.run(
+                        documents[page : page + 1],
+                        ctx,
+                        words=[words[page]],
+                        boxes=[boxes[page]],
+                    )
+                    print(f"Sub-classifier results : {pipe_results}")
+                    print(ctx["metadata"]["page_classifier"])
+                    detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
+
+        print("### ClassificationPipeline results")
+        print(context["metadata"]["page_classifier"])
+        store_json_object(
+            context["metadata"]["page_classifier"], "~/tmp/classification.json"
+        )
+
+        # Pivot the results to make it easier to work with  by page
+        print("----------------------------------------")
+        print("----------------------------------------")
+
+        class_by_page = {}
+        for idx, page_classifier_result in enumerate(page_classifier):
+            print(f"Page : {idx}")
+            classifier = page_classifier_result["classifier"]
+            for detail in page_classifier_result["details"]:
+                page = int(detail["page"])
+                classification = detail["classification"]
+                print(detail)
+                if page not in class_by_page:
+                    class_by_page[page] = []
+                detail["classifier"] = classifier
+                class_by_page[page].append(detail)
+        store_json_object(class_by_page, "~/tmp/classification.pivot.json")
         return documents
