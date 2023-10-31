@@ -1,29 +1,63 @@
 pipeline:
   name: 'default-corr'
+
+  id2label:
+    '0': additional_information
+    '1': attorney
+    '2': auth_approval
+    '3': auth_denial
+    '4': bankruptcy
+    '5': cms_letter
+    '6': dispute
+    '7': eligibility
+    '8': medical_certificate
+    '9': medical_record
+    '10': misc
+    '11': newborn
+    '12': noop_blank
+    '13': noop_check
+    '14': noop_cover
+    '15': noop_envelope
+    '16': noop_eob
+    '17': noop_hicfa
+    '18': noop_notice
+    '19': noop_patpay
+    '20': noop_w9
+    '21': pa_162
+    '22': referral
+    '23': refund_request
+    '24': tax_1099
+
   page_classifier:
     - model_name_or_path: 'rms/corr-layoutlmv3-classifier'
-      name: 'corr_page_layoutlmv3_classifier'
+      name: 'corr_page_classifier_layoutlmv3'
       type: 'transformers'
       task: 'text-classification-multimodal'
       device: 'cuda'
       enabled: True
-      # specific options for LayoutLMv3
-#      feature_extractor: LayoutLMv3ImageProcessor,
-#      image_processor: LayoutLMv3Processor
 
-#    - model_name_or_path: 'rms/corr-longformer-classifier'
-#      task: 'text-classification'
-#      name: 'corr_page_longformer_classifier'
-#      type: 'transformers'
-#      enabled: True
-#      device: 'cuda'
+    - model_name_or_path: 'rms/corr-longformer-classifier'
+      task: 'text-classification'
+      name: 'corr_page_classifier_longformer'
+      type: 'transformers'
+      enabled: False
+      batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+      device: 'cuda'
 
   sub_classifier:
-    - model_name_or_path: 'rms/layoutlmv3-large-patpay-ner'
-      enabled: True
+    - model_name_or_path: 'rms/corr-auth-longformer-classifier'
+      task: 'text-classification'
+      name: 'corr_auth_sub_classifier'
       type: 'transformers'
+      enabled: True
+      batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
       device: 'cuda'
-      name: 'subclassifier_corr_auth'
-      filter:
-        type: 'regex'
-        pattern: '.*'
+
+      id2label:
+        '0': auth_denial_in
+        '1': auth_denial_op
+
+  # Filter should be on the same level as the sub-classifier, for now this is just a global filter
+  filter:
+    type: 'exact'
+    pattern: 'auth_denial'

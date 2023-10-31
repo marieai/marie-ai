@@ -192,13 +192,12 @@ class ExtractPipeline:
         self.logger.info(f"page indexer enabled : {page_indexer_enabled}")
         post_processing_pipeline = []
 
-        if False:
-            post_processing_pipeline.append(
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline_component",
-                    document_classifiers=self.document_classifiers,
-                )
+        post_processing_pipeline.append(
+            ClassifierPipelineComponent(
+                name="classifier_pipeline_component",
+                document_classifiers=self.document_classifiers,
             )
+        )
 
         post_processing_pipeline.append(
             NamedEntityPipelineComponent(

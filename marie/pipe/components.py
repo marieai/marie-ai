@@ -108,10 +108,13 @@ def get_known_ocr_engines(use_cuda: bool = True) -> dict[str, any]:
     return ocr_engines
 
 
-def setup_classifiers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
+def setup_classifiers(
+    pipeline_config: Optional[dict] = None, key: str = "page_classifier"
+) -> dict[str, any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
+    :param key: key to use in the pipeline config
     :return: document classifiers
     """
 
@@ -121,12 +124,7 @@ def setup_classifiers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
 
     document_classifiers = dict()
 
-    configs = (
-        pipeline_config["page_classifier"]
-        if "page_classifier" in pipeline_config
-        else []
-    )
-    # classifier_configs =  pipeline_config["page_classifier"]
+    configs = pipeline_config[key] if key in pipeline_config else []
     for config in configs:
         if "model_name_or_path" not in config:
             raise BadConfigSource(
@@ -137,10 +135,19 @@ def setup_classifiers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
             logger.warning(f"Skipping classifier : {config['model_name_or_path']}")
             continue
 
+        id2label = (
+            pipeline_config["id2label"] if "id2label" in pipeline_config else None
+        )
+
         model_name_or_path = config["model_name_or_path"]
         device = config["device"] if "device" in config else "cpu"
         name = config["name"] if "name" in config else config["model_name_or_path"]
         model_type = config["type"] if "type" in config else "transformers"
+        task = config["task"] if "task" in config else "text-classification"
+        batch_size = config["batch_size"] if "batch_size" in config else 1
+        id2label = (
+            config["id2label"] if "id2label" in config else id2label
+        )  # Override id2label if provided in config
 
         logger.info(f"Using model : {model_name_or_path} on device : {device}")
 
@@ -150,8 +157,10 @@ def setup_classifiers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
         if model_type == "transformers":
             document_classifiers[name] = TransformersDocumentClassifier(
                 model_name_or_path=model_name_or_path,
-                batch_size=1,
+                batch_size=batch_size,
                 use_gpu=True,
+                task=task,
+                id2label=id2label,
             )
         else:
             raise ValueError(f"Invalid classifier type : {model_type}")

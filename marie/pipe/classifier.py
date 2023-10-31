@@ -48,47 +48,44 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
         """
 
         document_meta = []
-        try:
-            for key, document_classifier in self.document_classifiers.items():
-                meta = []
+        for key, document_classifier in self.document_classifiers.items():
+            meta = []
 
-                try:
-                    self.logger.info(f"Classifying document : {key}")
-                    classified_docs = document_classifier.run(
-                        documents=documents, words=words, boxes=boxes
-                    )
+            try:
+                self.logger.info(f"Classifying document : {key}")
+                classified_docs = document_classifier.run(
+                    documents=documents, words=words, boxes=boxes
+                )
 
-                    for idx, document in enumerate(classified_docs):
-                        assert "classification" in document.tags
-                        classification = document.tags["classification"]
-                        # document.tags.pop("classification")
+                for idx, document in enumerate(classified_docs):
+                    assert "classification" in document.tags
+                    classification = document.tags["classification"]
+                    # document.tags.pop("classification")
 
-                        assert "label" in classification
-                        assert "score" in classification
-                        meta.append(
-                            {
-                                "page": f"{idx}",  # Using string to avoid type conversion issues
-                                "classification": classification["label"],
-                                "score": classification["score"],
-                            }
-                        )
-
-                    self.logger.debug(f"Classification : {meta}")
-                    document_meta.append(
+                    assert "label" in classification
+                    assert "score" in classification
+                    meta.append(
                         {
-                            "classifier": key,
-                            "details": meta,
+                            "page": f"{idx}",  # Using string to avoid type conversion issues
+                            "classification": classification["label"],
+                            "score": classification["score"],
                         }
                     )
-                except Exception as e:
-                    self.logger.error(f"Error classifying document : {e}")
-                    document_meta.append(
-                        {
-                            "classifier": key,
-                            "details": [],
-                        }
-                    )
-        except Exception as e:
-            self.logger.error(f"Error classifying document : {e}")
+
+                self.logger.debug(f"Classification : {meta}")
+                document_meta.append(
+                    {
+                        "classifier": key,
+                        "details": meta,
+                    }
+                )
+            except Exception as e:
+                self.logger.error(f"Error classifying document : {e}")
+                document_meta.append(
+                    {
+                        "classifier": key,
+                        "details": [],
+                    }
+                )
 
         return document_meta

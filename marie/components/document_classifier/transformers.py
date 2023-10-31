@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Union, List, Callable, Any
+from typing import Optional, Union, List, Callable, Any, Sequence
 
 import numpy as np
 import torch
@@ -58,6 +58,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         use_auth_token: Optional[Union[str, bool]] = None,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
+        id2label: Optional[dict[int, str]] = None,
         **kwargs,
     ):
         """
@@ -91,6 +92,9 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                         A list containing torch device objects and/or strings is supported (For example
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
+        :param show_error: Whether to show errors during inference. If set to False, errors will be logged as debug messages.
+        :param id2label: A dictionary mapping label ids to label names. Only used for task 'text-classification' and 'text-classification-multimodal'.
+        :param kwargs: Additional keyword arguments passed to the model.
         """
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
@@ -101,6 +105,10 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.labels = labels
         self.top_k = top_k
         self.progress_bar = False
+        self.id2label = id2label
+        # Keys are always strings in JSON/YAML so convert ids to int here.
+        if id2label is not None:
+            self.id2label = {int(key): value for key, value in self.id2label.items()}
 
         if labels and task == "text-classification":
             self.logger.warning(
@@ -120,7 +128,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        print("self.device", self.device)
 
         registry_kwargs = {
             "__model_path__": __model_path__,
@@ -156,7 +163,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 device=resolved_devices[0],
                 revision=model_version,
                 top_k=top_k,
-                use_auth_token=use_auth_token,
+                # use_auth_token=use_auth_token,
             )
         elif task == "text-classification-multimodal":
             self.model = AutoModelForSequenceClassification.from_pretrained(
@@ -180,7 +187,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
-
         if batch_size is None:
             batch_size = self.batch_size
 
@@ -195,13 +201,30 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 len(documents) == len(words) == len(boxes)
             ), "documents, words and boxes must have the same length"
 
-        batches = batch_iterator(documents, batch_size)
+        # create a named tuple of (document, words, boxes) for each document
+
+        class BatchableMarieDoc(MarieDoc):
+            words: List
+            boxes: List
+
+        batchable_docs = DocList(
+            BatchableMarieDoc(
+                tensor=doc.tensor,
+                words=word,
+                boxes=box,
+            )
+            for doc, word, box in zip(documents, words, boxes)
+        )
+
+        batches = batch_iterator(batchable_docs, batch_size)
         predictions = []
         pb = tqdm(
             total=len(documents),
             disable=not self.progress_bar,
             desc="Classifying documents",
         )
+
+        id2label = self.id2label
         for batch in batches:
             batch_results = []
             if self.task == "zero-shot-classification":
@@ -211,7 +234,48 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                     truncation=True,
                 )
             elif self.task == "text-classification":
-                batch_results = self.model(batch, top_k=self.top_k, truncation=True)
+                try:
+                    from torch.utils.data import Dataset
+
+                    class IterableData(Dataset):
+                        def __init__(self, items: Sequence[BatchableMarieDoc]):
+                            self.items = items
+
+                        def __len__(self):
+                            return len(self.items)
+
+                        def __getitem__(self, idx):
+                            doc = self.items[idx]
+                            text = " ".join(doc.words)
+                            return text
+
+                    pipe_batched_results = self.model(
+                        IterableData(batch), top_k=self.top_k, truncation=True
+                    )
+                    k_results = []
+
+                    for results in pipe_batched_results:
+                        for k in range(self.top_k):
+                            result_k1 = results[k]
+                            label = result_k1["label"]
+                            label_id = int(label.split("_")[1])
+                            if id2label is not None:
+                                label = id2label[label_id]
+                            score = result_k1["score"]
+                            k_results.append(
+                                {
+                                    "label": label,
+                                    "score": score,
+                                }
+                            )
+                    batch_results.append(k_results)
+                except Exception as err:
+                    err_msg = f"Error while classifying documents: {err}"
+                    if self.show_error:
+                        self.logger.error(err_msg)
+                    else:
+                        self.logger.debug(err_msg)
+
             elif self.task == "text-classification-multimodal":
                 batch_results = []
                 for doc, w, b in zip(batch, words, boxes):
@@ -256,7 +320,12 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         :param top_k: number of predictions to return
         :return: prediction dictionary with label and score
         """
-        id2label = self.model.config.id2label
+
+        if self.id2label is None:
+            id2label = self.model.config.id2label
+        else:
+            id2label = self.id2label
+
         width, height = image.shape[1], image.shape[0]
         width_scale = 1000 / width
         height_scale = 1000 / height
