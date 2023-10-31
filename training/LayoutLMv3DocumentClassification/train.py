@@ -49,6 +49,10 @@ dataset_path = os.path.expanduser(
 )
 dataset_path = os.path.expanduser("~/datasets/private/corr-routing/ready/images")
 
+dataset_path = os.path.expanduser(
+    "~/datasets/private/assets-private/corr-routing/ready/images"
+)
+
 
 def load_data():
     labels = []
@@ -387,7 +391,7 @@ def inference(model_checkpoint_path: str):
 
     # load model
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    # device = "cpu"
 
     model = LayoutLMv3ForSequenceClassification.from_pretrained(
         os.path.expanduser(model_checkpoint_path)
@@ -444,7 +448,8 @@ def inference(model_checkpoint_path: str):
             print(
                 f"Expected / predicted label: {label} , {predicted_label} with probabilities: {probabilities}"
             )
-
+            # get the last two directories from the path
+            image_path = "/".join(image_path.split("/")[-2:])
             # write detailed results to a csv file
             matched = label == predicted_label
             with open("results.csv", "a") as f:
@@ -477,7 +482,7 @@ if __name__ == "__main__":
     # train()
 
     # load ckpt for inference
-    model_checkpoint_path = "/home/gbugaj/dev/marieai/marie-ai/training/LayoutLMv3DocumentClassification/lightning_logs/d0b6fxoa/checkpoints/epoch=2-step=8535-val_loss=0.3906.ckpt.dir"
+    model_checkpoint_path = "/home/greg/dev/marieai/marie-ai/model_zoo/rms/epoch=6-step=4984-val_loss=0.3505.ckpt.dir"
     inference(model_checkpoint_path)
 
 # set this to avoid error
