@@ -51,7 +51,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         tokenizer: Optional[str] = None,
         use_gpu: bool = True,
         top_k: Optional[int] = 1,
-        task: str = "sequence-classification",
+        task: str = "text-classification-multimodal",
         labels: Optional[List[str]] = None,
         batch_size: int = 16,
         classification_field: Optional[str] = None,
@@ -158,15 +158,16 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 top_k=top_k,
                 use_auth_token=use_auth_token,
             )
-        elif task == "sequence-classification":
+        elif task == "text-classification-multimodal":
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 model_name_or_path
             )
             self.model = self.optimize_model(self.model)
             self.model = self.model.eval().to(resolved_devices[0])
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
             feature_extractor = LayoutLMv3ImageProcessor(
-                apply_ocr=False, do_resize=True, resample=Image.LANCZOS
+                apply_ocr=False, do_resize=True, resample=Image.BILINEAR
             )
             self.processor = LayoutLMv3Processor(
                 feature_extractor, tokenizer=self.tokenizer
@@ -186,7 +187,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         if len(documents) == 0:
             return documents
 
-        if self.task == "sequence-classification":
+        if self.task == "text-classification-multimodal":
             assert (
                 words is not None and boxes is not None
             ), "words and boxes must be provided for sequence classification"
@@ -211,13 +212,9 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 )
             elif self.task == "text-classification":
                 batch_results = self.model(batch, top_k=self.top_k, truncation=True)
-            elif self.task == "sequence-classification":
+            elif self.task == "text-classification-multimodal":
                 batch_results = []
                 for doc, w, b in zip(batch, words, boxes):
-                    if doc.content_type != "tensor":
-                        raise ValueError(
-                            f"Document content_type {doc.content_type} is not supported"
-                        )
                     batch_results.append(
                         self.predict_document_image(
                             doc.tensor, words=w, boxes=b, top_k=self.top_k
@@ -229,7 +226,10 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         pb.close()
 
         for document, prediction in zip(documents, predictions):
-            if self.task == "sequence-classification":
+            if (
+                self.task == "text-classification-multimodal"
+                or self.task == "text-classification"
+            ):
                 formatted_prediction = {
                     "label": prediction[0]["label"],
                     "score": prediction[0]["score"],
@@ -301,6 +301,9 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
     def optimize_model(self, model: nn.Module) -> Callable | Module:
         """Optimizes the model for inference. This method is called by the __init__ method."""
+        if True:
+            return model
+
         try:
             with TimeContext("Compiling model", logger=self.logger):
                 import torchvision.models as models

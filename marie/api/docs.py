@@ -24,7 +24,7 @@ class StorageDoc(BaseDoc):
 
 
 class MarieDoc(ImageDoc):
-    tags: Optional[dict]  # type: ignore
+    tags: dict = {}
 
 
 class OutputDoc(BaseDoc):

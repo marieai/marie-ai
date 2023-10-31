@@ -2,15 +2,22 @@ pipeline:
   name: 'default-corr'
   page_classifier:
     - model_name_or_path: 'rms/corr-layoutlmv3-classifier'
-      type: 'transformers'
-      device: 'cuda'
-      enabled: True
       name: 'corr_page_layoutlmv3_classifier'
-    - model_name_or_path: 'rms/corr-longformer-classifier'
       type: 'transformers'
-      enabled: True
+      task: 'text-classification-multimodal'
       device: 'cuda'
-      name: 'corr_page_longformer_classifier'
+      enabled: True
+      # specific options for LayoutLMv3
+#      feature_extractor: LayoutLMv3ImageProcessor,
+#      image_processor: LayoutLMv3Processor
+
+#    - model_name_or_path: 'rms/corr-longformer-classifier'
+#      task: 'text-classification'
+#      name: 'corr_page_longformer_classifier'
+#      type: 'transformers'
+#      enabled: True
+#      device: 'cuda'
+
   sub_classifier:
     - model_name_or_path: 'rms/layoutlmv3-large-patpay-ner'
       enabled: True

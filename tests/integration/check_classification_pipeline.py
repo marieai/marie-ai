@@ -6,6 +6,7 @@ from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__
 from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
+from marie.models.utils import setup_torch_optimizations
 from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.pipe.extract_pipeline import split_filename
 from marie.storage import StorageManager
@@ -35,6 +36,8 @@ def setup_storage():
 
 if __name__ == "__main__":
     # setup_storage()
+    setup_torch_optimizations()
+
     MDC.put("request_id", "test")
     img_path = "~/tmp/PID_1925_9289_0_157186264.tif"
     img_path = os.path.expanduser(img_path)
@@ -47,16 +50,6 @@ if __name__ == "__main__":
 
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
-    # https://stackoverflow.com/questions/70119500/how-to-re-download-tokenizer-for-huggingface
-    tokenizer = AutoTokenizer.from_pretrained(
-        "allenai/longformer-base-4096",
-        max_length=4096,
-    )
-
-    # res = tokenizer.save_pretrained(os.path.expanduser("~/tmp/models/transformers"))
-
-    print(tokenizer)
-    exit(0)
 
     pipeline_config = load_yaml(
         os.path.join(
