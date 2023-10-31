@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 from collections.abc import MutableMapping
 from typing import Optional
 
-from marie import DocumentArray
+from docarray import DocList
 
+from marie.api.docs import MarieDoc
 from marie.logging.logger import MarieLogger
 
 
@@ -66,7 +67,7 @@ class PipelineComponent(ABC):
     @abstractmethod
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         context: Optional[PipelineContext] = None,
         **kwargs,
     ) -> PipelineResult:
@@ -74,7 +75,7 @@ class PipelineComponent(ABC):
 
     def run(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         context: Optional[PipelineContext] = None,
         **kwargs,
     ) -> PipelineResult:

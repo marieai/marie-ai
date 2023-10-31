@@ -1,7 +1,11 @@
 from abc import abstractmethod
 from typing import Optional, List
 
+from docarray import DocList
+from docarray.documents import ImageDoc
+
 from marie import DocumentArray
+from marie.api.docs import MarieDoc
 
 from marie.base_handler import BaseHandler
 from marie.logging.logger import MarieLogger
@@ -18,7 +22,7 @@ class BaseDocumentClassifier(BaseHandler):
     @abstractmethod
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
@@ -27,7 +31,7 @@ class BaseDocumentClassifier(BaseHandler):
 
     def run(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
@@ -46,7 +50,7 @@ class BaseDocumentClassifier(BaseHandler):
                 documents=documents, words=words, boxes=boxes, batch_size=batch_size
             )
         else:
-            results = DocumentArray()
+            results = DocList[MarieDoc]()
 
         document_id = [document.id for document in documents]
 

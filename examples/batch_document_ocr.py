@@ -272,8 +272,8 @@ if __name__ == "__main__":
         # )
 
         process_dir(
-            "~/datasets/private/payer-determination/output/images",
-            "~/datasets/private/payer-determination/output/annotations/",
+            "~/datasets/private/assets-private/corr-routing/converted",
+            "~/datasets/private/assets-private/corr-routing/annotations/",
             stop_event,
         )
 

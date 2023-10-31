@@ -62,7 +62,6 @@ def viewImage(image, name="Display"):
 
 
 def imwrite_dpi(output_filename, cv_image, dpi=(300, 300)):
-
     import PIL.Image
 
     image = PIL.Image.fromarray(cv_image)
@@ -92,7 +91,6 @@ def hash_file(filename):
 
     # open file for reading in binary mode
     with open(filename, "rb") as file:
-
         # loop till the end of the file
         chunk = 0
         while chunk != b"":
