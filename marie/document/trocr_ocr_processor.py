@@ -224,18 +224,18 @@ class TrOcrProcessor(OcrProcessor):
 
         start = time.time()
         # beam = 5
-        beam = 5
+        beam = 1
         # create a file lock to prevent multiple processes from loading the same model at the same time3
         logger.info(f"Model initialized : {self.__class__.INITIALIZED}")
         if not self.__class__.INITIALIZED:
             with ImportExtensions(
                 required=True,
-                help_text=f'FileLock is needed to guarantee single initialization of as the model is loaded. ',
+                help_text=f"FileLock is needed to guarantee single initialization of as the model is loaded. ",
             ):
                 import filelock
 
                 locks_root = _get_locks_root()
-                lock_file = locks_root.joinpath(f'{self.__class__.__name__}.lock')
+                lock_file = locks_root.joinpath(f"{self.__class__.__name__}.lock")
                 file_lock = filelock.FileLock(lock_file, timeout=-1)
 
                 with file_lock:
