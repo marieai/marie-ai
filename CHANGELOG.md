@@ -13,6 +13,7 @@
 
 
 
+
 <a name=release-note-__version__
 =
 
@@ -1647,4 +1648,29 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  - [[```a14ca598```](https://github.com/marieai/marie-ai/commit/a14ca598c2b5943f16a367349a950329984f53bb)] __-__ __jina__: merge (*gbugaj*)
  - [[```36050d27```](https://github.com/marieai/marie-ai/commit/36050d27eaed3d5d8ee3634ab815a2b36e9e0d86)] __-__ __jina__: merge latest changes (*Greg*)
  - [[```9ae2f760```](https://github.com/marieai/marie-ai/commit/9ae2f7603153814f92dea3735d2aaf96f5e68a0f)] __-__ __jina__: merge jina changes (*gbugaj*)
+
+<a name=release-note-3-0-21></a>
+## Release Note (`3.0.21`)
+
+> Release time: 2023-11-01 15:00:03
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg,  🙇
+
+
+### 🐞 Bug fixes
+
+ - [[```db35b812```](https://github.com/marieai/marie-ai/commit/db35b8125e9c1b65e7af776ec4b28b51e56d2ad3)] __-__ add pipeline device (cpu,gpu) handling (*Marie Dev Bot*)
+
+### 🍹 Other Improvements
+
+ - [[```39e294a2```](https://github.com/marieai/marie-ai/commit/39e294a2a9d836f65054f3f89333276ba17be980)] __-__ classification (*Greg*)
+ - [[```801b5cd6```](https://github.com/marieai/marie-ai/commit/801b5cd6b6bde6eb0422ea6de0e4eb9c2e3df453)] __-__ classfication (*Greg*)
+ - [[```7ad42803```](https://github.com/marieai/marie-ai/commit/7ad42803b006add6ced0b425a6ba23c15066f560)] __-__ wip (*Greg*)
+ - [[```5660085e```](https://github.com/marieai/marie-ai/commit/5660085e5c3b31a29f8771e24f8a19fd02be7b14)] __-__ document classification (*Marie Dev Bot*)
+ - [[```cc2848fc```](https://github.com/marieai/marie-ai/commit/cc2848fcf957d253302f175a2552e9e76d6de8c9)] __-__ integrating document classfication (*Marie Dev Bot*)
+ - [[```cba3a380```](https://github.com/marieai/marie-ai/commit/cba3a3800a9771a7b7843c76e5d0f8d0dce36d00)] __-__ cleanup (*Marie Dev Bot*)
+ - [[```7f4a128c```](https://github.com/marieai/marie-ai/commit/7f4a128c72de3894406a669b8a82315581fcfa97)] __-__ __release__: fixed release version 3.0.21 to match container versions (*Marie Dev Bot*)
 
