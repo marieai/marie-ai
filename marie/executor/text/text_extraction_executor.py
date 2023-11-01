@@ -14,7 +14,7 @@ from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
-from marie.models.utils import setup_torch_optimizations
+from marie.models.utils import setup_torch_optimizations, torch_gc
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.utils.docs import frames_from_docs, docs_from_asset
@@ -40,6 +40,9 @@ class TextExtractionExecutor(Executor, StorageMixin):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.logger = MarieLogger(
+            getattr(self.metas, "name", self.__class__.__name__)
+        ).logger
 
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
@@ -56,8 +59,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
             use_cuda = False
 
         setup_torch_optimizations()
-
-        self.logger = MarieLogger(context=self.__class__.__name__)
         self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=use_cuda)
 
         instance_name = "not_defined"
@@ -205,6 +206,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 "error": msg,
             }
         finally:
+            torch_gc()
             MDC.remove("request_id")
 
     @requests(on="/document/status")
@@ -227,6 +229,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
                 "type": ftype,
                 "ttl": 48 * 60,
                 "checksum": checksum,
+                "runtime": self.runtime_info,
             }
 
         if self.storage_enabled:

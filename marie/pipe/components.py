@@ -269,13 +269,16 @@ def restore_assets(
     return s3_root_path
 
 
-def store_assets(ref_id: str, ref_type: str, root_asset_dir: str) -> List[str]:
+def store_assets(
+    ref_id: str, ref_type: str, root_asset_dir: str, match_wildcard: Optional[str] = "*"
+) -> List[str]:
     """
     Store assets in primary storage (S3)
 
     :param ref_id:  document reference id (e.g. filename)
     :param ref_type: document reference type (e.g. document, page, process)
     :param root_asset_dir: root asset directory where all assets are stored
+    :param match_wildcard: wildcard to match files to store
     :return:
     """
 
@@ -291,7 +294,7 @@ def store_assets(ref_id: str, ref_type: str, root_asset_dir: str) -> List[str]:
             root_asset_dir,
             s3_asset_base,
             relative_to_dir=root_asset_dir,
-            match_wildcard="*",
+            match_wildcard=match_wildcard,
         )
 
         return StorageManager.list(s3_asset_base, return_full_path=True)

@@ -1,5 +1,5 @@
 pipeline:
-  name: 'default-corr'
+  name: 'default-corr' # name of the pipeline, used for logging and asset saving
 
   id2label:
     '0': additional_information
@@ -40,9 +40,9 @@ pipeline:
       task: 'text-classification'
       name: 'corr_page_classifier_longformer'
       type: 'transformers'
-      enabled: False
+      enabled: True
       batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
-      device: 'cuda'
+      device: 'cuda'F
 
   sub_classifier:
     - model_name_or_path: 'rms/corr-auth-longformer-classifier'
