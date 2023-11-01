@@ -68,6 +68,7 @@ class ClassificationPipeline:
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.pipeline_config = pipeline_config
+        self.pipeline_name = pipeline_config.get("name", "classification_pipeline")
 
         self.ocr_engines = get_known_ocr_engines(use_cuda=use_cuda)
         self.document_classifiers = setup_classifiers(
@@ -111,17 +112,14 @@ class ClassificationPipeline:
             ClassifierPipelineComponent(
                 name="classifier_pipeline",
                 document_classifiers=self.document_classifiers,
-            ),
-            # ClassifierPipelineComponent(
-            #     name="sub_classifier_pipeline",
-            #     document_classifiers=self.document_sub_classifiers,
-            # )
+            )
         ]
 
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
 
@@ -130,15 +128,13 @@ class ClassificationPipeline:
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
         )
 
-        # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
         ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
-        metadata["ocr"] = ocr_results
+        # metadata["ocr"] = ocr_results
 
         self.execute_pipeline(processing_pipeline, frames, ocr_results, metadata)
-
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
-        store_assets(ref_id, ref_type, root_asset_dir)
+        store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
 
         return metadata
 
@@ -149,7 +145,10 @@ class ClassificationPipeline:
         Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
         """
         filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
+        metadata_path = os.path.join(
+            root_asset_dir, f"{filename}.{self.pipeline_name}.classify.json"
+        )
+        self.logger.info(f"Storing metadata : {metadata_path}")
         store_json_object(metadata, metadata_path)
 
     def execute(
@@ -216,9 +215,7 @@ class ClassificationPipeline:
         ocr_results: dict,
         metadata: dict,
     ) -> DocList[MarieDoc]:
-        """Execute the post processing pipeline
-        TODO : This is temporary, we need to make this configurable
-        """
+        """Execute processing pipeline"""
         self.logger.info(
             f"Executing document processing pipeline : {processing_pipeline}"
         )
@@ -226,7 +223,6 @@ class ClassificationPipeline:
         words = []
         boxes = []
         documents = docs_from_image(frames)
-
         assert len(documents) == len(frames)
 
         for page_idx in range(len(frames)):
@@ -237,7 +233,7 @@ class ClassificationPipeline:
         assert len(words) == len(boxes)
 
         context = PipelineContext(pipeline_id="classification_pipeline")
-        context["metadata"] = metadata
+        context["metadata"] = {}
 
         for pipe in processing_pipeline:
             try:
@@ -277,17 +273,12 @@ class ClassificationPipeline:
             filter_type = pipeline_config["filter"]["type"]
             filter_pattern = pipeline_config["filter"]["pattern"]
 
-        print(f"Filter : {has_filter}, {filter_type}, {filter_pattern}")
-
         for idx, page_classifier_result in enumerate(page_classifier):
-            print(f"Page : {page_classifier_result}")
             for detail in page_classifier_result["details"]:
                 page = int(detail["page"])
                 classification = detail["classification"]
 
                 if classification == filter_pattern:
-                    print(f"Running sub-classifier for page : {page}")
-
                     ctx = PipelineContext(pipeline_id="sub_classification_pipeline")
                     ctx["metadata"] = {}
                     pipe_results = sub_classifier_pipeline.run(
@@ -296,31 +287,51 @@ class ClassificationPipeline:
                         words=[words[page]],
                         boxes=[boxes[page]],
                     )
-                    print(f"Sub-classifier results : {pipe_results}")
-                    print(ctx["metadata"]["page_classifier"])
                     detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
 
-        print("### ClassificationPipeline results")
-        print(context["metadata"]["page_classifier"])
-        store_json_object(
-            context["metadata"]["page_classifier"], "~/tmp/classification.json"
-        )
+        if False:
+            store_json_object(
+                context["metadata"]["page_classifier"], "~/tmp/classification.json"
+            )
 
-        # Pivot the results to make it easier to work with  by page
-        print("----------------------------------------")
-        print("----------------------------------------")
-
+        # Pivot the results to make it easier to work with by page
         class_by_page = {}
         for idx, page_classifier_result in enumerate(page_classifier):
-            print(f"Page : {idx}")
             classifier = page_classifier_result["classifier"]
             for detail in page_classifier_result["details"]:
                 page = int(detail["page"])
-                classification = detail["classification"]
-                print(detail)
                 if page not in class_by_page:
                     class_by_page[page] = []
                 detail["classifier"] = classifier
                 class_by_page[page].append(detail)
-        store_json_object(class_by_page, "~/tmp/classification.pivot.json")
+
+        # calculate max score for each page by max score
+        score_by_page = {}
+        for page, details in class_by_page.items():
+            max_score = 0.0
+            for detail in details:
+                if page not in score_by_page:
+                    score_by_page[page] = {}
+
+                score = float(detail["score"])
+                if score >= max_score:
+                    max_score = score
+                    score_by_page[page] = detail
+                    del detail["page"]
+
+        results = {
+            "strategy": "max_score",
+            "pages": {},
+        }
+
+        for page in list(class_by_page.keys()):
+            results["pages"][page] = {
+                "details": class_by_page[page],
+                "best": score_by_page[page],
+            }
+
+        metadata["classification"] = results
+        if False:
+            store_json_object(results, "~/tmp/classification.pivot.json")
+
         return documents

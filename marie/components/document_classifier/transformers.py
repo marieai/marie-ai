@@ -38,6 +38,11 @@ def scale_bounding_box(
     ]
 
 
+class BatchableMarieDoc(MarieDoc):
+    words: List
+    boxes: List
+
+
 class TransformersDocumentClassifier(BaseDocumentClassifier):
     """
     Transformer based model for document classification using the HuggingFace's transformers framework
@@ -203,10 +208,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
         # create a named tuple of (document, words, boxes) for each document
 
-        class BatchableMarieDoc(MarieDoc):
-            words: List
-            boxes: List
-
         batchable_docs = DocList(
             BatchableMarieDoc(
                 tensor=doc.tensor,
@@ -278,10 +279,13 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
             elif self.task == "text-classification-multimodal":
                 batch_results = []
-                for doc, w, b in zip(batch, words, boxes):
+                for doc in batchable_docs:
                     batch_results.append(
                         self.predict_document_image(
-                            doc.tensor, words=w, boxes=b, top_k=self.top_k
+                            doc.tensor,
+                            words=doc.words,
+                            boxes=doc.boxes,
+                            top_k=self.top_k,
                         )
                     )
 

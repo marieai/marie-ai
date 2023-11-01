@@ -68,7 +68,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
                         {
                             "page": f"{idx}",  # Using string to avoid type conversion issues
                             "classification": classification["label"],
-                            "score": classification["score"],
+                            "score": round(classification["score"], 4),
                         }
                     )
 

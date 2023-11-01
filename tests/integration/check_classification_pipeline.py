@@ -41,7 +41,12 @@ if __name__ == "__main__":
     MDC.put("request_id", "test")
     img_path = "~/tmp/PID_1925_9289_0_157186264.tif"
     img_path = "~/tmp/188958112.tif"
-    img_path = "~/datasets/private/corr-routing/Validation_Set/cms_letter/188172061_2.png"
+    img_path = (
+        # "~/datasets/private/corr-routing/Validation_Set/cms_letter/188172061_2.png"
+        "~/datasets/private/corr-routing/faux/001/merged-001.tif"
+        # "~/datasets/private/corr-routing/faux/002/merged-002.tif"
+    )
+    # img_path = "~/tmp/PID_1925_9289_0_157186264.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
