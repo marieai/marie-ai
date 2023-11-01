@@ -1,4 +1,5 @@
 import inspect
+import multiprocessing
 import os
 import platform
 import sys
@@ -322,5 +323,13 @@ if __name__ == "__main__":
             _input = sys.argv[1]
     else:
         _input = os.path.join(__config_dir__, "service", "marie.yml")
+
+    os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
+    os.environ["OMP_SCHEDULE"] = "STATIC"
+    os.environ["OMP_PROC_BIND"] = "CLOSE"
+    os.environ["OMP_PLACES"] = "CORES"
+
+    # set to core-count of your CPU
+    torch.set_num_threads(psutil.cpu_count(logical=False))
 
     main(_input)

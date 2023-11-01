@@ -52,7 +52,6 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
             meta = []
 
             try:
-                self.logger.info(f"Classifying document : {key}")
                 classified_docs = document_classifier.run(
                     documents=documents, words=words, boxes=boxes
                 )

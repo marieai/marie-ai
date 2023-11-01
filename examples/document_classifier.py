@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import threading
 import time
@@ -7,6 +8,7 @@ import uuid
 import requests
 
 from examples.utils import setup_queue, online
+from marie.utils.json import store_json_object
 
 api_base_url = "http://127.0.0.1:51000/api"
 default_queue_id = "0000-0000-0000-0000"
@@ -40,7 +42,7 @@ def process_extract(
         "queue_id": queue_id,
         "data": base64_str,
         # "uri": "s3://marie/incoming/PID_1764_8829_0_179519650.tif",
-        "modelXXX": "marie/layoutlmv3-document-classification",
+        "pipeline": "default-corr",
         "doc_id": f"classify-{uid}",
         "doc_type": "lbx",
     }
@@ -72,18 +74,52 @@ def process_extract(
     return json_result
 
 
+def message_handler(message):
+    print(message)
+    try:
+        if isinstance(message, str):
+            message = json.loads(message)
+
+        event = message["event"]
+        jobid = message["jobid"]
+
+        print(f"event: {event}, jobid: {jobid}")
+        print(message)
+
+        if event != "classify.completed":
+            return
+
+        payload = json.loads(message["payload"])
+
+        os.makedirs(f"/tmp/marie/classify", exist_ok=True)
+        store_json_object(payload, f"/tmp/marie/classify/{jobid}.json")
+        store_json_object(message, f"/tmp/marie/classify/{jobid}.event.json")
+
+    except Exception as e:
+        print(e)
+        return
+
+
 if __name__ == "__main__":
     stop_event = threading.Event()
+    # http://localhost:15672/#/
+    connection_config = {
+        "hostname": "localhost",
+    }
 
     setup_queue(
+        connection_config,
         api_key,
-        "classifier",
+        "classify",
         "classify.#",
         stop_event,
-        ["classify.completed", "classify.failed"],
-        lambda x: print(f"callback: {x}"),
+        [
+            "classify.completedXXX",
+            "classify.failedXXX",
+        ],  # this will not work if we have multiple requests
+        # lambda x: print(f"callback: {x}"),
+        message_handler,
     )
-
     # Specify the path to the file you would like to process
     src = os.path.expanduser("~/tmp/PID_1028_7826_0_157684456.tif")
     src = os.path.expanduser("~/tmp/PID_1925_9289_0_157186264.png")

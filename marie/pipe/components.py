@@ -3,6 +3,7 @@ from functools import partial
 from typing import Optional, Union, List
 
 import numpy as np
+import torch
 from PIL import Image
 
 from marie.boxes import PSMode
@@ -89,16 +90,20 @@ def s3_asset_path(
     return ret_path
 
 
-def get_known_ocr_engines(use_cuda: bool = True) -> dict[str, any]:
+def get_known_ocr_engines(device: str = 'cuda') -> dict[str, any]:
     """
     Get the known OCR engines
     mock : Mock OCR engine, returns dummy results
     default : Default OCR engine, uses the best OCR engine available on the system
     best : Voting OCR engine, uses ensemble of OCR engines to perform OCR on the document
 
-    :param use_cuda:
+    :param device: device to use for OCR (cpu or cuda)
     :return: OCR engines
     """
+
+    use_cuda = False
+    if device == 'cuda':
+        use_cuda = True
 
     ocr_engines = dict()
     ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
@@ -109,14 +114,18 @@ def get_known_ocr_engines(use_cuda: bool = True) -> dict[str, any]:
 
 
 def setup_classifiers(
-    pipeline_config: Optional[dict] = None, key: str = "page_classifier"
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_classifier",
+    device: str = "cuda",
 ) -> dict[str, any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
     :param key: key to use in the pipeline config
+    :param device: device to use for classification (cpu or cuda)
     :return: document classifiers
     """
+    use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
 
     if pipeline_config is None:
         logger.warning("Pipeline config is None, using default config")
@@ -158,7 +167,7 @@ def setup_classifiers(
             document_classifiers[name] = TransformersDocumentClassifier(
                 model_name_or_path=model_name_or_path,
                 batch_size=batch_size,
-                use_gpu=True,
+                use_gpu=use_cuda,
                 task=task,
                 id2label=id2label,
             )

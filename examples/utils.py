@@ -10,7 +10,17 @@ from pika.exchange_type import ExchangeType
 
 import logging
 
+from marie.storage import S3StorageHandler, StorageManager
+
 logger = logging.getLogger(__name__)
+
+
+def setup_s3_storage(config: dict):
+    handler = S3StorageHandler(config=config)
+
+    # export AWS_ACCESS_KEY_ID=MARIEACCESSKEY; export AWS_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY;  aws s3 ls --endpoint-url http://localhost:8000
+    StorageManager.register_handler(handler=handler)
+    StorageManager.ensure_connection("s3://")
 
 
 def online(api_url) -> bool:

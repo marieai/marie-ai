@@ -328,7 +328,7 @@ class BoxProcessorUlimDit(BoxProcessor):
 
         self.logger.info(f"Loading model from {args.config_file}")
         self.strict_box_segmentation = False
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda" if cuda else "cpu"
 
         cfg = setup_cfg(args, device)
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]

@@ -83,21 +83,22 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     # Process time 85.9748 seconds : With no compile
 
     # try to compile the model with torch.compile - cudagraphs
-    try:
-        # Optimize model for Inference time
-        with TimeContext("Compiling TROCR model", logger=logger):
-            import torch._dynamo as dynamo
+    if device == 'cuda':
+        try:
+            # Optimize model for Inference time
+            with TimeContext("Compiling TROCR model", logger=logger):
+                import torch._dynamo as dynamo
 
-            # model[0] = torch.compile(model[0])
-            model[0] = torch.compile(
-                model[0],
-                # mode="max-autotune",
-                fullgraph=True,
-                backend="inductor",
-                options={"max_autotune": True, "triton.cudagraphs": True},
-            )
-    except Exception as e:
-        logger.error(f"Failed to compile model : {e}")
+                # model[0] = torch.compile(model[0])
+                model[0] = torch.compile(
+                    model[0],
+                    # mode="max-autotune",
+                    fullgraph=True,
+                    backend="inductor",
+                    options={"max_autotune": True, "triton.cudagraphs": True},
+                )
+        except Exception as e:
+            logger.error(f"Failed to compile model : {e}")
 
     img_transform = transforms.Compose(
         [
@@ -208,7 +209,6 @@ class TrOcrProcessor(OcrProcessor):
         **kwargs,
     ) -> None:
         super().__init__(work_dir, cuda, **kwargs)
-
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
 

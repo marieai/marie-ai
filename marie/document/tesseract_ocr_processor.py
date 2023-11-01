@@ -19,8 +19,10 @@ class TesseractOcrProcessor(OcrProcessor):
         work_dir: str = "/tmp/icr",
         models_dir: str = os.path.join(__model_path__, "tessdata"),
         cuda: bool = True,
+        **kwargs,
     ) -> None:
-        super().__init__(work_dir, cuda)
+        super().__init__(models_dir=models_dir, cuda=cuda, **kwargs)
+
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.logger.info("Tesseract OCR processor [cuda={}]".format(cuda))
 

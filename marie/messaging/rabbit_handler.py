@@ -43,6 +43,9 @@ class RabbitMQToastHandler(ToastHandler):
             queue = f"{api_key}.all-events"
 
             routing_key = notification.event if notification.event else "*"
+            self.logger.debug(
+                f"exchange: {exchange}, queue: {queue}, routing_key: {routing_key}"
+            )
 
             client = BlockingPikaClient(conf=msg_config)
             # Declare the destination exchange with the topic exchange type to allow routing

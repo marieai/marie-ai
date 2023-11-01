@@ -22,8 +22,6 @@ from marie.models.utils import torch_gc
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 class CraftOcrProcessor(OcrProcessor):
     def __init__(
@@ -31,8 +29,9 @@ class CraftOcrProcessor(OcrProcessor):
         work_dir: str = "/tmp/icr",
         models_dir: str = os.path.join(__model_path__, "icr"),
         cuda: bool = True,
+        **kwargs,
     ) -> None:
-        super().__init__(work_dir, cuda)
+        super().__init__(work_dir, cuda, **kwargs)
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.logger.info("CRAFT ICR processor [cuda={}]".format(cuda))
 
@@ -41,6 +40,11 @@ class CraftOcrProcessor(OcrProcessor):
             "TPS-ResNet-BiLSTM-Attn-case-sensitive-ft",
             "best_accuracy.pth",
         )
+
+        if cuda and not torch.cuda.is_available():
+            raise Exception("CUDA specified but no cuda devices found ")
+
+        self.device = "cuda" if cuda else "cpu"
 
         if True:
             opt = Object()
@@ -132,8 +136,10 @@ class CraftOcrProcessor(OcrProcessor):
         # https://pytorch.org/tutorials/recipes/recipes/save_load_across_devices.html
 
         # GPU only
-        model = torch.nn.DataParallel(model, device_ids=None).to(device)
-        model.load_state_dict(torch.load(opt.saved_model, map_location=device))
+        model = model.to(self.device)
+        model = torch.nn.DataParallel(model, device_ids=None).to(self.device)
+        model.load_state_dict(torch.load(opt.saved_model, map_location=self.device))
+        model = self.optimize_model(model)
 
         if False:
 
@@ -148,11 +154,10 @@ class CraftOcrProcessor(OcrProcessor):
                     # CPU
 
             model = WrappedModel(model)
-            model = model.to(device)
-            state_dict = torch.load(opt.saved_model, map_location=device)
+            model = model.to(self.device)
+            state_dict = torch.load(opt.saved_model, map_location=self.device)
             model.load_state_dict(state_dict)
 
-        # model = self.optimize_model(model)
         return converter, model
 
     def optimize_model(self, model: nn.Module) -> Callable | nn.Module:
@@ -214,16 +219,16 @@ class CraftOcrProcessor(OcrProcessor):
                 for image_tensors, image_labels in eval_loader:
 
                     batch_size = image_tensors.size(0)
-                    image = image_tensors.to(device)
+                    image = image_tensors.to(self.device)
 
                     # For max length prediction
                     length_for_pred = torch.IntTensor(
                         [opt.batch_max_length] * batch_size
-                    ).to(device)
+                    ).to(self.device)
                     text_for_pred = (
                         torch.LongTensor(batch_size, opt.batch_max_length + 1)
                         .fill_(0)
-                        .to(device)
+                        .to(self.device)
                     )
 
                     if "CTC" in opt.Prediction:

@@ -11,11 +11,9 @@ from pathlib import Path
 
 import requests
 
-from examples.utils import setup_queue, online
-from marie.ocr.extract_pipeline import s3_asset_path
+from examples.utils import setup_queue, online, setup_s3_storage
+from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
-from marie.storage.s3_storage import S3StorageHandler
-from marie_server.storage.in_memory import InMemoryKV
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -64,9 +62,7 @@ def process_extract(
         ref_id=filename, ref_type="batch_document_ocr", include_filename=True
     )
     status = StorageManager.write(file_location, s3_path, overwrite=True)
-
-    logger.info(f"Uploaded {file_location} to {s3_path}")
-
+    logger.info(f"Uploaded {file_location} to {s3_path} : {status}")
     uid = str(uuid.uuid4())
 
     json_payload = {
@@ -156,14 +152,6 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         }
 
 
-def setup_storage(config: dict):
-    handler = S3StorageHandler(config=config)
-
-    # export AWS_ACCESS_KEY_ID=MARIEACCESSKEY; export AWS_SECRET_ACCESS_KEY=MARIESECRETACCESSKEY;  aws s3 ls --endpoint-url http://localhost:8000
-    StorageManager.register_handler(handler=handler)
-    StorageManager.ensure_connection("s3://")
-
-
 def message_handler(stop_event, message):
     completed_event = False
     try:
@@ -227,16 +215,14 @@ if __name__ == "__main__":
         "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
         "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
         "S3_STORAGE_BUCKET_NAME": "marie",
-        "S3_ENDPOINT_URL_L": "http://localhost:8000",
-        "S3_ENDPOINT_URL": "http://172.16.11.163:8000",
+        "S3_ENDPOINT_URL": "http://localhost:8000",
         "S3_ADDRESSING_STYLE": "path",
     }
 
-    setup_storage(storage_config)
+    setup_s3_storage(storage_config)
 
     connection_config = {
-        "hostname__": "localhost",
-        "hostname": "172.16.11.162",
+        "hostname": "localhost",
         "port": 5672,
         "username": "guest",
         "password": "guest",
@@ -250,7 +236,6 @@ if __name__ == "__main__":
         stop_event,
         None,
         partial(message_handler, stop_event),
-        # lambda x: print(f"callback: {x}"),
     )
 
     # cleanup empty files, this can happen for example when the file is not an image or service fails

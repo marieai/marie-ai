@@ -85,13 +85,18 @@ class ExtractPipeline:
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
+
+        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+        if device == "cuda" and not use_cuda:
+            device = "cpu"
+
         self.logger = MarieLogger(context=self.__class__.__name__)
 
         self.overlay_processor = OverlayProcessor(
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
         )
 
-        self.ocr_engines = get_known_ocr_engines(use_cuda=use_cuda)
+        self.ocr_engines = get_known_ocr_engines(device=device)
         self.document_classifiers = setup_classifiers(pipeline_config)
         self.document_indexers = setup_indexers(pipeline_config)
 
@@ -483,10 +488,6 @@ class ExtractPipeline:
         """Execute the post processing pipeline
         TODO : This is temporary, we need to make this configurable
         """
-        self.logger.info(
-            f"Executing document processing pipeline : {processing_pipeline}"
-        )
-
         words = []
         boxes = []
         documents = docs_from_image(frames)
@@ -506,7 +507,6 @@ class ExtractPipeline:
         for pipe in processing_pipeline:
             try:
                 # create a PipelineContext and pass it to the component
-                self.logger.info(f"Executing component : {pipe}")
                 pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
                 if pipe_results.state is not None:
                     if not isinstance(pipe_results.state, DocList):

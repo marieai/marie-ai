@@ -7,9 +7,15 @@ import uuid
 
 import requests
 
-from examples.utils import setup_queue, online
+from examples.utils import setup_queue, online, setup_s3_storage
+from marie.pipe.components import s3_asset_path
+from marie.storage import StorageManager
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 api_base_url = "http://127.0.0.1:51000/api"
 endpoint_url = f"{api_base_url}/document/extract"
@@ -38,6 +44,16 @@ def process_extract(
         encoded_bytes = base64.b64encode(file.read())
         base64_str = encoded_bytes.decode("utf-8")
 
+    filename = os.path.basename(file_location)
+    name = os.path.splitext(filename)[0]
+    extension = os.path.splitext(filename)[1]
+
+    s3_path = s3_asset_path(ref_id=filename, ref_type="lbx", include_filename=True)
+
+    status = StorageManager.write(file_location, s3_path, overwrite=True)
+    logger.info(f"Uploaded {file_location} to {s3_path} : {status}")
+    uid = str(uuid.uuid4())
+
     # Treat the image as a single word.
     # WORD = "word"
     # Sparse text. Find as much text as possible in no particular order.
@@ -54,25 +70,25 @@ def process_extract(
     # mode['word]=> extraction mode
     # output['json']=> json,text,pdf
 
-    uid = str(uuid.uuid4())
-
     json_payload = {
         "queue_id": queue_id,
-        "data": base64_str,
+        # "data": base64_str,
+        # "doc_id": f"extract-{uid}",
+        "uri": s3_path,
+        "doc_id": f"{filename}",
+        "doc_type": "lbxid",
         # "uri": "s3://marie/incoming/PID_1764_8829_0_179519650.tif",
         "mode": mode,
         "output": "json",
-        "doc_id": f"extract-{uid}",
-        "doc_type": "extract-adhoc",
         "features": [
             {
                 "type": "pipeline",
                 "name": "default",
                 "page_classifier": {
-                    "enabled": False,
+                    "enabled": True,
                 },
                 "page_splitter": {
-                    "enabled": False,
+                    "enabled": True,
                 },
                 "ocr": {
                     "document": {
@@ -137,10 +153,23 @@ def message_handler(message):
 
 if __name__ == "__main__":
     ensure_exists("/tmp/marie")
-
     stop_event = threading.Event()
+
+    storage_config = {
+        "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
+        "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
+        "S3_STORAGE_BUCKET_NAME": "marie",
+        "S3_ENDPOINT_URL": "http://localhost:8000",
+        "S3_ADDRESSING_STYLE": "path",
+    }
+
+    setup_s3_storage(storage_config)
+
     connection_config = {
         "hostname": "localhost",
+        "port": 5672,
+        "username": "guest",
+        "password": "guest",
     }
 
     setup_queue(

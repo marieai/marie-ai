@@ -31,7 +31,14 @@ class MonitoringMixin:
         if monitoring:
             from prometheus_client import start_http_server
 
-            start_http_server(int(port_monitoring), registry=self.metrics_registry)
+            try:
+                start_http_server(int(port_monitoring), registry=self.metrics_registry)
+            except OSError:
+                self.logger.error(
+                    f'Could not start the monitoring server on port {port_monitoring}. '
+                    f'Please check that the port is not already in use.'
+                )
+                raise
 
 
 class MonitoringRequestMixin:
