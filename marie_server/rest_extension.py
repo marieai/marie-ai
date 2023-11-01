@@ -94,9 +94,10 @@ def extend_rest_interface(flow: Flow, prefetch: int, app: "FastAPI") -> "FastAPI
     )
 
     extend_rest_interface_extract(app, client, queue=backpressure_queue)
+    extend_rest_interface_classifier(app, client, queue=backpressure_queue)
+
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
-    extend_rest_interface_classifier(app, client)
 
     return app
 

@@ -60,22 +60,28 @@ class ClassificationPipeline:
         pipeline_config: dict[str, any] = None,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        # super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.pipeline_config = pipeline_config
         self.pipeline_name = pipeline_config.get("name", "classification_pipeline")
 
-        self.ocr_engines = get_known_ocr_engines(use_cuda=use_cuda)
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        use_cuda = torch.cuda.is_available()
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            use_cuda = False
+
+        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+        if device == "cuda" and not use_cuda:
+            device = "cpu"
+
+        self.ocr_engines = get_known_ocr_engines(device=device)
+
         self.document_classifiers = setup_classifiers(
-            pipeline_config, key="page_classifier"
+            pipeline_config, key="page_classifier", device=device
         )
         self.document_sub_classifiers = setup_classifiers(
-            pipeline_config, key="sub_classifier"
+            pipeline_config, key="sub_classifier", device=device
         )
 
         self.logger.info(
@@ -216,9 +222,6 @@ class ClassificationPipeline:
         metadata: dict,
     ) -> DocList[MarieDoc]:
         """Execute processing pipeline"""
-        self.logger.info(
-            f"Executing document processing pipeline : {processing_pipeline}"
-        )
 
         words = []
         boxes = []
@@ -238,7 +241,6 @@ class ClassificationPipeline:
         for pipe in processing_pipeline:
             try:
                 # create a PipelineContext and pass it to the component
-                self.logger.info(f"Executing component : {pipe}")
                 pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
                 if pipe_results.state is not None:
                     if not isinstance(pipe_results.state, DocList):
@@ -250,11 +252,8 @@ class ClassificationPipeline:
                 self.logger.error(f"Error executing pipe : {e}")
 
         # TODO : This is temporary, we need to make this configurable
-        print("### ClassificationPipeline results")
-        print(context["metadata"]["page_classifier"])
-        # page_classifier
-
-        print("### ClassificationPipeline info")
+        self.logger.info("### ClassificationPipeline results")
+        self.logger.info(context["metadata"]["page_classifier"])
 
         sub_classifier_pipeline = ClassifierPipelineComponent(
             name="sub_classifier_pipeline",

@@ -1,7 +1,6 @@
 import os
-from typing import Dict, Union, Optional, Any
+from typing import Union, Optional, Any
 
-import numpy as np
 import torch
 from docarray import DocList
 
@@ -18,9 +17,6 @@ from marie.models.utils import setup_torch_optimizations, torch_gc
 from marie.ocr import CoordinateFormat
 from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.utils.docs import frames_from_docs, docs_from_asset
-from marie.utils.image_utils import (
-    convert_to_bytes,
-)
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
 
@@ -56,7 +52,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
+        use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
 
@@ -81,6 +77,10 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
             self.setup_storage(sconf.get("enabled", False), sconf)
+
+    @requests(on="/default")
+    def default(self, parameters, **kwargs):
+        return {"valid": True}
 
     @requests(on="/document/classify")
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supportedncoded

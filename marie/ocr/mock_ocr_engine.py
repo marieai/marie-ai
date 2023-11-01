@@ -24,7 +24,7 @@ class MockOcrEngine(OcrEngine):
         cuda: bool = True,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(cuda=cuda, **kwargs)
         self.logger = MarieLogger(context=self.__class__.__name__)
         work_dir_boxes = ensure_exists("/tmp/boxes")
         work_dir_icr = ensure_exists("/tmp/icr")

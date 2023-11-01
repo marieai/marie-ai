@@ -2,11 +2,9 @@ from abc import abstractmethod
 from typing import Optional, List
 
 from docarray import DocList
-from docarray.documents import ImageDoc
 
 from marie import DocumentArray
 from marie.api.docs import MarieDoc
-
 from marie.base_handler import BaseHandler
 from marie.logging.logger import MarieLogger
 
@@ -53,7 +51,5 @@ class BaseDocumentClassifier(BaseHandler):
             results = DocList[MarieDoc]()
 
         document_id = [document.id for document in documents]
-
-        # output = {"documents": results}
-        self.logger.info(f"Classified documents with IDs: {document_id}")
+        self.logger.debug(f"Classified documents with IDs: {document_id}")
         return results

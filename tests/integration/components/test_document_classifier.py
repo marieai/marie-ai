@@ -2,16 +2,13 @@ import multiprocessing
 import os
 
 import psutil
-from marie import DocumentArray
 
 from marie.components import TransformersDocumentClassifier
-from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
 from marie.ocr.util import get_words_and_boxes
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
 from marie.utils.json import load_json_file
-from marie.utils.process import load_omp_library
 
 
 def test_sequence_classifier():

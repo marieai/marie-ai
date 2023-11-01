@@ -209,14 +209,19 @@ class TextExtractionExecutor(Executor, StorageMixin):
             torch_gc()
             MDC.remove("request_id")
 
-    @requests(on="/document/status")
+    # Prevnet⠏ Waiting gateway... ━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━ 2/3 0:00:39
+
+    @requests(on="/document/extract/status")
     def status(self, parameters, **kwargs):
         use_cuda = torch.cuda.is_available()
-        print(f"{use_cuda=}")
         return {"index": "complete", "use_cuda": use_cuda}
 
-    @requests(on="/document/validate")
+    @requests(on="/document/extract/validate")
     def validate(self, parameters, **kwargs):
+        return {"valid": True}
+
+    @requests(on="/default")
+    def default(self, parameters, **kwargs):
         return {"valid": True}
 
     def persist(self, ref_id: str, ref_type: str, results: Any) -> None:

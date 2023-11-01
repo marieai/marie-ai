@@ -42,7 +42,7 @@ pipeline:
       type: 'transformers'
       enabled: True
       batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
-      device: 'cuda'F
+      device: 'cuda'
 
   sub_classifier:
     - model_name_or_path: 'rms/corr-auth-longformer-classifier'

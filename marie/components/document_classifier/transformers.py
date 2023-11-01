@@ -1,4 +1,5 @@
 import os
+import traceback
 from typing import Optional, Union, List, Callable, Any, Sequence
 
 import numpy as np
@@ -122,7 +123,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 labels,
             )
 
-        use_gpu = True
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
         )
@@ -271,6 +271,9 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                             )
                     batch_results.append(k_results)
                 except Exception as err:
+                    # print traceback
+                    traceback.print_exc()
+
                     err_msg = f"Error while classifying documents: {err}"
                     if self.show_error:
                         self.logger.error(err_msg)
