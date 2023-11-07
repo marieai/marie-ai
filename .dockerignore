@@ -3,7 +3,10 @@
 .*
 
 # Allow files and directories
+!im-policy.xml
 !marie/**
+!marie_server/**
+!hubble
 !setup.py
 !*requirements.txt
 !README.md
