@@ -14,6 +14,7 @@
 
 
 
+
 <a name=release-note-__version__
 =
 
@@ -1673,4 +1674,19 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  - [[```cc2848fc```](https://github.com/marieai/marie-ai/commit/cc2848fcf957d253302f175a2552e9e76d6de8c9)] __-__ integrating document classfication (*Marie Dev Bot*)
  - [[```cba3a380```](https://github.com/marieai/marie-ai/commit/cba3a3800a9771a7b7843c76e5d0f8d0dce36d00)] __-__ cleanup (*Marie Dev Bot*)
  - [[```7f4a128c```](https://github.com/marieai/marie-ai/commit/7f4a128c72de3894406a669b8a82315581fcfa97)] __-__ __release__: fixed release version 3.0.21 to match container versions (*Marie Dev Bot*)
+
+<a name=release-note-3-0-21></a>
+## Release Note (`3.0.21`)
+
+> Release time: 2023-11-01 15:03:52
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  🙇
+
+
+### 🍹 Other Improvements
+
+ - [[```368fbfb4```](https://github.com/marieai/marie-ai/commit/368fbfb46912418d88df33a1ec7039b864cec391)] __-__ __release__: release v3.0.21 (*Marie Dev Bot*)
 
