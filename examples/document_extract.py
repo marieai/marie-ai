@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 api_base_url = "http://127.0.0.1:51000/api"
+api_base_url = "http://172.20.10.12:51000/api"
 endpoint_url = f"{api_base_url}/document/extract"
 
 default_queue_id = "0000-0000-0000-0000"
@@ -159,7 +160,8 @@ if __name__ == "__main__":
         "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
         "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
         "S3_STORAGE_BUCKET_NAME": "marie",
-        "S3_ENDPOINT_URL": "http://localhost:8000",
+        "S3_ENDPOINT_URLXX": "http://localhost:8000",
+        "S3_ENDPOINT_URL": "http://172.16.11.163:8000",
         "S3_ADDRESSING_STYLE": "path",
     }
 
