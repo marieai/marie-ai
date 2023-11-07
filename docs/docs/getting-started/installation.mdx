@@ -1,22 +1,83 @@
 ---
 sidebar_position: 1
 ---
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Installation
+
+Marie comes with multiple installation options, enabling different feature sets.
+Standard install enables all major features of Marie and is the recommended installation for most users.
+
+:::tip[Quick Install]
+
+<Tabs>
+<TabItem value="js" label="pip">
+
+```shell
+pip install -U marie-ai
+```
+
+</TabItem>
+<TabItem value="conda" label="conda">
+
+```shell
+conda install marie-ai -c conda-forge
+```
+</TabItem>
+<TabItem value="docker" label="docker">
+
+```shell
+docker run marie-ai/marie:latest
+```
+
+</TabItem>
+</Tabs>
+
+:::
+
+## Autocomplete commands on Bash, Zsh and Fish
+
+After installing Marie via `pip`, you should be able to use your shell's autocomplete feature while using Marie's CLI. For example, typing `marie` then hitting your Tab key will provide the following suggestions:
+
+```bash
+marie
+--help          --version       --version-full  check           client          flow            gateway         hello             pod             ping            deployment            hub
+```
+
+The autocomplete is context-aware. It also works when you type a second-level argument:
+
+```bash
+marie hub
+--help  new     pull    push
+```
+
+
+Currently, the feature is enabled automatically on Bash, Zsh and Fish. It requires you to have a standard shell path as follows:
+
+| Shell | Configuration file path      |
+| ---   | ---                          |
+| Bash  | `~/.bashrc`                  |
+| Zsh   | `~/.zshrc`                   |
+| Fish  | `~/.config/fish/config.fish` |
+
+
+## More install options
+Version identifiers [are explained here](https://github.com/marieai/marie-ai/blob/main/RELEASE.md).
 
 ## Prerequisites
 * Linux
 * Python 3.10
-* [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/) 
+* [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/)
 * [CUDA 11.8](https://developer.nvidia.com/cuda-11-8-0-download-archive?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_local)
 * [cuDNN 8.7.0](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html)
 
 
 ## Environment Setup
-Setup development environment for Marie-AI. We recommend using Python 3.10. 
+Setup development environment for Marie-AI. We recommend using Python 3.10.
 There are known issues with upstream packages as they are not yet compatible with Python 3.11.
 
-### Setup Python 3.10 
+### Setup Python 3.10
 
 ```shell
 sudo apt-get install python3.10
@@ -47,7 +108,7 @@ If you are experienced with PyTorch and have already installed it, just skip thi
 :::
 
 ###  Install Pytorch 2.0
-The following command will install PyTorch 2.0 with CUDA 11.8 support. 
+The following command will install PyTorch 2.0 with CUDA 11.8 support.
 If you want to install PyTorch without CUDA support, you can remove the `cu118` part from the command.
 
 Install development version of PyTorch 2.0 with CUDA 11.8 support:
@@ -167,7 +228,7 @@ cd fairseq
 python setup.py build install
 ```
 
-Detectron2 install 
+Detectron2 install
 ```shell
 python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 # Or, to install it from a local clone:
@@ -196,7 +257,7 @@ TODO: This needs better setup
 sudo chown greg:greg /var/log/marie/
 sudo mkdir -p /var/log/marie
 ```
-### Marie-AI as a dependency  
+### Marie-AI as a dependency
 If you use Marie-AI as a dependency or third-party package, install it with pip:
 
 ```shell
@@ -235,29 +296,27 @@ print(results)
 
 ## Docker image
 
-Our universal Docker image is ready-to-use on linux/amd64 [Image listing](https://hub.docker.com/u/marieai). 
+Our universal Docker image is ready-to-use on linux/amd64 [Image listing](https://hub.docker.com/u/marieai).
 The Docker image name always starts with `marieai/marie` followed by a tag composed of three parts:
 
 ```text
 marieai/marie:{version}{python_version}{extra}
 ```
-nvidia/cuda:11.3.1-runtime-ubuntu20.04 
+nvidia/cuda:11.3.1-runtime-ubuntu20.04
 
 - `{version}`: The version of MarieAI. Possible values:
     - `latest`: the last release;
     - `master`: the master branch of `gregbugaj/marie-ai` repository;
-    - `x.y.z`: the release of a particular version; 
+    - `x.y.z`: the release of a particular version;
 - `{python_version}`: The Python version of the image. Possible values:
-    - `-py38` for Python 3.8;
-    - `-py39` for Python 3.9;
     - `-py310` for Python 3.10;
 - `{extra}`: the extra dependency installed along with MarieAI. Possible values:
-    - `-perf`: MarieAI is installed inside the image via `pip install marieai`. It includes all performance dependencies; 
-    - `-standard`: MarieAI is installed inside the image via `pip install marieai`. It includes all recommended dependencies;  
+    - `-perf`: MarieAI is installed inside the image via `pip install marieai`. It includes all performance dependencies;
+    - `-standard`: MarieAI is installed inside the image via `pip install marieai`. It includes all recommended dependencies;
     - `-devel`: MarieAI is installed inside the image via `pip install "marieai[devel]"`. It includes `standard` plus some extra dependencies;
 - `{env}`: GPU/CPU/XLA support:
-    - ` `: CPU only; 
-    - `-cuda`: MarieAI is build with GPU/CUDA support;  
+    - ` `: CPU only;
+    - `-cuda`: MarieAI is build with GPU/CUDA support;
 
 ## Docker on CPU-only platforms
 
@@ -294,10 +353,14 @@ docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 
 If we have properly configured our environment you should be able to build the container locally.
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . --cpuset-cpus="0-32"  --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu-310.Dockerfile -t marieai/marie:3.0.18-cuda --no-cache
+DOCKER_BUILDKIT=1 docker build . --cpuset-cpus="0-32"  --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu-310.Dockerfile -t marieai/marie:3.0.21-cuda --no-cache
+
+docker tag d4195ee97201 docker.io/marieai/marie:3.0.21-cuda 
+docker push docker.io/marieai/marie:3.0.21-cuda 
+
 ```
 
-After container have been build we can test it with following. 
+After container have been build we can test it with following.
 
 ```
 docker run --rm -it marieai/marie:3.0.18-cuda -vf
@@ -306,11 +369,11 @@ docker run --rm -it marieai/marie:3.0.18-cuda -vf
 
 ## Container maintenance
 
-Marie comes with number of utilities for managing the containers. 
+Marie comes with number of utilities for managing the containers.
 
 :::note
 
-When deployed with [Kubernetes Control Plane](/docs/getting-started/deployment/control-plane#kubernetes), 
+When deployed with [Kubernetes Control Plane](/docs/getting-started/deployment/control-plane#kubernetes),
 some of  will be redundant.
 
 :::
@@ -359,7 +422,7 @@ docker-util/
 
 * This script must not be run as root, run under 'docker user' account.
 
-* Scripts will redirect the output of the current script to the system logger. 
+* Scripts will redirect the output of the current script to the system logger.
 ```shell
 exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
 echo " container : ${CONTAINER_NAME}"
@@ -387,7 +450,7 @@ docker logs  marie-icr-0  -f --since 0m
 
 ### Segmentation fault
 
-There is a segmentation fault happening with `opencv-python==4.5.4.62` switching to `opencv-python==4.5.4.60` fixes the issue. 
+There is a segmentation fault happening with `opencv-python==4.5.4.62` switching to `opencv-python==4.5.4.60` fixes the issue.
 [connectedComponentsWithStats produces a segfault ](https://github.com/opencv/opencv-python/issues/604)
 
 ```
@@ -424,7 +487,7 @@ python3 -m pip install setuptools==59.5.0
 
 ### CUDA capability sm_86 is not compatible with the current PyTorch installation
 
-Building GPU version of the framework requires `1.10.2+cu113`. 
+Building GPU version of the framework requires `1.10.2+cu113`.
 
 If you encounter following error that indicates that we have a wrong version of PyTorch / Cuda
 
@@ -441,12 +504,12 @@ If you want to use the NVIDIA GeForce RTX 3060 Laptop GPU GPU with PyTorch, plea
 
 ```
 
-###  PIL.Image.LINEAR no longer exists #5010 
+###  PIL.Image.LINEAR no longer exists #5010
 Manually update `detectron2`  to fix the issue.
 https://github.com/facebookresearch/detectron2/issues/5010
 
 
-### Cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_' 
+### Cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_'
 
 ```shell
 cannot import name 'DEFAULT_CIPHERS' from 'urllib3.util.ssl_' (/home/greg/dev/marieai/marie-ai/venv/lib/python3.10/site-packages/urllib3/util/ssl_.py)
