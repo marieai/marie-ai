@@ -99,7 +99,22 @@ def extend_rest_interface(flow: Flow, prefetch: int, app: "FastAPI") -> "FastAPI
     extend_rest_interface_ner(app, client)
     extend_rest_interface_overlay(app, client)
 
+    extend_rest_interface_status(app, client)
+
     return app
+
+
+def extend_rest_interface_status(app: "FastAPI", client: Client) -> None:
+    """
+    :param client:
+    :param app:
+    :return:
+    """
+
+    @app.get("/health/status", tags=["status", "rest-api"])
+    async def overlay_status():
+        # compatible with dry_run \
+        return {"code": 0, "description": "", "exception": None}
 
 
 def parse_response_to_payload(
