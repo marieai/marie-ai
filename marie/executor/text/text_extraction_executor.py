@@ -140,6 +140,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             if parameters:
                 for key, value in parameters.items():
                     self.logger.debug("The p-value of {} is {}".format(key, value))
+
                 ref_id = parameters.get("ref_id")
                 ref_type = parameters.get("ref_type")
                 job_id = parameters.get("job_id", "0000-0000-0000-0000")
@@ -166,6 +167,10 @@ class TextExtractionExecutor(Executor, StorageMixin):
                     if "type" in feature and feature["type"] == "pipeline":
                         runtime_conf = feature
 
+            include_ocr = value_from_payload_or_args(
+                payload, "return_ocr", default=False
+            )
+
             metadata = self.pipeline.execute(
                 ref_id=ref_id,
                 ref_type=ref_type,
@@ -184,7 +189,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
             self.persist(ref_id, ref_type, metadata)
 
             # strip out ocr results from metadata
-            include_ocr = True
             if not include_ocr and "ocr" in metadata:
                 del metadata["ocr"]
 

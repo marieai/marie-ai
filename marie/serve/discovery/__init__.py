@@ -135,7 +135,7 @@ class DiscoveryServiceMixin:
 
             # Calling /dry_run on the flow will check if the Flow is initialized fully
             # Expecting to get InternalNetworkError: failed to connect to all addresses
-            service_url = f"{_service_scheme}://{_service_host}:{_service_port}/dry_run"
+
             if self._is_discovery_online(client=self.discovery_client):
                 service_node = self._get_service_node(
                     self.service_name, self.service_id
@@ -214,7 +214,6 @@ class DiscoveryServiceMixin:
         except Exception as ex:
             raise ex
             # pass
-        return None, False
 
     def _get_service_node(self, service_name, service_id):
         try:
@@ -243,8 +242,11 @@ class DiscoveryServiceMixin:
             raise Exception("service_id was none")
 
         service_name = "traefik-system-ingress"
+        # dry_run will block until the service is ready as well as it will block until the request is processed Executor
+        # which causes the service to be de-registered in the consul catalog
         # service_url = f"http://{service_host}:{service_port}/health/status"
-        service_url = f"{service_scheme}://{service_host}:{service_port}/dry_run"
+
+        service_url = f"{service_scheme}://{service_host}:{service_port}/health/status"
 
         if not self._is_discovery_online(self.discovery_client):
             self.logger.debug("Consul service is offline")
@@ -256,7 +258,6 @@ class DiscoveryServiceMixin:
                 service_id=service_id,
                 port=service_port,
                 address=service_host,
-                # check=Check.http(service_url, '10s', deregister='10m'),
                 check=Check.http(service_url, "10s"),
                 tags=[
                     "traefik.enable=true",
@@ -269,5 +270,4 @@ class DiscoveryServiceMixin:
             )
         except Exception as e:
             raise e
-            pass
         return service_id

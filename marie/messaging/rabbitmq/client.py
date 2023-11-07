@@ -69,7 +69,7 @@ class BlockingPikaClient:
             durable=durable,
         )
 
-    def publish_message(self, exchange, routing_key, message):
+    def publish_message(self, exchange: str, routing_key: str, message) -> None:
         """
         Publish a message to an exchange with a routing key
         :param exchange:
@@ -80,11 +80,17 @@ class BlockingPikaClient:
         channel = self.channel
         hdrs = {"key": "val"}
 
+        # this should be a configuration
+        # we do an expiration of 24 hours https://www.rabbitmq.com/ttl.html
+        hour = 60 * 60 * 1000
+        mils = hour * 24
+
         properties = pika.BasicProperties(
             app_id="marie-service",
             content_type="application/json",
             headers=hdrs,
             delivery_mode=pika.DeliveryMode.Transient,
+            expiration=str(mils),
         )
         # body = json.dumps(message, ensure_ascii=False)
         body = to_json(message)
