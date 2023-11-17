@@ -89,7 +89,7 @@ RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 
 RUN python3 -m pip install intel-openmp
-RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu --force
 
 # Order is important, need to install detectron2 last expected version is 0.6
 RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
@@ -99,8 +99,7 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
 
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
-
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
+FROM ubuntu22.04
 
 ARG http_proxy
 ARG https_proxy

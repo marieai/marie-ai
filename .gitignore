@@ -4,6 +4,7 @@ model_zoo/
 torch_compile_debug/
 torch_extensions/
 # Environments
+ansible/*.env
 .env
 .venv
 env/
