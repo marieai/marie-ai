@@ -16,7 +16,7 @@
       become_method: sudo
     - debug: var=out.stdout_lines
 
-    - name: Get infos on container
+    - name: Get info on container
       docker_container_info:
         name: "marieai-{{ stack_name }}-server"
       register: result

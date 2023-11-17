@@ -378,7 +378,7 @@ class ExtractPipeline:
         renderer.render(
             frames,
             results,
-            output_filename=os.path.join(root_asset_dir, "results.txt"),
+            output_file_or_dir=os.path.join(root_asset_dir, "results.txt"),
         )
 
     def render_pdf(self, ref_id: str, frames, results, root_asset_dir) -> None:

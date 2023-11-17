@@ -223,8 +223,6 @@ class DiscoveryServiceMixin:
                     return node
         except Exception as e:
             raise e
-            pass
-        return None
 
     def _register_with_catalog(
         self, service_host, service_port, service_scheme, service_id

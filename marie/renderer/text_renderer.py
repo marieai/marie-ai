@@ -1,6 +1,6 @@
 from math import ceil
 from os import PathLike
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Callable, Optional
 
 import numpy as np
 
@@ -145,12 +145,14 @@ class TextRenderer(ResultRenderer):
         self,
         frames: np.ndarray,
         results: [Dict[str, Any]],
-        output_filename: Union[str, PathLike],
+        output_file_or_dir: Union[str, PathLike],
+        filename_generator: Optional[Callable[[int], str]] = None,
+        **kwargs: Any,
     ) -> None:
         """Renders results into text output stream
         Results parameter "format" is expected to be in "XYWH" conversion will be performed to accommodate this
         """
-        self.logger.info(f"Render textfile : {output_filename}")
+        self.logger.info(f"Render textfile : {output_file_or_dir}")
         # The form feed character is sometimes used in plain text files of source code as a delimiter for a page break
         page_seperator = "\f"  # or \x0c
         # page_seperator = "\n\n__SEP__\n\n"
@@ -168,5 +170,5 @@ class TextRenderer(ResultRenderer):
                 if page_index < len(frames) - 1:
                     buffer += page_seperator
 
-        with open(output_filename, "w", encoding="UTF-8") as text_file:
+        with open(output_file_or_dir, "w", encoding="UTF-8") as text_file:
             text_file.write(buffer)

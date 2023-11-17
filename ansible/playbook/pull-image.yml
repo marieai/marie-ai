@@ -4,7 +4,7 @@
   hosts: ml.cluster
   gather_facts: true
   vars:
-    image_tag: 3.0.20-cuda
+    image_tag: 3.0.22-cuda
   tasks:
     # https://docs.ansible.com/ansible/latest/collections/community/docker/docker_image_module.html
     - name:  Pull the inference-server

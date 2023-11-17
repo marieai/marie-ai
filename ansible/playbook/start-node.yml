@@ -5,8 +5,9 @@
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag_prev: 3.0.19-cuda
-    image_tag: 3.0.20-cuda
+    image_tag: 3.0.22-cuda
+    config_tag: marie-3.0.21.yml
+#    config_tag: marie-3.0.2x-corr.yml
     server_port: 8080
   tasks:
 #    - name: Create network
@@ -26,7 +27,7 @@
         tty: true
         restart_policy: "always" # always | on-failure | unless-stopped
         network_mode: host #"marie-{{ stack_name }}"
-        command: server --start --uses /etc/marie/config/service/marie.yml
+        command: server --start --uses /etc/marie/config/service/{{ config_tag }}
         device_requests:
           - # Add nVidia GPUs to this container
             driver: nvidia
