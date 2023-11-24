@@ -17,18 +17,15 @@ from torchvision.transforms import Compose, InterpolationMode
 
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
-from marie.importer import ImportExtensions
 from marie.lang import Object
 from marie.logging.predefined import default_logger
 from marie.logging.profile import TimeContext
 from marie.models.icr.memory_dataset import MemoryDataset
-from marie.models.utils import torch_gc
-from marie.serve.executors.decorators import _get_locks_root
-from marie.timer import Timer
-from marie.utils.utils import batchify
 
 # required to register text_recognition
 from marie.models.unilm.trocr.task import TextRecognitionTask
+from marie.models.utils import torch_gc
+from marie.utils.utils import batchify
 
 faux_t = TextRecognitionTask
 logger = default_logger
@@ -89,14 +86,15 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
             with TimeContext("Compiling TROCR model", logger=logger):
                 import torch._dynamo as dynamo
 
-                # model[0] = torch.compile(model[0])
-                model[0] = torch.compile(
-                    model[0],
-                    # mode="max-autotune",
-                    fullgraph=True,
-                    backend="inductor",
-                    options={"max_autotune": True, "triton.cudagraphs": True},
-                )
+                model[0] = torch.compile(model[0])
+                if False:
+                    model[0] = torch.compile(
+                        model[0],
+                        # mode="max-autotune",
+                        fullgraph=True,
+                        backend="inductor",
+                        options={"max_autotune": True, "triton.cudagraphs": True},
+                    )
         except Exception as e:
             logger.error(f"Failed to compile model : {e}")
 
@@ -225,34 +223,19 @@ class TrOcrProcessor(OcrProcessor):
         start = time.time()
         # beam = 5
         beam = 1
-        # create a file lock to prevent multiple processes from loading the same model at the same time3
-        logger.info(f"Model initialized : {self.__class__.INITIALIZED}")
-        if not self.__class__.INITIALIZED:
-            with ImportExtensions(
-                required=True,
-                help_text=f"FileLock is needed to guarantee single initialization of as the model is loaded. ",
-            ):
-                import filelock
+        (
+            model,
+            cfg,
+            task,
+            generator,
+            bpe,
+            img_transform,
+            device,
+        ) = init(model_path, beam, device)
 
-                locks_root = _get_locks_root()
-                lock_file = locks_root.joinpath(f"{self.__class__.__name__}.lock")
-                file_lock = filelock.FileLock(lock_file, timeout=-1)
-
-                with file_lock:
-                    (
-                        model,
-                        cfg,
-                        task,
-                        generator,
-                        bpe,
-                        img_transform,
-                        device,
-                    ) = init(model_path, beam, device)
-
-                    self.__class__.MODEL_SPEC = TrOcrModelSpec(
-                        model, cfg, task, generator, bpe, img_transform, device
-                    )
-                    self.__class__.INITIALIZED = True
+        self.MODEL_SPEC = TrOcrModelSpec(
+            model, cfg, task, generator, bpe, img_transform, device
+        )
 
         logger.info("Model load elapsed: %s" % (time.time() - start))
         opt = Object()
@@ -308,7 +291,7 @@ class TrOcrProcessor(OcrProcessor):
             opt = self.opt
             results = []
             start = time.time()
-            model_spec: TrOcrModelSpec = self.__class__.MODEL_SPEC
+            model_spec: TrOcrModelSpec = self.MODEL_SPEC
 
             with torch.amp.autocast(
                 device_type=model_spec.device, enabled=True, cache_enabled=True

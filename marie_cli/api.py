@@ -222,9 +222,7 @@ def cloud(args: 'Namespace'):
     Use jcloud (Jina Cloud) commands
     :param args: arguments coming from the CLI.
     """
-    from jcloud import api
-
-    getattr(api, args.jc_cli.replace('-', '_'))(args)
+    raise NotImplementedError
 
 
 def server(args: 'Namespace'):
