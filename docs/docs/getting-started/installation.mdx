@@ -353,19 +353,25 @@ docker run --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 
 If we have properly configured our environment you should be able to build the container locally.
 
 ```shell
-DOCKER_BUILDKIT=1 docker build . --cpuset-cpus="0-32"  --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu-310.Dockerfile -t marieai/marie:3.0.21-cuda --no-cache
+DOCKER_BUILDKIT=1 docker build . --cpuset-cpus="0-32"  --build-arg PIP_TAG="[standard]" -f ./Dockerfiles/gpu-310.Dockerfile -t marieai/marie:3.0.22-cuda --no-cache
 
-docker tag d4195ee97201 docker.io/marieai/marie:3.0.21-cuda 
-docker push docker.io/marieai/marie:3.0.21-cuda 
+docker tag d4195ee97201 docker.io/marieai/marie:3.0.22-cuda
+docker push docker.io/marieai/marie:3.0.22-cuda
 
 ```
 
 After container have been build we can test it with following.
 
-```
+```shell
 docker run --rm -it marieai/marie:3.0.18-cuda -vf
 ```
 
+Overwrite the container `ENTRYPOINT` by using `--entrypoint` from command line and validate the GPU works by executing
+`nvidia-smi`
+
+```shell
+docker run -it --rm  --gpus all --entrypoint /bin/bash marie-icr:2.0
+```
 
 ## Container maintenance
 
