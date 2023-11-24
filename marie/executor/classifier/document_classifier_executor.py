@@ -178,7 +178,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
                     f"REF_ID and REF_TYPE are not present in parameters"
                 )
                 ref_id = hash_frames_fast(frames)
-                ref_type = "extract"
+                ref_type = "classify"
                 job_id = "0000-0000-0000-0000"
 
             self.logger.debug(
