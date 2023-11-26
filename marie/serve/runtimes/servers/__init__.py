@@ -1,6 +1,6 @@
 import abc
-import threading
 import time
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
@@ -12,6 +12,7 @@ __all__ = ['BaseServer']
 
 if TYPE_CHECKING:
     import multiprocessing
+    import threading
 
     from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
     from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
@@ -34,7 +35,13 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         self.name = name or ''
         self.runtime_args = runtime_args
         self.works_as_load_balancer = False
-        self.is_cancel = is_cancel or threading.Event()
+        try:
+            self.is_cancel = is_cancel or asyncio.Event()
+        except:
+            # in some unit tests we instantiate the server without an asyncio Loop
+            import threading
+
+            self.is_cancel = threading.Event()
         if isinstance(runtime_args, Dict):
             self.works_as_load_balancer = runtime_args.get(
                 'gateway_load_balancer', False
@@ -97,7 +104,6 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors(),
             tracing_client_interceptor=self.tracing_client_interceptor(),
             deployment_name=self.name.split('/')[0],
-            works_as_load_balancer=self.works_as_load_balancer,
         )
 
     def _add_gateway_args(self):
@@ -243,7 +249,9 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
     def wait_for_ready_or_shutdown(
         cls,
         timeout: Optional[float],
-        ready_or_shutdown_event: Union['multiprocessing.Event', 'threading.Event'],
+        ready_or_shutdown_event: Union[
+            'multiprocessing.Event', 'threading.Event', 'asyncio.Event'
+        ],
         ctrl_address: str,
         health_check: bool = False,
         **kwargs,

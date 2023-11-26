@@ -188,7 +188,9 @@ class WorkerRequestHandler:
         async def _shutdown():
             await self.close()
 
-        return app
+        from marie.helper import extend_rest_interface
+
+        return extend_rest_interface(app)
 
     def _http_fastapi_sagemaker_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_sagemaker_app import get_fastapi_app
