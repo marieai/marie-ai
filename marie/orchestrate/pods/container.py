@@ -1,12 +1,10 @@
 import argparse
-import asyncio
 import copy
 import multiprocessing
 import os
 import platform
 import re
 import signal
-import threading
 import time
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
@@ -25,6 +23,7 @@ from marie.orchestrate.pods.container_helper import (
 from marie.parsers import set_gateway_parser
 
 if TYPE_CHECKING:  # pragma: no cover
+    import threading
     from docker.client import DockerClient
 
 
@@ -213,18 +212,22 @@ def run(
     :param is_ready: concurrency event to communicate runtime is ready to receive messages
     """
     import docker
+    import asyncio
 
     log_kwargs = copy.deepcopy(vars(args))
     log_kwargs['log_config'] = 'docker'
     logger = MarieLogger(name, **log_kwargs)
 
-    cancel = threading.Event()
-    fail_to_start = threading.Event()
+    cancel = False
+    fail_to_start = False
+
+    def _set_cancel(*args, **kwargs):
+        cancel = True
 
     if not __windows__:
         try:
             for signame in {signal.SIGINT, signal.SIGTERM}:
-                signal.signal(signame, lambda *args, **kwargs: cancel.set())
+                signal.signal(signame, _set_cancel)
         except (ValueError, RuntimeError) as exc:
             logger.warning(
                 f'The process starting the container for {name} will not be able to handle termination signals. '
@@ -239,7 +242,7 @@ def run(
         ):
             import win32api
 
-        win32api.SetConsoleCtrlHandler(lambda *args, **kwargs: cancel.set(), True)
+        win32api.SetConsoleCtrlHandler(_set_cancel, True)
 
     is_signal_handlers_installed.set()
     client = docker.from_env()
@@ -273,25 +276,17 @@ def run(
             return True
 
         async def _check_readiness(container):
-            while (
-                _is_container_alive(container)
-                and not _is_ready()
-                and not cancel.is_set()
-            ):
+            while _is_container_alive(container) and not _is_ready() and not cancel:
                 await asyncio.sleep(0.1)
             if _is_container_alive(container):
                 is_started.set()
                 is_ready.set()
             else:
-                fail_to_start.set()
+                fail_to_start = True
 
         async def _stream_starting_logs(container):
             for line in container.logs(stream=True):
-                if (
-                    not is_started.is_set()
-                    and not fail_to_start.is_set()
-                    and not cancel.is_set()
-                ):
+                if not is_started.is_set() and not fail_to_start and not cancel:
                     await asyncio.sleep(0.01)
                 msg = line.decode().rstrip()  # type: str
                 logger.debug(re.sub(r'\u001b\[.*?[@-~]', '', msg))

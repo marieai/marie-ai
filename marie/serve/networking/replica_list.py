@@ -52,7 +52,6 @@ class _ReplicaList:
         self.channel_options = channel_options
         # a set containing all the ConnectionStubs that will be created using add_connection
         # this set is not updated in reset_connection and remove_connection
-        self._warmup_stubs = set()
         self.load_balancer = LoadBalancer.get_load_balancer(
             load_balancer_type, deployment_name, logger
         )
@@ -102,7 +101,6 @@ class _ReplicaList:
             # create a new set of stubs and channels for warmup to avoid
             # loosing channel during remove_connection or reset_connection
             stubs, _ = self._create_connection(address, deployment_name)
-            self._warmup_stubs.add(stubs)
             self.load_balancer.update_connections(self._connections)
 
     async def remove_connection(self, address: str):
@@ -193,17 +191,7 @@ class _ReplicaList:
         self._address_to_channel.clear()
         self._address_to_connection_idx.clear()
         self._connections.clear()
-        for stub in self._warmup_stubs:
-            await stub.channel.close(0.5)
-        self._warmup_stubs.clear()
         self.load_balancer.close()
-
-    @property
-    def warmup_stubs(self):
-        """Return set of warmup stubs
-        :returns: Set of stubs. The set doesn't remove any items once added.
-        """
-        return self._warmup_stubs
 
     def incr_usage(self, address: str) -> int:
         """
