@@ -34,8 +34,6 @@ from marie.types.request import Request
 from marie.types.request.data import SingleDocumentRequest
 
 if TYPE_CHECKING:  # pragma: no cover
-    import threading
-
     from grpc.aio._interceptor import ClientInterceptor
     from opentelemetry.instrumentation.grpc._client import (
         OpenTelemetryClientInterceptor,
@@ -55,8 +53,8 @@ class GrpcConnectionPool:
     :param compression: The compression algorithm to be used by this GRPCConnectionPool when sending data to GRPC
     """
 
-    K8S_PORT_USES_AFTER = 8082
-    K8S_PORT_USES_BEFORE = 8081
+    K8S_PORT_USES_AFTER = 8079
+    K8S_PORT_USES_BEFORE = 8078
     K8S_PORT = 8080
     K8S_PORT_MONITORING = 9090
 
@@ -633,71 +631,6 @@ class GrpcConnectionPool:
                     return default_endpoints_proto, None
 
         return task_coroutine()
-
-    async def warmup(
-        self,
-        deployment: str,
-        stop_event: 'threading.Event',
-    ):
-        """Executes JinaInfoRPC against the provided deployment. A single task is created for each replica connection.
-        :param deployment: deployment name and the replicas that needs to be warmed up.
-        :param stop_event: signal to indicate if an early termination of the task is required for graceful teardown.
-        """
-        self._logger.debug(f'starting warmup task for deployment {deployment}')
-
-        async def task_wrapper(target_warmup_responses, stub):
-            try:
-                call_result = stub.send_info_rpc(timeout=0.5)
-                await call_result
-                target_warmup_responses[stub.address] = True
-            except asyncio.CancelledError:
-                self._logger.debug(f'warmup task got cancelled')
-                target_warmup_responses[stub.address] = False
-                raise
-            except Exception:
-                target_warmup_responses[stub.address] = False
-
-        try:
-            start_time = time.time()
-            timeout = start_time + 60 * 5  # 5 minutes from now
-            warmed_up_targets = set()
-            replicas = self._get_all_replicas(deployment)
-
-            while not stop_event.is_set():
-                replica_warmup_responses = {}
-                tasks = []
-                try:
-                    for replica in replicas:
-                        for stub in replica.warmup_stubs:
-                            if stub.address not in warmed_up_targets:
-                                tasks.append(
-                                    asyncio.create_task(
-                                        task_wrapper(replica_warmup_responses, stub)
-                                    )
-                                )
-
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    for target, response in replica_warmup_responses.items():
-                        if response:
-                            warmed_up_targets.add(target)
-
-                    now = time.time()
-                    if now > timeout or all(list(replica_warmup_responses.values())):
-                        self._logger.debug(
-                            f'completed warmup task in {now - start_time}s.'
-                        )
-                        return
-                    await asyncio.sleep(0.2)
-                except asyncio.CancelledError:
-                    self._logger.debug(f'warmup task got cancelled')
-                    if tasks:
-                        for task in tasks:
-                            task.cancel()
-                    raise
-
-        except Exception as ex:
-            self._logger.error(f'error with warmup up task: {ex}')
-            return
 
     def _get_all_replicas(self, deployment):
         replica_set = set()

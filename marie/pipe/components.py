@@ -90,25 +90,40 @@ def s3_asset_path(
     return ret_path
 
 
-def get_known_ocr_engines(device: str = 'cuda') -> dict[str, any]:
+def get_known_ocr_engines(device: str = "cuda", engine: str = None) -> dict[str, any]:
     """
     Get the known OCR engines
     mock : Mock OCR engine, returns dummy results
     default : Default OCR engine, uses the best OCR engine available on the system
     best : Voting OCR engine, uses ensemble of OCR engines to perform OCR on the document
 
+    Most GPU will not have enough memory to run multiple OCR engines in parallel and hence it is recommended to use
+    the default OCR engine on GPU. If you have a large GPU with enough memory, you can use the best OCR engine.
+
     :param device: device to use for OCR (cpu or cuda)
+    :param engine: engine to use for OCR (mock, default, best)
     :return: OCR engines
     """
 
     use_cuda = False
-    if device == 'cuda':
+    if device == "cuda":
         use_cuda = True
 
+    logger.info(f"Using device : {device}")
     ocr_engines = dict()
-    ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
-    ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
-    ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
+
+    if engine is None:
+        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
+        ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
+        ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
+    elif engine == "mock":
+        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
+    elif engine == "default":
+        ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
+    elif engine == "best":
+        ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
+    else:
+        raise ValueError(f"Invalid OCR engine : {engine}")
 
     return ocr_engines
 

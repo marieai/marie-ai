@@ -75,7 +75,7 @@ class ClassificationPipeline:
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
-        self.ocr_engines = get_known_ocr_engines(device=device)
+        self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
 
         self.document_classifiers = setup_classifiers(
             pipeline_config, key="page_classifier", device=device
