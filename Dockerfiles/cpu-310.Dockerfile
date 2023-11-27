@@ -4,7 +4,7 @@ ARG CUDA_VERSION=11.8.0
 #ARG CUDA_VERSION=11.3.1
 
 #FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
-FROM ubuntu22.04 as build-image
+FROM ubuntu:22.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
@@ -99,7 +99,7 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
 
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
-FROM ubuntu22.04
+FROM ubuntu:22.04
 
 ARG http_proxy
 ARG https_proxy
@@ -140,7 +140,8 @@ RUN apt-get update && \
         libomp-dev \
         libjemalloc-dev \
         libgoogle-perftools-dev \
-        libmagickwand-dev && \
+        libmagickwand-dev \
+	tesseract-ocr && \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     ln -s /usr/lib/x86_64-linux-gnu/libjemalloc.so /usr/lib/libjemalloc.so && \
     ln -s /usr/lib/x86_64-linux-gnu/libtcmalloc.so /usr/lib/libtcmalloc.so && \
