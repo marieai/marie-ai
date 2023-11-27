@@ -1,4 +1,7 @@
+import multiprocessing
 import os
+import warnings
+from pathlib import Path
 from typing import Union, Optional, Any
 
 import numpy as np
@@ -10,7 +13,12 @@ from marie import safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
+from marie.constants import (
+    __model_path__,
+)
+from marie.excepts import RuntimeFailToStart
 from marie.executor.mixin import StorageMixin
+from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
@@ -20,6 +28,7 @@ from marie.pipe import ExtractPipeline
 from marie.utils.docs import frames_from_docs, docs_from_asset
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
+from marie.utils.types import strtobool
 
 
 class TextExtractionExecutor(Executor, StorageMixin):
@@ -43,6 +52,16 @@ class TextExtractionExecutor(Executor, StorageMixin):
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        use_cuda = torch.cuda.is_available()
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            use_cuda = False
+
+        if not device:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if not use_cuda:
+            device = "cpu"
+        self.device = device
 
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
@@ -52,13 +71,30 @@ class TextExtractionExecutor(Executor, StorageMixin):
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
 
-        self.show_error = True  # show prediction errors
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
+        num_threads = max(1, torch.get_num_threads())
+        if not self.device.startswith("cuda") and (
+            "OMP_NUM_THREADS" not in os.environ
+            and hasattr(self.runtime_args, "replicas")
+        ):
+            replicas = getattr(self.runtime_args, "replicas", 1)
+            num_threads = max(1, torch.get_num_threads() // replicas)
 
-        setup_torch_optimizations()
+            if num_threads < 2:
+                warnings.warn(
+                    f"Too many replicas ({replicas}) vs too few threads {num_threads} may result in "
+                    f"sub-optimal performance."
+                )
+
+            # NOTE: make sure to set the threads right after the torch import,
+            # and `torch.set_num_threads` always take precedence over environment variables `OMP_NUM_THREADS`.
+            # For more details, please see https://pytorch.org/docs/stable/generated/torch.set_num_threads.html
+            torch.set_num_threads(max(num_threads, 1))
+            torch.set_num_interop_threads(1)
+
+        setup_torch_optimizations(num_threads=num_threads)
+        setup_cache()
+
+        self.show_error = True  # show prediction errors
         self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=use_cuda)
 
         instance_name = "not_defined"
@@ -213,8 +249,6 @@ class TextExtractionExecutor(Executor, StorageMixin):
             torch_gc()
             MDC.remove("request_id")
 
-    # Prevnet⠏ Waiting gateway... ━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━ 2/3 0:00:39
-
     @requests(on="/document/extract/status")
     def status(self, parameters, **kwargs):
         use_cuda = torch.cuda.is_available()
@@ -261,6 +295,43 @@ class TextExtractionExecutor(Executor, StorageMixin):
             )
 
 
+def setup_cache():
+    """Setup cathe and download known models for faster startup"""
+    import urllib.error
+
+    if strtobool(os.environ.get("MARIE_SKIP_MODEL_CACHE", False)):
+        logger.info("Skipping cache setup.")
+        return
+
+    try:
+        with ImportExtensions(
+            required=True,
+            help_text=f"FileLock is needed to guarantee single initialization.",
+        ):
+            import filelock
+
+            # this is needed to guarantee single initialization of as the models accessed by multiple processes
+            locks_root = Path(os.path.join(__model_path__, "cache"))
+            lock_file = locks_root.joinpath(f"models.lock")
+            file_lock = filelock.FileLock(lock_file, timeout=-1)
+            with file_lock:
+                from torch.hub import _get_torch_home
+
+                torch_home = os.path.join(__model_path__, "cache", "torch")
+                os.environ["TORCH_HOME"] = torch_home
+                torch.hub.set_dir(torch_home)
+                torch_cache_home = _get_torch_home()
+                logger.info(f"Setting up cache for models as {torch_cache_home}")
+
+                torch.hub.load("pytorch/fairseq:main", "roberta.large")
+                torch.hub.load("pytorch/fairseq:main", "roberta.base")
+    except urllib.error.HTTPError as err:
+        logger.error(f"Unable to download model : {err.code}")
+        raise RuntimeFailToStart(f"Unable to download model : {err}")
+    except Exception as e:
+        logger.error(f"Error setting up cache : {e}")
+
+
 class TextExtractionExecutorMock(Executor):
     def __init__(
         self,
@@ -282,6 +353,7 @@ class TextExtractionExecutorMock(Executor):
         import time
 
         logger.info(f"Starting mock executor : {time.time()}")
+        setup_torch_optimizations()
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
@@ -289,7 +361,13 @@ class TextExtractionExecutorMock(Executor):
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if not device:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not use_cuda:
+            device = "cpu"
+        self.device = device
+
         self.runtime_info = {
             "name": self.__class__.__name__,
             "instance_name": kwargs.get("runtime_args", {}).get("name", "not_defined"),

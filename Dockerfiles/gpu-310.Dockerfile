@@ -89,7 +89,10 @@ RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 
 RUN python3 -m pip install intel-openmp
-RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+# USING NIGHTLY causes CUDA multiprocessing error
+# https://forums.developer.nvidia.com/t/python-opencv-multiprocessing-doesnt-work-with-cuda/180195
+#RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
+RUN python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118  --force
 
 # Order is important, need to install detectron2 last expected version is 0.6
 RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \

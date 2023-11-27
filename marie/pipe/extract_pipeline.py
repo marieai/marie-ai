@@ -91,7 +91,6 @@ class ExtractPipeline:
             device = "cpu"
 
         self.logger = MarieLogger(context=self.__class__.__name__)
-
         self.overlay_processor = OverlayProcessor(
             work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
         )

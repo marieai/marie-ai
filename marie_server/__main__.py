@@ -1,5 +1,4 @@
 import inspect
-import multiprocessing
 import os
 import platform
 import sys
@@ -7,12 +6,10 @@ import traceback
 from functools import partial
 from typing import Dict, Any, Optional
 
-import psutil
-import torch
 from rich.traceback import install
 
 import marie.helper
-from marie import Flow, Deployment
+from marie import Flow
 from marie import __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (
@@ -235,10 +232,8 @@ def __main__(
     logger.info(f"env = {env}")
     logger.info(f"CONTEXT.gpu_device_count = {gpu_device_count()}")
 
-    # load env file
     if not env_file:
         env_file = os.path.join(__config_dir__, ".env")
-
     load_env_file(dotenv_path=env_file)
 
     context = {
@@ -277,11 +272,10 @@ def __main__(
         prefetch=prefetch,
     ).config_gateway(prefetch=prefetch)
 
+    marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
+
     filter_endpoint()
     setup_server(config)
-
-    # os.environ["JINA_MP_START_METHOD"] = "spawn"
-    marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
 
     with f:
         f.block()
@@ -295,7 +289,6 @@ def setup_server(config: Dict[str, Any]) -> None:
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
     setup_auth(config.get("auth", {}))
-
     # setup_scheduler(config.get("scheduler", {}))
 
 
@@ -306,11 +299,14 @@ def filter_endpoint() -> None:
     """
     import logging
 
-    # filter out dry_run endpoint from uvicorn logs
+    # filter out dry_run and health/status  endpoint from uvicorn logs
 
     class _EndpointFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
-            return record.getMessage().find("GET /dry_run") == -1
+            return (
+                record.getMessage().find("GET /dry_run") == -1
+                and record.getMessage().find("GET /health/status") == -1
+            )
 
     logging.getLogger("uvicorn.access").addFilter(_EndpointFilter())
 
@@ -323,13 +319,5 @@ if __name__ == "__main__":
             _input = sys.argv[1]
     else:
         _input = os.path.join(__config_dir__, "service", "marie.yml")
-
-    os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
-    os.environ["OMP_SCHEDULE"] = "STATIC"
-    os.environ["OMP_PROC_BIND"] = "CLOSE"
-    os.environ["OMP_PLACES"] = "CORES"
-
-    # set to core-count of your CPU
-    torch.set_num_threads(psutil.cpu_count(logical=False))
 
     main(_input)
