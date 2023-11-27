@@ -6,14 +6,16 @@ import logging
 import psutil
 import torch
 
+from marie.utils.types import strtobool
+
 logger = logging.getLogger(__name__)
 
 
 def initialize_device_settings(
-        use_cuda: Optional[bool] = None,
-        local_rank: int = -1,
-        multi_gpu: bool = True,
-        devices: Optional[List[Union[str, torch.device]]] = None,
+    use_cuda: Optional[bool] = None,
+    local_rank: int = -1,
+    multi_gpu: bool = True,
+    devices: Optional[List[Union[str, torch.device]]] = None,
 ) -> Tuple[List[torch.device], int]:
     """
     Returns a list of available devices.
@@ -29,7 +31,7 @@ def initialize_device_settings(
                         parameter is not used and a single cpu device is used for inference.
     """
     if (
-            use_cuda is False
+        use_cuda is False
     ):  # Note that it could be None, in which case we also want to just skip this step.
         devices_to_use = [torch.device("cpu")]
         n_gpu = 0
@@ -123,18 +125,28 @@ def openmp_setup(threads: int):
     os.environ["OMP_PLACES"] = "CORES"
 
 
-def setup_torch_optimizations():
+def setup_torch_optimizations(num_threads: int = -1):
+    """
+    Setup torch optimizations
+    :return:
+    """
     try:
         logger.info(f"Setting up torch optimizations")
 
+        if strtobool(os.environ.get("MARIE_SKIP_TORCH_OPTIMIZATION", False)):
+            logger.info("Skipping torch optimizations")
+            return
+
         # Optimizations for PyTorch
-        core_count = psutil.cpu_count(logical=False)
+        core_count = num_threads
+        if num_threads == -1:
+            core_count = psutil.cpu_count(logical=False)
 
         torch_versions = torch.__version__.split(".")
         torch_major_version = int(torch_versions[0])
         torch_minor_version = int(torch_versions[1])
         if torch_major_version > 1 or (
-                torch_major_version == 1 and torch_minor_version >= 12
+            torch_major_version == 1 and torch_minor_version >= 12
         ):
             # Gives a large speedup on Ampere-class GPUs
             torch.set_float32_matmul_precision("high")
@@ -146,7 +158,7 @@ def setup_torch_optimizations():
         openmp_setup(core_count)
         torch.set_num_threads(core_count)
 
-        # Enable oneDNN Graph
+        # Enable oneDNN Graph, which is a graph optimization pass that fuses multiple operators into a single kernel
         torch.jit.enable_onednn_fusion(True)
     except Exception as e:
         raise e

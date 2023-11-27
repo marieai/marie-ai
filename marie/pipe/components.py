@@ -90,7 +90,7 @@ def s3_asset_path(
     return ret_path
 
 
-def get_known_ocr_engines(device: str = 'cuda', engine: str = None) -> dict[str, any]:
+def get_known_ocr_engines(device: str = "cuda", engine: str = None) -> dict[str, any]:
     """
     Get the known OCR engines
     mock : Mock OCR engine, returns dummy results
@@ -106,7 +106,7 @@ def get_known_ocr_engines(device: str = 'cuda', engine: str = None) -> dict[str,
     """
 
     use_cuda = False
-    if device == 'cuda':
+    if device == "cuda":
         use_cuda = True
 
     logger.info(f"Using device : {device}")

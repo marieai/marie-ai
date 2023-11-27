@@ -112,7 +112,7 @@ def extend_rest_interface_status(app: "FastAPI", client: Client) -> None:
     """
 
     @app.get("/health/status", tags=["status", "rest-api"])
-    async def overlay_status():
+    async def health_status():
         # compatible with dry_run \
         return {"code": 0, "description": "", "exception": None}
 
