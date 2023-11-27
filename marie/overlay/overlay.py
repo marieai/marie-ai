@@ -36,9 +36,8 @@ class OverlayProcessor(BaseHandler):
         **kwargs,
     ) -> None:
         super().__init__()
-        # print(f"OverlayProcessor [cuda={cuda}, models_dir={models_dir}]")
         checkpoint_dir = os.path.join(models_dir, "overlay")
-        self.cuda = True
+        self.cuda = cuda
         self.models_dir = models_dir
         self.work_dir = work_dir
         self.opt, self.model = self.__setup(cuda, checkpoint_dir)

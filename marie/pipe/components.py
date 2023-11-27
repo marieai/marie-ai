@@ -6,11 +6,13 @@ import numpy as np
 import torch
 from PIL import Image
 
-from marie.boxes import PSMode
+from marie.boxes import PSMode, BoxProcessorUlimDit
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
+from marie.document import TrOcrProcessor
 from marie.excepts import BadConfigSource
 from marie.executor.ner import NerExtractionExecutor
+from marie.executor.util import setup_cache
 from marie.logging.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, MockOcrEngine, DefaultOcrEngine, VotingOcrEngine
 from marie.storage import StorageManager
@@ -109,19 +111,44 @@ def get_known_ocr_engines(device: str = "cuda", engine: str = None) -> dict[str,
     if device == "cuda":
         use_cuda = True
 
-    logger.info(f"Using device : {device}")
+    logger.info(f"Getting OCR engine using engine : {engine}, device : {device}")
+    setup_cache(list_of_models=None)
+
+    box_processor = BoxProcessorUlimDit(
+        work_dir=ensure_exists("/tmp/boxes"),
+        cuda=use_cuda,
+    )
+
+    trocr_processor = TrOcrProcessor(work_dir=ensure_exists("/tmp/icr"), cuda=use_cuda)
+
     ocr_engines = dict()
 
     if engine is None:
-        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
-        ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
-        ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
+        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda, box_processor=box_processor)
+        ocr_engines["default"] = DefaultOcrEngine(
+            cuda=use_cuda,
+            box_processor=box_processor,
+            default_ocr_processor=trocr_processor,
+        )
+        ocr_engines["best"] = VotingOcrEngine(
+            cuda=use_cuda,
+            box_processor=box_processor,
+            default_ocr_processor=trocr_processor,
+        )
     elif engine == "mock":
-        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda)
+        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda, box_processor=box_processor)
     elif engine == "default":
-        ocr_engines["default"] = DefaultOcrEngine(cuda=use_cuda)
+        ocr_engines["default"] = DefaultOcrEngine(
+            cuda=use_cuda,
+            box_processor=box_processor,
+            default_ocr_processor=trocr_processor,
+        )
     elif engine == "best":
-        ocr_engines["best"] = VotingOcrEngine(cuda=use_cuda)
+        ocr_engines["best"] = VotingOcrEngine(
+            cuda=use_cuda,
+            box_processor=box_processor,
+            default_ocr_processor=trocr_processor,
+        )
     else:
         raise ValueError(f"Invalid OCR engine : {engine}")
 

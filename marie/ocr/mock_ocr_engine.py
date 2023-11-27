@@ -1,10 +1,11 @@
 import os
-from typing import Union, List
+from typing import Union, List, Optional
 
 import numpy as np
 from PIL import Image
 
 from marie.boxes import PSMode
+from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.ocr import OcrEngine, CoordinateFormat
@@ -22,6 +23,8 @@ class MockOcrEngine(OcrEngine):
         self,
         models_dir: str = os.path.join(__model_path__),
         cuda: bool = True,
+        *,
+        box_processor: Optional[BoxProcessor] = None,
         **kwargs,
     ) -> None:
         super().__init__(cuda=cuda, **kwargs)

@@ -195,6 +195,9 @@ def __main__(
 
         is_latest_version(github_repo="marie-ai")
 
+    torch_home = os.path.join(__model_path__, "cache", "torch")
+    os.environ["TORCH_HOME"] = torch_home
+
     if False:
         import shutil
 
