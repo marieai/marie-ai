@@ -13,7 +13,11 @@ from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
-from marie.models.utils import setup_torch_optimizations, torch_gc
+from marie.models.utils import (
+    setup_torch_optimizations,
+    torch_gc,
+    initialize_device_settings,
+)
 from marie.ocr import CoordinateFormat
 from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.utils.docs import frames_from_docs, docs_from_asset
@@ -52,12 +56,20 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
 
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
+        resolved_devices, _ = initialize_device_settings(
+            devices=[device], use_cuda=True, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+        has_cuda = True if self.device.type.startswith("cuda") else False
 
         setup_torch_optimizations()
-        self.pipeline = ClassificationPipeline(pipeline_config=pipeline, cuda=use_cuda)
+        self.pipeline = ClassificationPipeline(pipeline_config=pipeline, cuda=has_cuda)
 
         instance_name = "not_defined"
         if kwargs is not None:
@@ -70,7 +82,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
-            "use_cuda": use_cuda,
+            "use_cuda": has_cuda,
         }
 
         self.storage_enabled = False

@@ -1,17 +1,19 @@
 import os
 import traceback
 from copy import deepcopy
-from typing import List, Union, Dict
+from typing import List, Union, Dict, Optional
 
 import numpy as np
 from PIL import Image
 from collections import defaultdict
 
 from marie.boxes import PSMode
+from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.document.lev_ocr_processor import LevenshteinOcrProcessor
+from marie.document.ocr_processor import OcrProcessor
 from marie.document.tesseract_ocr_processor import TesseractOcrProcessor
 from marie.ocr import OcrEngine, CoordinateFormat
 from collections import OrderedDict
@@ -34,16 +36,23 @@ class VotingOcrEngine(OcrEngine):
         self,
         models_dir: str = os.path.join(__model_path__),
         cuda: bool = True,
+        *,
+        box_processor: Optional[BoxProcessor] = None,
+        default_ocr_processor: Optional[OcrProcessor] = None,
         **kwargs,
     ) -> None:
-        super().__init__(models_dir=models_dir, cuda=cuda, **kwargs)
+        super().__init__(
+            models_dir=models_dir, cuda=cuda, box_processor=box_processor, **kwargs
+        )
 
         self.processors = OrderedDict()
 
-        self.processors["trocr"] = {
+        self.processors["default"] = {
             "enabled": True,
             "default": True,
-            "processor": TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda),
+            "processor": default_ocr_processor
+            if default_ocr_processor is not None
+            else TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda),
         }
 
         self.processors["craft"] = {

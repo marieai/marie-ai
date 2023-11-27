@@ -19,7 +19,7 @@ from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
 from marie.logging.predefined import default_logger
-from marie.logging.profile import TimeContext
+from marie.logging.profile import TimeContext, TimeContextCuda
 from marie.models.icr.memory_dataset import MemoryDataset
 
 # required to register text_recognition
@@ -76,32 +76,24 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     else:
         model[0] = model[0].to(device)
 
-    # Process time 80.9748 seconds : With compile - default
-    # Process time 85.9748 seconds : With no compile
-
     # try to compile the model with torch.compile - cudagraphs
-    if device == 'cuda':
-        try:
-            # Optimize model for Inference time
-            with TimeContext("Compiling TROCR model", logger=logger):
-                import torch._dynamo as dynamo
-
-                model[0] = torch.compile(model[0])
-                if False:
-                    model[0] = torch.compile(
-                        model[0],
-                        # mode="max-autotune",
-                        fullgraph=True,
-                        backend="inductor",
-                        options={"max_autotune": True, "triton.cudagraphs": True},
-                    )
-        except Exception as e:
-            logger.error(f"Failed to compile model : {e}")
+    try:
+        with TimeContext("Compiling TROCR model", logger=logger):
+            model[0] = torch.compile(model[0], mode="max-autotune", dynamic=True)
+            if False:
+                model[0] = torch.compile(
+                    model[0],
+                    fullgraph=True,
+                    dynamic=True,
+                    backend="inductor",
+                    options={"max_autotune": True, "triton.cudagraphs": True},
+                )
+    except Exception as e:
+        logger.error(f"Failed to compile model : {e}")
 
     img_transform = transforms.Compose(
         [
             transforms.Resize((384, 384), interpolation=InterpolationMode.BICUBIC),
-            # transforms.Resize((384, 384), interpolation=InterpolationMode.LANCZOS),
             transforms.ToTensor(),
             transforms.Normalize(0.5, 0.5),
         ]
@@ -120,7 +112,6 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
     return model, cfg, inference_task, generator, bpe, img_transform, device
 
 
-# @Timer(text="preprocess_image in {:.4f} seconds")
 def preprocess_image(image, img_transform, device):
     im = image.convert("RGB").resize((384, 384), Image.BICUBIC)
     # this causes an error when batching due to the shape in deit.py
@@ -133,7 +124,6 @@ def preprocess_image(image, img_transform, device):
     return im
 
 
-# @Timer(text="preprocess_samples in {:.4f} seconds")
 def preprocess_samples(src_images, img_transform, device):
     images = []
     for image in src_images:
@@ -148,7 +138,6 @@ def preprocess_samples(src_images, img_transform, device):
     return sample
 
 
-# @Timer(text="Text in {:.4f} seconds")
 def get_text(cfg, task, generator, model, samples, bpe):
     predictions = []
     scores = []
@@ -197,7 +186,6 @@ TrOcrModelSpec = namedtuple(
 
 class TrOcrProcessor(OcrProcessor):
     MODEL_SPEC = TrOcrModelSpec(None, None, None, None, None, None, None)
-    INITIALIZED = False
 
     def __init__(
         self,
@@ -209,7 +197,6 @@ class TrOcrProcessor(OcrProcessor):
         super().__init__(work_dir, cuda, **kwargs)
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
-
         if not os.path.exists(model_path):
             raise Exception(f"File not found : {model_path}")
 
@@ -221,8 +208,7 @@ class TrOcrProcessor(OcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        # beam = 5
-        beam = 1
+        beam = 1  # default beam size is 5
         (
             model,
             cfg,
@@ -293,51 +279,72 @@ class TrOcrProcessor(OcrProcessor):
             start = time.time()
             model_spec: TrOcrModelSpec = self.MODEL_SPEC
 
-            with torch.amp.autocast(
-                device_type=model_spec.device, enabled=True, cache_enabled=True
+            # not seeing any better performance with amp on GPU, we are actually having about 15% performance hit
+            amp_enabled = False
+            if self.device == "cpu":
+                amp_enabled = True
+
+            def log_cuda_time(cuda_time):
+                logger.warning(f"CUDA : {cuda_time}")
+                # write to the text file
+                with open("/tmp/cuda_time_autocast_compiled.txt", "a") as f:
+                    f.write(f"{cuda_time}, {len(src_images)}, {amp_enabled}\n")
+
+            with TimeContextCuda(
+                "TrOcr inference", logger=logger, enabled=False, callback=log_cuda_time
             ):
-                for i, batch in enumerate(batchify(src_images, batch_size)):
-                    eval_data = MemoryDataset(images=batch, opt=opt)
-                    batch_start = time.time()
+                with torch.amp.autocast(
+                    device_type=model_spec.device,
+                    enabled=amp_enabled,
+                    cache_enabled=True,
+                ):
+                    for i, batch in enumerate(batchify(src_images, batch_size)):
+                        eval_data = MemoryDataset(images=batch, opt=opt)
+                        batch_start = time.time()
 
-                    images = [img for img, img_name in eval_data]
-                    samples = preprocess_samples(
-                        images, model_spec.img_transform, model_spec.device
-                    )
-                    predictions, scores = get_text(
-                        model_spec.cfg,
-                        model_spec.task,
-                        model_spec.generator,
-                        model_spec.model,
-                        samples,
-                        model_spec.bpe,
-                    )
+                        images = [img for img, img_name in eval_data]
+                        samples = preprocess_samples(
+                            images, model_spec.img_transform, model_spec.device
+                        )
+                        predictions, scores = get_text(
+                            model_spec.cfg,
+                            model_spec.task,
+                            model_spec.generator,
+                            model_spec.model,
+                            samples,
+                            model_spec.bpe,
+                        )
 
-                    for k in range(len(predictions)):
-                        text = predictions[k]
-                        # TODO: make this configurable as an option. Different models can return different cases
-                        text = text.upper() if text is not None else ""
-                        score = scores[k]
-                        _, img_name = eval_data[k]
-                        confidence = round(score, 4)
-                        row = {"confidence": confidence, "id": img_name, "text": text}
-                        results.append(row)
-                        logger.debug(f"results : {row}")
+                        for k in range(len(predictions)):
+                            text = predictions[k]
+                            # TODO: make this configurable as an option. Different models can return different cases
+                            text = text.upper() if text is not None else ""
+                            score = scores[k]
+                            _, img_name = eval_data[k]
+                            confidence = round(score, 4)
+                            row = {
+                                "confidence": confidence,
+                                "id": img_name,
+                                "text": text,
+                            }
+                            results.append(row)
+                            logger.debug(f"results : {row}")
 
-                    logger.info(
-                        "Batch time [%s, %s]: %s"
-                        % (i, len(batch), time.time() - batch_start)
-                    )
+                        logger.info(
+                            "Batch time [%s, %s]: %s"
+                            % (i, len(batch), time.time() - batch_start)
+                        )
 
-                    del scores
-                    del predictions
-                    del images
-                    del samples
-                    del eval_data
+                        del scores
+                        del predictions
+                        del images
+                        del samples
+                        del eval_data
 
-                    torch_gc()
-                logger.info("ICR Time elapsed: %s" % (time.time() - start))
+                    logger.info("ICR Time elapsed: %s" % (time.time() - start))
         except Exception as ex:
             print(traceback.format_exc())
             raise ex
+        finally:
+            torch_gc()
         return results

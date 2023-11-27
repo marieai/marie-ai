@@ -1,7 +1,6 @@
 import os
-import traceback
 from abc import ABC, abstractmethod
-from typing import Union, List, Any, Dict
+from typing import Union, List, Any, Dict, Optional
 
 import cv2
 import numpy as np
@@ -29,6 +28,8 @@ class OcrEngine(ABC):
         self,
         models_dir: str = os.path.join(__model_path__),
         cuda: bool = True,
+        *,
+        box_processor: Optional[BoxProcessor] = None,
         **kwargs,
     ) -> None:
         self.logger = MarieLogger(context=self.__class__.__name__)
@@ -42,21 +43,23 @@ class OcrEngine(ABC):
             has_cuda = False
 
         self.has_cuda = has_cuda
-        box_segmentation_mode = int(kwargs.get("box_segmentation_mode", "1"))
-        box_segmentation_mode = 1
-        if box_segmentation_mode == 1:
-            self.box_processor = BoxProcessorUlimDit(
-                work_dir=work_dir_boxes,
-                cuda=has_cuda,
-            )
-        elif box_segmentation_mode == 2:
-            self.box_processor = BoxProcessorCraft(
-                work_dir=work_dir_boxes, cuda=has_cuda
-            )
+        if box_processor is not None:
+            self.box_processor = box_processor
         else:
-            raise Exception(
-                f"Unsupported box segmentation mode : {box_segmentation_mode}"
-            )
+            box_segmentation_mode = int(kwargs.get("box_segmentation_mode", "1"))
+            if box_segmentation_mode == 1:
+                self.box_processor = BoxProcessorUlimDit(
+                    work_dir=work_dir_boxes,
+                    cuda=has_cuda,
+                )
+            elif box_segmentation_mode == 2:
+                self.box_processor = BoxProcessorCraft(
+                    work_dir=work_dir_boxes, cuda=has_cuda
+                )
+            else:
+                raise Exception(
+                    f"Unsupported box segmentation mode : {box_segmentation_mode}"
+                )
 
     @abstractmethod
     def extract(

@@ -4,20 +4,13 @@ import os
 
 import cv2
 import numpy
-import numpy as np
-import tqdm
 from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
-from marie.boxes.craft_box_processor import BoxProcessorCraft
-from marie.boxes.textfusenet_box_processor import BoxProcessorTextFuseNet
-from marie.document import TesseractOcrProcessor
 from marie.document.craft_ocr_processor import CraftOcrProcessor
-from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer.pdf_renderer import PdfRenderer
-from marie.renderer.text_renderer import TextRenderer
 from marie.utils.utils import ensure_exists
 
 

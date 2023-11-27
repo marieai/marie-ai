@@ -74,7 +74,6 @@ class ExtractPipeline:
 
     def __init__(
         self,
-        # models_dir: str = os.path.join(__model_path__),
         pipeline_config: dict[str, any] = None,
         cuda: bool = True,
         **kwargs,

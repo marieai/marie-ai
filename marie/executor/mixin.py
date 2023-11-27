@@ -3,12 +3,9 @@ from typing import Dict, Optional
 
 from docarray import DocList
 
-from marie import DocumentArray
 from marie.api.docs import StorageDoc
-
 from marie.excepts import BadConfigSource
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
-from marie.timer import Timer
 
 
 class StorageMixin:
