@@ -1,6 +1,4 @@
-import asyncio
 import itertools
-import threading
 from typing import TYPE_CHECKING, AsyncIterator, Dict
 
 from marie.enums import ProtocolType
@@ -30,7 +28,6 @@ class GatewayRequestHandler:
         meter=None,
         aio_tracing_client_interceptors=None,
         tracing_client_interceptor=None,
-        works_as_load_balancer: bool = False,
         **kwargs,
     ):
         import json
@@ -102,37 +99,12 @@ class GatewayRequestHandler:
             if isinstance(addresses, Dict):
                 servers.extend(addresses.get(ProtocolType.HTTP.to_string(), []))
         self.load_balancer_servers = itertools.cycle(servers)
-        self.warmup_stop_event = threading.Event()
-        self.warmup_task = None
-        if not works_as_load_balancer:
-            try:
-                self.warmup_task = asyncio.create_task(
-                    self.streamer.warmup(self.warmup_stop_event)
-                )
-            except RuntimeError:
-                # when Gateway is started locally, it may not have loop
-                pass
-
-    def cancel_warmup_task(self):
-        """Cancel warmup task if exists and is not completed. Cancellation is required if the Flow is being terminated before the
-        task is successful or hasn't reached the max timeout.
-        """
-        if self.warmup_task:
-            try:
-                if not self.warmup_task.done():
-                    self.logger.debug(f'Cancelling warmup task.')
-                    self.warmup_stop_event.set()  # this event is useless if simply cancel
-                    self.warmup_task.cancel()
-            except Exception as ex:
-                self.logger.debug(f'exception during warmup task cancellation: {ex}')
-                pass
 
     async def close(self):
         """
         Gratefully closes the object making sure all the floating requests are taken care and the connections are closed gracefully
         """
         self.logger.debug(f'Closing Request Handler')
-        self.cancel_warmup_task()
         await self.streamer.close()
         self.logger.debug(f'Request Handler closed')
 
@@ -186,7 +158,17 @@ class GatewayRequestHandler:
         try:
             async with aiohttp.ClientSession() as session:
                 if request.method == 'GET':
-                    async with session.get(target_url) as response:
+                    request_kwargs = {}
+                    try:
+                        payload = await request.json()
+                        if payload:
+                            request_kwargs['json'] = payload
+                    except Exception:
+                        self.logger.debug('No JSON payload found in request')
+
+                    async with session.get(
+                        url=target_url, **request_kwargs
+                    ) as response:
                         # Create a StreamResponse with the same headers and status as the target response
                         stream_response = web.StreamResponse(
                             status=response.status,

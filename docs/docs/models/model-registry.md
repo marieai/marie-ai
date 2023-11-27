@@ -54,3 +54,9 @@ _name_or_path = "group/layoutlmv3-large-indexer-ner"
 kwargs = {"__model_path__": __model_path__}
 _name_or_path = ModelRegistry.get(_name_or_path, **kwargs)
 ```
+
+
+# Proxies
+Proxies are used to provide a unified way to access models from different sources.
+
+
