@@ -15,6 +15,12 @@
 
 
 
+
+
+
+
+
+
 <a name=release-note-__version__
 =
 
@@ -1689,4 +1695,164 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
 ### 🍹 Other Improvements
 
  - [[```368fbfb4```](https://github.com/marieai/marie-ai/commit/368fbfb46912418d88df33a1ec7039b864cec391)] __-__ __release__: release v3.0.21 (*Marie Dev Bot*)
+
+<a name=release-note-3-0-23></a>
+## Release Note (`3.0.23`)
+
+> Release time: 2023-11-28 12:43:42
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Greg,  Marie Dev Bot,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+
+<a name=release-note-3-0-23></a>
+## Release Note (`3.0.23`)
+
+> Release time: 2023-11-28 12:43:58
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Greg,  Marie Dev Bot,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+
+<a name=release-note-3-0-23></a>
+## Release Note (`3.0.23`)
+
+> Release time: 2023-11-28 12:48:15
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```0a96f933```](https://github.com/marieai/marie-ai/commit/0a96f9337b55a751be782f903f07769160f934b9)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+
+<a name=release-note-3-0-23></a>
+## Release Note (`3.0.23`)
+
+> Release time: 2023-11-28 12:49:01
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```0a96f933```](https://github.com/marieai/marie-ai/commit/0a96f9337b55a751be782f903f07769160f934b9)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+
+<a name=release-note-3-0-24></a>
+## Release Note (`3.0.24`)
+
+> Release time: 2023-11-28 12:52:00
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```5c7a7123```](https://github.com/marieai/marie-ai/commit/5c7a71236f040db860a182545459e726893d44cf)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+
+<a name=release-note-3-0-24></a>
+## Release Note (`3.0.24`)
+
+> Release time: 2023-11-28 12:52:36
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg,  Greg Bugaj,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
+ - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
+
+### 🐞 Bug fixes
+
+ - [[```d5d82827```](https://github.com/marieai/marie-ai/commit/d5d828272bafc62dc7f2aecbdb42e7735447f1cb)] __-__ added tesseract to the configs (*Greg Bugaj*)
+ - [[```1980e43c```](https://github.com/marieai/marie-ai/commit/1980e43ce802e0ec22358dc9ddf8b3f525aa85fc)] __-__ work on fixing caching of BERT models (*Greg*)
+
+### 🍹 Other Improvements
+
+ - [[```5c7a7123```](https://github.com/marieai/marie-ai/commit/5c7a71236f040db860a182545459e726893d44cf)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
+ - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
 
