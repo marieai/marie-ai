@@ -45,7 +45,7 @@ jobs:
     needs: [token-check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.MARIE_DEV_BOT }}
           fetch-depth: 100  # means max contribute history is limited to 100 lines
