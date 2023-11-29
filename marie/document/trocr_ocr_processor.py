@@ -290,58 +290,58 @@ class TrOcrProcessor(OcrProcessor):
                 with open("/tmp/cuda_time_autocast_compiled.txt", "a") as f:
                     f.write(f"{cuda_time}, {len(src_images)}, {amp_enabled}\n")
 
-            with TimeContextCuda(
-                "TrOcr inference", logger=logger, enabled=False, callback=log_cuda_time
+            # with TimeContextCuda(
+            #     "TrOcr inference", logger=logger, enabled=False, callback=log_cuda_time
+            # ):
+            with torch.amp.autocast(
+                device_type=model_spec.device,
+                enabled=amp_enabled,
+                cache_enabled=True,
             ):
-                with torch.amp.autocast(
-                    device_type=model_spec.device,
-                    enabled=amp_enabled,
-                    cache_enabled=True,
-                ):
-                    for i, batch in enumerate(batchify(src_images, batch_size)):
-                        eval_data = MemoryDataset(images=batch, opt=opt)
-                        batch_start = time.time()
+                for i, batch in enumerate(batchify(src_images, batch_size)):
+                    eval_data = MemoryDataset(images=batch, opt=opt)
+                    batch_start = time.time()
 
-                        images = [img for img, img_name in eval_data]
-                        samples = preprocess_samples(
-                            images, model_spec.img_transform, model_spec.device
-                        )
-                        predictions, scores = get_text(
-                            model_spec.cfg,
-                            model_spec.task,
-                            model_spec.generator,
-                            model_spec.model,
-                            samples,
-                            model_spec.bpe,
-                        )
+                    images = [img for img, img_name in eval_data]
+                    samples = preprocess_samples(
+                        images, model_spec.img_transform, model_spec.device
+                    )
+                    predictions, scores = get_text(
+                        model_spec.cfg,
+                        model_spec.task,
+                        model_spec.generator,
+                        model_spec.model,
+                        samples,
+                        model_spec.bpe,
+                    )
 
-                        for k in range(len(predictions)):
-                            text = predictions[k]
-                            # TODO: make this configurable as an option. Different models can return different cases
-                            text = text.upper() if text is not None else ""
-                            score = scores[k]
-                            _, img_name = eval_data[k]
-                            confidence = round(score, 4)
-                            row = {
-                                "confidence": confidence,
-                                "id": img_name,
-                                "text": text,
-                            }
-                            results.append(row)
-                            logger.debug(f"results : {row}")
+                    for k in range(len(predictions)):
+                        text = predictions[k]
+                        # TODO: make this configurable as an option. Different models can return different cases
+                        text = text.upper() if text is not None else ""
+                        score = scores[k]
+                        _, img_name = eval_data[k]
+                        confidence = round(score, 4)
+                        row = {
+                            "confidence": confidence,
+                            "id": img_name,
+                            "text": text,
+                        }
+                        results.append(row)
+                        logger.debug(f"results : {row}")
 
-                        logger.info(
-                            "Batch time [%s, %s]: %s"
-                            % (i, len(batch), time.time() - batch_start)
-                        )
+                    logger.info(
+                        "Batch time [%s, %s]: %s"
+                        % (i, len(batch), time.time() - batch_start)
+                    )
 
-                        del scores
-                        del predictions
-                        del images
-                        del samples
-                        del eval_data
+                    del scores
+                    del predictions
+                    del images
+                    del samples
+                    del eval_data
 
-                    logger.info("ICR Time elapsed: %s" % (time.time() - start))
+                logger.info("ICR Time elapsed: %s" % (time.time() - start))
         except Exception as ex:
             print(traceback.format_exc())
             raise ex
