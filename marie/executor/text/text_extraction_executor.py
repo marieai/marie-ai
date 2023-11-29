@@ -58,17 +58,19 @@ class TextExtractionExecutor(Executor, StorageMixin):
         # if not has_cuda:
         #     device = "cpu"
         # self.device = device
+        use_cuda = not strtobool(os.environ.get("MARIE_DISABLE_CUDA", "false"))
 
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
         logger.info(f"Storage config: {storage}")
         logger.info(f"Pipeline config: {pipeline}")
         logger.info(f"Device : {device}")
+        logger.info(f"use_cuda : {use_cuda}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
 
         resolved_devices, _ = initialize_device_settings(
-            devices=[device], use_cuda=True, multi_gpu=False
+            devices=[device], use_cuda=use_cuda, multi_gpu=False
         )
         if len(resolved_devices) > 1:
             self.logger.warning(

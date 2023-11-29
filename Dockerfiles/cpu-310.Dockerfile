@@ -68,6 +68,8 @@ RUN apt-get update && apt-get upgrade -y && \
         libomp-dev \
         ninja-build \
         cmake \
+        gcc \
+        g++ \
         imagemagick \
         libmagickwand-dev \
         libtiff5-dev \

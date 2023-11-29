@@ -8,7 +8,9 @@ version: "3.9"
 
 services:
   psql:
+    container_name: marie-psql-server
     image: postgres:${POSTGRES_VERSION}
+    command: postgres -c 'max_connections=200'
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -17,6 +19,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - psql_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/max_conns.sql
 #      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
 
 volumes:
