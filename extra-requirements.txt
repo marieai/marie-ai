@@ -100,7 +100,7 @@ python-consul2:               standard,devel
 fastwer==0.1.3:               standard,core
 matplotlib:                   standard,core
 albumentations:               standard,core
-dominate:                     standard,core
+dominate==2.7.0:              standard,core
 lmdb:                         standard,core
 natsort:                      standard,core
 celery:                       standard,core
