@@ -13,10 +13,8 @@ from docarray import DocList
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.logging.logger import MarieLogger
-from marie.ocr import CoordinateFormat, DefaultOcrEngine, VotingOcrEngine
-from marie.ocr.mock_ocr_engine import MockOcrEngine
+from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.overlay.overlay import OverlayProcessor
 from marie.pipe import ClassifierPipelineComponent
 from marie.pipe import NamedEntityPipelineComponent
 from marie.pipe import PipelineComponent, PipelineContext
@@ -30,6 +28,7 @@ from marie.pipe.components import (
     burst_frames,
     restore_assets,
     get_known_ocr_engines,
+    setup_overlay,
 )
 from marie.renderer import TextRenderer, PdfRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
@@ -90,10 +89,8 @@ class ExtractPipeline:
             device = "cpu"
 
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.overlay_processor = OverlayProcessor(
-            work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
-        )
 
+        self.overlay_processor = setup_overlay(pipeline_config)
         self.ocr_engines = get_known_ocr_engines(device=device)
         self.document_classifiers = setup_classifiers(pipeline_config)
         self.document_indexers = setup_indexers(pipeline_config)

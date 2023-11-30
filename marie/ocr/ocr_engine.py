@@ -16,6 +16,13 @@ from marie.utils.base64 import encodeToBase64
 from marie.utils.image_utils import crop_to_content, hash_frames_fast
 from marie.utils.utils import ensure_exists
 
+bbox_cache = {}
+
+
+def reset_bbox_cache():
+    global bbox_cache
+    bbox_cache = {}
+
 
 class OcrEngine(ABC):
     """
@@ -295,15 +302,27 @@ class OcrEngine(ABC):
                 else:
                     mode = pms_mode
 
+                # create cache key from region id and overlay hash
+                overlay_hash = hash_frames_fast(overlay)
+                cache_key = f"{id(region)}_{overlay_hash}"
+                bbox_results = None
+
+                if cache_key in bbox_cache:
+                    bbox_results = bbox_cache[cache_key]
+
+                if bbox_results is None:
+                    bbox_results = box_processor.extract_bounding_boxes(
+                        queue_id, checksum, overlay, psm=mode
+                    )
+                    bbox_cache[cache_key] = bbox_results
+
                 (
                     boxes,
                     img_fragments,
                     lines,
                     _,
                     lines_bboxes,
-                ) = box_processor.extract_bounding_boxes(
-                    queue_id, checksum, overlay, psm=mode
-                )
+                ) = bbox_results
 
                 result, overlay_image = icr_processor.recognize(
                     queue_id, checksum, overlay, boxes, img_fragments, lines

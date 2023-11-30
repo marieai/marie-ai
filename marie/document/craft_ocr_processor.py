@@ -133,14 +133,19 @@ class CraftOcrProcessor(OcrProcessor):
         )
 
         # Somehow the model in being still loaded on GPU
-        # https://pytorch.org/tutorials/recipes/recipes/save_load_across_devices.html
+        # Solution :
+        # FIXME : need to pass the device to the model as currently it is being loaded on GPU and only defaults to CPU
+        # so there is a mismatch between the device used in the model and the device used in the inference
+        # UPDATE  predicion.py, transformation.py
 
         # GPU only
-        model = model.to(self.device)
-        model = torch.nn.DataParallel(model, device_ids=None).to(self.device)
-        model.load_state_dict(torch.load(opt.saved_model, map_location=self.device))
-        model = self.optimize_model(model)
+        if True:
+            model = model.to(self.device)
+            model = torch.nn.DataParallel(model, device_ids=None).to(self.device)
+            model.load_state_dict(torch.load(opt.saved_model, map_location=self.device))
+            model = self.optimize_model(model)
 
+        # CPU only
         if False:
 
             class WrappedModel(torch.nn.Module):
@@ -148,13 +153,12 @@ class CraftOcrProcessor(OcrProcessor):
                     super(WrappedModel, self).__init__()
                     self.module = module  # that I actually define.
 
-                def forward(self, x):
-                    return self.module(x)
-
-                    # CPU
+                def forward(self, input, text, is_train=True):
+                    return self.module(input, text, is_train)
 
             model = WrappedModel(model)
             model = model.to(self.device)
+
             state_dict = torch.load(opt.saved_model, map_location=self.device)
             model.load_state_dict(state_dict)
 
@@ -171,9 +175,7 @@ class CraftOcrProcessor(OcrProcessor):
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
                 # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
-                model = torch.compile(
-                    model, backend="inductor", mode="default", fullgraph=False
-                )
+                model = torch.compile(model)
                 return model
         except Exception as err:
             self.logger.warning(f"Model compile not supported: {err}")

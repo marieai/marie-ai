@@ -15,6 +15,7 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.executor.util import setup_cache
 from marie.logging.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, MockOcrEngine, DefaultOcrEngine, VotingOcrEngine
+from marie.overlay.overlay import OverlayProcessor, NoopOverlayProcessor
 from marie.storage import StorageManager
 from marie.utils.json import store_json_object, load_json_file
 from marie.utils.tiff_ops import burst_tiff_frames
@@ -153,6 +154,50 @@ def get_known_ocr_engines(device: str = "cuda", engine: str = None) -> dict[str,
         raise ValueError(f"Invalid OCR engine : {engine}")
 
     return ocr_engines
+
+
+def setup_overlay(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_overlay",
+    device: str = "cuda",
+) -> Union[OverlayProcessor, NoopOverlayProcessor]:
+    """
+    Setup the document overlay (Document cleanup) for the pipeline
+    :param pipeline_config: pipeline configuration
+    :param key: key to use in the pipeline config
+    :param device: device to use for overlay (cpu or cuda)
+    :return: document overlay processor or NoopOverlayProcessor if not enabled
+    """
+    use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
+
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    if key not in pipeline_config:
+        logger.warning(f"Missing {key} in pipeline config, using default config")
+        return OverlayProcessor(
+            work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
+        )
+
+    config = pipeline_config[key] if key in pipeline_config else {}
+
+    if "model_name_or_path" not in config:
+        raise BadConfigSource(
+            f"Missing model_name_or_path in page overlay config : {config}"
+        )
+
+    if not config.get("enabled", True):
+        logger.warning(
+            f"Page Overlay disabled (using NOOP): {config['model_name_or_path']}"
+        )
+        return NoopOverlayProcessor(
+            work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
+        )
+
+    return OverlayProcessor(
+        work_dir=ensure_exists("/tmp/form-segmentation"), cuda=use_cuda
+    )
 
 
 def setup_classifiers(

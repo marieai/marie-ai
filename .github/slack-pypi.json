@@ -25,7 +25,7 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "<https://pypi.org/project/marieai/|:package: Check out the PyPi release>"
+          "text": "<https://pypi.org/project/marie-ai/|:package: Check out the PyPi release>"
         }
       ]
     },

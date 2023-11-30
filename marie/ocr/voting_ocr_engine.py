@@ -18,6 +18,7 @@ from marie.document.tesseract_ocr_processor import TesseractOcrProcessor
 from marie.ocr import OcrEngine, CoordinateFormat
 from collections import OrderedDict
 
+from marie.ocr.ocr_engine import reset_bbox_cache
 from marie.utils.json import store_json_object
 
 
@@ -116,6 +117,8 @@ class VotingOcrEngine(OcrEngine):
             except Exception as e:
                 traceback.print_exc()
                 continue
+            finally:
+                reset_bbox_cache()
 
         return self.voting_evaluator(aggregated_results, default_results, regions)
 
