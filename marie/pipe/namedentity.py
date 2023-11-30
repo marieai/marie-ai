@@ -26,8 +26,6 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         words: List[List[str]] = None,
         boxes: List[List[List[int]]] = None,
     ) -> PipelineResult:
-        print("NamedEntityPipelineComponent.predict()")
-
         context["metadata"]["page_indexer"] = self.extract_named_entity(
             documents, words, boxes
         )

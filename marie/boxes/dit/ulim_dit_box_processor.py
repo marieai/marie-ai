@@ -365,9 +365,11 @@ class BoxProcessorUlimDit(BoxProcessor):
                 self.logger.debug(
                     f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
                 )
+                # TODO : This is a hack, we need to update the model to work with smaller images
+                # currently we are resizing the image to 1/2  of the minimum width which is 800
                 image, coord = resize_image(
                     image,
-                    (self.min_size_test[0], self.min_size_test[1]),
+                    (self.min_size_test[0] , self.min_size_test[1]),
                     keep_max_size=True,
                 )
                 self.logger.debug(f"Resized image  : {image.shape}, {coord}")

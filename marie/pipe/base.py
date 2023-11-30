@@ -91,5 +91,5 @@ class PipelineComponent(ABC):
         results = self.predict(documents, context, **kwargs)
 
         document_id = [document.id for document in documents]
-        self.logger.info(f"Processed documents with IDs: {document_id}")
+        self.logger.debug(f"Processed documents with IDs: {document_id}")
         return results

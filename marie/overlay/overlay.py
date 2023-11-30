@@ -369,3 +369,26 @@ class OverlayProcessor(BaseHandler):
         img.save(f"/tmp/onnx_test.png")
         print("Eval time is :", timeit.default_timer() - starttime)
         return image_numpy.astype("uint8")
+
+
+class NoopOverlayProcessor(BaseHandler):
+    def __init__(
+        self,
+        work_dir: str,
+        models_dir: str = os.path.join(__model_path__),
+        cuda: bool = True,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+
+    def segment_frame(
+        self, document_id: str, frame: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        NOOP Segment from given frame
+
+        :param document_id:
+        :param frame:
+        """
+
+        return frame, frame, frame
