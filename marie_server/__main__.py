@@ -6,10 +6,11 @@ import traceback
 from functools import partial
 from typing import Dict, Any, Optional
 
+from docarray import DocList, BaseDoc
 from rich.traceback import install
 
 import marie.helper
-from marie import Flow
+from marie import Flow, Deployment
 from marie import __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (
@@ -273,6 +274,7 @@ def __main__(
         include_gateway=True,
         noblock_on_start=False,
         prefetch=prefetch,
+        external=True,
     ).config_gateway(prefetch=prefetch)
 
     marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
