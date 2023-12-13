@@ -1,3 +1,13 @@
 ansible_connection: ssh
+
+# DOCS AND COR
 ansible_ssh_private_key_file: ~/keys/gpu-cluster/gpu-svc.pem
+
+# SK
+#ansible_ssh_private_key_file: ~/keys/rmsadmin.pem
 ansible_python_interpreter: /usr/bin/python3
+
+# https://docs.ansible.com/ansible-core/2.14/playbook_guide/playbooks_privilege_escalation.html#playbooks-privilege-escalation
+# https://stackoverflow.com/questions/47873671/becoming-non-root-user-in-ansible-fails
+# We need this when executing : ./play-deploy-to-node.sh
+ansible_shell_allow_world_readable_temp: true

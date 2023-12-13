@@ -5,12 +5,30 @@
 
 
   tasks:
-    - name: restart docker daemon
+#    - name: restart docker daemon
+#      systemd:
+#        state: restarted
+#        daemon_reload: yes
+#        name: docker
+#
+#      become_user: root # we need to be root
+#      become: yes
+#      become_method: sudo
+
+    - name: efs stop
       systemd:
-        state: restarted
-        daemon_reload: yes
-        name: docker
-      
-      become_user: root # we need to be root 
+        state: stopped
+        name: efs
+
+      become_user: root # we need to be root
       become: yes
-      become_method: sudo        
+      become_method: sudo
+
+    - name: eraagent stop
+      systemd:
+        state: stopped
+        name: eraagent
+
+      become_user: root # we need to be root
+      become: yes
+      become_method: sudo

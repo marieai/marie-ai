@@ -3,11 +3,23 @@
 - name: pull image
   hosts: ml.cluster
   gather_facts: true
+
   vars:
-    image_tag: 3.0.22-cuda
+    image_tag: 3.0.24-cpu
+    default_image_tagXX: 3.0.24-cuda
+    default_image_tag: 3.0.24-cpu
+
+  vars_prompt:
+
+    - name: image_tag
+      prompt: "Image tag marieai/marie:"
+      private: false
+      default: "{{ default_image_tag }}"
+
   tasks:
+
     # https://docs.ansible.com/ansible/latest/collections/community/docker/docker_image_module.html
-    - name:  Pull the inference-server
+    - name: 'Pulling inference-server {{ image_tag }}'
       community.docker.docker_image:
         name: "marieai/marie:{{ image_tag }}"
         source: pull

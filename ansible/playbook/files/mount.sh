@@ -10,7 +10,16 @@ fi
 
 sudo -n uptime
 mkdir -p /mnt/data/marie-ai
+ the @
+cat >>/etc/fstab <<'EOF'
+# MARIE_AI_START
+127.0.0.1:/mnt/shares/data  /mnt/data/marie-ai       nfs defaults,nfsvers=3 0 0
+# MARIE_AI_END
+EOF
 
+mount /mnt/data/marie-ai
+
+# check if mounted:
 # check if mounted
 if mountpoint -q /mnt/data/marie-ai/; then
     echo "Destination reachable."
@@ -26,16 +35,7 @@ fi
 echo "Setting up cifs/nfs mounts"
 sudo apt-get install -qy nfs-common cifs-utils
 
-# single quote prevents parameter expansion for the @
-cat >>/etc/fstab <<'EOF'
-# MARIE_AI_START
-172.20.10.50:/mnt/shares/data  /mnt/data/marie-ai       nfs defaults,nfsvers=3 0 0
-# MARIE_AI_END
-EOF
-
-mount /mnt/data/marie-ai
-
-# check if mounted:
+# single quote prevents parameter expansion for
 if mountpoint -q /mnt/data/marie-ai/; then
     echo "Destination reachable."
     exit 0
