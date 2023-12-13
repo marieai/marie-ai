@@ -2,10 +2,10 @@ import json
 import os
 import sys
 import threading
-from packaging.version import Version
 from urllib.request import Request, urlopen
 
 import pkg_resources
+from packaging.version import Version
 from rich import print
 from rich.panel import Panel
 

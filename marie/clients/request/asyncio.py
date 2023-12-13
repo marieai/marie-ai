@@ -7,7 +7,6 @@ from marie.enums import DataInputType
 from marie.importer import ImportExtensions
 from marie.logging.predefined import default_logger
 
-
 if TYPE_CHECKING:
     from marie.clients.request import GeneratorSourceType
     from marie.types.request import Request

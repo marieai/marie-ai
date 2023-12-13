@@ -1,6 +1,6 @@
-from marie import Flow, Executor, requests
-
 import pytest
+
+from marie import Executor, Flow, requests
 
 
 class GoodExecutor(Executor):

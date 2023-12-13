@@ -1,12 +1,12 @@
 from marie.helper import GATEWAY_NAME
 from marie.parsers.helper import _SHOW_ALL_ARGS
 from marie.parsers.logging import mixin_suppress_root_logging_parser
+from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
 from marie.parsers.orchestrate.runtimes.grpc_channel import (
     mixin_grpc_channel_options_parser,
 )
 from marie.parsers.orchestrate.runtimes.head import mixin_head_parser
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 
 
 def set_pod_parser(parser=None, default_name=None):

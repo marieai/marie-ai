@@ -11,7 +11,10 @@ import requests as req
 from marie import Client, Document, Flow
 from marie.helper import random_port
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from tests.helper import _validate_custom_gateway_process, _validate_dummy_custom_gateway_response
+from tests.helper import (
+    _validate_custom_gateway_process,
+    _validate_dummy_custom_gateway_response,
+)
 
 
 class DockerComposeFlow:

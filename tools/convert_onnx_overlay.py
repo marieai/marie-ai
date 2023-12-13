@@ -9,9 +9,9 @@ import onnx as onnx
 import onnxruntime as onnxruntime
 import psutil
 import torch
-from PIL import Image
 from onnxruntime import ExecutionMode
-from onnxruntime.quantization import quantize_dynamic, QuantType
+from onnxruntime.quantization import QuantType, quantize_dynamic
+from PIL import Image
 
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
@@ -344,9 +344,9 @@ def optimize(src_onnx, opt_onnx):
 
 
 def test_trn_backend(model_path):
+    import numpy as np
     import onnx
     import onnx_tensorrt.backend as backend
-    import numpy as np
 
     model = onnx.load(model_path)
     engine = backend.prepare(model, device='CUDA:0')

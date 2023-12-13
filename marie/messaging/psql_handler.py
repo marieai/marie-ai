@@ -5,15 +5,13 @@ from typing import Any, List
 from docarray import DocList
 from docarray.documents import ImageDoc
 
-from marie import DocumentArray, Document
+from marie import Document, DocumentArray
 from marie.api.docs import StorageDoc
-
+from marie.excepts import BadConfigSource
+from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
-from marie.executor.mixin import StorageMixin
-
-from marie.excepts import BadConfigSource
 
 
 class PsqlToastHandler(ToastHandler, StorageMixin):

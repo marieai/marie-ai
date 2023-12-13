@@ -1,18 +1,16 @@
 from datetime import datetime
 from os import PathLike
-from typing import Dict, Any, Union
+from typing import Any, Dict, Union
 
 import numpy as np
 
-from marie.ocr import OutputFormat
 from marie.logging.logger import MarieLogger
+from marie.logging.predefined import default_logger
+from marie.ocr import OutputFormat
 from marie.renderer import TextRenderer
-
 from marie.utils import json
 from marie.utils.json import to_json
 from marie.utils.utils import ensure_exists
-
-from marie.logging.predefined import default_logger
 
 
 class TextOutputRenderer:

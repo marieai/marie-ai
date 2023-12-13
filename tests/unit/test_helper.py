@@ -6,8 +6,8 @@ import psutil
 import pytest
 
 from marie import Executor, Flow
-from marie.constants import __default_endpoint__
 from marie.clients.helper import _safe_callback, pprint_routes
+from marie.constants import __default_endpoint__
 from marie.excepts import BadClientCallback, NotSupportedError
 from marie.helper import (
     cached_property,

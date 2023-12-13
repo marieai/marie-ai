@@ -1,12 +1,13 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional, Union, Dict
+from typing import TYPE_CHECKING, Dict, Optional, Union
 
 import aiohttp
 from aiohttp import WSMsgType
 from aiohttp.payload import BytesPayload
 from starlette import status
 
+from marie._docarray import docarray_v2
 from marie.clients.base import retry
 from marie.enums import WebsocketSubProtocols
 from marie.excepts import BadClient
@@ -14,10 +15,10 @@ from marie.importer import ImportExtensions
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
 from marie.types.request.status import StatusMessage
-from marie._docarray import docarray_v2
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
+
     from marie._docarray import Document
     from marie.logging.logger import MarieLogger
 

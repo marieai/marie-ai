@@ -10,9 +10,9 @@ import fairseq
 import torch
 import torch.utils.data
 import torchvision.transforms as transforms
-from PIL import Image
 from fairseq import utils
 from fairseq_cli import generate
+from PIL import Image
 from torchvision.transforms import Compose, InterpolationMode
 
 from marie.constants import __model_path__

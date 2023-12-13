@@ -9,9 +9,9 @@ import uuid
 import requests
 from PIL import Image
 
+from examples.utils import setup_queue
 from marie.executor.ner.utils import visualize_icr
 from marie.utils.utils import ensure_exists
-from examples.utils import setup_queue
 
 api_base_url = "http://127.0.0.1:51000/api"
 default_queue_id = "0000-0000-0000-0000"

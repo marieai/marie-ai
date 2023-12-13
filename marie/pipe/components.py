@@ -1,12 +1,12 @@
 import os
 from functools import partial
-from typing import Optional, Union, List
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
 from PIL import Image
 
-from marie.boxes import PSMode, BoxProcessorUlimDit
+from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier
 from marie.document import TrOcrProcessor
@@ -14,10 +14,10 @@ from marie.excepts import BadConfigSource
 from marie.executor.ner import NerExtractionExecutor
 from marie.executor.util import setup_cache
 from marie.logging.predefined import default_logger as logger
-from marie.ocr import CoordinateFormat, MockOcrEngine, DefaultOcrEngine, VotingOcrEngine
-from marie.overlay.overlay import OverlayProcessor, NoopOverlayProcessor
+from marie.ocr import CoordinateFormat, DefaultOcrEngine, MockOcrEngine, VotingOcrEngine
+from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
-from marie.utils.json import store_json_object, load_json_file
+from marie.utils.json import load_json_file, store_json_object
 from marie.utils.tiff_ops import burst_tiff_frames
 from marie.utils.types import strtobool
 from marie.utils.utils import ensure_exists

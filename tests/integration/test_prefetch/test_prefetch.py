@@ -1,7 +1,7 @@
 import pytest
 import requests as req
-
 from docarray import DocumentArray
+
 from marie import Executor, Flow, requests
 
 

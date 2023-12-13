@@ -5,13 +5,12 @@ from urllib.parse import urlparse
 from grpc.aio import ClientInterceptor
 
 from marie.excepts import EstablishGrpcConnectionError
-from marie.serve.networking.balancer.load_balancer import LoadBalancer
+from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import (
     _NetworkingHistograms,
     _NetworkingMetrics,
 )
-from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import TLS_PROTOCOL_SCHEMES
 
 if TYPE_CHECKING:

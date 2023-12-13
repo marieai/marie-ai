@@ -1,7 +1,7 @@
 import pytest
+
 from marie import Flow
 from marie.enums import ProtocolType
-
 from tests import random_docs
 
 

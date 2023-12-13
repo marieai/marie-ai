@@ -8,11 +8,11 @@ from marie.boxes.box_processor import PSMode
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
 from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
+from marie.timer import Timer
 from marie.utils.docs import frames_from_file
 from marie.utils.image_utils import crop_to_content
-from marie.utils.json import store_json_object, load_json_file
+from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
-from marie.timer import Timer
 
 
 def process_dir(

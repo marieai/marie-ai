@@ -3,24 +3,18 @@ import os
 import sys
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Optional, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from docarray import DocList
-from fastapi import HTTPException
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from marie import Client, Flow
 from marie._core.utils import run_background_task
-from marie.api import extract_payload_to_uri
-from marie.api import value_from_payload_or_args
+from marie.api import extract_payload_to_uri, value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
-from marie.messaging import (
-    mark_as_complete,
-    mark_as_started,
-    mark_as_failed,
-)
+from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
 from marie.messaging.publisher import mark_as_scheduled
 from marie.types.request.data import DataRequest
 from marie.utils.types import strtobool
@@ -66,18 +60,10 @@ def extend_rest_interface(flow: Flow, prefetch: int, app: "FastAPI") -> "FastAPI
     :return:
     """
 
-    from .executors.extract.mserve_torch import (
-        extend_rest_interface_extract,
-    )
-    from .executors.ner.mserve_torch import (
-        extend_rest_interface_ner,
-    )
-    from .executors.overlay.mserve_torch import (
-        extend_rest_interface_overlay,
-    )
-    from .executors.classifier.mserve_torch import (
-        extend_rest_interface_classifier,
-    )
+    from .executors.classifier.mserve_torch import extend_rest_interface_classifier
+    from .executors.extract.mserve_torch import extend_rest_interface_extract
+    from .executors.ner.mserve_torch import extend_rest_interface_ner
+    from .executors.overlay.mserve_torch import extend_rest_interface_overlay
 
     client = Client(
         host="0.0.0.0",

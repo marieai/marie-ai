@@ -2,17 +2,17 @@ import argparse
 import glob
 import hashlib
 import json
+import logging
 import os
 
 import cv2
 import numpy as np
 
-from tools import from_json_file, ensure_exists, __tmp_path__
 from marie.boxes import BoxProcessorUlimDit, PSMode
-from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.boxes.line_processor import find_line_number
+from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
-import logging
+from tools import __tmp_path__, ensure_exists, from_json_file
 
 # Setup default logger for this file
 logger = logging.getLogger(__name__)

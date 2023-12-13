@@ -3,16 +3,17 @@ from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from pydantic import BaseConfig, BaseModel, Field, create_model, root_validator
 
+from marie._docarray import docarray_v2
 from marie.proto.jina_pb2 import (
     DataRequestProto,
     JinaInfoProto,
     RouteProto,
     StatusProto,
 )
-from marie._docarray import docarray_v2
 
 if TYPE_CHECKING:  # pragma: no cover
     from google.protobuf.pyext.cpp_message import GeneratedProtocolMessageType

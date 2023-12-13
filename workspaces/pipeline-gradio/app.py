@@ -1,15 +1,9 @@
 import gradio as gr
 import numpy as np
 import torch as torch
+from effect import bleed_through, blur, morphology, pepper, salt
 from PIL import Image
 
-from effect import (
-    blur,
-    morphology,
-    pepper,
-    salt,
-    bleed_through,
-)
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor

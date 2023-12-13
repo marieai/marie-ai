@@ -1,6 +1,7 @@
 import time
 
 import pytest
+
 from marie import Flow
 from marie.excepts import RuntimeFailToStart
 from marie.logging.profile import TimeContext

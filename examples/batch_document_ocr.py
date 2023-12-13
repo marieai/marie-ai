@@ -12,7 +12,7 @@ from pathlib import Path
 
 import requests
 
-from examples.utils import setup_queue, online, setup_s3_storage
+from examples.utils import online, setup_queue, setup_s3_storage
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
 

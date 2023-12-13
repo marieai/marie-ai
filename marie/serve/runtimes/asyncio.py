@@ -11,7 +11,6 @@ from marie.logging.logger import MarieLogger
 from marie.parsers import set_gateway_parser
 from marie.parsers.helper import _set_gateway_uses
 
-
 # Keep these imports even if not used, since YAML parser needs to find them in imported modules
 from marie.serve.runtimes.gateway.composite import CompositeGateway
 from marie.serve.runtimes.gateway.gateway import BaseGateway
@@ -21,8 +20,8 @@ from marie.serve.runtimes.gateway.websocket import WebSocketGateway
 from marie.serve.runtimes.servers import BaseServer
 
 if TYPE_CHECKING:  # pragma: no cover
-    import threading
     import multiprocessing
+    import threading
 
 HANDLED_SIGNALS = (
     signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
@@ -225,9 +224,9 @@ class AsyncNewLoopRuntime:
         elif (
             len(self.args.protocol) == 1 and self.args.protocol[0] == ProtocolType.HTTP
         ):
-            from marie.serve.runtimes.servers.http import (
+            from marie.serve.runtimes.servers.http import (  # we need a concrete implementation of this
                 HTTPServer,
-            )  # we need a concrete implementation of this
+            )
 
             return HTTPServer(
                 name=self.args.name,
@@ -244,9 +243,9 @@ class AsyncNewLoopRuntime:
             len(self.args.protocol) == 1
             and self.args.protocol[0] == ProtocolType.WEBSOCKET
         ):
-            from marie.serve.runtimes.servers.websocket import (
+            from marie.serve.runtimes.servers.websocket import (  # we need a concrete implementation of this
                 WebSocketServer,
-            )  # we need a concrete implementation of this
+            )
 
             return WebSocketServer(
                 name=self.args.name,
@@ -259,9 +258,9 @@ class AsyncNewLoopRuntime:
                 is_cancel=self.is_cancel,
             )
         elif len(self.args.protocol) > 1:
-            from marie.serve.runtimes.servers.composite import (
+            from marie.serve.runtimes.servers.composite import (  # we need a concrete implementation of this
                 CompositeServer,
-            )  # we need a concrete implementation of this
+            )
 
             return CompositeServer(
                 name=self.args.name,

@@ -3,22 +3,19 @@ import os
 import sys
 import typing
 from abc import abstractmethod
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import PIL
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+import PIL
 from numpy import ndarray
+from PIL import Image, ImageDraw
 
 from marie.base_handler import BaseHandler
 from marie.logging.predefined import default_logger
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
-from marie.utils.draw_truetype import (
-    determine_font_size,
-    get_default_font,
-)
+from marie.utils.draw_truetype import determine_font_size, get_default_font
 from marie.utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))

@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from marie import Flow, Executor, requests, DocumentArray, Document
+from marie import Document, DocumentArray, Executor, Flow, requests
 
 
 @pytest.fixture()

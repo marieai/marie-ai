@@ -1,8 +1,8 @@
 import sys
 
+from marie.parsers import set_pod_parser
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.head.request_handling import HeaderRequestHandler
-from marie.parsers import set_pod_parser
 
 
 def run(*args, **kwargs):

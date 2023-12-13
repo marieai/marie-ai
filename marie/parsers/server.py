@@ -1,7 +1,7 @@
 """Argparser module for server"""
 
 from marie.parsers.base import set_base_parser
-from marie.parsers.helper import add_arg_group, KVAppendAction
+from marie.parsers.helper import KVAppendAction, add_arg_group
 
 
 def set_server_parser(parser=None):

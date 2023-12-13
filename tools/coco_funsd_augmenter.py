@@ -17,9 +17,10 @@ import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
 from multiprocessing import Pool
-import rstr
+
 import cv2
 import numpy as np
+import rstr
 from faker import Faker
 from faker.providers import BaseProvider
 from PIL import Image, ImageDraw, ImageFont

@@ -6,7 +6,7 @@ import tempfile
 import uuid
 from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime
-from typing import Callable, Optional, List
+from typing import Callable, List, Optional
 
 import cv2
 import numpy as np
@@ -15,7 +15,6 @@ import numpy as np
 from tifffile import TiffWriter
 
 from marie.utils.docs import frames_from_file, get_document_type
-
 
 # https://github.com/joeatwork/python-lzw
 # exiftool PID_576_7188_0_150300431.tif

@@ -4,29 +4,28 @@ import platform
 import sys
 import traceback
 from functools import partial
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from docarray import DocList, BaseDoc
+from docarray import BaseDoc, DocList
 from rich.traceback import install
 
 import marie.helper
-from marie import Flow, Deployment
-from marie import __version__
+from marie import Deployment, Flow, __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (
-    __model_path__,
+    __cache_path__,
     __config_dir__,
     __marie_home__,
-    __cache_path__,
+    __model_path__,
 )
 from marie.importer import ImportExtensions
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import (
-    Toast,
     NativeToastHandler,
-    RabbitMQToastHandler,
     PsqlToastHandler,
+    RabbitMQToastHandler,
+    Toast,
 )
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
@@ -211,8 +210,9 @@ def __main__(
         print(shutil.get_terminal_size())
         import logging
         import shutil
-        from rich.logging import RichHandler
+
         from rich.console import Console
+        from rich.logging import RichHandler
 
         logging.basicConfig(
             level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)]

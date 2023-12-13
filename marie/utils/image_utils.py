@@ -1,11 +1,11 @@
 import hashlib
+import io
 import sys
 import time
 from math import ceil
-from typing import Union, Tuple, List
+from typing import List, Tuple, Union
 
 import cv2
-import io
 import numpy as np
 import PIL.Image
 from PIL import Image

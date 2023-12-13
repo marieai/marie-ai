@@ -1,5 +1,6 @@
-from marie.serve.runtimes.servers import BaseServer
 from aiohttp import web
+
+from marie.serve.runtimes.servers import BaseServer
 
 
 class LoadBalancingServer(BaseServer):

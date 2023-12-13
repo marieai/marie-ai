@@ -1,4 +1,4 @@
-from typing import Union, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Union
 
 from marie_server.job.placement_group import PlacementGroup
 

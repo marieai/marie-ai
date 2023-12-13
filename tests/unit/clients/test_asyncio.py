@@ -2,8 +2,8 @@ import asyncio
 from math import ceil
 
 import pytest
-
 from docarray import Document
+
 from marie.clients.request.asyncio import request_generator
 
 NUM_INPUT_DOCS = 30

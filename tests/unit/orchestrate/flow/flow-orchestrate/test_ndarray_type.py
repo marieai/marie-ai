@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import torch
 from docarray import Document, DocumentArray
+
 from marie import Executor, Flow, requests
 
 

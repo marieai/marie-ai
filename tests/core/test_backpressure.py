@@ -1,8 +1,8 @@
-import sys
-import time
 import asyncio
 import functools
 import itertools
+import sys
+import time
 
 
 async def map_unordered(func, iterable, *, limit):

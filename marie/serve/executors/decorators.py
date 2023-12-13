@@ -3,7 +3,7 @@ import functools
 import inspect
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Type, Union, Any
+from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
 from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.constants import __cache_path__
@@ -524,8 +524,7 @@ def monitor(
 
                 # custom metric for `my_method`
                 @monitor(name='metric_name', documentation='useful information goes here')
-                def my_method(self):
-                    ...
+                def my_method(self): ...
 
         As context manager
 
@@ -593,8 +592,9 @@ def safely_encoded(
         """
 
         try:
-            from marie.numpyencoder import NumpyEncoder
             import json
+
+            from marie.numpyencoder import NumpyEncoder
 
             tmp_str = json.dumps(
                 obj,

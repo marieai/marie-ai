@@ -1,18 +1,13 @@
 import numpy as np
-
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-
 from torch.utils.data import DataLoader
-
 from torchvision import datasets
 from torchvision.datasets.mnist import MNIST
-
 from torchvision.transforms import ToTensor
 from tqdm import tqdm, trange
-
-from vit import ViTForImageRotation, MyVitBlock, get_positional_embeddings
+from vit import MyVitBlock, ViTForImageRotation, get_positional_embeddings
 
 rad2deg = lambda x: x * 180 / np.pi
 

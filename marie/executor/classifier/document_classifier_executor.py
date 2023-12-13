@@ -1,29 +1,27 @@
 import os
-from typing import Union, Optional, Any
+from typing import Any, Optional, Union
 
 import torch
 from docarray import DocList
 
-from marie import Executor, requests
-from marie import safely_encoded
+from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
-from marie.api.docs import StorageDoc, AssetKeyDoc
+from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.models.utils import (
+    initialize_device_settings,
     setup_torch_optimizations,
     torch_gc,
-    initialize_device_settings,
 )
 from marie.ocr import CoordinateFormat
 from marie.pipe.classification_pipeline import ClassificationPipeline
-from marie.utils.docs import frames_from_docs, docs_from_asset
+from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.network import get_ip_address
-
 
 # TODO : Refactor this to as it is a duplicate of the one in text_extraction_executor.py
 

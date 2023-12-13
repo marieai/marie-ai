@@ -3,38 +3,40 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Union, List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
-from PIL import Image
 from docarray import DocList
+from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent
-from marie.pipe import NamedEntityPipelineComponent
-from marie.pipe import PipelineComponent, PipelineContext
+from marie.pipe import (
+    ClassifierPipelineComponent,
+    NamedEntityPipelineComponent,
+    PipelineComponent,
+    PipelineContext,
+)
 from marie.pipe.components import (
+    burst_frames,
+    get_known_ocr_engines,
+    ocr_frames,
+    restore_assets,
+    s3_asset_path,
     setup_classifiers,
     setup_indexers,
-    split_filename,
-    s3_asset_path,
-    ocr_frames,
-    store_assets,
-    burst_frames,
-    restore_assets,
-    get_known_ocr_engines,
     setup_overlay,
+    split_filename,
+    store_assets,
 )
-from marie.renderer import TextRenderer, PdfRenderer
+from marie.renderer import PdfRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
-from marie.utils.docs import docs_from_image
-from marie.utils.docs import frames_from_file
+from marie.utils.docs import docs_from_image, frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
 from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4

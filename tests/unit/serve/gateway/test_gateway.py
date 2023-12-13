@@ -8,9 +8,9 @@ import pytest
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from tests.helper import (
     _generate_pod_args,
     _validate_custom_gateway_process,
@@ -163,10 +163,8 @@ def test_custom_gateway_no_executors(uses, uses_with, expected):
 
 
 def test_stream_individual_executor_simple():
-    from marie import DocumentArray, Document
-
+    from marie import Document, DocumentArray, Executor, Flow, requests
     from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
-    from marie import Flow, Executor, requests
 
     PARAMETERS = {"dog": "woof"}
 
@@ -226,11 +224,12 @@ def test_stream_individual_executor_multirequest(n_replicas: int, n_shards: int)
     N_DOCS: int = 100
     BATCH_SIZE: int = 5
 
-    from docarray import DocumentArray, Document
-
-    from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
-    from marie import Flow, Executor, requests
     import os
+
+    from docarray import Document, DocumentArray
+
+    from marie import Executor, Flow, requests
+    from marie.serve.runtimes.gateway.http import FastAPIBaseGateway
 
     PARAMETERS = {"dog": "woof"}
 

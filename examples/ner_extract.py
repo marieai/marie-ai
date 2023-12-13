@@ -6,7 +6,7 @@ import uuid
 
 import requests
 
-from examples.utils import setup_queue, online
+from examples.utils import online, setup_queue
 from marie.utils.utils import ensure_exists
 
 api_base_url = "http://127.0.0.1:51000/api"

@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from marie.logging.logger import MarieLogger
 from marie_server.storage.storage_client import StorageArea

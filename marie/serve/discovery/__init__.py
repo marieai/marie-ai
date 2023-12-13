@@ -1,6 +1,6 @@
-from typing import Optional, Tuple, Union, TYPE_CHECKING
 import threading
 import time
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import requests
 
