@@ -1,10 +1,11 @@
 import os
 import time
+
 import pytest
 
-from marie import Deployment, Executor, requests, Client, DocumentArray
-from marie.helper import random_port
+from marie import Client, Deployment, DocumentArray, Executor, requests
 from marie._docarray import docarray_v2
+from marie.helper import random_port
 
 
 class SingleExecutorDeployment(Executor):

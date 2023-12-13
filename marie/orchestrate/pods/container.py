@@ -9,7 +9,7 @@ import time
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
 from marie.constants import __docker_host__, __windows__
-from marie.enums import PodRoleType, DockerNetworkMode
+from marie.enums import DockerNetworkMode, PodRoleType
 from marie.excepts import BadImageNameError, DockerVersionError
 from marie.helper import random_name, slugify
 from marie.importer import ImportExtensions
@@ -24,6 +24,7 @@ from marie.parsers import set_gateway_parser
 
 if TYPE_CHECKING:  # pragma: no cover
     import threading
+
     from docker.client import DockerClient
 
 
@@ -211,8 +212,9 @@ def run(
     :param is_shutdown: concurrency event to communicate runtime is terminated
     :param is_ready: concurrency event to communicate runtime is ready to receive messages
     """
-    import docker
     import asyncio
+
+    import docker
 
     log_kwargs = copy.deepcopy(vars(args))
     log_kwargs['log_config'] = 'docker'

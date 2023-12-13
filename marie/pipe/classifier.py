@@ -1,11 +1,11 @@
 from abc import ABC
-from typing import Optional, List
+from typing import List, Optional
 
 from docarray import DocList
 
 from marie.api.docs import MarieDoc
 from marie.logging.logger import MarieLogger
-from marie.pipe.base import PipelineComponent, PipelineResult, PipelineContext
+from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
 class ClassifierPipelineComponent(PipelineComponent, ABC):

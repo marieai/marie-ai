@@ -1,12 +1,13 @@
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+
 from marie import Client
 from marie.logging.predefined import default_logger
 from marie_server.rest_extension import (
-    parse_response_to_payload,
-    parse_payload_to_docs,
     handle_request,
+    parse_payload_to_docs,
+    parse_response_to_payload,
 )
 
 if TYPE_CHECKING:  # pragma: no cover

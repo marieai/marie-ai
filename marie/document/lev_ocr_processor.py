@@ -1,9 +1,9 @@
 import os
 import typing
 
+from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.models.icr.model import Model
-from marie.constants import __model_path__
 
 
 class LevenshteinOcrProcessor(OcrProcessor):

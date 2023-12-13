@@ -1,9 +1,9 @@
 import os
 
 import cv2
+
 from marie.boxes.craft_box_processor import BoxProcessorCraft, PSMode
 from marie.document.craft_ocr_processor import CraftOcrProcessor
-
 from marie.utils.utils import ensure_exists
 
 if __name__ == "__main__":

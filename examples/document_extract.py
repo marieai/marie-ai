@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 import threading
 import time
@@ -7,12 +8,11 @@ import uuid
 
 import requests
 
-from examples.utils import setup_queue, online, setup_s3_storage
+from examples.utils import online, setup_queue, setup_s3_storage
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
 from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

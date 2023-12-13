@@ -1,11 +1,5 @@
 import asyncio
-from typing import Any
-from typing import (
-    MutableMapping,
-    OrderedDict,
-    Iterable,
-    Optional,
-)
+from typing import Any, Iterable, MutableMapping, Optional, OrderedDict
 
 from marie.excepts import BadConfigSource
 from marie.messaging.events import EventMessage

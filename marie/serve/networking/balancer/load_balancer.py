@@ -70,11 +70,11 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         :param deployment_name: Name of the deployment.
         :return:
         """
-        from marie.serve.networking.balancer.round_robin_balancer import (
-            RoundRobinLoadBalancer,
-        )
         from marie.serve.networking.balancer.least_connection_balancer import (
             LeastConnectionsLoadBalancer,
+        )
+        from marie.serve.networking.balancer.round_robin_balancer import (
+            RoundRobinLoadBalancer,
         )
 
         if isinstance(load_balancer_type, str):

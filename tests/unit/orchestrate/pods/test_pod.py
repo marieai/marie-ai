@@ -6,8 +6,8 @@ import pytest
 from marie.excepts import RuntimeFailToStart
 from marie.orchestrate.pods import Pod
 from marie.parsers import set_gateway_parser
-from marie.serve.runtimes import asyncio as runtime_asyncio
 from marie.serve.executors import BaseExecutor
+from marie.serve.runtimes import asyncio as runtime_asyncio
 from tests.helper import _generate_pod_args
 
 

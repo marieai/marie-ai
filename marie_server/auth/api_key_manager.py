@@ -1,7 +1,7 @@
-from typing import List, Dict, Any, Optional
-from marie.logging.predefined import default_logger as logger
-
 import secrets
+from typing import Any, Dict, List, Optional
+
+from marie.logging.predefined import default_logger as logger
 
 
 def str2bool(v):

@@ -1,5 +1,5 @@
 import abc
-from typing import Any, Optional, List, Dict
+from typing import Any, Dict, List, Optional
 
 
 class StorageArea(abc.ABC):

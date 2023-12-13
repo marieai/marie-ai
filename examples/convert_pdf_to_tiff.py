@@ -1,10 +1,8 @@
 import glob
-import glob
 import os
 
 from marie.executor.ner import NerExtractionExecutor
-from marie.utils.docs import docs_from_file, frames_from_docs
-from marie.utils.docs import frames_from_file
+from marie.utils.docs import docs_from_file, frames_from_docs, frames_from_file
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.tiff_ops import merge_tiff_frames
 from marie.utils.utils import ensure_exists

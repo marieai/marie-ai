@@ -1,13 +1,10 @@
 import os
-from typing import Any, List, Optional, Tuple, Union, Dict
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as nn
 from PIL import Image, ImageDraw
-
-# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
-from marie import DocumentArray, Document
 from transformers import (
     AutoModelForTokenClassification,
     LayoutLMv3FeatureExtractor,
@@ -16,7 +13,8 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 
-from marie import Executor, requests, safely_encoded
+# Calling this from here prevents : "AttributeError: module 'detectron2' has no attribute 'config'"
+from marie import Document, DocumentArray, Executor, requests, safely_encoded
 from marie.boxes import PSMode
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -34,18 +32,15 @@ from marie.executor.ner.utils import (
     visualize_prediction,
 )
 from marie.logging.logger import MarieLogger
-from marie.ocr import DefaultOcrEngine, CoordinateFormat
+from marie.logging.predefined import default_logger as logger
+from marie.ocr import CoordinateFormat, DefaultOcrEngine
 from marie.registry.model_registry import ModelRegistry
-from marie.utils.docs import (
-    convert_frames,
-    frames_from_docs,
-)
+from marie.utils.docs import convert_frames, frames_from_docs
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
-from marie.logging.predefined import default_logger as logger
 
 check_min_version("4.5.0")
 
@@ -163,7 +158,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never relased
                 # Switching to use cudagraphs
                 # torch._dynamo.config.set("inductor", "cache_memory", 0)
-
                 # mode options: default, reduce-overhead, max-autotune
                 # default, reduce-overhead, max-autotune
                 # ['aot_ts_nvfuser', 'cudagraphs', 'inductor', 'ipex', 'nvprims_nvfuser', 'onnxrt', 'tensorrt', 'tvm']

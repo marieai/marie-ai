@@ -5,7 +5,12 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from marie.constants import __ready_msg__, __stop_msg__, __windows__
+from marie.constants import (
+    RAFT_TO_EXECUTOR_PORT,
+    __ready_msg__,
+    __stop_msg__,
+    __windows__,
+)
 from marie.enums import PodRoleType
 from marie.excepts import RuntimeFailToStart, RuntimeRunForeverEarlyError
 from marie.helper import typename
@@ -14,7 +19,6 @@ from marie.logging.logger import MarieLogger
 from marie.orchestrate.pods.helper import ConditionalEvent, _get_event
 from marie.parsers.helper import _update_gateway_args
 from marie.serve.executors.run import run, run_raft
-from marie.constants import RAFT_TO_EXECUTOR_PORT
 
 __all__ = ['BasePod', 'Pod']
 
@@ -181,6 +185,7 @@ class BasePod(ABC):
         Wait for the `Pod` to start successfully in a non-blocking manner
         """
         import asyncio
+
         from marie.serve.runtimes.servers import BaseServer
 
         _timeout = self.args.timeout_ready

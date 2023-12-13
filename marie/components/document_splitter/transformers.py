@@ -1,29 +1,30 @@
 import os
-from typing import Optional, Union, List, Callable, Dict, Any
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
-from marie import DocumentArray
 from torch.nn import Module
 from tqdm import tqdm
 from transformers import (
-    pipeline,
-    LayoutLMv3Processor,
-    LayoutLMv3ImageProcessor,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    LayoutLMv3ImageProcessor,
+    LayoutLMv3Processor,
+    pipeline,
 )
-from marie.constants import __model_path__
 
+from marie import DocumentArray
+from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
-from .base import BaseDocumentSplitter
+
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
+from .base import BaseDocumentSplitter
 
 
 def scale_bounding_box(
@@ -242,8 +243,8 @@ class TransformersDocumentSplitter(BaseDocumentSplitter):
         """Optimizes the model for inference. This method is called by the __init__ method."""
         try:
             with TimeContext("Compiling model", logger=self.logger):
-                import torchvision.models as models
                 import torch._dynamo as dynamo
+                import torchvision.models as models
 
                 torch._dynamo.config.verbose = False
                 torch._dynamo.config.suppress_errors = True

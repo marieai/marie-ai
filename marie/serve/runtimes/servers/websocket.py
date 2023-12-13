@@ -2,10 +2,9 @@ import logging
 import os
 from typing import Optional
 
+from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.servers import BaseServer
-
-from marie._docarray import docarray_v2
 
 
 class WebSocketServer(BaseServer):

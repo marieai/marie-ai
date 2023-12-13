@@ -1,7 +1,8 @@
 import timeit
 
-from marie.utils.overlap import merge_boxes
 import numpy as np
+
+from marie.utils.overlap import merge_boxes
 
 
 def generate_bboxes(count: int):

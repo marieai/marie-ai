@@ -2,8 +2,8 @@ import asyncio
 import random
 
 import pytest
-
 from docarray import Document, DocumentArray
+
 from marie.helper import Namespace, random_identity
 from marie.serve.stream import RequestStreamer
 from marie.types.request.data import DataRequest

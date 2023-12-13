@@ -1,6 +1,6 @@
 import io
 import os
-from typing import Union, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 import cv2
 import numpy as np

@@ -1177,6 +1177,7 @@ metas:
         # with ImportExtensions(required=True):
         import docker.errors
         from docker import APIClient
+
         from hubble import __windows__
 
         try:

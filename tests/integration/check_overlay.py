@@ -1,4 +1,5 @@
 import glob
+import logging
 import multiprocessing
 import os
 import platform
@@ -15,8 +16,6 @@ from marie.utils.image_utils import imwrite
 from marie.utils.process import load_omp_library
 from marie.utils.tiff_ops import burst_tiff
 from marie.utils.utils import ensure_exists
-
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

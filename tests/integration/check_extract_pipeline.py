@@ -2,11 +2,11 @@ import os
 
 import torch
 
-from marie.constants import __model_path__, __config_dir__
 from marie.conf.helper import load_yaml
+from marie.constants import __config_dir__, __model_path__
 from marie.logging.mdc import MDC
 from marie.logging.profile import TimeContext
-from marie.pipe.extract_pipeline import ExtractPipeline, split_filename, s3_asset_path
+from marie.pipe.extract_pipeline import ExtractPipeline, s3_asset_path, split_filename
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
 from marie.utils.docs import frames_from_file

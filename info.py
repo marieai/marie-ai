@@ -23,8 +23,8 @@ def main():
 
     if True:
         try:
-            import torchvision.models as models
             import torch._dynamo as dynamo
+            import torchvision.models as models
 
             torch._dynamo.config.verbose = True
             torch.backends.cudnn.benchmark = True

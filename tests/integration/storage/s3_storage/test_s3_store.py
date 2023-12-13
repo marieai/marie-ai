@@ -5,7 +5,7 @@ import time
 import pytest
 
 from marie.common.file_io import get_file_count
-from marie.storage import StorageManager, S3StorageHandler
+from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.utils import ensure_exists
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

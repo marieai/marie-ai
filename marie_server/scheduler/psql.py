@@ -1,15 +1,15 @@
 import asyncio
 import threading
 import traceback
-from typing import Any, Dict, List, Generator
+from typing import Any, Dict, Generator, List
 
 import psycopg2
 
 from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
+from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.scheduler.scheduler import Scheduler
-from marie.logging.predefined import default_logger as logger
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s

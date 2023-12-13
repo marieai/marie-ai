@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import Dict
+
+from pydantic import BaseModel
 
 
 def _to_camel_case(snake_str: str) -> str:

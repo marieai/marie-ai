@@ -10,8 +10,8 @@ from marie.enums import ProtocolType
 from marie.excepts import RuntimeFailToStart
 from marie.helper import random_port
 from marie.orchestrate.pods.container import ContainerPod
-from marie.serve.runtimes import servers
 from marie.parsers import set_gateway_parser
+from marie.serve.runtimes import servers
 from tests.helper import _generate_pod_args, _validate_dummy_custom_gateway_response
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

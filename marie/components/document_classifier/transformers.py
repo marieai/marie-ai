@@ -1,31 +1,32 @@
 import os
 import traceback
-from typing import Optional, Union, List, Callable, Any, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
 from docarray import DocList
+from PIL import Image
 from torch.nn import Module
 from tqdm import tqdm
 from transformers import (
-    pipeline,
-    LayoutLMv3Processor,
-    LayoutLMv3ImageProcessor,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    LayoutLMv3ImageProcessor,
+    LayoutLMv3Processor,
+    pipeline,
 )
 
 from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
-from ..document_classifier.base import BaseDocumentClassifier
+
 from ...api.docs import MarieDoc
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
+from ..document_classifier.base import BaseDocumentClassifier
 
 
 def scale_bounding_box(
@@ -382,8 +383,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
         try:
             with TimeContext("Compiling model", logger=self.logger):
-                import torchvision.models as models
                 import torch._dynamo as dynamo
+                import torchvision.models as models
 
                 # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
                 torch._dynamo.config.verbose = False

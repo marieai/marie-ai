@@ -7,13 +7,13 @@ from __future__ import absolute_import
 import os
 import sys
 
-from .craft_ocr_processor import CraftOcrProcessor
-from .trocr_ocr_processor import TrOcrProcessor
-from .tesseract_ocr_processor import TesseractOcrProcessor
-from .lev_ocr_processor import LevenshteinOcrProcessor
 from .aws_textract_ocr import AwsTextractOcrProcessor
-from .google_vision_ocr import GoogleVisionOcrProcessor
 from .azure_vision_ocr import AzureVisionOcrProcessor
+from .craft_ocr_processor import CraftOcrProcessor
+from .google_vision_ocr import GoogleVisionOcrProcessor
+from .lev_ocr_processor import LevenshteinOcrProcessor
+from .tesseract_ocr_processor import TesseractOcrProcessor
+from .trocr_ocr_processor import TrOcrProcessor
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
 

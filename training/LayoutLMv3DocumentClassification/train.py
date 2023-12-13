@@ -7,29 +7,29 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from PIL import Image
 from fsspec.core import url_to_fs
 from imblearn.over_sampling import RandomOverSampler
 from matplotlib import pyplot as plt
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from PIL import Image
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 from sklearn.metrics import (
+    ConfusionMatrixDisplay,
     classification_report,
     confusion_matrix,
-    ConfusionMatrixDisplay,
 )
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torchmetrics import Accuracy
 from tqdm import tqdm
 from transformers import (
-    LayoutLMv3Tokenizer,
-    LayoutLMv3Processor,
-    LayoutLMv3ForSequenceClassification,
     AdamW,
-    LayoutLMv3ImageProcessor,
     AutoConfig,
+    LayoutLMv3ForSequenceClassification,
+    LayoutLMv3ImageProcessor,
+    LayoutLMv3Processor,
+    LayoutLMv3Tokenizer,
 )
-from pytorch_lightning.loggers import WandbLogger
 
 from marie.logging.profile import TimeContext
 from training.LayoutLMv3DocumentClassification.llmv3_dataset import (
@@ -412,8 +412,8 @@ def inference(model_checkpoint_path: str):
     if True:
         try:
             with TimeContext("Compile model"):
-                import torchvision.models as models
                 import torch._dynamo as dynamo
+                import torchvision.models as models
 
                 # model = torch.compile(model, backend="inductor", mode="max-autotune")
                 model = torch.compile(model)

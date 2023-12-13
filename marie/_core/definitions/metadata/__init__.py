@@ -11,9 +11,9 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    TypeVar,
     Union,
     cast,
-    TypeVar,
 )
 
 from typing_extensions import Self, TypeAlias
@@ -27,10 +27,7 @@ from marie._core.errors import DagsterInvalidMetadata
 #     WhitelistMap,
 #     pack_value,
 # )
-from marie.utils.backcompat import (
-    canonicalize_backcompat_args,
-    deprecation_warning,
-)
+from marie.utils.backcompat import canonicalize_backcompat_args, deprecation_warning
 from marie.utils.json import to_json
 
 #

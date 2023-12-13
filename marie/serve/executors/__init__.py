@@ -51,7 +51,6 @@ from marie.serve.helper import (
 )
 from marie.serve.instrumentation import MetricsTimer
 
-
 if docarray_v2:
     from docarray.documents.legacy import LegacyDocument
 

@@ -1,6 +1,6 @@
 import io
 from os import PathLike
-from typing import Any, Dict, Union, Optional, Callable
+from typing import Any, Callable, Dict, Optional, Union
 
 import cv2
 import numpy as np

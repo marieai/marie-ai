@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING
 
-
 from marie.parsers.helper import _update_gateway_args
 
 if TYPE_CHECKING:
@@ -93,8 +92,8 @@ def gateway(args: 'Namespace'):
 
     :param args: arguments coming from the CLI.
     """
-    from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
     from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+    from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 
     args.port_monitoring = args.port_monitoring[0]
     _update_gateway_args(args)
@@ -231,10 +230,9 @@ def server(args: 'Namespace'):
     :param args: arguments coming from the CLI.
     """
     import os
+
+    from marie.constants import __config_dir__
     from marie_server import __main__ as srv
-    from marie.constants import (
-        __config_dir__,
-    )
 
     if args.uses:
         _input = args.uses

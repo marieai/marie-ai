@@ -1,19 +1,15 @@
 import os
-from typing import Dict, Union, Optional, Any
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import torch
-from marie import DocumentArray, Document
 
-from marie import Executor, requests, safely_encoded
+from marie import Document, DocumentArray, Executor, requests, safely_encoded
 from marie.executor.mixin import StorageMixin
 from marie.logging.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.docs import frames_from_docs
-from marie.utils.image_utils import (
-    hash_frames_fast,
-    convert_to_bytes,
-)
+from marie.utils.image_utils import convert_to_bytes, hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.utils import ensure_exists
 

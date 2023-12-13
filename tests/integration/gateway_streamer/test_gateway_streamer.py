@@ -7,9 +7,9 @@ import pytest
 from marie import Document, DocumentArray, Executor, requests
 from marie.excepts import ExecutorError
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
 from tests.helper import _generate_pod_args

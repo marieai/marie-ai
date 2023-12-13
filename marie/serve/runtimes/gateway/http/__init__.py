@@ -1,7 +1,7 @@
-from marie.serve.runtimes.gateway.http.fastapi import (
-    FastAPIBaseGateway,
-)  # keep import here for backwards compatibility
 from marie.serve.runtimes.gateway.gateway import BaseGateway
+from marie.serve.runtimes.gateway.http.fastapi import (  # keep import here for backwards compatibility
+    FastAPIBaseGateway,
+)
 from marie.serve.runtimes.servers.http import HTTPServer
 
 __all__ = ['HTTPGateway']
