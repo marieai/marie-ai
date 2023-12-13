@@ -1,0 +1,71 @@
+ml.cluster:
+  hosts:
+    GPU-002:
+      ansible_host: "asp-gpu002"
+    GPU-003:
+      ansible_host: "asp-gpu003"
+    GPU-004:
+      ansible_host: "asp-gpu004"
+    GPU-005:
+      ansible_host: "asp-gpu005"
+    GPU-006:
+      ansible_host: "asp-gpu006"
+    GPU-007:
+      ansible_host: "asp-gpu007"
+    GPU-008:
+      ansible_host: "asp-gpu008"
+    GPU-009:
+      ansible_host: "asp-gpu009"
+    GPU-010:
+      ansible_host: "asp-gpu010"
+    GPU-011:
+      ansible_host: "asp-gpu011"
+    GPU-012:
+      ansible_host: "asp-gpu012"
+    GPU-013:
+      ansible_host: "asp-gpu013"
+#    GPU-014:
+#      ansible_host: "asp-gpu014" # DOWN
+    GPU-015:
+      ansible_host: "asp-gpu015" # DOWN
+    GPU-016:
+      ansible_host: "asp-gpu016"
+    GPU-017:
+      ansible_host: "asp-gpu017"
+    GPU-018:
+      ansible_host: "asp-gpu018"
+    GPU-019:
+      ansible_host: "asp-gpu019"
+    GPU-020:
+      ansible_host: "asp-gpu020"
+    GPU-021:
+      ansible_host: "asp-gpu021"
+    GPU-022:
+      ansible_host: "asp-gpu022"
+    GPU-023:
+      ansible_host: "asp-gpu023"
+#    GPU-024:
+#      ansible_host: "asp-gpu024"  # NO CONTAINER
+    GPU-025:
+      ansible_host: "asp-gpu025"
+    GPU-026:
+      ansible_host: "asp-gpu026"
+    GPU-027:
+      ansible_host: "asp-gpu027"
+
+    # CORRESPONDENCE
+#    GPU-028:
+#      ansible_host: "asp-gpu028"
+#    GPU-029:
+#      ansible_host: "asp-gpu029"
+#    GPU-030:
+#      ansible_host: "asp-gpu030"
+#    GPU-031:
+#      ansible_host: "asp-gpu031"
+#    GPU-032:
+#      ansible_host: "asp-gpu032"
+
+# ps auxw | grep $(docker container ls | grep containername | awk '{print $1}') | awk '{print $2}'
+# docker logs marieai-dev-server --follow --since 5m 2>&1
+
+# sudo find /var/lib/docker/containers -name '*.log' -exec truncate -s0 {} \;

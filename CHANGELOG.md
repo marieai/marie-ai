@@ -1840,7 +1840,7 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  Marie Dev Bot,  Greg,  Greg Bugaj,  🙇
 
 
-### 🆕 New Features
+~~### 🆕 New Features
 
  - [[```6a75565a```](https://github.com/marieai/marie-ai/commit/6a75565aede2eb2d403b7e37f4e3b3a4283073f7)] __-__ add proper torch caching changed Torch autocast inference to be only used for CPU changed how executors determine their device types (*Marie Dev Bot*)
  - [[```16a1306d```](https://github.com/marieai/marie-ai/commit/16a1306d1e976da54c63dc5de4b3f33471abdfc1)] __-__ merging jina v3.23.0 (*Greg*)
@@ -1854,5 +1854,5 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
 
  - [[```5c7a7123```](https://github.com/marieai/marie-ai/commit/5c7a71236f040db860a182545459e726893d44cf)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
  - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
- - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)
+ - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)~~
 

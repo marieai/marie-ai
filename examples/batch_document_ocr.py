@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -18,7 +19,7 @@ from marie.storage import StorageManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-api_base_url = "http://127.0.0.1:51000/api"
+# api_base_url = "http://127.0.0.1:51000/api"
 api_base_url = "http://gext-02.rms-asp.com:5000/api"
 # api_base_url = "http://asp-gpu002.rms-asp.com:51000/api"
 endpoint_url = f"{api_base_url}/document/extract"
@@ -126,12 +127,26 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
         name = os.path.splitext(filename)[0]
         extension = os.path.splitext(filename)[1]
         os.makedirs(output_dir, exist_ok=True)
+        json_output_path = os.path.join(output_dir, f"{name}.json")
 
         if extension.lower() not in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
             logger.warning(f"Skipping {img_path} : {extension} not supported")
             continue
 
-        json_output_path = os.path.join(output_dir, f"{name}.json")
+        # this is a hack to copy the annotations from the temp folder
+        copy_from_temp = True
+        if copy_from_temp:
+            parent = os.path.basename(os.path.dirname(img_path))
+            temp_dir = os.path.expanduser(
+                "~/datasets/private/corr-routing/ready/annotations_all/"
+            )
+            temp_output_path = os.path.join(temp_dir, parent, f"{name}.json")
+
+            if os.path.exists(temp_output_path) and not os.path.exists(
+                json_output_path
+            ):
+                shutil.copyfile(temp_output_path, json_output_path)
+
         if os.path.exists(json_output_path):
             logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
@@ -215,14 +230,16 @@ if __name__ == "__main__":
         "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
         "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
         "S3_STORAGE_BUCKET_NAME": "marie",
-        "S3_ENDPOINT_URL": "http://localhost:8000",
+        "S3_ENDPOINT_URL__": "http://localhost:8000",
+        "S3_ENDPOINT_URL": "http://172.16.11.163:8000",
         "S3_ADDRESSING_STYLE": "path",
     }
 
     setup_s3_storage(storage_config)
 
     connection_config = {
-        "hostname": "localhost",
+        "hostname__": "localhost",
+        "hostname": "172.16.11.162",
         "port": 5672,
         "username": "guest",
         "password": "guest",
@@ -257,8 +274,8 @@ if __name__ == "__main__":
         # )
 
         process_dir(
-            "~/datasets/private/assets-private/corr-routing/converted",
-            "~/datasets/private/assets-private/corr-routing/annotations/",
+            "~/datasets/private/corr-routing/ready/images/",
+            "~/datasets/private/corr-routing/ready/annotations/",
             stop_event,
         )
 
