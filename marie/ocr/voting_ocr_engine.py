@@ -1,11 +1,11 @@
 import os
 import traceback
+from collections import OrderedDict, defaultdict
 from copy import deepcopy
-from typing import List, Union, Dict, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 from PIL import Image
-from collections import defaultdict
 
 from marie.boxes import PSMode
 from marie.boxes.box_processor import BoxProcessor
@@ -15,9 +15,7 @@ from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.document.lev_ocr_processor import LevenshteinOcrProcessor
 from marie.document.ocr_processor import OcrProcessor
 from marie.document.tesseract_ocr_processor import TesseractOcrProcessor
-from marie.ocr import OcrEngine, CoordinateFormat
-from collections import OrderedDict
-
+from marie.ocr import CoordinateFormat, OcrEngine
 from marie.ocr.ocr_engine import reset_bbox_cache
 from marie.utils.json import store_json_object
 

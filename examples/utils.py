@@ -1,14 +1,14 @@
+import json
+import logging
 import sys
 import threading
 from datetime import datetime
 from functools import partial
 from threading import Thread
+
 import pika
-import json
 import requests
 from pika.exchange_type import ExchangeType
-
-import logging
 
 from marie.storage import S3StorageHandler, StorageManager
 

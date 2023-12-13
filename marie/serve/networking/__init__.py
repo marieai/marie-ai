@@ -2,6 +2,7 @@ import asyncio
 import time
 from typing import (
     TYPE_CHECKING,
+    AsyncGenerator,
     Dict,
     List,
     Optional,
@@ -9,7 +10,6 @@ from typing import (
     Set,
     Tuple,
     Union,
-    AsyncGenerator,
 )
 
 import grpc

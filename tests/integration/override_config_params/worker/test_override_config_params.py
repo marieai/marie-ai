@@ -1,7 +1,6 @@
 import os
 
 import pytest
-
 from jina import Client, Document, Executor, Flow, requests
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))

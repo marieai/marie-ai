@@ -1,5 +1,5 @@
 import os
-from typing import Union, List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 from PIL import Image
@@ -8,7 +8,7 @@ from marie.boxes import PSMode
 from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
-from marie.ocr import OcrEngine, CoordinateFormat
+from marie.ocr import CoordinateFormat, OcrEngine
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists

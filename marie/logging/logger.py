@@ -5,10 +5,12 @@ import os
 import platform
 import sys
 import uuid
-from typing import Optional, NamedTuple, Mapping, Union
+from collections import OrderedDict
+from typing import Mapping, NamedTuple, Optional, Union
 
 from rich.logging import LogRender as _LogRender
 from rich.logging import RichHandler as _RichHandler
+from typing_extensions import Final
 
 from marie import check
 from marie.constants import __resources_path__, __uptime__, __windows__
@@ -17,10 +19,6 @@ from marie.jaml import JAML
 from marie.logging import formatter
 from marie.logging.mdc_filter import MDCContextFilter
 from marie.utils.json import to_json
-from typing import Mapping, Union
-from collections import OrderedDict
-
-from typing_extensions import Final
 
 # TODO : Implement MDC like context for logging
 # https://stackoverflow.com/questions/6618513/python-logging-with-context

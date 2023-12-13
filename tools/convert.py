@@ -1,11 +1,11 @@
 import argparse
+import distutils.util
+import glob
 import json
 import os
-import glob
-import distutils.util
 import shutil
 
-from tools import from_json_file, ensure_exists
+from tools import ensure_exists, from_json_file
 
 
 def _validate_qa_balance(

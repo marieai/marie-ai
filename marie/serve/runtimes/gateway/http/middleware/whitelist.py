@@ -1,5 +1,7 @@
 from typing import Optional
-from fastapi import Request, HTTPException, status
+
+from fastapi import HTTPException, Request, status
+
 from marie.logging.logger import MarieLogger
 
 

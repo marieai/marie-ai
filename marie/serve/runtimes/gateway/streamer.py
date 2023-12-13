@@ -26,7 +26,6 @@ from marie.serve.stream import RequestStreamer
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, SingleDocumentRequest
 
-
 if docarray_v2:
     from docarray import DocList
 

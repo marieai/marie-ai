@@ -5,6 +5,7 @@ from unittest import mock
 
 import pytest
 import yaml
+
 from marie import Flow
 from marie.constants import __cache_path__
 

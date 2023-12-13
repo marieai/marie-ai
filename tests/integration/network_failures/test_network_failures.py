@@ -8,12 +8,14 @@ from docarray import DocumentArray
 from marie import Client, Executor, requests
 from marie.parsers import set_gateway_parser
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from tests.helper import _generate_pod_args
-
-from tests.integration.runtimes.test_runtimes import _create_gateway_runtime, _create_head_runtime
+from tests.integration.runtimes.test_runtimes import (
+    _create_gateway_runtime,
+    _create_head_runtime,
+)
 
 
 class DummyExec(Executor):

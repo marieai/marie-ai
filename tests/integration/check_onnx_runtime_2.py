@@ -1,3 +1,5 @@
+import os
+import time
 from timeit import timeit
 
 import numpy as np
@@ -7,15 +9,6 @@ import psutil
 import torch
 import torchvision.models as models
 import transformers
-
-
-import os
-import torch
-import onnx
-import torchvision.models as models
-import onnxruntime
-import time
-
 
 # Optimizations :
 #  export LD_PRELOAD=/usr/local/lib/libjemalloc.so:$LD_PRELOAD &&  python ./check_onnx_runtime.py

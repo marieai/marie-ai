@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from marie._docarray import docarray_v2
 from marie.serve.helper import get_default_grpc_options
 from marie.serve.runtimes.helper import (
     _get_name_from_replicas_name,
@@ -10,7 +11,6 @@ from marie.serve.runtimes.helper import (
     _parse_specific_params,
     _spit_key_and_executor_name,
 )
-from marie._docarray import docarray_v2
 
 
 @pytest.mark.parametrize(
@@ -89,12 +89,17 @@ def _custom_grpc_options(
 @pytest.mark.parametrize('transformation', ['proto', 'json'])
 @pytest.mark.skipif(not docarray_v2, reason='Test only working with docarray v2')
 def test_create_pydantic_model_from_schema(transformation):
-    from marie.serve.runtimes.helper import _create_aux_model_doc_list_to_list, _create_pydantic_model_from_schema
-    import numpy as np
     from typing import Optional
+
+    import numpy as np
     from docarray import BaseDoc, DocList
-    from docarray.typing import AnyTensor, ImageUrl
     from docarray.documents import TextDoc
+    from docarray.typing import AnyTensor, ImageUrl
+
+    from marie.serve.runtimes.helper import (
+        _create_aux_model_doc_list_to_list,
+        _create_pydantic_model_from_schema,
+    )
 
     class CustomDoc(BaseDoc):
         tensor: Optional[AnyTensor]
@@ -213,11 +218,16 @@ def test_create_pydantic_model_from_schema(transformation):
 @pytest.mark.parametrize('transformation', ['proto', 'json'])
 @pytest.mark.skipif(not docarray_v2, reason='Test only working with docarray v2')
 def test_create_empty_doc_list_from_schema(transformation):
-    from marie.serve.runtimes.helper import _create_aux_model_doc_list_to_list, _create_pydantic_model_from_schema
     from typing import Optional
+
     from docarray import BaseDoc, DocList
-    from docarray.typing import AnyTensor, ImageUrl
     from docarray.documents import TextDoc
+    from docarray.typing import AnyTensor, ImageUrl
+
+    from marie.serve.runtimes.helper import (
+        _create_aux_model_doc_list_to_list,
+        _create_pydantic_model_from_schema,
+    )
 
     class CustomDoc(BaseDoc):
         tensor: Optional[AnyTensor]

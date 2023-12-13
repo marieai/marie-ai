@@ -2,8 +2,8 @@ import asyncio
 import time
 
 import pytest
-
 from docarray import Document
+
 from marie.clients.request import request_generator
 from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter
 

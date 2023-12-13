@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
 from pprint import pprint
-from typing import Optional, List
+from typing import List, Optional
 
 from marie import DocumentArray
-
 from marie.logging.logger import MarieLogger
-from marie.pipe.base import PipelineComponent, PipelineResult, PipelineContext
+from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
 class NamedEntityPipelineComponent(PipelineComponent, ABC):

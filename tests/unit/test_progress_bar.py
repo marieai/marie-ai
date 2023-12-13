@@ -1,6 +1,7 @@
 import time
 
 import pytest
+
 from marie.logging.profile import ProgressBar
 
 

@@ -5,8 +5,8 @@ import time
 from typing import Dict
 
 import pytest
-
 from docarray import Document, DocumentArray
+
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
 from marie.serve import networking

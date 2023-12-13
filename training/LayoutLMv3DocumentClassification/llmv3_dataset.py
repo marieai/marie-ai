@@ -1,15 +1,13 @@
-import logging
-import os
-
-import torch
-from PIL import Image
-
-from torch.utils.data import Dataset
 import io
 import json
+import logging
+import os
 from typing import Any, List
 
+import torch
 from pandas import DataFrame
+from PIL import Image
+from torch.utils.data import Dataset
 from transformers import LayoutLMv3Processor
 
 

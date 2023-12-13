@@ -1,17 +1,18 @@
 import argparse
 import json
+import multiprocessing as mp
 import os
 import random
 import time
-import numpy as np
-import multiprocessing as mp
-
-from tools import from_json_file, ensure_exists
-from faker import Faker
 from functools import lru_cache
+
+import numpy as np
+from faker import Faker
 from PIL import Image, ImageDraw, ImageFont
-from marie.numpyencoder import NumpyEncoder
+
 from marie.constants import __root_dir__
+from marie.numpyencoder import NumpyEncoder
+from tools import ensure_exists, from_json_file
 
 # setup data aug
 fake = Faker("en_US")

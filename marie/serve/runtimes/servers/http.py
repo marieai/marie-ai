@@ -7,7 +7,6 @@ from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.runtimes.servers import BaseServer
 
-
 if TYPE_CHECKING:
     from fastapi import FastAPI
 

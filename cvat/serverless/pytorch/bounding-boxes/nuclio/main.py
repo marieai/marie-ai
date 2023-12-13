@@ -1,10 +1,10 @@
-import json
 import base64
+import io
+import json
 
 import yaml
-from PIL import Image
-import io
 from model_handler import ModelHandler
+from PIL import Image
 
 # https://opencv.github.io/cvat/docs/manual/advanced/serverless-tutorial/
 

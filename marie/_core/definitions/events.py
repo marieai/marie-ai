@@ -11,10 +11,13 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Tuple,
     TypeVar,
     Union,
     cast,
 )
+
+from pydantic import BaseModel
 
 import marie.check as check
 from marie._annotations import PublicAttr, public
@@ -23,8 +26,10 @@ from marie._core.storage.tags import (
     SYSTEM_TAG_PREFIX,
 )
 from marie.utils.backcompat import experimental_class_param_warning
-from .data_version import DataVersion
 
+# from ...serdes import deserialize_value
+from ...utils.json import deserialize_value, to_json
+from .data_version import DataVersion
 from .metadata import (
     MetadataMapping,
     MetadataValue,
@@ -32,13 +37,8 @@ from .metadata import (
     normalize_metadata,
 )
 
-from typing import List, Tuple
-from pydantic import BaseModel
-
 # from .utils import DEFAULT_OUTPUT
 
-# from ...serdes import deserialize_value
-from ...utils.json import deserialize_value, to_json
 
 if TYPE_CHECKING:
     from marie._core.execution.context.output import OutputContext

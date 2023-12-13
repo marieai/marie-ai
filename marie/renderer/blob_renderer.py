@@ -1,6 +1,6 @@
 import os.path
 from os import PathLike
-from typing import Dict, Any, Union, Optional, Callable
+from typing import Any, Callable, Dict, Optional, Union
 from xml.sax.saxutils import escape
 
 import numpy as np

@@ -2,11 +2,11 @@
 
 from marie.constants import __default_host__
 from marie.parsers.helper import CastHostAction, KVAppendAction, add_arg_group
+from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 from marie.parsers.orchestrate.runtimes.grpc_channel import (
     mixin_grpc_channel_options_parser,
 )
 from marie.parsers.orchestrate.runtimes.runtime import mixin_base_runtime_parser
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
 
 
 def mixin_remote_runtime_parser(parser):

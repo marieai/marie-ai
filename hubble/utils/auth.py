@@ -6,11 +6,12 @@ from urllib.parse import urlencode, urljoin
 
 import aiohttp
 import requests
+from rich import print as rich_print
+
 from hubble.client.session import HubbleAPISession
 from hubble.excepts import AuthenticationFailedError
 from hubble.utils.api_utils import get_base_url, get_json_from_response
 from hubble.utils.config import config
-from rich import print as rich_print
 
 JINA_LOGO = (
     'https://d2vchdhjlcm3i6.cloudfront.net/Company+Logo/Light/Company+logo_light.svg'

@@ -2,9 +2,9 @@ import json
 import os
 
 import pytest
+
 from hubble.executor import HubExecutor
 from hubble.executor.hubio import HubIO
-
 from marie import __version__
 from marie.orchestrate.deployments.config.helper import (
     get_base_executor_version,

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from os import PathLike
-from typing import Dict, Any, Union, Optional, Callable
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 

@@ -3,12 +3,13 @@ import asyncio
 import json
 import os
 from collections import defaultdict
-from typing import TYPE_CHECKING, AsyncIterator, Dict, List, Optional, Tuple, Any
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import grpc
 
-from marie.enums import PollingType
+from marie._docarray import docarray_v2
 from marie.constants import __default_endpoint__
+from marie.enums import PollingType
 from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.proto import jina_pb2
@@ -16,12 +17,12 @@ from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.monitoring import MonitoringRequestMixin
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types.request.data import DataRequest, Response
-from marie._docarray import docarray_v2
 
 if docarray_v2:
-    from marie.serve.runtimes.helper import _create_pydantic_model_from_schema
     from docarray import DocList
     from docarray.base_doc.any_doc import AnyDoc
+
+    from marie.serve.runtimes.helper import _create_pydantic_model_from_schema
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -331,8 +332,8 @@ class HeaderRequestHandler(MonitoringRequestMixin):
     def _get_endpoints_from_workers(
         self, connection_pool: GrpcConnectionPool, name: str, retries: int, stop_event
     ):
-        from google.protobuf import json_format
         from docarray.documents.legacy import LegacyDocument
+        from google.protobuf import json_format
 
         legacy_doc_schema = LegacyDocument.schema()
 

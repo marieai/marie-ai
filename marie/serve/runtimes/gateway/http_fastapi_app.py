@@ -97,8 +97,8 @@ def get_fastapi_app(
         from marie._docarray import DocumentArray
         from marie.proto import jina_pb2
         from marie.serve.executors import __dry_run_endpoint__
-        from marie.serve.runtimes.gateway.models import PROTO_TO_PYDANTIC_MODELS
         from marie.serve.runtimes.gateway.health_model import JinaInfoModel
+        from marie.serve.runtimes.gateway.models import PROTO_TO_PYDANTIC_MODELS
         from marie.types.request.status import StatusMessage
 
         @app.get(

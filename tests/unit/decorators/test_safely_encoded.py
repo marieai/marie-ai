@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from docarray import DocumentArray
+
 from marie import requests, safely_encoded
 from marie.serve.executors import BaseExecutor
 

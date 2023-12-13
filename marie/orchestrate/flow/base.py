@@ -25,7 +25,6 @@ from typing import (
     overload,
 )
 
-from marie.serve.discovery import DiscoveryServiceMixin
 from rich import print
 from rich.panel import Panel
 from rich.progress import (
@@ -37,7 +36,6 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from marie.constants import __default_host__, __docker_host__, __windows__
 from marie.clients import Client
 from marie.clients.mixin import (
     AsyncPostMixin,
@@ -45,6 +43,7 @@ from marie.clients.mixin import (
     PostMixin,
     ProfileMixin,
 )
+from marie.constants import __default_host__, __docker_host__, __windows__
 from marie.enums import (
     DeploymentRoleType,
     FlowBuildLevel,
@@ -64,9 +63,9 @@ from marie.helper import (
     get_internal_ip,
     get_public_ip,
     is_port_free,
+    random_ports,
     send_telemetry_event,
     typename,
-    random_ports,
 )
 from marie.importer import ImportExtensions
 from marie.jaml import JAMLCompatible
@@ -80,6 +79,7 @@ from marie.parsers import (
     set_gateway_parser,
 )
 from marie.parsers.flow import set_flow_parser
+from marie.serve.discovery import DiscoveryServiceMixin
 
 __all__ = ['Flow']
 GATEWAY_ARGS_BLACKLIST = ['uses', 'uses_with']

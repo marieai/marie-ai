@@ -1,17 +1,15 @@
 import os
 import time
-import pytest
-
 from typing import Dict
 
-from marie import Deployment, Executor, requests, Client
-from marie.helper import random_port
+import pytest
+
+from marie import Client, Deployment, Executor, requests
 from marie._docarray import docarray_v2
+from marie.helper import random_port
 
 if docarray_v2:
-    from docarray import DocList
-
-    from docarray import BaseDoc
+    from docarray import BaseDoc, DocList
     from docarray.documents.legacy import LegacyDocument
 
 

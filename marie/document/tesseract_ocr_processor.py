@@ -6,9 +6,9 @@ from concurrent.futures import ProcessPoolExecutor
 
 from pytesseract import image_to_data
 
+from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.logging.logger import MarieLogger
-from marie.constants import __model_path__
 
 
 class TesseractOcrProcessor(OcrProcessor):

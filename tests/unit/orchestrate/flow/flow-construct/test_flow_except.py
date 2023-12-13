@@ -4,10 +4,10 @@ import time
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
+
 from marie import Document, Executor, Flow, requests
 from marie.excepts import BadServer, RuntimeFailToStart
 from marie.proto import jina_pb2
-
 from tests import validate_callback
 
 

@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
+from rich.console import Console
+
 from hubble import get_token
 from hubble.executor.requirements import (
     check_env_variable,
@@ -29,7 +31,6 @@ from hubble.executor.requirements import (
     parse_requirement,
 )
 from hubble.utils.api_utils import get_base_url
-from rich.console import Console
 
 default_logger = logging.getLogger(__name__)
 

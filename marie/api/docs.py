@@ -4,7 +4,6 @@ from docarray import BaseDoc
 from docarray.documents import ImageDoc
 from docarray.typing import AnyTensor
 
-
 # from marie._core.definitions.events import AssetKey
 
 

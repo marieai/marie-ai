@@ -167,9 +167,9 @@ class WorkerRequestHandler:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
 
     def _http_fastapi_default_app(self, **kwargs):
-        from marie.serve.runtimes.worker.http_fastapi_app import (
+        from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
             get_fastapi_app,
-        )  # For Gateway, it works as for head
+        )
 
         request_models_map = self._executor._get_endpoint_models_dict()
 
@@ -1012,6 +1012,7 @@ class WorkerRequestHandler:
         schemas = self._executor._get_endpoint_models_dict()
         if docarray_v2:
             from docarray.documents.legacy import LegacyDocument
+
             from marie.serve.runtimes.helper import _create_aux_model_doc_list_to_list
 
             legacy_doc_schema = LegacyDocument.schema()

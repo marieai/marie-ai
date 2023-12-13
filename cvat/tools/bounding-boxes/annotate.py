@@ -1,12 +1,12 @@
 import argparse
 from typing import List, Optional
 
-import PIL.Image
 import cvat_sdk.auto_annotation as cvataa
 import cvat_sdk.models as models
+import PIL.Image
 import torch
 from cvat_sdk import make_client
-from cvat_sdk.auto_annotation import DetectionFunctionSpec, DetectionFunction
+from cvat_sdk.auto_annotation import DetectionFunction, DetectionFunctionSpec
 from cvat_sdk.auto_annotation.driver import (
     _AnnotationMapper,
     _DetectionFunctionContextImpl,

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from dataclasses import dataclass, replace, asdict
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple, Union
 

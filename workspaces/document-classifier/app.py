@@ -1,3 +1,4 @@
+import argparse
 import os
 import tempfile
 from functools import partial
@@ -10,11 +11,10 @@ import torch as torch
 from marie.components import TransformersDocumentClassifier
 from marie.helper import colored
 from marie.logging.mdc import MDC
+from marie.logging.predefined import default_logger as logger
 from marie.ocr import DefaultOcrEngine, MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
-from marie.utils.docs import frames_from_file, docs_from_image
-from marie.logging.predefined import default_logger as logger
-import argparse
+from marie.utils.docs import docs_from_image, frames_from_file
 
 use_cuda = torch.cuda.is_available()
 

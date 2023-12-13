@@ -1,12 +1,12 @@
 import os
 from abc import ABC, abstractmethod
-from typing import Union, List, Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from marie.boxes import PSMode, BoxProcessorUlimDit, BoxProcessorCraft
+from marie.boxes import BoxProcessorCraft, BoxProcessorUlimDit, PSMode
 from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor

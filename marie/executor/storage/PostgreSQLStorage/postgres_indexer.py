@@ -6,8 +6,8 @@ from docarray import DocList
 from marie import DocumentArray, Executor
 from marie.api.docs import StorageDoc
 from marie.logging.logger import MarieLogger
-from .postgreshandler import PostgreSQLHandler
 
+from .postgreshandler import PostgreSQLHandler
 
 # https://github.com/jina-ai/executor-hnsw-postgres/blob/main/executor/postgres_indexer.py
 

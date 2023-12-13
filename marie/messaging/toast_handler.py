@@ -1,6 +1,5 @@
-from typing import Dict, Any, List
-
 import logging
+from typing import Any, Dict, List
 
 from marie.messaging.events import EventMessage
 

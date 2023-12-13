@@ -1,6 +1,6 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 
 
 def patchify(images: torch.Tensor, n_patches: int) -> torch.Tensor:

@@ -18,11 +18,12 @@ from marie.helper import batch_iterator
 from marie.logging.predefined import default_logger
 
 if TYPE_CHECKING:  # pragma: no cover
+    from docarray import BaseDoc, DocList
+
     from marie._docarray import Document
     from marie._docarray.document import DocumentSourceType
     from marie._docarray.document.mixins.content import DocumentContentType
     from marie.types.request import Request
-    from docarray import DocList, BaseDoc
 
     SingletonDataType = Union[
         DocumentContentType,

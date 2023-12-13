@@ -5,9 +5,9 @@ import pytest
 from marie import Client
 from marie.parsers import set_gateway_parser
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from tests.helper import _generate_pod_args
 
 

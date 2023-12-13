@@ -1,13 +1,13 @@
 import argparse
+import copy
 import multiprocessing
 import os
-import copy
-from typing import Dict, Optional, Type, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional, Type, Union
 
-from marie.logging.logger import MarieLogger
-from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
-from marie.serve.helper import _get_workspace_from_name_and_shards
 from marie.constants import RAFT_TO_EXECUTOR_PORT
+from marie.logging.logger import MarieLogger
+from marie.serve.helper import _get_workspace_from_name_and_shards
+from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 
 if TYPE_CHECKING:
     import threading
@@ -182,6 +182,7 @@ def run_stateful(
     :param envs: a dictionary of environment variables to be set in the new Process
     """
     import signal
+
     from marie.jaml import JAML
 
     is_ready = multiprocessing.Event()

@@ -1,6 +1,6 @@
-from marie_cli.export import api_to_dict
 from marie.schemas.gateway import schema_gateway
 from marie.schemas.helper import _cli_to_schema
+from marie_cli.export import api_to_dict
 
 _schema_flow_with = _cli_to_schema(
     api_to_dict(),
