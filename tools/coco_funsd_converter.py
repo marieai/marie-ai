@@ -3,8 +3,7 @@ import distutils.util
 import os
 import sys
 
-from tools import convert, decorate, augmenter, split_dataset
-
+from tools import augmenter, convert, decorate, split_dataset
 
 # FUNSD format can be found here
 # https://guillaumejaume.github.io/FUNSD/description/

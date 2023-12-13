@@ -1,7 +1,7 @@
 import inspect
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from marie import DocumentArray, Document
+from marie import Document, DocumentArray
 from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.networking.sse import EventSourceResponse
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from marie.logging.logger import MarieLogger
 
 if docarray_v2:
-    from docarray import DocList, BaseDoc
+    from docarray import BaseDoc, DocList
 
 
 def get_fastapi_app(
@@ -35,12 +35,13 @@ def get_fastapi_app(
         from fastapi import FastAPI, Response, HTTPException
         import pydantic
         from fastapi.middleware.cors import CORSMiddleware
+    import os
+
     from pydantic import BaseModel, Field
     from pydantic.config import BaseConfig, inherit_config
 
     from marie.proto import jina_pb2
     from marie.serve.runtimes.gateway.models import _to_camel_case
-    import os
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(

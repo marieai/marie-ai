@@ -5,12 +5,11 @@ from __future__ import print_function
 # Run it with `python collect_env.py`.
 import datetime
 import locale
+import os
 import re
 import subprocess
 import sys
-import os
 from collections import namedtuple
-
 
 try:
     import torch

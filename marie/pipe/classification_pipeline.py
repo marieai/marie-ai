@@ -1,28 +1,27 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Union, List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
-from PIL import Image
 from docarray import DocList
+from PIL import Image
 
 from marie.api.docs import MarieDoc
 from marie.boxes import PSMode
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent
-from marie.pipe import PipelineComponent, PipelineContext
+from marie.pipe import ClassifierPipelineComponent, PipelineComponent, PipelineContext
 from marie.pipe.components import (
+    burst_frames,
+    get_known_ocr_engines,
+    ocr_frames,
+    restore_assets,
     setup_classifiers,
     split_filename,
-    ocr_frames,
     store_assets,
-    burst_frames,
-    restore_assets,
-    get_known_ocr_engines,
 )
 from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast

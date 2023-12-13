@@ -16,7 +16,6 @@ from torch.autograd import Variable
 import marie.models.craft.craft_utils
 import marie.models.craft.file_utils
 import marie.models.craft.imgproc
-from marie.constants import __model_path__
 from marie.boxes.box_processor import (
     BoxProcessor,
     PSMode,
@@ -24,6 +23,7 @@ from marie.boxes.box_processor import (
     create_dirs,
     estimate_character_width,
 )
+from marie.constants import __model_path__
 from marie.lang import Object
 from marie.models import craft
 from marie.models.craft.craft import CRAFT

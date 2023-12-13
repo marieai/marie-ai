@@ -2,8 +2,8 @@ import os
 
 import yaml
 
-from marie.serve.runtimes.gateway.gateway import BaseGateway, Gateway
 from marie.jaml import JAML
+from marie.serve.runtimes.gateway.gateway import BaseGateway, Gateway
 
 
 class MyDummyGateway(Gateway):

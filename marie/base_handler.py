@@ -15,7 +15,6 @@ from torch.profiler import ProfilerActivity, profile, record_function
 
 # from marie.logger import setup_logger
 from marie.logging.predefined import default_logger as logger
-
 from marie.registry_base import RegistryHolder
 
 # logger = setup_logger(__name__)

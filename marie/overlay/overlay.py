@@ -6,20 +6,20 @@ from shutil import copyfile
 from typing import Tuple, Union
 
 import cv2
-import torch
 import numpy as np
-from marie.constants import __model_path__
+import torch
+from PIL import Image
 
 from marie.base_handler import BaseHandler
+from marie.constants import __model_path__
 from marie.models.pix2pix.data import create_dataset
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
 from marie.timer import Timer
-from marie.utils.image_utils import imwrite, read_image, viewImage, hash_frames_fast
+from marie.utils.image_utils import hash_frames_fast, imwrite, read_image, viewImage
 from marie.utils.onnx import OnnxModule
 from marie.utils.utils import ensure_exists
-from PIL import Image
 
 # Add parent to the search path, so we can reference the module here without throwing and exception
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))

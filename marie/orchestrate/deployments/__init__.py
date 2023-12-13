@@ -16,10 +16,10 @@ from contextlib import ExitStack
 from itertools import cycle
 from typing import TYPE_CHECKING, Dict, List, Optional, Set, Type, Union, overload
 
-from hubble.executor.helper import replace_secret_of_hub_uri
 from rich import print
 from rich.panel import Panel
 
+from hubble.executor.helper import replace_secret_of_hub_uri
 from marie.clients import Client
 from marie.clients.mixin import PostMixin
 from marie.constants import (

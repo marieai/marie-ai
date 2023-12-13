@@ -1,8 +1,9 @@
+import argparse
 import datetime
 import glob
 import os
 from functools import partial
-import argparse
+
 import numpy as np
 import torch
 from PIL import Image

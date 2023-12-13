@@ -2,10 +2,10 @@ import datetime
 import errno
 import os
 from enum import Enum
-from typing import Mapping, TypeVar, Tuple, TypeAlias, Callable, Any
+from typing import Any, Callable, Mapping, Tuple, TypeAlias, TypeVar
 
-from .utils import FileSystem
 from .. import check
+from .utils import FileSystem
 
 K = TypeVar("K")
 T = TypeVar("T")

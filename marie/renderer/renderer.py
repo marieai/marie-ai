@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from os import PathLike
-from typing import Any, Dict, Union, Optional, Callable
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 

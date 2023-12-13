@@ -11,7 +11,6 @@ from typing import (
     Union,
 )
 
-
 from marie.excepts import InternalNetworkError
 from marie.logging.logger import MarieLogger
 from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter

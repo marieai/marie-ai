@@ -1,6 +1,5 @@
 import ssl
-from typing import Dict, Any
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import pika
 from pika.exchange_type import ExchangeType

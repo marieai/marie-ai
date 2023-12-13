@@ -12,8 +12,9 @@ import platform as _platform
 import signal as _signal
 import sys as _sys
 import warnings as _warnings
-import docarray as _docarray
 from distutils.util import strtobool as strtobool
+
+import docarray as _docarray
 
 if _sys.version_info < (3, 10, 0):
     raise OSError(f"Marie requires Python >= 3.10, but yours is {_sys.version_info}")

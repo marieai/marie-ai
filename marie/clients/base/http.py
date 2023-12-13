@@ -3,6 +3,7 @@ import json
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 
+from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.clients.base import BaseClient
 from marie.clients.base.helper import HTTPClientlet, handle_response_status
 from marie.clients.helper import callback_exec
@@ -11,7 +12,6 @@ from marie.logging.profile import ProgressBar
 from marie.serve.stream import RequestStreamer
 from marie.types.request import Request
 from marie.types.request.data import DataRequest
-from marie._docarray import Document, DocumentArray, docarray_v2
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.base import CallbackFnType, InputType

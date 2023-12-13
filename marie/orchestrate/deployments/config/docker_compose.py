@@ -17,11 +17,11 @@ from marie.orchestrate.deployments.config.helper import (
     construct_runtime_container_args,
     get_base_executor_version,
     get_image_name,
+    resolve_image_name,
     to_compatible_name,
     validate_uses,
 )
 from marie.orchestrate.helper import generate_default_volume_and_workspace
-from marie.orchestrate.deployments.config.helper import resolve_image_name
 
 port = 8081
 

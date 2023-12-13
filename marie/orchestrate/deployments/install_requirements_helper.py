@@ -1,7 +1,7 @@
 import os
 import re
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, cast
 
-from typing import TYPE_CHECKING, Tuple, Dict, Optional, cast
 from pkg_resources import Requirement
 
 if TYPE_CHECKING:  # pragma: no cover

@@ -1,6 +1,6 @@
 import os
 
-from transformers import LongformerTokenizer, AutoTokenizer
+from transformers import AutoTokenizer, LongformerTokenizer
 
 from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__

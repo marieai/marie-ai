@@ -7,9 +7,8 @@ from typing import Any, List, Optional
 import cv2
 import numpy as np
 
-from marie.utils.overlap import find_overlap_vertical
-
 from marie.logging.predefined import default_logger as logger
+from marie.utils.overlap import find_overlap_vertical
 
 
 def find_line_number(lines, box):

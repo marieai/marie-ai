@@ -1,6 +1,6 @@
 from math import ceil
 from os import PathLike
-from typing import Any, Dict, Union, Callable, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 

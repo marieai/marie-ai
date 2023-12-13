@@ -1,5 +1,6 @@
 import json
 from logging import LogRecord
+
 import pytest
 
 from marie.logging.formatter import JsonFormatter, ProfileFormatter

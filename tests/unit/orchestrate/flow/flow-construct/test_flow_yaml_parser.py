@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from docarray.document.generators import from_ndarray
+
 from marie import Executor, Flow
 from marie.enums import ProtocolType
 from marie.excepts import BadYAMLVersion

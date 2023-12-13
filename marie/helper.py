@@ -951,13 +951,8 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     except:
         __jcloud_version__ = 'not-available'
 
+    from marie import __docarray_version__, __proto_version__, __version__
     from marie.constants import __marie_env__, __unset_msg__, __uptime__
-
-    from marie import (
-        __docarray_version__,
-        __proto_version__,
-        __version__,
-    )
     from marie.logging.predefined import default_logger
 
     try:

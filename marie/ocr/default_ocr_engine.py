@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 from PIL import Image
@@ -9,7 +9,7 @@ from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.document.ocr_processor import OcrProcessor
-from marie.ocr import OcrEngine, CoordinateFormat
+from marie.ocr import CoordinateFormat, OcrEngine
 
 
 class DefaultOcrEngine(OcrEngine):

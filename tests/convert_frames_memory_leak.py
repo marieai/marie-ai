@@ -1,7 +1,8 @@
 import os
+import tracemalloc
+
 import cv2
 import numpy as np
-import tracemalloc
 
 from marie.utils.docs import convert_frames
 

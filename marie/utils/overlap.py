@@ -1,6 +1,6 @@
-import numpy as np
-
 import copy
+
+import numpy as np
 
 # https://gist.github.com/YaYaB/39f9df9d481d784b786ad88eea8533e8
 

@@ -9,9 +9,9 @@ import cv2
 import numpy as np
 
 from marie.logging.predefined import default_logger
+from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
 from marie.utils.utils import FileSystem, ensure_exists
-from marie.storage import StorageManager
 
 logger = default_logger
 

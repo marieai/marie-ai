@@ -1,10 +1,11 @@
 # kind version has to be bumped to v0.11.1 since pytest-kind is just using v0.10.0 which does not work on ubuntu in ci
 import os
+
 import pytest
 import requests as req
-from marie.helper import random_port
 
-from marie import Client, Document, Deployment
+from marie import Client, Deployment, Document
+from marie.helper import random_port
 from tests.docker_compose.conftest import DockerComposeServices
 
 

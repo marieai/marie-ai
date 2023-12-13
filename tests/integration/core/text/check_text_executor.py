@@ -3,15 +3,12 @@ import os
 import uuid
 
 from marie import Client
-from marie.executor.text import TextExtractionExecutor
-from marie.executor.text import TextExtractionExecutorMock
+from marie.executor.text import TextExtractionExecutor, TextExtractionExecutorMock
 from marie.storage import S3StorageHandler, StorageManager
-from marie.utils.docs import frames_from_docs, docs_from_file
+from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
-from marie_server.rest_extension import (
-    parse_payload_to_docs_sync,
-)
+from marie_server.rest_extension import parse_payload_to_docs_sync
 
 
 def setup_storage():

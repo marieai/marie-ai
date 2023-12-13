@@ -4,9 +4,7 @@ import os
 from copy import deepcopy
 
 import numpy as np
-
-from helpers import ensure_exists, copyFiles, from_json_file
-
+from helpers import copyFiles, ensure_exists, from_json_file
 
 # from tools import from_json_file, ensure_exists, copyFiles
 

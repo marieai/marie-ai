@@ -1,6 +1,5 @@
 import urllib
-from typing import Dict, Any
-from typing import List, Optional, TextIO, Tuple, Union
+from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
 
 import yaml
 

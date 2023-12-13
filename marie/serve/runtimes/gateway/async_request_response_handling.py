@@ -14,7 +14,6 @@ from marie.serve.runtimes.helper import _is_param_for_specific_executor
 from marie.serve.runtimes.monitoring import MonitoringRequestMixin
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
-
 if TYPE_CHECKING:  # pragma: no cover
     from asyncio import Future
 

@@ -1,7 +1,6 @@
-from typing import List
 import argparse
 import json
-
+from typing import List
 
 parser = argparse.ArgumentParser(prog="Prepender docs/_versions.json")
 parser.add_argument(

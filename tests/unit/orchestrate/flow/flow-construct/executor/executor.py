@@ -1,4 +1,4 @@
-from marie import Executor, DocumentArray, requests
+from marie import DocumentArray, Executor, requests
 
 
 class CustomExec(Executor):

@@ -1,8 +1,9 @@
 import os
 import time
+
 import pytest
 
-from marie import Flow, Document, Client
+from marie import Client, Document, Flow
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 

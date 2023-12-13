@@ -10,7 +10,7 @@ import time
 import pytest
 from docarray import Document
 
-from marie import DocumentArray, Executor, requests, Deployment
+from marie import Deployment, DocumentArray, Executor, requests
 from marie.enums import PollingType
 from marie.parsers import set_deployment_parser
 from marie.proto import jina_pb2
@@ -21,12 +21,12 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types.request.data import DataRequest
-from marie_server.job.common import JobStatus, JobInfo
+from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.job_distributor import JobDistributor
 from marie_server.job.job_manager import JobManager
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
-from tests.core.test_utils import async_wait_for_condition_async_predicate, async_delay
+from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 from tests.helper import _generate_pod_args
 
 

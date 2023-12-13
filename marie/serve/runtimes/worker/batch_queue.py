@@ -1,12 +1,14 @@
 import asyncio
 from asyncio import Event, Task
-from typing import Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+
 from marie._docarray import docarray_v2
 
 if not docarray_v2:
     from docarray import DocumentArray
 else:
     from docarray import DocList
+
 from marie.types.request.data import DataRequest
 
 if TYPE_CHECKING:

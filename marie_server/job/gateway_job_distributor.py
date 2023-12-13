@@ -1,13 +1,14 @@
-from typing import Optional, Any
+from typing import Any, Optional
 
+from m import Document
+
+from marie import DocumentArray
 from marie.clients.request import asyncio
 from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request.data import DataRequest
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.job_distributor import JobDistributor
-from m import Document
-from marie import DocumentArray
 
 
 class GatewayJobDistributor(JobDistributor):

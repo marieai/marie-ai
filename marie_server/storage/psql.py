@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 from uuid_extensions import uuid7str

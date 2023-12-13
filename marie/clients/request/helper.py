@@ -6,7 +6,7 @@ from marie.enums import DataInputType
 from marie.types.request.data import DataRequest
 
 if docarray_v2:
-    from docarray import DocList, BaseDoc
+    from docarray import BaseDoc, DocList
 
 
 def _new_data_request_from_batch(

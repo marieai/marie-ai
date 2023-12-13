@@ -41,7 +41,7 @@ def get_fastapi_app(
     if not docarray_v2:
         from marie.serve.runtimes.gateway.models import JinaEndpointRequestModel
     else:
-        from docarray import DocList, BaseDoc
+        from docarray import BaseDoc, DocList
 
     with ImportExtensions(required=True):
         from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect, status

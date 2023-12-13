@@ -13,7 +13,6 @@ from marie.serve.networking.utils import get_available_services, get_grpc_channe
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, SingleDocumentRequest
 
-
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor
 
