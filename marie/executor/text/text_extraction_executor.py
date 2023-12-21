@@ -22,7 +22,7 @@ from marie.models.utils import (
 from marie.ocr import CoordinateFormat
 from marie.pipe import ExtractPipeline
 from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import hash_frames_fast
+from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
 
@@ -132,12 +132,16 @@ class TextExtractionExecutor(Executor, StorageMixin):
         if len(docs) > 1:
             return {"error": "expected single document"}
 
-        doc = docs[0]
         # load documents from specified document asset key
+        doc = docs[0]
         docs = docs_from_asset(doc.asset_key, doc.pages)
 
-        frames = frames_from_docs(docs)
-        frame_len = len(frames)
+        src_frames = frames_from_docs(docs)
+        changed, frames = ensure_max_page_size(src_frames)
+        if changed:
+            self.logger.warning(f"Page size of frames was changed ")
+            for i, (s, f) in enumerate(zip(src_frames, frames)):
+                self.logger.warning(f"Frame[{i}] changed : {s.shape} -> {f.shape}")
 
         if parameters is None or "job_id" not in parameters:
             self.logger.warning(f"Job ID is not present in parameters")
@@ -197,7 +201,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
             self.logger.debug(
                 "ref_id, ref_type frames , regions , pms_mode, coordinate_format,"
-                f" checksum: {ref_id}, {ref_type},  {frame_len}, {len(regions)}, {pms_mode},"
+                f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}"
             )
             payload_kwargs = {}

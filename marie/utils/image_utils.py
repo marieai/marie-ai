@@ -245,3 +245,67 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
 
     dt = time.time() - start
     return cropped
+
+
+def ensure_max_page_size(
+    frames: List[np.ndarray], max_page_size: Tuple[int, int] = (3300, 2550)
+) -> Tuple[bool, List[np.ndarray]]:
+    """
+    Ensure frames do not exceed the max page size. Resize if necessary, considering the orientation.
+
+    EXAMPLE USAGE
+    .. code-block:: python
+        frames = [cv2.imread(image_path) for image_path in list_of_image_paths]
+        changed, resized_frames = ensure_max_page_size(frames)
+
+    :param frames: List of image frames.
+    :param max_page_size: Max page size (width, height) in pixels for portrait orientation.
+    :return: (changed, frames) - 'changed' indicates if any resizing was done; 'frames' are the possibly resized frames.
+    """
+
+    max_width_portrait, max_height_portrait = max_page_size
+    resized_frames = []
+    changed = False
+
+    for frame in frames:
+        height, width = frame.shape[:2]
+
+        # Determine if the frame is portrait or landscape
+        if width > height:
+            # Landscape orientation: swap max width and height
+            max_width, max_height = max_height_portrait, max_width_portrait
+        else:
+            # Portrait orientation
+            max_width, max_height = max_width_portrait, max_height_portrait
+
+        # Check if the frame exceeds max dimensions
+        if width > max_width or height > max_height:
+            changed = True
+            # Calculate aspect ratio
+            aspect_ratio = width / height
+
+            # Determine new dimensions
+            if width > height:  # Landscape orientation
+                new_width = min(width, max_width)
+                new_height = int(new_width / aspect_ratio)
+                # Adjust height if it exceeds max height
+                if new_height > max_height:
+                    new_height = max_height
+                    new_width = int(new_height * aspect_ratio)
+            else:  # Portrait orientation
+                new_height = min(height, max_height)
+                new_width = int(new_height * aspect_ratio)
+                # Adjust width if it exceeds max width
+                if new_width > max_width:
+                    new_width = max_width
+                    new_height = int(new_width / aspect_ratio)
+
+            # Resize the frame
+            resized_frame = cv2.resize(
+                frame, (new_width, new_height), interpolation=cv2.INTER_AREA
+            )
+            resized_frames.append(resized_frame)
+        else:
+            resized_frames.append(frame)
+
+    return changed, resized_frames
