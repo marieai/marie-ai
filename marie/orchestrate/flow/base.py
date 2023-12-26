@@ -1986,14 +1986,15 @@ class Flow(
                     for task in pending:
                         task.cancel()
 
-            # kick off spinner thread
-            polling_status_thread = threading.Thread(
-                target=_polling_status,
-                args=(len(wait_for_ready_coros),),
-                daemon=True,
-            )
+            if 'GITHUB_WORKFLOW' not in os.environ:
+                # kick off spinner thread
+                polling_status_thread = threading.Thread(
+                    target=_polling_status,
+                    args=(len(wait_for_ready_coros),),
+                    daemon=True,
+                )
 
-            polling_status_thread.start()
+                polling_status_thread.start()
 
             # kick off all deployments wait-ready tasks
             try:
@@ -2023,7 +2024,8 @@ class Flow(
                 for t in wait_ready_threads:
                     t.start()
 
-            polling_status_thread.join()
+            if 'GITHUB_WORKFLOW' not in os.environ:
+                polling_status_thread.join()
             for t in wait_ready_threads:
                 t.join()
 

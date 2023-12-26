@@ -165,7 +165,7 @@ def run(
     finally:
         _unset_envs()
         is_shutdown.set()
-        logger.debug(f'process terminated')
+        logger.debug('process terminated')
 
 
 def run_stateful(
