@@ -78,7 +78,7 @@ def process_dir_text_renderer(src_dir: str, output_dir: str):
             text_output_path = os.path.join(output_dir, f"{name}.txt")
 
             results = load_json_file(file_path)
-            # create a fake frames array from metadata in the results
+            # create a fake frames array from metadata in the results, this is needed for the renderer for sizing
             frames = []
 
             for result in results:
@@ -95,10 +95,8 @@ def process_dir_text_renderer(src_dir: str, output_dir: str):
                 output_file_or_dir=text_output_path,
             )
 
-            return
         except Exception as e:
             print(e)
-            return
 
 
 if __name__ == "__main__":

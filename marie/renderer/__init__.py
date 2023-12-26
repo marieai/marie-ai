@@ -4,7 +4,8 @@ import os
 import sys
 
 from .pdf_renderer import PdfRenderer
-from .text_output_renderer import TextOutputRenderer
 from .text_renderer import TextRenderer
+
+from .renderer import ResultRenderer  # isort:skip
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
