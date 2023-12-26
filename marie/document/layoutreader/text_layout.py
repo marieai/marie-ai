@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import numpy as np
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, BertTokenizer, RobertaTokenizer
 
 import marie.models.unilm.layoutreader.s2s_ft.s2s_loader as seq2seq_loader
 from marie.models.unilm.layoutreader.s2s_ft.modeling_decoding import (
@@ -12,6 +12,16 @@ from marie.models.unilm.layoutreader.s2s_ft.modeling_decoding import (
     LayoutlmForSeq2SeqDecoder,
 )
 from marie.models.unilm.layoutreader.s2s_ft.s2s_loader import Preprocess4Seq2seqDecoder
+from marie.models.unilm.layoutreader.s2s_ft.tokenization_minilm import MinilmTokenizer
+from marie.models.unilm.layoutreader.s2s_ft.tokenization_unilm import UnilmTokenizer
+
+TOKENIZER_CLASSES = {
+    'bert': BertTokenizer,
+    'minilm': MinilmTokenizer,
+    'roberta': RobertaTokenizer,
+    'unilm': UnilmTokenizer,
+    'layoutlm': BertTokenizer,
+}
 
 
 class TextLayout:
@@ -20,8 +30,23 @@ class TextLayout:
             "cuda" if torch.cuda.is_available() else "cpu"
         )  # pylint: disable=no-member
         self.tokenizer = AutoTokenizer.from_pretrained(
-            "microsoft/layoutlmv2-base-uncased"
+            # "microsoft/layoutlmv2-base-uncased"
+            "bert-base-uncased"
         )
+
+        model_type = 'layoutlm'
+        tokenizer_name = 'bert-base-uncased'
+
+        max_seq_length = 1024
+        do_lower_case = True
+        cache_dir = None
+        tokenizer = TOKENIZER_CLASSES[model_type].from_pretrained(
+            tokenizer_name,
+            do_lower_case=do_lower_case,
+            cache_dir=cache_dir if cache_dir else None,
+            max_len=max_seq_length,
+        )
+        self.tokenizer = tokenizer
         config_file = os.path.join(model_path, "config.json")
 
         self.config = BertConfig.from_json_file(
