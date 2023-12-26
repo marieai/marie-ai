@@ -1,10 +1,11 @@
+import io
 from math import ceil
 from os import PathLike
 from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 
-from marie.renderer.renderer import ResultRenderer
+from marie.renderer import ResultRenderer
 from marie.utils.types import strtobool
 
 
@@ -145,7 +146,7 @@ class TextRenderer(ResultRenderer):
         self,
         frames: np.ndarray,
         results: [Dict[str, Any]],
-        output_file_or_dir: Union[str, PathLike],
+        output_file_or_dir: Union[str, PathLike, io.BytesIO],
         filename_generator: Optional[Callable[[int], str]] = None,
         **kwargs: Any,
     ) -> None:

@@ -1,3 +1,4 @@
+import io
 from abc import ABC, abstractmethod
 from os import PathLike
 from typing import Any, Callable, Dict, Optional, Union
@@ -27,7 +28,7 @@ class ResultRenderer(ABC):
         self,
         frames: np.ndarray,
         results: [Dict[str, Any]],
-        output_file_or_dir: Union[str, PathLike],
+        output_file_or_dir: Union[str, PathLike, io.BytesIO],
         filename_generator: Optional[Callable[[int], str]] = None,
         **kwargs: Any
     ) -> None:
@@ -50,7 +51,7 @@ class ResultRenderer(ABC):
         # Ensure page is in xywh format
         # change from xywy -> xyxy
         meta = result["meta"]
-        if convert and meta["format"] != "xywh":
+        if convert and "format" in meta and meta["format"] != "xywh":
             self.logger.info("Changing coordinate format from xywh -> xyxy")
             for word in result["words"]:
                 x, y, w, h = word["box"]
