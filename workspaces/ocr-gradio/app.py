@@ -79,18 +79,18 @@ def process_image(image):
     print(result)
     # get boxes and words from the result
     words = []
-    boxes = []
+    boxes_norm = []
     # boxes = [word["box"] for word in words]
 
     for word in result["words"]:
         x, y, w, h = word["box"]
         w_box = [x, y, x + w, y + h]
         words.append(word["text"])
-        boxes.append(normalize_bbox(word["box"], (image.size[0], image.size[1])))
+        boxes_norm.append(normalize_bbox(w_box, (image.size[0], image.size[1])))
 
     print("len words", len(words))
-    print("len boxes", len(boxes))
-    layout_boxes = text_layout.forward(words, boxes)
+    print("len boxes", len(boxes_norm))
+    layout_boxes = text_layout(words, boxes_norm)
     print(layout_boxes)
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")

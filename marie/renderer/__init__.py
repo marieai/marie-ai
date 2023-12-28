@@ -8,4 +8,5 @@ from .text_renderer import TextRenderer
 
 from .renderer import ResultRenderer  # isort:skip
 
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
