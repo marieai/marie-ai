@@ -135,12 +135,13 @@ class ClassificationPipeline:
 
         burst_frames(ref_id, frames, root_asset_dir)
         ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
-        # metadata["ocr"] = ocr_results
+        metadata["ocr"] = ocr_results
 
         self.execute_pipeline(processing_pipeline, frames, ocr_results, metadata)
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
 
+        del metadata["ocr"]
         return metadata
 
     def store_metadata(
