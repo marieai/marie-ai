@@ -22,27 +22,12 @@ from marie.constants import __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
-from ...api.docs import MarieDoc
+from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
 from ..document_classifier.base import BaseDocumentClassifier
-
-
-def scale_bounding_box(
-    box: List[int], width_scale: float = 1.0, height_scale: float = 1.0
-) -> List[int]:
-    return [
-        int(box[0] * width_scale),
-        int(box[1] * height_scale),
-        int(box[2] * width_scale),
-        int(box[3] * height_scale),
-    ]
-
-
-class BatchableMarieDoc(MarieDoc):
-    words: List
-    boxes: List
+from ..util import scale_bounding_box
 
 
 class TransformersDocumentClassifier(BaseDocumentClassifier):

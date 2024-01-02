@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import numpy as np
 import torch
@@ -13,7 +13,6 @@ from transformers import (
     AutoTokenizer,
     LayoutLMv3ImageProcessor,
     LayoutLMv3Processor,
-    pipeline,
 )
 
 from marie import DocumentArray
@@ -24,18 +23,8 @@ from marie.models.utils import initialize_device_settings
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
+from ..util import scale_bounding_box
 from .base import BaseDocumentSplitter
-
-
-def scale_bounding_box(
-    box: List[int], width_scale: float = 1.0, height_scale: float = 1.0
-) -> List[int]:
-    return [
-        int(box[0] * width_scale),
-        int(box[1] * height_scale),
-        int(box[2] * width_scale),
-        int(box[3] * height_scale),
-    ]
 
 
 class TransformersDocumentSplitter(BaseDocumentSplitter):
@@ -193,7 +182,7 @@ class TransformersDocumentSplitter(BaseDocumentSplitter):
         top_k: int = 1,
     ) -> list[dict[str, Any]]:
         """
-        Predicts the label of a document image
+        Predicts the label of a document image.
 
         :param image: image to predict
         :param words: words in the image
