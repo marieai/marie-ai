@@ -1,8 +1,9 @@
 from abc import abstractmethod
 from typing import List, Optional
 
-from docarray import DocumentArray
+from docarray import DocList
 
+from marie.api.docs import MarieDoc
 from marie.base_handler import BaseHandler
 from marie.logging.logger import MarieLogger
 
@@ -18,20 +19,20 @@ class BaseDocumentSplitter(BaseHandler):
     @abstractmethod
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList[MarieDoc],
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
-    ) -> DocumentArray:
+    ) -> DocList:
         pass
 
     def run(
         self,
-        documents: DocumentArray,
+        documents: DocList,
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
-    ) -> DocumentArray:
+    ) -> DocList:
         """
         Run the document splitter on the given documents.
 
@@ -46,7 +47,7 @@ class BaseDocumentSplitter(BaseHandler):
                 documents=documents, words=words, boxes=boxes, batch_size=batch_size
             )
         else:
-            results = DocumentArray()
+            results = DocList()
 
         document_id = [document.id for document in documents]
 

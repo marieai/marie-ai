@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from docarray import BaseDoc
 from docarray.documents import ImageDoc
@@ -24,6 +24,11 @@ class StorageDoc(BaseDoc):
 
 class MarieDoc(ImageDoc):
     tags: dict = {}
+
+
+class BatchableMarieDoc(MarieDoc):
+    words: List
+    boxes: List
 
 
 class OutputDoc(BaseDoc):
