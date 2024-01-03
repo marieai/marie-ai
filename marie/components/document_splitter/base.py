@@ -24,6 +24,13 @@ class BaseDocumentSplitter(BaseHandler):
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
     ) -> DocList:
+        """
+        Predict the split documents. This method must be implemented by subclasses.
+        :param documents:
+        :param words:
+        :param boxes:
+        :param batch_size:
+        """
         pass
 
     def run(
