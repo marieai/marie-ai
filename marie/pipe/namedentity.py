@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from pprint import pprint
 from typing import List, Optional
 
