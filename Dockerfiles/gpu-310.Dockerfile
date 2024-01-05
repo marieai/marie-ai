@@ -114,8 +114,6 @@ RUN git clone https://github.com/NVIDIA/apex && \
     sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
     python3 setup.py install --cpp_ext --cuda_ext
 
-
-
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
 
 ARG http_proxy
