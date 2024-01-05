@@ -248,7 +248,9 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
 
 
 def ensure_max_page_size(
-    frames: List[np.ndarray], max_page_size: Tuple[int, int] = (3300, 2550)
+    frames: List[np.ndarray],
+    max_page_size: Tuple[int, int] = (2550, 3300),
+    expand_ratio: float = 0.15,
 ) -> Tuple[bool, List[np.ndarray]]:
     """
     Ensure frames do not exceed the max page size. Resize if necessary, considering the orientation.
@@ -260,6 +262,7 @@ def ensure_max_page_size(
 
     :param frames: List of image frames.
     :param max_page_size: Max page size (width, height) in pixels for portrait orientation.
+    :param expand_ratio: Ratio of the max page size to expand the max page size by.
     :return: (changed, frames) - 'changed' indicates if any resizing was done; 'frames' are the possibly resized frames.
     """
 
@@ -277,6 +280,9 @@ def ensure_max_page_size(
         else:
             # Portrait orientation
             max_width, max_height = max_width_portrait, max_height_portrait
+
+        max_width = max_width + int(max_width * expand_ratio)
+        max_height = max_height + int(max_height * expand_ratio)
 
         # Check if the frame exceeds max dimensions
         if width > max_width or height > max_height:
