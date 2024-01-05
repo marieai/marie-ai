@@ -40,6 +40,8 @@ ENV PIP_NO_CACHE_DIR=1 \
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
 ENV TORCH_CUDA_ARCH_LIST "7.0;7.2;7.5;8.0;8.6;8.9;9.0"
+ENV PIP_DEFAULT_TIMEOUT=100
+
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
@@ -106,7 +108,7 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
     python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 
 RUN cd /tmp/ && \
-    python3 -m pip install --default-timeout=1000  --compile # --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+    python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
 
 RUN git clone https://github.com/NVIDIA/apex && \
