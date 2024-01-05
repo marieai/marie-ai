@@ -37,6 +37,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Tweak this list to reduce build time
+# https://developer.nvidia.com/cuda-gpus
+ENV TORCH_CUDA_ARCH_LIST "7.0;7.2;7.5;8.0;8.6;8.9;9.0"
+
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
@@ -57,6 +61,7 @@ RUN apt-get update && apt-get upgrade -y && \
         python3-dev \
         python3-pip \
         python3-wheel \
+        python3-packaging \
         python3-opencv \
         python3-venv \
         python3-setuptools \
@@ -102,6 +107,14 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
 
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+
+
+RUN git clone https://github.com/NVIDIA/apex && \
+    cd apex && git checkout 2386a912164b0c5cfcd8be7a2b890fbac5607c82 && \
+    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
+    python3 setup.py install --cpp_ext --cuda_ext
+
+
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
 
