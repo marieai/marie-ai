@@ -106,7 +106,7 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
     python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 
 RUN cd /tmp/ && \
-    python3 -m pip install --default-timeout=1000  --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+    python3 -m pip install --default-timeout=1000  --compile # --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
 
 RUN git clone https://github.com/NVIDIA/apex && \
