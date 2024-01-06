@@ -93,6 +93,8 @@ def visualize_bboxes(
     viz_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     viz_img = Image.fromarray(viz_img)
     draw = ImageDraw.Draw(viz_img, "RGBA")
+    idx = 0
+
 
     for box in bboxes:
         if format == "xywh":
@@ -109,6 +111,15 @@ def visualize_bboxes(
             ),
             width=1,
         )
+
+        draw.text(
+            (box[0] + 10, box[1] - 10),
+            text=f"{idx}",
+            fill="red",
+            width=1,
+        )
+        idx += 1
+
 
     # viz_img.show()
     return viz_img
