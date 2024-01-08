@@ -4,9 +4,10 @@ import time
 import cv2
 
 from marie.boxes import BoxProcessorUlimDit
+from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
 from marie.document.layoutreader import TextLayout
-from marie.executor.ner.utils import normalize_bbox
+from marie.executor.ner.utils import normalize_bbox, unnormalize_box
 from marie.logger import setup_logger
 from marie.registry_base import RegistryHolder
 from marie.timer import Timer
@@ -20,7 +21,8 @@ if __name__ == "__main__":
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     img_path = "../../examples/set-001/test/fragment-001.png"
-    img_path = "~/tmp/layoutreader/fragment-004.png"
+    img_path = "~/tmp/layoutreader/fragment-002.png"
+    img_path = "~/tmp/192967096.tif"
 
     img_path = os.path.expanduser(img_path)
     file_name = os.path.basename(img_path).split(".")[0]
@@ -32,7 +34,7 @@ if __name__ == "__main__":
     image = cv2.imread(img_path)
 
     text_layout = TextLayout("../../model_zoo/unilm/layoutreader/layoutreader-base-readingbank")
-    run_ocr = False
+    run_ocr = True
 
     if run_ocr:
         icr = TrOcrProcessor(
@@ -95,5 +97,16 @@ if __name__ == "__main__":
 
         print(tl_words)
         print(tl_boxes)
+        width = image.shape[1]
+        height = image.shape[0]
+
+        true_boxes = [
+            unnormalize_box(box, width, height)
+            for idx, box in enumerate(tl_boxes)
+        ]
+
+        bboxes_img = visualize_bboxes(image, boxes, format="xyxy")
+        print(bboxes_img)
+        bboxes_img.save(os.path.expanduser(f"~/tmp/layoutreader/{file_name}_bboxes.png"))
 
     logger.info("Elapsed: %s" % (time.time() - start))

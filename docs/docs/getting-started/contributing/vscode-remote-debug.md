@@ -34,6 +34,11 @@ MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HO
 marie server --start --uses /mnt/data/marie-ai/config/service/marie.yml 
 ```
 
+```shell
+MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HOST=0.0.0.0 \
+marie server --start --uses /etc/marie/config/service/marie-3.0.2x-corr.yml
+```
+
 ## Attaching the debugger
 
 To attach the debugger, you need to create or modify `launch.json` file in your `.vscode` folder.
