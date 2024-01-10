@@ -45,13 +45,13 @@ def extract_additionaltemplates(image, template, numadditionaltemplates, keypoin
     keypointsCandidates_row = np.array(
         (np.unravel_index(ind, similarity.shape))
     ).transpose(1, 0)
-    df = pd.DataFrame(keypointsCandidates_row, columns=list('AB'))
+    df = pd.DataFrame(keypointsCandidates_row, columns=list("AB"))
     keypointsCandidates = df[
-        (df['A'] + 1 > np.ceil(h / 2))
-        & (df['A'] < x - np.ceil(h / 2))
-        & (df['B'] + 1 > np.ceil(w / 2))
-        & (df['B'] < y - np.ceil(w / 2))
-    ].values.astype('float32')
+        (df["A"] + 1 > np.ceil(h / 2))
+        & (df["A"] < x - np.ceil(h / 2))
+        & (df["B"] + 1 > np.ceil(w / 2))
+        & (df["B"] < y - np.ceil(w / 2))
+    ].values.astype("float32")
     keypointCandidatesAccepted = []
     addtemplates = []
     numAccepted = 0
@@ -85,21 +85,27 @@ def extract_additionaltemplates(image, template, numadditionaltemplates, keypoin
 
 
 def preprocess(image):
-    '''The preprocess described in original DIM paper'''
+    """The preprocess described in original DIM paper"""
     cuda = torch.cuda.current_device()
+    if False:
+        imageon = torch.clamp(image, min=0)
+        imageoff = torch.clamp(image, max=0).abs()
+        out = torch.cat((imageon, imageoff), 1).to(cuda)
+        return out
+
     n, c, h, w = image.size()
     X = torch.zeros(n, 2 * c, h, w, device=cuda)
     for i in range(len(image)):
         for j in range(len(image[i])):
             X[i][2 * (j - 1) + 2] = torch.clamp(image[i][j], min=0)
             X[i][2 * (j - 1) + 3] = torch.clamp(image[i][j], max=0).abs()
-    '''    
+    """    
     Alternatively, you can use the fellowing code which run faster  
     imageon=torch.clamp(image,min=0)
     imageoff=torch.clamp(image,max=0).abs()  
     out=torch.cat((imageon,imageoff),1)
     return out
-    '''
+    """
     return X
 
 

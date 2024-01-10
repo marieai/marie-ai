@@ -17,7 +17,7 @@ from .DIM import (
     preprocess,
 )
 
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 
 
 # https://debuggercafe.com/visualizing-filters-and-feature-maps-in-convolutional-neural-networks-using-pytorch/
@@ -85,15 +85,15 @@ class Featex:
 
     def save_feature1(self, module, input, output):
         self.feature1 = output.detach()
-        self.visualize_feature(self.feature1, 'feature1')
+        self.visualize_feature(self.feature1, "feature1")
 
     def save_feature2(self, module, input, output):
         self.feature2 = output.detach()
-        self.visualize_feature(self.feature2, 'feature2')
+        self.visualize_feature(self.feature2, "feature2")
 
     def save_feature3(self, module, input, output):
         self.feature3 = output.detach()
-        self.visualize_feature(self.feature3, 'feature3')
+        self.visualize_feature(self.feature3, "feature3")
 
     def visualize_feature(self, feature, name):
 
@@ -114,14 +114,14 @@ class Featex:
             if i == 16:  # we will visualize only 8x8 blocks from each layer
                 break
             plt.subplot(4, 4, i + 1)
-            plt.imshow(filter, cmap='jet')
+            plt.imshow(filter, cmap="jet")
             plt.axis("on")
 
         print(f"Saving layer {name} feature maps...")
         plt.savefig(f"/tmp/dim/layer_{name}.png")
         plt.close()
 
-    def __call__(self, input, mode='normal'):
+    def __call__(self, input, mode="normal"):
         channel = 64
         if self.use_cuda:
             input = input.cuda()
@@ -143,7 +143,7 @@ class Featex:
         h = self.feature1.size()[3]
         w = self.feature1.size()[2]
 
-        if mode == 'big':
+        if mode == "big":
             # resize feature1 to the same size of feature2
             w = self.feature3.size()[2]
             h = self.feature3.size()[3]
@@ -151,26 +151,26 @@ class Featex:
             reducefeature1 = F.interpolate(
                 reducefeature1,
                 size=(self.feature3.size()[2], self.feature3.size()[3]),
-                mode='bilinear',
+                mode="bilinear",
                 align_corners=True,
             )
             reducefeature2 = F.interpolate(
                 reducefeature2,
                 size=(self.feature3.size()[2], self.feature3.size()[3]),
-                mode='bilinear',
+                mode="bilinear",
                 align_corners=True,
             )
         else:
             reducefeature2 = F.interpolate(
                 reducefeature2,
                 size=(self.feature1.size()[2], self.feature1.size()[3]),
-                mode='bilinear',
+                mode="bilinear",
                 align_corners=True,
             )
             reducefeature3 = F.interpolate(
                 reducefeature3,
                 size=(self.feature1.size()[2], self.feature1.size()[3]),
-                mode='bilinear',
+                mode="bilinear",
                 align_corners=True,
             )
 
@@ -185,6 +185,9 @@ class Featex:
         hog_feature = extract_hog_features(gray, channel, input.device)
         # lbp_feature = extract_lbp_features(gray, channel, input.device)
 
+        # return torch.cat(
+        #     (reducefeature1, reducefeature2, reducefeature3, hog_feature), dim=1
+        # )
         return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
         # return torch.cat((hog_feature, hog_feature), dim=1)
 
@@ -243,8 +246,8 @@ def apply_DIM(I_row, SI_row, template_bbox, pad, pad1, image, numaddtemplates):
         templates = torch.cat((template, addtemplates), 0)
     else:
         templates = template
-    print('Numtemplates=', len(templates))
-    print('Preprocess done,start matching...')
+    print("Numtemplates=", len(templates))
+    print("Preprocess done,start matching...")
     similarity = DIM_matching(SI, templates, 6)[
         pad[0] : pad[0] + I.shape[2], pad[1] : pad[1] + I.shape[3]
     ]
