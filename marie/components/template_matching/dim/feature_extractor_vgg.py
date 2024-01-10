@@ -96,7 +96,8 @@ class Featex:
         self.visualize_feature(self.feature3, 'feature3')
 
     def visualize_feature(self, feature, name):
-        if False:
+
+        if True:
             return
 
         import matplotlib.pyplot as plt
@@ -184,8 +185,8 @@ class Featex:
         hog_feature = extract_hog_features(gray, channel, input.device)
         # lbp_feature = extract_lbp_features(gray, channel, input.device)
 
-        # return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
-        return torch.cat((hog_feature, hog_feature), dim=1)
+        return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
+        # return torch.cat((hog_feature, hog_feature), dim=1)
 
 
 def runpca(x, components, U):
@@ -244,7 +245,7 @@ def apply_DIM(I_row, SI_row, template_bbox, pad, pad1, image, numaddtemplates):
         templates = template
     print('Numtemplates=', len(templates))
     print('Preprocess done,start matching...')
-    similarity = DIM_matching(SI, templates, 5)[
+    similarity = DIM_matching(SI, templates, 6)[
         pad[0] : pad[0] + I.shape[2], pad[1] : pad[1] + I.shape[3]
     ]
     # post processing
@@ -263,4 +264,5 @@ def apply_DIM(I_row, SI_row, template_bbox, pad, pad1, image, numaddtemplates):
         .squeeze()
         .numpy()
     )
+
     return similarity
