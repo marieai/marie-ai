@@ -11,9 +11,15 @@ from torchvision import models, transforms
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...models.pix2pix.pytorch_ssim import ms_ssim, ssim
+from ...utils.image_utils import crop_to_content
+from ...utils.nms import non_max_suppression_fast
+from ...utils.overlap import find_overlap
+from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
 from .dim.DIM import odd
 from .dim.feature_extractor_vgg import Featex, apply_DIM
+from .dim.utils import IoU
 
 
 class DeepDimTemplateMatcher(BaseTemplateMatcher):
@@ -95,8 +101,9 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
     def predict(
         self,
         frame: np.ndarray,
-        templates: List[np.ndarray],
-        labels: List[str],
+        template_frames: list[np.ndarray],
+        template_boxes: list[tuple[int, int, int, int]],
+        template_labels: list[str],
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
@@ -110,19 +117,18 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         image = frame
         image_plot = image.copy()
 
-        for template_raw in templates:
-            template_bbox = [
-                0,
-                0,
-                template_raw.shape[1],
-                template_raw.shape[0],
-            ]  # x, y, w, h
+        for template_raw, template_bbox, template_label in zip(
+            template_frames, template_boxes, template_labels
+        ):
+            print("template_label", template_label)
+            print("template_bbox", template_bbox)
 
             x, y, w, h = [int(round(t)) for t in template_bbox]
             template_plot = cv2.rectangle(
                 template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
             )
 
+            cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
             image_transform = transforms.Compose(
                 [
                     transforms.ToTensor(),
@@ -132,6 +138,18 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                     ),
                 ]
             )
+            # ensure that the image is in RGB
+            if len(image.shape) == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            # ensure that the template is in RGB
+            if len(template_raw.shape) == 2:
+                template_raw = cv2.cvtColor(template_raw, cv2.COLOR_GRAY2RGB)
+
+            if image.shape[2] == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            if template_raw.shape[2] == 2:
+                template_raw = cv2.cvtColor(template_raw, cv2.COLOR_GRAY2RGB)
+
             T_image = image_transform(template_raw.copy()).unsqueeze(0)
             T_search_image = image_transform(image.copy()).unsqueeze(0)
 
@@ -179,23 +197,28 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                     'symmetric',
                 )
             )
-            similarity = apply_DIM(I_feat, SI_pad, resize_bbox, pad2, pad1, image, 10)
+            similarity = apply_DIM(I_feat, SI_pad, resize_bbox, pad2, pad1, image, 5)
+            print('Matching done.')
+            print('similarity shape:', similarity.shape)
 
             ptx, pty = np.where(similarity == np.amax(similarity))
-            image_pd = tuple(
-                [
-                    pty[0] + 1 - (odd(template_bbox[2]) - 1) / 2,
-                    ptx[0] + 1 - (odd(template_bbox[3]) - 1) / 2,
-                    template_bbox[2],
-                    template_bbox[3],
-                ]
-            )
+            image_pd = [
+                pty[0] + 1 - (odd(template_bbox[2]) - 1) / 2,
+                ptx[0] + 1 - (odd(template_bbox[3]) - 1) / 2,
+                template_bbox[2],
+                template_bbox[3],
+            ]
+            image_pd = [int(t) for t in image_pd]
             print('Predict box:', image_pd)
 
             # Plotting
-            x, y, w, h = [int(round(t)) for t in image_pd]
+            xp, yp, wp, hp = [int(round(t)) for t in image_pd]
             image_plot = cv2.rectangle(
-                image_plot, (int(x), int(y)), (int(x + w), int(y + h)), (255, 0, 0), 2
+                image_plot,
+                (int(xp), int(yp)),
+                (int(xp + wp), int(yp + hp)),
+                (255, 0, 0),
+                2,
             )
 
             fig, ax = plt.subplots(1, 3, figsize=(20, 5))
@@ -207,4 +230,210 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             plt.savefig('/tmp/dim/results.png')
             plt.pause(0.0001)
             plt.close()
+
+            from skimage import metrics
+
+            # get template snippet from template image
+            template = template_raw[y : y + h, x : x + w, :]
+            pred_snippet = image[
+                image_pd[1] : image_pd[1] + h, image_pd[0] : image_pd[0] + w, :
+            ]
+
+            image1_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+            image2_gray = cv2.cvtColor(pred_snippet, cv2.COLOR_BGR2GRAY)
+
+            # save for debugging
+            cv2.imwrite('/tmp/dim/image1_gray.png', image1_gray)
+            cv2.imwrite('/tmp/dim/image2_gray.png', image2_gray)
+            cv2.imwrite('/tmp/dim/template_raw.png', template_raw)
+
+            # Calculate SSIM
+            ssim_score = metrics.structural_similarity(
+                image1_gray, image2_gray, full=True
+            )
+            print(f"SSIM Score: ", round(ssim_score[0], 2))
+
+            k = 10  # number of top results to select
+            # https://blog.finxter.com/np-argpartition-a-simple-illustrated-guide/
+
+            # top = np.argpartition(similarity, k, axis=1)[:, :k]
+            # val = similarity[np.arange(similarity.shape[0])[:, None], top]
+
+            # Flatten the array and get the indices of the top-k elements
+            top_k_indices = np.argpartition(similarity.flatten(), -k)[-k:]
+
+            # Convert the indices back to 2D
+            ptx, pty = np.unravel_index(top_k_indices, similarity.shape)
+
+            # Create a list of tuples for the top-k results
+            image_pd_list = [
+                (
+                    pty[i] + 1 - (odd(template_bbox[2]) - 1) / 2,
+                    ptx[i] + 1 - (odd(template_bbox[3]) - 1) / 2,
+                    template_bbox[2],
+                    template_bbox[3],
+                )
+                for i in range(k)
+            ]
+
+            # convert to x_min, y_min, x_max, y_max
+            image_pd_list = [
+                [
+                    max(int(round(t[0])), 0),
+                    int(round(t[1])),
+                    int(round(t[0] + t[2])),
+                    int(round(t[1] + t[3])),
+                ]
+                for t in image_pd_list
+            ]
+
+            print('Predict box list:', image_pd_list)
+            if True:
+                filtered = []
+                visited = [False for _ in range(len(image_pd_list))]
+                for idx in range(len(image_pd_list)):
+                    if visited[idx]:
+                        continue
+                    visited[idx] = True
+                    pd = image_pd_list[idx]
+                    overlaps, indexes = find_overlap(pd, image_pd_list)
+                    filtered.append(pd)
+                    for i in indexes:
+                        visited[i] = True
+
+                image_pd_list = filtered
+            # apply non-max suppression
+            # image_pd_list = non_max_suppression_fast(np.array(image_pd_list), 0.5)
+
+            #  convert to x_min, y_min, w, h
+            image_pd_list = [
+                [
+                    int(round(t[0])),
+                    int(round(t[1])),
+                    int(round(t[2] - t[0])),
+                    int(round(t[3] - t[1])),
+                ]
+                for t in image_pd_list
+            ]
+
+            # image_pd_list = non_max_suppression(np.array(image_pd_list), 0.5)
+            print('Predict box list:', image_pd_list)
             print('Done, results saved')
+            # image1_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+            output = image.copy()
+            # https://towardsdatascience.com/measuring-similarity-in-two-images-using-python-b72233eb53c6
+            for idx, image_pd in enumerate(image_pd_list):
+                pred_snippet = image[
+                    image_pd[1] : image_pd[1] + h, image_pd[0] : image_pd[0] + w, :
+                ]
+                image2_gray = cv2.cvtColor(pred_snippet, cv2.COLOR_BGR2GRAY)
+
+                image1_gray = crop_to_content(image1_gray, content_aware=False)
+                image2_gray = crop_to_content(image2_gray, content_aware=False)
+                # find the max dimension of the two images and resize the other image to match it
+                max_y = max(image1_gray.shape[0], image2_gray.shape[0]) * 3
+                max_x = max(image1_gray.shape[1], image2_gray.shape[1]) * 3
+
+                max_y = int(max_y)
+                max_x = int(max_x)
+
+                image1_gray, coord = resize_image(
+                    image1_gray,
+                    desired_size=(max_y, max_x),
+                    color=(255, 255, 255),
+                    keep_max_size=False,
+                )
+                image2_gray, coord = resize_image(
+                    image2_gray,
+                    desired_size=(max_y, max_x),
+                    color=(255, 255, 255),
+                    keep_max_size=False,
+                )
+
+                stacked = np.hstack((image1_gray, image2_gray))
+
+                # save for debugging
+                cv2.imwrite(f'/tmp/dim/image2_gray_{idx}.png', image2_gray)
+
+                # # Calculate SSIM
+                blur1 = cv2.GaussianBlur(image1_gray, (7, 7), sigmaX=1.5, sigmaY=1.5)
+                blur2 = cv2.GaussianBlur(image2_gray, (7, 7), sigmaX=1.5, sigmaY=1.5)
+
+                # stacked = np.hstack((blur1, blur2))
+                cv2.imwrite(f'/tmp/dim/stacked_{idx}.png', stacked)
+
+                # make sure the images are in the correct format and has three channels
+                g1 = cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2RGB)
+                g2 = cv2.cvtColor(image2_gray, cv2.COLOR_GRAY2RGB)
+
+                g1 = g1.astype(np.uint8)
+                g2 = g2.astype(np.uint8)
+
+                g1 = torch.from_numpy(g1)
+                g2 = torch.from_numpy(g2)
+
+                # move channel to the first dimension
+                g1 = g1.permute(2, 0, 1)
+                g2 = g2.permute(2, 0, 1)
+
+                # add batch dimension
+                g1 = g1.unsqueeze(0)
+                g2 = g2.unsqueeze(0)
+
+                from sewar.full_ref import (
+                    ergas,
+                    mse,
+                    msssim,
+                    psnr,
+                    rase,
+                    rmse,
+                    sam,
+                    scc,
+                    ssim,
+                    uqi,
+                    vifp,
+                )
+
+                print('-----------------------------------')
+                print(f"SSIM Score[{idx}]: ", round(ssim_score[0], 2), image_pd)
+                org = image1_gray
+                blur = image2_gray
+
+                # org = blur1
+                # blur = blur2
+
+                print("MSE: ", mse(blur, org))
+                print("RMSE: ", rmse(blur, org))
+                print("PSNR: ", psnr(blur, org))
+                print("SSIM: ", ssim(blur, org))
+                print("UQI: ", uqi(blur, org))
+                # print("MSSSIM: ", msssim(blur, org))
+                print("ERGAS: ", ergas(blur, org))
+                print("SCC: ", scc(blur, org))
+                print("RASE: ", rase(blur, org))
+                print("SAM: ", sam(blur, org))
+                print("VIF: ", vifp(blur, org))
+
+                score = vifp(org, blur)
+
+                # draw rectangle on image
+                cv2.rectangle(
+                    output,
+                    (image_pd[0], image_pd[1]),
+                    (image_pd[0] + image_pd[2], image_pd[1] + image_pd[3]),
+                    (0, 255, 0),
+                    2,
+                )
+                # add label
+                cv2.putText(
+                    output,
+                    f"{round(score, 2)}",
+                    (image_pd[0], image_pd[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 255),
+                    1,
+                )
+
+            cv2.imwrite(f'/tmp/dim/output.png', output)

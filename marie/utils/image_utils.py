@@ -203,7 +203,11 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
     cv2.imwrite("/tmp/fragments/frame-src.png", frame)
 
     # Transform source image to gray if it is not already
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # check if the image is already in grayscale
+    if len(frame.shape) == 3 and frame.shape[2] == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = frame
 
     if content_aware:
         # apply division normalization to preprocess the image

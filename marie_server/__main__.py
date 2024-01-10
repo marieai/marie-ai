@@ -134,7 +134,6 @@ def main(
     :param env:
     :param env_file:
     """
-
     try:
         # setup debugpy for remote debugging
         if strtobool(os.environ.get("MARIE_DEBUG", False)):

@@ -18,8 +18,9 @@ class BaseTemplateMatcher(ABC):
     def predict(
         self,
         frame: np.ndarray,
-        templates: List[np.ndarray],
-        labels: List[str],
+        template_frames: list[np.ndarray],
+        template_boxes: list[tuple[int, int, int, int]],
+        template_labels: list[str],
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
@@ -36,8 +37,9 @@ class BaseTemplateMatcher(ABC):
     def run(
         self,
         frames: list[np.ndarray],
-        templates: list[np.ndarray],
-        labels: list[str],
+        template_frames: list[np.ndarray],
+        template_boxes: list[tuple[int, int, int, int]],
+        template_labels: list[str],
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
@@ -61,7 +63,7 @@ class BaseTemplateMatcher(ABC):
         """
 
         # assertions can be disabled via the the -O flag  (python -O)
-        assert len(templates) == len(labels)
+        # assert len(templates) == len(labels)
         assert 0 <= score_threshold <= 1
         assert 0 <= max_overlap <= 1
         assert max_objects > 0
@@ -77,15 +79,14 @@ class BaseTemplateMatcher(ABC):
 
         for i, (frame, region) in enumerate(zip(frames, regions)):
             self.logger.info(f"matching frame {i} region: {region}")
-
             # check depth and number of channels
             assert frame.ndim == 3
-            assert frame.shape[2] == templates[0].shape[2]
 
             predictions = self.predict(
                 frame,
-                templates,
-                labels,
+                template_frames,
+                template_boxes,
+                template_labels,
                 score_threshold,
                 max_overlap,
                 max_objects,
@@ -97,7 +98,7 @@ class BaseTemplateMatcher(ABC):
 
             results[i] = {
                 "page": i,
-                "boxes": predictions,
+                "predictions": predictions,
             }
 
         return results

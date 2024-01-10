@@ -59,8 +59,9 @@ def resize_image(
     image = cv2.copyMakeBorder(
         image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
     )
-    # convert top, bottom, left, right to x, y, w, h
-    x, y, w, h = left, top, right - left, bottom - top
 
-    # cv2.imwrite("/tmp/marie/box_framed.png", image)
+    # convert top, bottom, left, right to x, y, w, h
+    x, y, w, h = left, top, size[1], size[0]
+
+    cv2.imwrite("/tmp/dim/box_framed.png", image)
     return image, (x, y, w, h)
