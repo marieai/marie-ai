@@ -22,6 +22,7 @@ def test_template_matcher():
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     import intel_extension_for_pytorch as ipex
+
     print("ipex", ipex.__version__)
     print("torch", torch.__version__)
 
@@ -36,13 +37,20 @@ def test_template_matcher():
     # 0.1061895 empty image
     # 0.1061895 empty image
     for i in range(1):
-        frames = frames_from_docs(docs_from_file("./assets/template_matching/sample-003.png"))
-        frames_t = frames_from_docs(docs_from_file("./assets/template_matching/template-001.png"))
-        frames_t = frames_from_docs(docs_from_file("./assets/template_matching/template-002.png"))
+        frames = frames_from_docs(
+            docs_from_file("./assets/template_matching/sample-003.png")
+        )
+        frames_t = frames_from_docs(
+            docs_from_file("./assets/template_matching/template-001.png")
+        )
+        frames_t = frames_from_docs(
+            docs_from_file("./assets/template_matching/template-002.png")
+        )
 
         template_coords = [[10, 135, 90, 30]]  #
         template_coords = [[195, 90, 90, 30]]  # -001
-        template_coords = [[177, 92, 121, 29]]  # -002
+        template_coords = [[127, 92, 234, 27]]  # -002 - CLAIM PROVIDER
+        template_coords = [[127, 92, 87, 27]]  # -002 - CLAIM
 
         template_bboxes = []
         template_frames = []
@@ -50,10 +58,14 @@ def test_template_matcher():
 
         for c in template_coords:
             x, y, w, h = c
-            template = frames_t[0][y: y + h, x: x + w, :]
+            template = frames_t[0][y : y + h, x : x + w, :]
             # center the template in same size as the input image
-            template, coord = resize_image(template, desired_size=(frames_t[0].shape[0], frames_t[0].shape[1]),
-                                           color=(255, 255, 255), keep_max_size=True)
+            template, coord = resize_image(
+                template,
+                desired_size=(frames_t[0].shape[0], frames_t[0].shape[1]),
+                color=(255, 255, 255),
+                keep_max_size=True,
+            )
             print(coord)
             template_frames.append(template)
             template_bboxes.append(coord)
@@ -61,6 +73,10 @@ def test_template_matcher():
             cv2.imwrite(f"/tmp/dim/template.png", template)
 
         with TimeContext(f"Eval # {i}"):
-            results = matcher.run(frames=frames, template_frames=template_frames, template_boxes=template_bboxes,
-                                  template_labels=template_labels)
+            results = matcher.run(
+                frames=frames,
+                template_frames=template_frames,
+                template_boxes=template_bboxes,
+                template_labels=template_labels,
+            )
             print(results)
