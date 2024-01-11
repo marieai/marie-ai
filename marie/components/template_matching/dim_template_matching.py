@@ -5,7 +5,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from patchify import patchify
+from patchify import patchify, unpatchify
 from sewar.full_ref import rmse
 from skimage import metrics
 from torch import nn
@@ -230,6 +230,7 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             # clip box to image size
             image_pd[0] = max(image_pd[0], 0)
             image_pd[1] = max(image_pd[1], 0)
+            print("Predict box:", image_pd)
 
             # Plotting
             xp, yp, wp, hp = [int(round(t)) for t in image_pd]
@@ -266,6 +267,11 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             cv2.imwrite("/tmp/dim/template_raw.png", template_raw)
 
             k = max_objects  # number of top results to select
+            # Calculate SSIM
+            p_score = metrics.structural_similarity(image1_gray, image2_gray, full=True)
+            print(f"SSIM Score: ", round(p_score[0], 2))
+
+            k = 3  # number of top results to select
             # https://blog.finxter.com/np-argpartition-a-simple-illustrated-guide/
             image_pd_list = []
             max_sim = np.amax(similarity)
@@ -291,6 +297,12 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 ]
 
                 max_sim = 6  # By observation
+                print("XXXXXX")
+                print("box", box)
+                sim_area = similarity[
+                    box[1] : box[1] + box[3], box[0] : box[0] + box[2]
+                ]
+
                 val = np.amax(sim_area) / max_sim
                 region_sim.append(val)
                 print("SiM VAL ", val)
@@ -384,6 +396,64 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 patch_size_h = min(patch_size_h, image1_gray.shape[0])
                 patch_size_w = min(patch_size_w, image1_gray.shape[1])
 
+                patches_t = patchify(
+                    blur,
+                    (patch_size_h, patch_size_w),
+                    step=min(patch_size_h, patch_size_w),
+                )
+                patches_m = patchify(
+                    org,
+                    (patch_size_h, patch_size_w),
+                    step=min(patch_size_h, patch_size_w),
+                )
+
+                print("Patches shape: {}".format(patches_t.shape))
+                print("Patches shape: {}".format(patches_m.shape))
+
+                self.viz_patches(patches_t, f"/tmp/dim/patches_t_{idx}.png")
+                self.viz_patches(patches_m, f"/tmp/dim/patches_m_{idx}.png")
+
+                square_x = patches_t.shape[1]
+                square_y = patches_t.shape[0]
+
+                ix = 1
+                s0_total = 0
+                s1_total = 0
+
+                for i in range(square_y):
+                    for j in range(square_x):
+                        p1 = patches_t[i, j, :, :]
+                        p2 = patches_m[i, j, :, :]
+
+                        s0 = rmse(p1, p2)  # value between 0 and 255
+                        s0 = 1 - s0 / 255  # normalize rmse to 1
+                        # s0 = 0
+
+                        s1 = metrics.structural_similarity(
+                            p1, p2, full=True, data_range=1
+                        )[0]
+
+                        s0_total += max(s0, 0)
+                        s1_total += max(s1, 0)
+
+                        # print(f"PP SSIM Score[{idx}]: ", round(s1, 2), s0)
+                        ix += 1
+
+                s0_total_norm = s0_total / (square_x * square_y)
+                s1_total_norm = s1_total / (square_x * square_y)
+
+                print("s0_total", s0_total)
+                print("s1_total", s1_total)
+                print("s0_total_norm", s0_total_norm)
+                print("s1_total_norm", s1_total_norm)
+
+                sim_val = region_sim[idx]
+
+                score = (s0_total_norm + s1_total_norm) / 2
+                score = score * sim_val
+
+                patch_size_h = image1_gray.shape[0] // 2
+                patch_size_w = image1_gray.shape[1] // 2
                 patches_t = patchify(
                     blur,
                     (patch_size_h, patch_size_w),

@@ -5,9 +5,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from patchify import patchify
-from sewar.full_ref import rmse
-from skimage import metrics
 from torch import nn
 from torchvision import models, transforms
 
@@ -105,7 +102,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
         region: tuple[int, int, int, int] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
@@ -230,6 +226,8 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             plt.pause(0.0001)
             plt.close()
 
+            from skimage import metrics
+
             # get template snippet from template image
             template = template_raw[y : y + h, x : x + w, :]
             pred_snippet = image[
@@ -250,7 +248,8 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             )
             print(f"SSIM Score: ", round(ssim_score[0], 2))
 
-            k = max_objects  # number of top results to select
+            k = 3  # number of top results to select
+            # https://blog.finxter.com/np-argpartition-a-simple-illustrated-guide/
             image_pd_list = []
             max_sim = np.amax(similarity)
 
