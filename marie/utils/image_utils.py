@@ -228,8 +228,9 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
     min_x_pad = 16  # img_w // 16
     min_y_pad = img_h // 4
 
-    print(min_x_pad)
-    print(min_y_pad)
+    if len(indices[0]) == 0 or len(indices[1]) == 0:
+        print("No content found")
+        return frame
 
     # indices are in y,X format
     if content_aware:
@@ -243,9 +244,8 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    print(x, y, w, h)
     cropped = frame[y : y + h + 1, x : x + w + 1].copy()
-    cv2.imwrite("/tmp/fragments/cropped.png", cropped)
+    # cv2.imwrite("/tmp/fragments/cropped.png", cropped)
 
     dt = time.time() - start
     return cropped

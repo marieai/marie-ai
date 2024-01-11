@@ -63,5 +63,5 @@ def resize_image(
     # convert top, bottom, left, right to x, y, w, h
     x, y, w, h = left, top, size[1], size[0]
 
-    cv2.imwrite("/tmp/dim/box_framed.png", image)
+    # cv2.imwrite("/tmp/dim/box_framed.png", image)
     return image, (x, y, w, h)

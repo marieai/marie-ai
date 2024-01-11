@@ -5,6 +5,9 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from patchify import patchify
+from sewar.full_ref import rmse
+from skimage import metrics
 from torch import nn
 from torchvision import models, transforms
 
@@ -12,10 +15,9 @@ from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...utils.image_utils import crop_to_content
-from ...utils.overlap import find_overlap
 from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
-from .dim.DIM import conv2_same, odd
+from .dim.DIM import odd
 from .dim.feature_extractor_vgg import Featex, apply_DIM
 
 
@@ -93,6 +95,26 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
 
         return model
 
+    def viz_patches(self, patches, filename):
+        plt.figure(figsize=(9, 9))
+        square_x = patches.shape[1]
+        square_y = patches.shape[0]
+
+        ix = 1
+        for i in range(square_y):
+            for j in range(square_x):
+                # specify subplot and turn of axis
+                ax = plt.subplot(square_y, square_x, ix)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                # plot
+                plt.imshow(patches[i, j, :, :], cmap="gray")
+                ix += 1
+        # show the figure
+        # plt.show()
+        plt.savefig(filename)
+        plt.close()
+
     def predict(
         self,
         frame: np.ndarray,
@@ -102,6 +124,7 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
+        window_size: tuple[int, int] = (384, 128),  # h, w
         region: tuple[int, int, int, int] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
@@ -204,7 +227,9 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 template_bbox[3],
             ]
             image_pd = [int(t) for t in image_pd]
-            print("Predict box:", image_pd)
+            # clip box to image size
+            image_pd[0] = max(image_pd[0], 0)
+            image_pd[1] = max(image_pd[1], 0)
 
             # Plotting
             xp, yp, wp, hp = [int(round(t)) for t in image_pd]
@@ -226,8 +251,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             plt.pause(0.0001)
             plt.close()
 
-            from skimage import metrics
-
             # get template snippet from template image
             template = template_raw[y : y + h, x : x + w, :]
             pred_snippet = image[
@@ -242,15 +265,12 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             cv2.imwrite("/tmp/dim/image2_gray.png", image2_gray)
             cv2.imwrite("/tmp/dim/template_raw.png", template_raw)
 
-            # Calculate SSIM
-            ssim_score = metrics.structural_similarity(
-                image1_gray, image2_gray, full=True
-            )
-            print(f"SSIM Score: ", round(ssim_score[0], 2))
-
-            k = 3  # number of top results to select
+            k = max_objects  # number of top results to select
             # https://blog.finxter.com/np-argpartition-a-simple-illustrated-guide/
             image_pd_list = []
+            max_sim = np.amax(similarity)
+            print("max_sim", max_sim)
+            region_sim = []
 
             for i in range(k):
                 ptx, pty = np.where(similarity == np.amax(similarity))
@@ -260,23 +280,24 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                     template_bbox[2],
                     template_bbox[3],
                 ]
+                # clip box to image size
+                box[0] = max(box[0], 0)
+                box[1] = max(box[1], 0)
+                box[2] = min(box[2], image.shape[1])
+                box[3] = min(box[3], image.shape[0])
+
+                sim_area = similarity[
+                    box[1] : box[1] + box[3], box[0] : box[0] + box[2]
+                ]
+
+                max_sim = 6  # By observation
+                val = np.amax(sim_area) / max_sim
+                region_sim.append(val)
+                print("SiM VAL ", val)
+                print("-----------")
+
                 similarity[box[1] : box[1] + box[3], box[0] : box[0] + box[2]] = 0
                 image_pd_list.append(box)
-
-            print("Predict box list:", image_pd_list)
-            print("Done, results saved")
-
-            if False:
-                # Create a list of tuples for the top-k results
-                image_pd_list = [
-                    (
-                        pty[i] + 1 - (odd(template_bbox[2]) - 1) / 2,
-                        ptx[i] + 1 - (odd(template_bbox[3]) - 1) / 2,
-                        template_bbox[2],
-                        template_bbox[3],
-                    )
-                    for i in range(k)
-                ]
 
             # convert to x_min, y_min, x_max, y_max
             image_pd_list = [
@@ -290,23 +311,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
             ]
 
             print("Predict box list:", image_pd_list)
-            if False:
-                filtered = []
-                visited = [False for _ in range(len(image_pd_list))]
-                for idx in range(len(image_pd_list)):
-                    if visited[idx]:
-                        continue
-                    visited[idx] = True
-                    pd = image_pd_list[idx]
-                    overlaps, indexes = find_overlap(pd, image_pd_list)
-                    filtered.append(pd)
-                    for i in indexes:
-                        visited[i] = True
-
-                image_pd_list = filtered
-            # apply non-max suppression
-            # image_pd_list = non_max_suppression_fast(np.array(image_pd_list), 0.5)
-
             #  convert to x_min, y_min, w, h
             image_pd_list = [
                 [
@@ -320,11 +324,12 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
 
             # image_pd_list = non_max_suppression(np.array(image_pd_list), 0.5)
             print("Predict box list:", image_pd_list)
-            print("Done, results saved")
 
             output = image.copy()
             template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
             template_gray = template_gray.astype(np.uint8)
+
+            predictions = []
 
             for idx, image_pd in enumerate(image_pd_list):
                 pred_snippet = image[
@@ -332,15 +337,13 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 ]
 
                 image2_gray = cv2.cvtColor(pred_snippet, cv2.COLOR_BGR2GRAY)
-                image2_gray = crop_to_content(image2_gray, content_aware=False)
-                image1_gray = crop_to_content(template_gray, content_aware=False)
+                image2_gray = crop_to_content(image2_gray, content_aware=True)
+                image1_gray = crop_to_content(template_gray, content_aware=True)
 
                 # find the max dimension of the two images and resize the other image to match it
-                max_y = max(image1_gray.shape[0], image2_gray.shape[0]) * 1
-                max_x = max(image1_gray.shape[1], image2_gray.shape[1]) * 1
-
-                max_y = int(max_y)
-                max_x = int(max_x)
+                # we add 16 pixels to the max dimension to ensure that the image does not touch the border
+                max_y = int(max(image1_gray.shape[0], image2_gray.shape[0])) + 16
+                max_x = int(max(image1_gray.shape[1], image2_gray.shape[1])) + 16
 
                 image1_gray, coord = resize_image(
                     image1_gray,
@@ -348,6 +351,7 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                     color=(255, 255, 255),
                     keep_max_size=False,
                 )
+
                 image2_gray, coord = resize_image(
                     image2_gray,
                     desired_size=(max_y, max_x),
@@ -367,118 +371,76 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 # stacked = np.hstack((blur1, blur2))
                 cv2.imwrite(f"/tmp/dim/stacked_{idx}.png", stacked)
 
-                from sewar.full_ref import (
-                    ergas,
-                    mse,
-                    psnr,
-                    rase,
-                    rmse,
-                    sam,
-                    scc,
-                    ssim,
-                    uqi,
-                    vifp,
-                )
-
-                print("-----------------------------------")
-                print(f"SSIM Score[{idx}]: ", round(ssim_score[0], 2), image_pd)
                 org = blur1
                 blur = blur2
 
-                # make sure we have a 3 channel image
-                if False:
-                    t = image_transform(
-                        cv2.cvtColor(org, cv2.COLOR_GRAY2RGB).copy()
-                    ).unsqueeze(0)
+                patch_size_h = image1_gray.shape[0] // 8
+                patch_size_w = image1_gray.shape[1] // 8
 
-                    m = image_transform(
-                        cv2.cvtColor(blur, cv2.COLOR_GRAY2RGB).copy()
-                    ).unsqueeze(0)
+                patch_size_h = 16
+                patch_size_w = 16
 
-                    f1 = self.featex(t, "big")
-                    f2 = self.featex(m, "big")
-                    print("f1", f1.shape)
-                    print("f2", f2.shape)
+                # ensure that the patch is not larger than the image
+                patch_size_h = min(patch_size_h, image1_gray.shape[0])
+                patch_size_w = min(patch_size_w, image1_gray.shape[1])
 
-                    # remove the batch dimension
-                    f1 = f1.squeeze(0)
-                    f2 = f2.squeeze(0)
+                patches_t = patchify(
+                    blur,
+                    (patch_size_h, patch_size_w),
+                    step=min(patch_size_h, patch_size_w),
+                )
+                patches_m = patchify(
+                    org,
+                    (patch_size_h, patch_size_w),
+                    step=min(patch_size_h, patch_size_w),
+                )
 
-                    # get feature size
-                    f_size = f1.shape[0]
-                    if f_size > 16:
-                        f_size = 16
+                print("Patches shape: {}".format(patches_t.shape))
+                print("Patches shape: {}".format(patches_m.shape))
 
-                    # template = torch.flip(t, [2, 3])
-                    # similarity = conv2_same(m, template).squeeze().cpu().numpy()
-                    # cv2.imwrite(f"/tmp/dim/similarity_{idx}.png", similarity)
+                self.viz_patches(patches_t, f"/tmp/dim/patches_t_{idx}.png")
+                self.viz_patches(patches_m, f"/tmp/dim/patches_m_{idx}.png")
 
-                    # new flat image
-                    f_img = np.zeros((f1.shape[1], f1.shape[2] * f_size))
-                    t_img = np.zeros((f2.shape[1], f2.shape[2] * f_size))
-                    # fill in the flat image
-                    for i in range(f_size):
-                        # val = f1[i].cpu().numpy().transpose(1, 2, 0)
-                        f_img[:, i * f1.shape[2] : (i + 1) * f1.shape[2]] = (
-                            f1[i].cpu().numpy() * 255
-                        )
-                        t_img[:, i * f2.shape[2] : (i + 1) * f2.shape[2]] = (
-                            f2[i].cpu().numpy() * 255
-                        )
+                square_x = patches_t.shape[1]
+                square_y = patches_t.shape[0]
 
-                    print("f_img", f_img.shape)
-                    f_img = f_img.astype(np.uint8)
-                    t_img = t_img.astype(np.uint8)
+                ix = 1
+                s0_total = 0
+                s1_total = 0
 
-                    cv2.imwrite(f"/tmp/dim/f_img_{idx}.png", f_img)
-                    cv2.imwrite(f"/tmp/dim/t_img_{idx}.png", t_img)
+                for i in range(square_y):
+                    for j in range(square_x):
+                        p1 = patches_t[i, j, :, :]
+                        p2 = patches_m[i, j, :, :]
 
-                    blur = f_img
-                    org = t_img
+                        s0 = rmse(p1, p2)  # value between 0 and 255
+                        s0 = 1 - s0 / 255  # normalize rmse to 1
+                        # s0 = 0
 
-                print("MSE: ", mse(blur, org))
-                print("RMSE: ", rmse(blur, org))
-                print("PSNR: ", psnr(blur, org))
-                print("SSIM: ", ssim(blur, org))
-                print("UQI: ", uqi(blur, org))
-                # print("MSSSIM: ", msssim(blur, org))
-                print("ERGAS: ", ergas(blur, org))
-                print("SCC: ", scc(blur, org))
-                print("RASE: ", rase(blur, org))
-                print("SAM: ", sam(blur, org))
-                # print("VIF: ", vifp(blur, org))
+                        s1 = metrics.structural_similarity(
+                            p1, p2, full=True, data_range=1
+                        )[0]
 
-                s0 = rmse(org, blur)  # value between 0 and 255
-                s1 = ssim(org, blur, MAX=255)[1]  # value between 0 and 1
-                s2 = 0  # vifp(org, blur, sigma_nsq=2.0)  # value between 0 and 1
-                s3 = psnr(
-                    org, blur, MAX=255
-                )  # value between 0 and 100 (db) INF if org == blur
-                # normalize pnsr to 1
-                if s3 == float("inf"):
-                    s3 = 1
-                else:
-                    s3 = s3 / 100
+                        s0_total += max(s0, 0)
+                        s1_total += max(s1, 0)
 
-                # normalize rmse to 1
-                s0 = 1 - s0 / 255
+                        # print(f"PP SSIM Score[{idx}]: ", round(s1, 2), s0)
+                        ix += 1
 
-                print("s0", s0)
-                print("s1", s1)
-                print("s2", s2)
-                print("s3", s3)
+                s0_total_norm = s0_total / (square_x * square_y)
+                s1_total_norm = s1_total / (square_x * square_y)
 
-                flat_1 = blur.flatten()
-                flat_2 = org.flatten()
-                from scipy.spatial import distance
+                print("s0_total", s0_total)
+                print("s1_total", s1_total)
+                print("s0_total_norm", s0_total_norm)
+                print("s1_total_norm", s1_total_norm)
 
-                ham_dist = distance.hamming(flat_1, flat_2)
-                # ham_dist = 1 - ham_dist
-                print("ham_dist", ham_dist)
+                sim_val = region_sim[idx]
 
-                # create composite score from ssim, vifp, and psnr scores then normalize to 1
-                score = (s0 + s1) / 2 + (1 - ham_dist)
-                print("score before norm : ", score)
+                score = (s0_total_norm + s1_total_norm) / 2
+                score = score * sim_val
+
+                print("score norm : ", score, sim_val)
                 score = min(score, 1.0)
 
                 # draw rectangle on image
@@ -493,14 +455,22 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 cv2.putText(
                     output,
                     f"{round(score, 2)}",
-                    (image_pd[0], image_pd[1] - 5),
+                    (image_pd[0], image_pd[1] + image_pd[3] // 2 + 5),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
                     (0, 0, 255),
                     1,
                 )
 
+                predictions.append(
+                    {
+                        "bbox": image_pd,
+                        "label": template_label,
+                        "score": round(score, 3),
+                    }
+                )
             cv2.imwrite(f"/tmp/dim/output.png", output)
+            return predictions
 
 
 # ref https://stackoverflow.com/questions/77230340/ssim-is-large-but-the-two-images-are-not-similar-at-all

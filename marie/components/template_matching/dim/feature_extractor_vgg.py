@@ -122,7 +122,7 @@ class Featex:
         plt.close()
 
     def __call__(self, input, mode="normal"):
-        channel = 64
+        channel = 32  # 64
         if self.use_cuda:
             input = input.cuda()
         _ = self.model(input)
@@ -188,7 +188,10 @@ class Featex:
         # return torch.cat(
         #     (reducefeature1, reducefeature2, reducefeature3, hog_feature), dim=1
         # )
-        return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
+        # return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
+        return torch.cat(
+            (hog_feature, reducefeature1, reducefeature2, reducefeature3), dim=1
+        )
         # return torch.cat((hog_feature, hog_feature), dim=1)
 
 
@@ -248,7 +251,7 @@ def apply_DIM(I_row, SI_row, template_bbox, pad, pad1, image, numaddtemplates):
         templates = template
     print("Numtemplates=", len(templates))
     print("Preprocess done,start matching...")
-    similarity = DIM_matching(SI, templates, 6)[
+    similarity = DIM_matching(SI, templates, 5)[
         pad[0] : pad[0] + I.shape[2], pad[1] : pad[1] + I.shape[3]
     ]
     # post processing
