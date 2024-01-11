@@ -68,7 +68,7 @@ def test_template_matcher():
     for i in range(1):
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
-            docs_from_file("./assets/template_matching/sample-004.png")
+            docs_from_file("./assets/template_matching/sample-003.png")
         )
 
         samples = {
@@ -177,6 +177,17 @@ def test_template_matcher():
                     keep_max_size=True,
                 )
 
+        for c in template_coords:
+            x, y, w, h = c
+            template = frames_t[0][y : y + h, x : x + w, :]
+            # center the template in same size as the input image
+            template, coord = resize_image(
+                template,
+                desired_size=(frames_t[0].shape[0], frames_t[0].shape[1]),
+                color=(255, 255, 255),
+                keep_max_size=True,
+            )
+            print(coord)
             template_frames.append(template)
             template_bboxes.append(coord)
             template_labels.append("test")
