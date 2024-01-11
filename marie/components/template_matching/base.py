@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+import cv2
 import numpy as np
+from patchify import patchify
 
 from marie.logging.logger import MarieLogger
+from marie.utils.nms import non_max_suppression_fast
+from marie.utils.overlap import find_overlap
 
 
 class BaseTemplateMatcher(ABC):
@@ -24,6 +28,7 @@ class BaseTemplateMatcher(ABC):
         score_threshold: float = 0.9,
         max_overlap: float = 0.5,
         max_objects: int = 1,
+        window_size: tuple[int, int] = (384, 128),  # h, w
         region: tuple[int, int, int, int] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
@@ -40,9 +45,10 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
-        score_threshold: float = 0.9,
+        score_threshold: float = 0.45,
         max_overlap: float = 0.5,
         max_objects: int = 1,
+        window_size: tuple[int, int] = (384, 128),  # h, w
         regions: list[tuple[int, int, int, int]] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
@@ -82,23 +88,115 @@ class BaseTemplateMatcher(ABC):
             # check depth and number of channels
             assert frame.ndim == 3
 
-            predictions = self.predict(
-                frame,
-                template_frames,
-                template_boxes,
-                template_labels,
-                score_threshold,
-                max_overlap,
-                max_objects,
-                region,
-                downscale_factor,
-                batch_size,
-            )
-            self.logger.info(f"predictions: {predictions}")
+            # validate the template frames are the same size as the window size
+            for template_frame in template_frames:
+                assert template_frame.shape[0] == window_size[0]
+                assert template_frame.shape[1] == window_size[1]
 
-            results[i] = {
-                "page": i,
-                "predictions": predictions,
-            }
+                if (
+                    template_frame.shape[0] != window_size[0]
+                    or template_frame.shape[1] != window_size[1]
+                ):
+                    raise Exception(
+                        "Template frame size does not match window size, please resize the template frames to match the window size"
+                    )
+
+            # downscale the window size
+            window_size = (
+                int(window_size[0] // downscale_factor),
+                int(window_size[1] // downscale_factor),
+            )
+
+            print("window_size : ", window_size)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            patches = patchify(
+                frame,
+                window_size,
+                step=min(int(window_size[0] // 2), int(window_size[1] // 2)),
+            )
+            patches = patches.reshape(-1, window_size[0], window_size[1])
+            print("patches : ", patches.shape)
+
+            agg_bboxes = []
+            agg_labels = []
+            agg_scores = []
+
+            for idx, patch in enumerate(patches):
+                cv2.imwrite(f"/tmp/dim/patch_{idx}.png", patch)
+                if idx != 1:
+                    continue
+
+                predictions = self.predict(
+                    patch,
+                    template_frames,
+                    template_boxes,
+                    template_labels,
+                    score_threshold,
+                    max_overlap,
+                    max_objects,
+                    window_size,
+                    region,
+                    downscale_factor,
+                    batch_size,
+                )
+                self.logger.info(f"predictions: {predictions}")
+
+                for prediction in predictions:
+                    agg_bboxes.append(prediction["bbox"])
+                    agg_labels.append(prediction["label"])
+                    agg_scores.append(prediction["score"])
+
+                results[i] = {
+                    "page": i,
+                    "predictions": predictions,
+                }
+
+            # filter out low scores
+            score_threshold = 0.25
+            for idx, score in enumerate(agg_scores):
+                if score < score_threshold:
+                    agg_bboxes.pop(idx)
+                    agg_labels.pop(idx)
+                    agg_scores.pop(idx)
+
+            print("bboxes before : ", agg_bboxes)
+            # sort by score (descending)
+            agg_bboxes = [
+                bbox
+                for _, bbox in sorted(
+                    zip(agg_scores, agg_bboxes), key=lambda pair: pair[0], reverse=True
+                )
+            ]
+            agg_labels = [
+                label
+                for _, label in sorted(
+                    zip(agg_scores, agg_labels), key=lambda pair: pair[0], reverse=True
+                )
+            ]
+            agg_scores = sorted(agg_scores, reverse=True)
+
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            for bbox, label, score in zip(agg_bboxes, agg_labels, agg_scores):
+                print(" -- bbox : ", bbox, score)
+
+                cv2.rectangle(
+                    frame,
+                    (bbox[0], bbox[1]),
+                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                    (0, 255, 0),
+                    2,
+                )
+
+                cv2.putText(
+                    frame,
+                    f"{score:.2f}",
+                    (bbox[0], bbox[1] + bbox[3] // 2 + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 255),
+                    1,
+                )
+
+            cv2.imwrite(f"/tmp/dim/results_frame_{i}.png", frame)
 
         return results
