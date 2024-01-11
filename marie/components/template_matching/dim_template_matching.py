@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from patchify import patchify, unpatchify
-from sewar.full_ref import rmse
+from scipy.spatial import distance
+from sewar.full_ref import ergas, mse, psnr, rase, rmse, sam, scc, ssim, uqi, vifp
 from skimage import metrics
 from torch import nn
 from torchvision import models, transforms

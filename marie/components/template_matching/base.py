@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import cv2
 import numpy as np
-from patchify import patchify
+from patchify import patchify, unpatchify
 
 from marie.logging.logger import MarieLogger
 from marie.utils.nms import non_max_suppression_fast
@@ -109,21 +109,76 @@ class BaseTemplateMatcher(ABC):
 
             print("window_size : ", window_size)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
             patches = patchify(
                 frame,
                 window_size,
-                step=min(int(window_size[0] // 2), int(window_size[1] // 2)),
+                step=60,  # min(int(window_size[0] // 2), int(window_size[1] // 2)),
             )
-            patches = patches.reshape(-1, window_size[0], window_size[1])
-            print("patches : ", patches.shape)
 
+            print("patches A : ", patches.shape)
+            reconstructed_image = unpatchify(patches, frame.shape)
+            cv2.imwrite(f"/tmp/dim/reconstructed_image.png", reconstructed_image)
+            # assert (reconstructed_image == frame).all()
+            #
+            patches_flat = patches.reshape(-1, window_size[0], window_size[1])
+            print("patches B: ", patches_flat.shape)
+
+            # SAHI based image patching
+
+            # for profiling
+            durations_in_seconds = dict()
+
+            # currently only 1 batch supported
+            num_batch = 1
+            import time
+
+            from PIL import Image
+            from sahi.slicing import slice_image
+
+            # convert to PIL image
+            image = Image.fromarray(frame)
+            slice_height = window_size[0]
+            slice_width = window_size[1]
+            overlap_height_ratio = 0.5
+            overlap_width_ratio = 0.5
+            output_file_name = "frame_"
+
+            # create slices from full image
+            time_start = time.time()
+            slice_image_result = slice_image(
+                image=image,
+                output_file_name=output_file_name,  # ADDED OUTPUT FILE NAME TO (OPTIONALLY) SAVE SLICES
+                output_dir="/tmp/dim/slices",  # ADDED INTERIM DIRECTORY TO (OPTIONALLY) SAVE SLICES
+                slice_height=slice_height,
+                slice_width=slice_width,
+                overlap_height_ratio=overlap_height_ratio,
+                overlap_width_ratio=overlap_width_ratio,
+                auto_slice_resolution=False,
+            )
+
+            num_slices = len(slice_image_result)
+            time_end = time.time() - time_start
+            durations_in_seconds["slice"] = time_end
+
+            print("slice_image_result : ", slice_image_result)
+            print("num_slices : ", num_slices)
+
+            print("durations_in_seconds : ", durations_in_seconds)
+            print("---------------")
+            for idx, slice in enumerate(slice_image_result):
+                print("slice : ", slice)
+
+            return
             agg_bboxes = []
             agg_labels = []
             agg_scores = []
 
-            for idx, patch in enumerate(patches):
+            for idx, patch in enumerate(patches_flat):
                 cv2.imwrite(f"/tmp/dim/patch_{idx}.png", patch)
-                if idx != 1:
+
+                continue
+                if idx != 3:
                     continue
 
                 predictions = self.predict(

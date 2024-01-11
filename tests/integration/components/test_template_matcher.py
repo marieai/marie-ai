@@ -167,7 +167,7 @@ def test_template_matcher():
             template = frames_t[0]
             coord = c
 
-            if True:
+            if False:
                 template = frames_t[0][y : y + h, x : x + w, :]
                 # center the template in same size as the input image
                 template, coord = resize_image(
@@ -183,11 +183,13 @@ def test_template_matcher():
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
-                desired_size=(frames_t[0].shape[0], frames_t[0].shape[1]),
+                desired_size=window_size, #(frames_t[0].shape[0], frames_t[0].shape[1]),
                 color=(255, 255, 255),
                 keep_max_size=True,
             )
+
             print(coord)
+
             template_frames.append(template)
             template_bboxes.append(coord)
             template_labels.append("test")
