@@ -21,6 +21,10 @@ def resize_image(
         The image of size = desired_size
     """
 
+    # check if the image is already of the desired size
+    if image.shape[0] == desired_size[0] and image.shape[1] == desired_size[1]:
+        return image, (0, 0, image.shape[1], image.shape[0])
+
     size = image.shape[:2]
     if keep_max_size:
         # size = (max(size[0], desired_size[0]), max(size[1], desired_size[1]))

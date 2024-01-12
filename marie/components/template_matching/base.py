@@ -1,13 +1,28 @@
+import time
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import cv2
 import numpy as np
-from patchify import patchify, unpatchify
+from PIL import Image
+from sahi.postprocess.combine import (
+    GreedyNMMPostprocess,
+    LSNMSPostprocess,
+    NMMPostprocess,
+    NMSPostprocess,
+    PostprocessPredictions,
+)
+from sahi.prediction import ObjectPrediction, PredictionResult
+from sahi.slicing import slice_image
 
 from marie.logging.logger import MarieLogger
-from marie.utils.nms import non_max_suppression_fast
-from marie.utils.overlap import find_overlap
+
+POSTPROCESS_NAME_TO_CLASS = {
+    "GREEDYNMM": GreedyNMMPostprocess,
+    "NMM": NMMPostprocess,
+    "NMS": NMSPostprocess,
+    "LSNMS": LSNMSPostprocess,
+}
 
 
 class BaseTemplateMatcher(ABC):
@@ -83,6 +98,25 @@ class BaseTemplateMatcher(ABC):
 
         results = {}
 
+        postprocess_type = "GREEDYNMM"
+        postprocess_match_metric = "IOS"
+        postprocess_match_threshold = 0.5
+        postprocess_class_agnostic = False
+
+        # init match postprocess instance
+        if postprocess_type not in POSTPROCESS_NAME_TO_CLASS.keys():
+            raise ValueError(
+                f"postprocess_type should be one of {list(POSTPROCESS_NAME_TO_CLASS.keys())} but given as {postprocess_type}"
+            )
+
+        postprocess_constructor = POSTPROCESS_NAME_TO_CLASS[postprocess_type]
+        postprocess = postprocess_constructor(
+            match_threshold=postprocess_match_threshold,
+            match_metric=postprocess_match_metric,
+            class_agnostic=postprocess_class_agnostic,
+        )
+
+        print(postprocess)
         for i, (frame, region) in enumerate(zip(frames, regions)):
             self.logger.info(f"matching frame {i} region: {region}")
             # check depth and number of channels
@@ -109,39 +143,18 @@ class BaseTemplateMatcher(ABC):
 
             print("window_size : ", window_size)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-            patches = patchify(
-                frame,
-                window_size,
-                step=60,  # min(int(window_size[0] // 2), int(window_size[1] // 2)),
-            )
-
-            print("patches A : ", patches.shape)
-            reconstructed_image = unpatchify(patches, frame.shape)
-            cv2.imwrite(f"/tmp/dim/reconstructed_image.png", reconstructed_image)
-            # assert (reconstructed_image == frame).all()
-            #
-            patches_flat = patches.reshape(-1, window_size[0], window_size[1])
-            print("patches B: ", patches_flat.shape)
-
-            # SAHI based image patching
-
             # for profiling
             durations_in_seconds = dict()
 
             # currently only 1 batch supported
             num_batch = 1
-            import time
-
-            from PIL import Image
-            from sahi.slicing import slice_image
 
             # convert to PIL image
             image = Image.fromarray(frame)
             slice_height = window_size[0]
             slice_width = window_size[1]
-            overlap_height_ratio = 0.5
-            overlap_width_ratio = 0.5
+            overlap_height_ratio = 0.2
+            overlap_width_ratio = 0.2
             output_file_name = "frame_"
 
             # create slices from full image
@@ -164,22 +177,21 @@ class BaseTemplateMatcher(ABC):
             print("slice_image_result : ", slice_image_result)
             print("num_slices : ", num_slices)
 
-            print("durations_in_seconds : ", durations_in_seconds)
-            print("---------------")
-            for idx, slice in enumerate(slice_image_result):
-                print("slice : ", slice)
+            image_list = []
+            shift_amount_list = []
 
-            return
-            agg_bboxes = []
-            agg_labels = []
-            agg_scores = []
+            for idx, slice_result in enumerate(slice_image_result):
+                patch = slice_result["image"]
+                starting_pixel = slice_result["starting_pixel"]
+                image_list.append(patch)
+                shift_amount_list.append(starting_pixel)
 
-            for idx, patch in enumerate(patches_flat):
-                cv2.imwrite(f"/tmp/dim/patch_{idx}.png", patch)
+            result_bboxes = []
+            result_labels = []
+            results_scores = []
 
-                continue
-                if idx != 3:
-                    continue
+            for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
+                offset_x, offset_y = offset
 
                 predictions = self.predict(
                     patch,
@@ -197,61 +209,194 @@ class BaseTemplateMatcher(ABC):
                 self.logger.info(f"predictions: {predictions}")
 
                 for prediction in predictions:
-                    agg_bboxes.append(prediction["bbox"])
-                    agg_labels.append(prediction["label"])
-                    agg_scores.append(prediction["score"])
+                    bbox = prediction["bbox"]
+                    shifted_bbox = [
+                        bbox[0] + offset_x,
+                        bbox[1] + offset_y,
+                        bbox[2],
+                        bbox[3],
+                    ]
 
-                results[i] = {
-                    "page": i,
-                    "predictions": predictions,
-                }
+                    result_bboxes.append(shifted_bbox)
+                    result_labels.append(prediction["label"])
+                    results_scores.append(prediction["score"])
 
-            # filter out low scores
-            score_threshold = 0.25
-            for idx, score in enumerate(agg_scores):
-                if score < score_threshold:
-                    agg_bboxes.pop(idx)
-                    agg_labels.pop(idx)
-                    agg_scores.pop(idx)
+            result_bboxes, result_labels, results_scores = self.filter_scores(
+                result_bboxes, result_labels, results_scores, score_threshold
+            )
 
-            print("bboxes before : ", agg_bboxes)
-            # sort by score (descending)
-            agg_bboxes = [
+            print("bboxes before : ", result_bboxes)
+
+            result_bboxes = [
                 bbox
                 for _, bbox in sorted(
-                    zip(agg_scores, agg_bboxes), key=lambda pair: pair[0], reverse=True
+                    zip(results_scores, result_bboxes),
+                    key=lambda pair: pair[0],
+                    reverse=True,
                 )
             ]
-            agg_labels = [
+            result_labels = [
                 label
                 for _, label in sorted(
-                    zip(agg_scores, agg_labels), key=lambda pair: pair[0], reverse=True
+                    zip(results_scores, result_labels),
+                    key=lambda pair: pair[0],
+                    reverse=True,
                 )
             ]
-            agg_scores = sorted(agg_scores, reverse=True)
+
+            results_scores = sorted(results_scores, reverse=True)
+
+            object_prediction_list: List[
+                ObjectPrediction
+            ] = self.to_object_prediction_list(
+                result_bboxes, result_labels, results_scores
+            )
+
+            # postprocess predictions
+            print("postprocess : ", postprocess)
+            print("object_prediction_list : ", object_prediction_list)
+            # postprocess matching predictions
+            if postprocess is not None:
+                object_prediction_list = postprocess(object_prediction_list)
+
+            print("object_prediction_list : ", object_prediction_list)
+            time_end = time.time() - time_start
+            durations_in_seconds["postprocess"] = time_end
+
+            object_result_map = self.to_object_result_map(object_prediction_list)
+
+            # flatten the object_result_map
+            result_bboxes = []
+            result_labels = []
+            results_scores = []
+
+            for label, predictions in object_result_map.items():
+                for prediction in predictions:
+                    result_bboxes.append(prediction["bbox"])
+                    result_labels.append(prediction["label"])
+                    results_scores.append(prediction["score"])
+
+            results[i] = {"frame": i, "predictions": object_result_map}
 
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            for bbox, label, score in zip(agg_bboxes, agg_labels, agg_scores):
-                print(" -- bbox : ", bbox, score)
+            self.visualize_object_predictions(
+                result_bboxes, result_labels, results_scores, frame, i
+            )
 
-                cv2.rectangle(
-                    frame,
-                    (bbox[0], bbox[1]),
-                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
-                    (0, 255, 0),
-                    2,
+            time_end = time.time() - time_start
+            durations_in_seconds["prediction"] = time_end
+            verbose = 2
+
+            if verbose == 2:
+                print(
+                    "Slicing performed in",
+                    durations_in_seconds["slice"],
+                    "seconds.",
                 )
-
-                cv2.putText(
-                    frame,
-                    f"{score:.2f}",
-                    (bbox[0], bbox[1] + bbox[3] // 2 + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 0, 255),
-                    1,
+                print(
+                    "Prediction performed in",
+                    durations_in_seconds["prediction"],
+                    "seconds.",
                 )
-
-            cv2.imwrite(f"/tmp/dim/results_frame_{i}.png", frame)
 
         return results
+
+    def visualize_object_predictions(
+        self, bboxes, labels, scores, frame, index
+    ) -> None:
+        for bbox, label, score in zip(bboxes, labels, scores):
+            print(" -- bbox : ", bbox, score)
+
+            cv2.rectangle(
+                frame,
+                (bbox[0], bbox[1]),
+                (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                (0, 255, 0),
+                2,
+            )
+
+            cv2.putText(
+                frame,
+                f"{score:.2f}",
+                # (bbox[0], bbox[1] + bbox[3] // 2 + 5),
+                (bbox[0], bbox[1] - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 255),
+                1,
+            )
+        cv2.imwrite(f"/tmp/dim/results_frame_{index}.png", frame)
+
+    def filter_scores(
+        self, bboxes, labels, scores, score_threshold
+    ) -> tuple[list, list, list]:
+        """
+        Filter out scores below the threshold.
+        :param bboxes: bounding boxes
+        :param labels: labels to filter
+        :param scores:  scores to filter
+        :param score_threshold:
+        :return:
+        """
+
+        bboxes = [
+            bbox for bbox, score in zip(bboxes, scores) if score > score_threshold
+        ]
+
+        labels = [
+            label for label, score in zip(labels, scores) if score > score_threshold
+        ]
+
+        scores = [score for score in scores if score > score_threshold]
+        return bboxes, labels, scores
+
+    def to_object_prediction_list(
+        self, bboxes, labels, scores
+    ) -> List[ObjectPrediction]:
+        """
+        Convert the results to a list of ObjectPrediction.
+        :param bboxes:  bounding boxes to convert in the format (x, y, width, height)
+        :param labels:  labels to convert
+        :param scores: scores to convert in range [0, 1]
+        :return:  a list of ObjectPrediction
+        """
+
+        object_prediction_list: List[ObjectPrediction] = []
+        for bbox, label, score in zip(bboxes, labels, scores):
+            # convert to x, y, x2, y2
+            bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+
+            object_prediction = ObjectPrediction(
+                category_name=label,
+                category_id=0,
+                bbox=bbox,
+                score=score,
+                shift_amount=[0, 0],
+            )
+            object_prediction_list.append(object_prediction)
+
+        return object_prediction_list
+
+    def to_object_result_map(self, object_prediction_list: List[ObjectPrediction]):
+        import sahi.annotation as BoundingBox
+        import sahi.prediction as PredictionScore
+
+        object_result_map = {}
+        for object_prediction in object_prediction_list:
+            label = object_prediction.category.name
+            if label not in object_result_map:
+                object_result_map[label] = []
+
+            bbox: BoundingBox = object_prediction.bbox
+            bbox = bbox.to_xywh()  # convert to x, y, width, height
+
+            score: PredictionScore = object_prediction.score
+            score = score.value
+
+            prediction = {
+                "bbox": bbox,
+                "label": label,
+                "score": score,
+            }
+            object_result_map[label].append(prediction)
+        return object_result_map
