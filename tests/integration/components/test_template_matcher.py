@@ -68,7 +68,7 @@ def test_template_matcher():
     for i in range(1):
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
-            docs_from_file("./assets/template_matching/sample-003.png")
+            docs_from_file("./assets/template_matching/sample-005.png")
         )
 
         samples = {
@@ -106,7 +106,7 @@ def test_template_matcher():
                 "label": "CLAIM",
                 "coords": [[218, 181, 89, 31]],  # -004 :
                 "image": "./assets/template_matching/template-005.png",
-                "target": "./assets/template_matching/sample-004.png",
+                "target": "./assets/template_matching/sample-005.png",
             },
         }
 
@@ -183,7 +183,7 @@ def test_template_matcher():
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
-                desired_size=window_size, #(frames_t[0].shape[0], frames_t[0].shape[1]),
+                desired_size=window_size,  # (frames_t[0].shape[0], frames_t[0].shape[1]),
                 color=(255, 255, 255),
                 keep_max_size=True,
             )
