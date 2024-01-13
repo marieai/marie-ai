@@ -162,6 +162,7 @@ def test_template_matcher():
                 cv2.imwrite(f"/tmp/dim/window_resized.png", window)
 
         window_size = (128, 384)
+        window_size = (384, 384)
         for c in template_coords:
             x, y, w, h = c
             template = frames_t[0]
@@ -205,5 +206,6 @@ def test_template_matcher():
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,
+                downscale_factor=2
             )
             print(results)
