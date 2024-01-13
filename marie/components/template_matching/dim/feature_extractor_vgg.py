@@ -174,24 +174,23 @@ class Featex:
                 align_corners=True,
             )
 
-        # Apply HOG and LBP  to the input image
-        # convert from tensor to numpy
-        src_input = input.squeeze(0).permute(1, 2, 0).cpu().numpy()
-        # blur the image
-        # src_input = cv2.GaussianBlur(src_input, (5, 5), 3)
-        gray = cv2.cvtColor(src_input, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (h, w))
+        if False:
+            # Apply HOG and LBP  to the input image
+            # convert from tensor to numpy
+            src_input = input.squeeze(0).permute(1, 2, 0).cpu().numpy()
+            # blur the image
+            # src_input = cv2.GaussianBlur(src_input, (5, 5), 3)
+            gray = cv2.cvtColor(src_input, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (h, w))
 
-        hog_feature = extract_hog_features(gray, channel, input.device)
-        # lbp_feature = extract_lbp_features(gray, channel, input.device)
+            hog_feature = extract_hog_features(gray, channel, input.device)
+            # lbp_feature = extract_lbp_features(gray, channel, input.device)
 
         # return torch.cat(
         #     (reducefeature1, reducefeature2, reducefeature3, hog_feature), dim=1
         # )
         # return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
-        return torch.cat(
-            (hog_feature, reducefeature1, reducefeature2, reducefeature3), dim=1
-        )
+        return torch.cat((reducefeature1, reducefeature2, reducefeature3), dim=1)
         # return torch.cat((hog_feature, hog_feature), dim=1)
 
 
