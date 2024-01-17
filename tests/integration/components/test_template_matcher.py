@@ -207,5 +207,6 @@ def test_template_matcher():
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,
+                downscale_factor=2,
             )
             print(results)

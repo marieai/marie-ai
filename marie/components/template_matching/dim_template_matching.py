@@ -146,7 +146,7 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
                 template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
             )
 
-            # cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
+            cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
 
             image_transform = transforms.Compose(
                 [

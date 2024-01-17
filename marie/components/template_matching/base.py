@@ -123,7 +123,7 @@ class BaseTemplateMatcher(ABC):
             assert frame.ndim == 3
 
             # validate the template frames are the same size as the window size
-            for template_frame in template_frames:
+            for template_frame, template_boxe in zip(template_frames, template_boxes):
                 assert template_frame.shape[0] == window_size[0]
                 assert template_frame.shape[1] == window_size[1]
 
@@ -135,14 +135,50 @@ class BaseTemplateMatcher(ABC):
                         "Template frame size does not match window size, please resize the template frames to match the window size"
                     )
 
+                if downscale_factor > 1:
+                    # downscale the template frames
+                    template_frame = cv2.resize(
+                        template_frame,
+                        (
+                            template_frame.shape[1] // downscale_factor,
+                            template_frame.shape[0] // downscale_factor,
+                        ),
+                        interpolation=cv2.INTER_AREA,
+                    )
+
+                    # downscale the template boxes
+                    cv2.imwrite(
+                        f"/tmp/dim/template_frame_downscaled_{i}.png", template_frame
+                    )
+                    template_frames[i] = template_frame
+
+                    template_boxe = (
+                        template_boxe[0] // downscale_factor,
+                        template_boxe[1] // downscale_factor,
+                        template_boxe[2] // downscale_factor,
+                        template_boxe[3] // downscale_factor,
+                    )
+                    template_boxes[i] = template_boxe
             # downscale the window size
             window_size = (
                 int(window_size[0] // downscale_factor),
                 int(window_size[1] // downscale_factor),
             )
 
+            # downscale the frame
             print("window_size : ", window_size)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = cv2.resize(
+                frame,
+                (
+                    frame.shape[1] // downscale_factor,
+                    frame.shape[0] // downscale_factor,
+                ),
+                interpolation=cv2.INTER_AREA,
+            )
+
+            cv2.imwrite(f"/tmp/dim/frame_downscaled_{i}.png", frame)
+
             # for profiling
             durations_in_seconds = dict()
 
@@ -189,6 +225,8 @@ class BaseTemplateMatcher(ABC):
             result_bboxes = []
             result_labels = []
             results_scores = []
+
+            score_threshold = 0.001
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
                 offset_x, offset_y = offset
