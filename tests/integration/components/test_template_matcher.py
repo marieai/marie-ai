@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+import random
 from typing import Tuple
 
 import cv2
@@ -9,6 +10,9 @@ import torch
 
 from marie.components.template_matching.dim_template_matching import (
     DeepDimTemplateMatcher,
+)
+from marie.components.template_matching.vqnnf_template_matching import (
+    VQNNFTemplateMatcher,
 )
 from marie.logging.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
@@ -47,9 +51,18 @@ def extract_windows(
     return windows
 
 
+def setup_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+
+
 def test_template_matcher():
     # kwargs = {"__model_path__": __model_path__}
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    setup_seed(42)
 
     import intel_extension_for_pytorch as ipex
 
@@ -63,12 +76,15 @@ def test_template_matcher():
     # set to core-count of your CPU
     torch.set_num_threads(psutil.cpu_count(logical=False))
 
-    matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
+    # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
+    # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
+    matcher = VQNNFTemplateMatcher(model_name_or_path="vgg19")
 
     for i in range(1):
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
-            docs_from_file("./assets/template_matching/sample-005.png")
+            # docs_from_file("./assets/template_matching/sample-005.png")
+            docs_from_file("./assets/template_matching/sample-002.png")
         )
 
         samples = {
@@ -164,6 +180,7 @@ def test_template_matcher():
         window_size = (128, 384)
         window_size = (384, 384)
         window_size = (512, 512)
+
         for c in template_coords:
             x, y, w, h = c
             template = frames_t[0]
@@ -207,6 +224,6 @@ def test_template_matcher():
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,
-                downscale_factor=2,
+                downscale_factor=1,
             )
             print(results)

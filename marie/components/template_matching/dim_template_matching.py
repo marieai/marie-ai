@@ -95,26 +95,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
 
         return model
 
-    def viz_patches(self, patches, filename):
-        plt.figure(figsize=(9, 9))
-        square_x = patches.shape[1]
-        square_y = patches.shape[0]
-
-        ix = 1
-        for i in range(square_y):
-            for j in range(square_x):
-                # specify subplot and turn of axis
-                ax = plt.subplot(square_y, square_x, ix)
-                ax.set_xticks([])
-                ax.set_yticks([])
-                # plot
-                plt.imshow(patches[i, j, :, :], cmap="gray")
-                ix += 1
-        # show the figure
-        # plt.show()
-        plt.savefig(filename)
-        plt.close()
-
     def predict(
         self,
         frame: np.ndarray,
