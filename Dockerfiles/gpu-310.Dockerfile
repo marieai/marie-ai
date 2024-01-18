@@ -174,6 +174,10 @@ ENV WORKDIR /marie
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
+# Add ESET certs to download models from fairseq
+RUN pip3 install get_cert
+RUN get_cert "https://dl.fbaipublicfiles.com" >> /opt/venv/lib/python3.10/site-packages/certifi/cacert.pem
+
 # Install and initialize MARIE-AI, copy all necessary files
 # copy will almost always invalididate the cache
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
