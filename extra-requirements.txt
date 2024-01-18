@@ -158,3 +158,5 @@ pillow~=9.5:                  standard,core
 
 pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
+colorcet:                     standard,core
+fast_pytorch_kmeans:          standard,core
