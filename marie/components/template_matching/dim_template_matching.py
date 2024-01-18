@@ -556,3 +556,7 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
 # ref https://stackoverflow.com/questions/77230340/ssim-is-large-but-the-two-images-are-not-similar-at-all
 # Binary-image comparison with local-dissimilarity quantification
 # https://www.sciencedirect.com/science/article/abs/pii/S0031320307003287
+
+# model_efficientnet-b4_n_feats_512_pcadims_None_n_codes_128_haar_filts_23_scale_3
+# model_efficientnet-b4_n_feats_512_pcadims_None_n_codes_128_haar_filts_1_scale_3
+# model_efficientnet-b0_n_feats_512_pcadims_18_n_codes_128_haar_filts_23_scale_3 0.75530435046822
