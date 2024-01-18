@@ -438,3 +438,25 @@ class BaseTemplateMatcher(ABC):
             }
             object_result_map[label].append(prediction)
         return object_result_map
+
+    def viz_patches(self, patches, filename: str) -> None:
+        from matplotlib import pyplot as plt
+
+        plt.figure(figsize=(9, 9))
+        square_x = patches.shape[1]
+        square_y = patches.shape[0]
+
+        ix = 1
+        for i in range(square_y):
+            for j in range(square_x):
+                # specify subplot and turn of axis
+                ax = plt.subplot(square_y, square_x, ix)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                # plot
+                plt.imshow(patches[i, j, :, :], cmap="gray")
+                ix += 1
+        # show the figure
+        # plt.show()
+        plt.savefig(filename)
+        plt.close()
