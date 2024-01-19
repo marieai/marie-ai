@@ -166,7 +166,6 @@ class BaseTemplateMatcher(ABC):
             )
 
             # downscale the frame
-            print("window_size : ", window_size)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             frame = cv2.resize(
                 frame,
@@ -177,14 +176,13 @@ class BaseTemplateMatcher(ABC):
                 interpolation=cv2.INTER_AREA,
             )
 
-            cv2.imwrite(f"/tmp/dim/frame_downscaled_{i}.png", frame)
+            # cv2.imwrite(f"/tmp/dim/frame_downscaled_{i}.png", frame)
 
             # for profiling
             durations_in_seconds = dict()
 
             # currently only 1 batch supported
             num_batch = 1
-
             # convert to PIL image
             image = Image.fromarray(frame)
             slice_height = window_size[0]
@@ -210,9 +208,6 @@ class BaseTemplateMatcher(ABC):
             time_end = time.time() - time_start
             durations_in_seconds["slice"] = time_end
 
-            print("slice_image_result : ", slice_image_result)
-            print("num_slices : ", num_slices)
-
             image_list = []
             shift_amount_list = []
 
@@ -227,6 +222,7 @@ class BaseTemplateMatcher(ABC):
             results_scores = []
 
             score_threshold = 0.001
+            score_threshold = 0.70
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
                 offset_x, offset_y = offset
@@ -291,8 +287,6 @@ class BaseTemplateMatcher(ABC):
             )
 
             # postprocess predictions
-            print("postprocess : ", postprocess)
-            print("object_prediction_list : ", object_prediction_list)
             # postprocess matching predictions
             if postprocess is not None:
                 object_prediction_list = postprocess(object_prediction_list)
