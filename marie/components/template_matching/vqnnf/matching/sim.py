@@ -142,9 +142,9 @@ def extract_hog_features(gray, channels, device):
 
     fd, hog_image = hog(
         gray,
-        # orientations=9,
-        # pixels_per_cell=(2, 2),
-        # cells_per_block=(2, 2),
+        orientations=9,
+        pixels_per_cell=(2, 2),
+        cells_per_block=(2, 2),
         visualize=True,
     )
 
@@ -164,7 +164,7 @@ def similarity_score_color(template, query, metric) -> float:
     p2 = cv2.resize(query, (max_w, max_h), interpolation=cv2.INTER_CUBIC)
 
     s0 = uqi(p1, p2)  # value between 0 and 1
-    s0 = scc(p1, p2)  # value between 0 and 1
+    # s0 = scc(p1, p2)  # value between 0 and 1
 
     score = s0
     cv2.imwrite(
@@ -220,18 +220,11 @@ def similarity_score(template, query, metric) -> float:
     fd_1, hog_image_1 = extract_hog_features(image1_gray, 1, "cpu")
     fd_2, hog_image_2 = extract_hog_features(image2_gray, 1, "cpu")
 
-    from scipy.spatial import distance
-
-    dst = distance.euclidean(fd_1, fd_2)
     image1_gray = hog_image_1
     image2_gray = hog_image_2
 
-    print("hog_1", fd_1)
-    print("hog_2", fd_2)
-    print("dst", dst)
-
-    # cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", hog_image_1)
-    # cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", hog_image_2)
+    cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", hog_image_1)
+    cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", hog_image_2)
 
     # # 0 = Background, 1 = Object
     # bin_image1 = np.where(hog_image_1 > 0, 0, 1)
@@ -289,6 +282,7 @@ def similarity_score(template, query, metric) -> float:
     s1_total_norm = s1_total / slices_len
     s2_total_norm = s2_total / slices_len
     score = (s0_total_norm + s1_total_norm + s2_total_norm) / 3
+    score = (max(s0_total_norm, s1_total_norm) + s2_total_norm) / 2
 
     if True:
         print(f"score {idx} : ", score)
@@ -298,7 +292,7 @@ def similarity_score(template, query, metric) -> float:
         print(f"s1_total_norm {idx} ", s1_total_norm)
         print(f"s2_total_norm {idx} ", s2_total_norm)
 
-    if False:
+    if True:
         stacked = np.hstack(
             (image1_gray, image2_gray, original_image1_gray, original_image2_gray)
         )

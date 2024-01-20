@@ -222,7 +222,7 @@ class BaseTemplateMatcher(ABC):
             results_scores = []
 
             score_threshold = 0.001
-            score_threshold = 0.70
+            score_threshold = 0.30
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
                 offset_x, offset_y = offset
