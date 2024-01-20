@@ -3,7 +3,6 @@ import concurrent.futures
 import distutils.util
 import glob
 import hashlib
-import io
 import json
 import logging
 import multiprocessing as mp
@@ -14,7 +13,6 @@ import string
 import sys
 import time
 import uuid
-from concurrent.futures.thread import ThreadPoolExecutor
 from functools import lru_cache
 from multiprocessing import Pool
 
@@ -31,7 +29,6 @@ from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.line_processor import find_line_number
 from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
-from marie.timer import Timer
 from marie.utils.utils import ensure_exists
 
 # FUNSD format can be found here

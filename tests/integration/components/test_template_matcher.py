@@ -20,6 +20,7 @@ from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.json import load_json_file
 from marie.utils.resize_image import resize_image
 
+# 110328
 
 # extract windows snippet from the input image centered around the template
 def extract_windows(
@@ -77,14 +78,14 @@ def test_template_matcher():
     torch.set_num_threads(psutil.cpu_count(logical=False))
 
     # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
-    # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
     matcher = VQNNFTemplateMatcher(model_name_or_path="NONE")
 
     for i in range(1):
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
             # docs_from_file("./assets/template_matching/sample-005.png")
-            docs_from_file("./assets/template_matching/sample-001.png")
+            # docs_from_file("./assets/template_matching/sample-001.png")
+            docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
         )
 
@@ -128,6 +129,7 @@ def test_template_matcher():
         }
 
         key = "005-A"
+        # key = "002-A"
 
         template_coords = samples[key]["coords"]
         frames_t = frames_from_docs(docs_from_file(samples[key]["image"]))
@@ -207,8 +209,6 @@ def test_template_matcher():
                 color=(255, 255, 255),
                 keep_max_size=True,
             )
-
-            print(coord)
 
             template_frames.append(template)
             template_bboxes.append(coord)

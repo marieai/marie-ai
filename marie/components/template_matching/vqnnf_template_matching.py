@@ -5,7 +5,6 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 import torch
-from skimage.exposure import rescale_intensity
 from torch import nn
 
 from marie.logging.logger import MarieLogger
@@ -13,14 +12,27 @@ from marie.models.utils import initialize_device_settings
 
 from .base import BaseTemplateMatcher
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
-from .vqnnf.matching.sim import similarity_score, similarity_score_color
+from .vqnnf.matching.sim import similarity_score
 from .vqnnf.matching.template_matching import VQNNFMatcher
 
 
 def augment_document(glow_radius, glow_strength, src_image):
     if True:
         img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
-        # return img_blurred
+        return img_blurred
+
+    # dilate and erode to get the glow
+    # img_blurred = cv2.erode(src_image, np.ones((3, 3), np.uint8), iterations=1)
+    img_dilated = cv2.dilate(src_image, np.ones((3, 3), np.uint8), iterations=2)
+
+    # change the color of dilated image
+    img_dilated[:, :, 0] = 255
+    overlay = cv2.addWeighted(img_dilated, 0.4, src_image, 1, 1).astype(np.uint8)
+    return overlay
+
+    # img_dilated = cv2.GaussianBlur(img_dilated, (glow_radius, glow_radius), 1)
+    # img_dilated = img_dilated.astype(np.uint8)
+    # img_dilated = cv2.addWeighted(src_image, 1, img_dilated, 1, 0)
 
     max_val = np.max(img_blurred, axis=2)
     # max_val[max_val < 160] = 160
@@ -29,10 +41,8 @@ def augment_document(glow_radius, glow_strength, src_image):
     max_val = np.stack(
         [max_val, np.zeros_like(max_val), np.zeros_like(max_val)], axis=2
     )
-    max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
-    # combine the two images
-    # img_blended = cv2.addWeighted(src_image, 1, max_val, .8, 0)
 
+    max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
     return max_val
 
 
@@ -94,20 +104,16 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             )
 
         self.device = resolved_devices[0]
-        # model,n_features,n_codes,rect_haar_filters,scale,pca_dims,M_IOU,Success_Rate,Temp_Match_Time,Kmeans_Time,Total_Time
-        # efficientnet-b0,512.0,128.0,1.0,3.0,,0.833204448223114,1.0,0.033192422654893666,0.03436501820882162,0.06755744086371529
         self.model_name = "efficientnet-b0"
         self.n_feature = 512
         self.n_code = 128
         self.rect_haar_filter = 1
         self.scale = 3
-        self.pca_dim = None
+        self.pca_dim = 128
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
-
-    def load(self, model_name_or_path: Union[str, os.PathLike]) -> nn.Module:
-        pass
+        self.feature_extractor_sim = self.feature_extractor
 
     def predict(
         self,
@@ -178,6 +184,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
             cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
             cv2.imwrite("/tmp/dim/query_image.png", query_image)
+            cv2.imwrite("/tmp/dim/template_image.png", template_image)
 
             template_image_features = feature_extractor.get_features(template_image)
 
@@ -244,10 +251,27 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
+
             sim_val = similarity_score(template_snippet, query_pred_snippet, "ssim")
             similarities.append(sim_val)
 
-            if False:  # verbose:
+            t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+            q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+
+            template_snippet_features = self.feature_extractor_sim.get_features(t)
+            query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
+
+            cosine = nn.CosineSimilarity(dim=1)
+            sim = cosine(
+                template_snippet_features.reshape(1, -1),
+                query_pred_snippet_features.reshape(1, -1),
+            )
+            sim = sim.cpu().numpy()[0]
+            print("sim", sim)
+            # sim_val = sim_val
+            sim_val = (sim_val + sim) / 2
+
+            if True:  # verbose:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_template_nnf.png",
                     cv2.applyColorMap(
@@ -275,46 +299,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                         cv2.COLORMAP_JET,
                     ),
                 )
-
-            # extract heatmaps for template and query
-            if True:
-                query_pred_nnf = query_nnf[qys : qys + qhs, qxs : qxs + qws, :] * 255
-                template_nnf = template_nnf * 255
-
-                template_nnf = template_nnf.astype(np.uint8)
-                query_pred_nnf = query_pred_nnf.astype(np.uint8)
-
-                # query_pred_nnf = rescale_intensity(query_pred_nnf, out_range=(0, 255))
-                # template_nnf = rescale_intensity(template_nnf, out_range=(0, 255))
-
-                # cv2.imwrite(f"/tmp/dim/{idx}_query_hmap_nnf.png", query_pred_nnf)
-                # cv2.imwrite(f"/tmp/dim/{idx}_template_nnf.png", template_nnf)
-
-                # sim_val = similarity_score_color(template_nnf, query_pred_nnf, "ssim")
-
-                heatmap = rescale_intensity(heatmap, out_range=(0, 255))
-                #
-                # heatmap = cv2.applyColorMap(
-                #     (
-                #         ((heatmap - heatmap.min()) / (heatmap.max() - heatmap.min()))
-                #         * 255
-                #     ).astype(np.uint8),
-                #     cv2.COLORMAP_JET,
-                # )
-
-                hmap_snippet = heatmap[qys : qys + qhs, qxs : qxs + qws]
-
-                hmap_intensity = np.sum(hmap_snippet) / (
-                    hmap_snippet.shape[0] * hmap_snippet.shape[1] * 255
-                )
-
-                # compute the intensity of the maximum value in the heatmap
-                # ptx, pty = np.unravel_index(np.argmax(hmap_snippet), hmap_snippet.shape)
-                # val = hmap_snippet[ptx, pty]
-                #
-                # cv2.imwrite(
-                #     f"/tmp/dim/{idx}_query_hmap_{hmap_intensity}.png", hmap_snippet
-                # )
 
             predictions.append(
                 {
