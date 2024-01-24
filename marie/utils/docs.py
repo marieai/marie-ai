@@ -191,8 +191,9 @@ def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
         del frames
         return loaded, converted
 
-    img = skio.imread(img_path)  # RGB order
-    # img = Image.open(img_path).convert('RGB')
+    # img = skio.imread(img_path)  # RGB order
+    img = Image.open(img_path).convert('RGB')
+    img = np.array(img)
     # return True, [img]
 
     if img.shape[0] == 2:
