@@ -19,6 +19,11 @@ def ensure_exists(dir_to_validate) -> str:
     return dir_to_validate
 
 
+def file_exists(path):
+    """check if file is already downloaded"""
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+
 def copyFiles(src_file_paths, dest_path):
     """Copies a list of files to a destination directory."""
     os.makedirs(dest_path, exist_ok=True)
