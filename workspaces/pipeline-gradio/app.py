@@ -101,8 +101,6 @@ def process_image(image):
     else:
         real, fake, blended = image, image, image
 
-    # pil image from opencv
-    # image = Image.fromarray(blended)
     image = blended
     (
         boxes,
