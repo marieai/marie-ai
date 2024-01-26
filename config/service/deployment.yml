@@ -1,0 +1,15 @@
+jtype: Deployment
+with:
+  uses:
+    jtype: TextExtractionExecutorMock
+    metas:
+      py_modules:
+        - marie.executor.text
+
+  replicas: 3
+  name: extract_exec
+  protocol: [grpc, http]
+#  port: [54321, 54322, 54323]
+#  port: [51000, 52000, 53000]
+#  discovery: True
+#  discovery_host:

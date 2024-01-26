@@ -1,5 +1,8 @@
 import os
 
+import cv2
+import torch
+
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.utils.docs import frames_from_file
@@ -12,13 +15,14 @@ def process_image(image):
         models_dir="../../model_zoo/unilm/dit/text_detection",
         cuda=True,
     )
-    (
-        boxes,
-        fragments,
-        lines,
-        _,
-        lines_bboxes,
-    ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE, bbox_optimization=True, bbox_context_aware=True)
+    (boxes, fragments, lines, _, lines_bboxes,) = box.extract_bounding_boxes(
+        "gradio",
+        "field",
+        image,
+        PSMode.SPARSE,
+        bbox_optimization=True,
+        bbox_context_aware=True,
+    )
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
@@ -28,13 +32,15 @@ def process_image(image):
 
 
 if __name__ == "__main__":
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "~/tmp/analysis/DEVOPSSD-54421/178443716.tif"
     img_path = "~/tmp/PID_576_7188_0_150300411_4.tif"
-    img_path = "/home/gbugaj/tmp/demo/159581778_3.png"
+    img_path = "~/tmp/demo/merged-001_00001.png"
 
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
@@ -42,6 +48,10 @@ if __name__ == "__main__":
 
     key = img_path.split("/")[-1]
     frames = frames_from_file(img_path)
+    # scale image up by 2x
+    # frames[0] = cv2.resize(frames[0], None, fx=3, fy=3)
+
+    cv2.imwrite(f"/tmp/boxes/resized.png", frames[0])
     frames = [frames[0]]
     # frames = [crop_to_content(frame, True) for frame in frames]
 
