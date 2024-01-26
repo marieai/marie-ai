@@ -37,6 +37,7 @@ class OverlayProcessor(BaseHandler):
     ) -> None:
         super().__init__()
         checkpoint_dir = os.path.join(models_dir, "overlay")
+        checkpoint_dir = "/media/gbugaj/4C4219B54219A52C/transfer"
         self.cuda = cuda
         self.models_dir = models_dir
         self.work_dir = work_dir
@@ -54,7 +55,7 @@ class OverlayProcessor(BaseHandler):
             "./data",
             "--name",
             # "template_mask_global",
-            "claim_mask",
+            "hicfa_mask_local",  # hicfa_mask_local
             "--model",
             "test",
             "--netG",
@@ -85,14 +86,36 @@ class OverlayProcessor(BaseHandler):
 
         opt = TestOptions().parse(args)
         # hard-code parameters for test
-        opt.eval = True
-        opt.num_threads = 0  # test code only supports num_threads = 0
-        opt.batch_size = 1  # test code only supports batch_size = 1
-        opt.serial_batches = True
-        opt.no_flip = True
-        opt.no_dropout = False
-        opt.display_id = -1
-        opt.output_nc = 3
+        if True:
+            opt.eval = True
+            opt.num_threads = 0  # test code only supports num_threads = 0
+            opt.batch_size = 1  # test code only supports batch_size = 1
+            opt.serial_batches = True
+            opt.no_flip = True
+            opt.no_dropout = False
+            opt.display_id = -1
+            opt.output_nc = 3
+
+        # opt.eval = True
+        # opt.num_threads = 0  # test code only supports num_threads = 0
+        # opt.batch_size = 1  # test code only supports batch_size = 1
+        # opt.serial_batches = True
+        # opt.no_flip = False
+        # opt.no_dropout = True
+        # opt.display_id = -1
+        # opt.input_nc = 3
+        # opt.output_nc = 3
+        # opt.n_layers_D = 3
+        # opt.norm = "instance"
+        # opt.ndf = 64
+        # opt.ngf = 64
+        # opt.netD = "n_layers_multi"
+        # opt.netG = "local"
+        # opt.direction = "AtoB"
+        # opt.dataset_mode = "single"
+        # opt.model = "test"
+        # opt.name = "hicfa_mask_local"
+        # opt.gan_mode = "ssim"
 
         # check if we have a onnx model and load it
         model_path = os.path.expanduser(
