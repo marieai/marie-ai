@@ -184,7 +184,7 @@ if ret_code == 0 and not is_windows_os and (not is_mac_os or not is_37):
         'ext_modules': [
             Extension(
                 'jraft',
-                ['jina/serve/consensus/run.go'],
+                ['marie/serve/consensus/run.go'],
                 py_limited_api=True,
                 define_macros=[('Py_LIMITED_API', None)],
             )
