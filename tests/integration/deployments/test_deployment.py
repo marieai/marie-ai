@@ -3,10 +3,16 @@ import json
 import time
 
 import pytest
-from docarray import Document, DocumentArray
 from pytest import FixtureRequest
 
-from marie import Client, Document, Executor, requests
+# from docarray import Document, DocumentArray
+from marie import (  # compatible with docarray < 0.30
+    Client,
+    Document,
+    DocumentArray,
+    Executor,
+    requests,
+)
 from marie.enums import PollingType
 from marie.helper import random_port
 from marie.orchestrate.deployments import Deployment
@@ -35,9 +41,9 @@ async def test_deployments_trivial_topology(port_generator):
 
     with worker_deployment, gateway_deployment:
         # send requests to the gateway
-        c = Client(host='localhost', port=port, asyncio=True)
+        c = Client(host="localhost", port=port, asyncio=True)
         responses = c.post(
-            '/', inputs=async_inputs, request_size=1, return_responses=True
+            "/", inputs=async_inputs, request_size=1, return_responses=True
         )
 
         response_list = []
@@ -54,22 +60,22 @@ async def test_deployments_trivial_topology(port_generator):
 @pytest.fixture
 def complete_graph_dict():
     return {
-        'start-gateway': ['deployment0', 'deployment4', 'deployment6'],
-        'deployment0': ['deployment1', 'deployment2'],
-        'deployment1': ['end-gateway'],
-        'deployment2': ['deployment3'],
-        'deployment4': ['deployment5'],
-        'merger': ['deployment_last'],
-        'deployment5': ['merger'],
-        'deployment3': ['merger'],
-        'deployment6': [],  # hanging_deployment
-        'deployment_last': ['end-gateway'],
+        "start-gateway": ["deployment0", "deployment4", "deployment6"],
+        "deployment0": ["deployment1", "deployment2"],
+        "deployment1": ["end-gateway"],
+        "deployment2": ["deployment3"],
+        "deployment4": ["deployment5"],
+        "merger": ["deployment_last"],
+        "deployment5": ["merger"],
+        "deployment3": ["merger"],
+        "deployment6": [],  # hanging_deployment
+        "deployment_last": ["end-gateway"],
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('uses_before', [True, False])
-@pytest.mark.parametrize('uses_after', [True, False])
+@pytest.mark.parametrize("uses_before", [True, False])
+@pytest.mark.parametrize("uses_after", [True, False])
 # test gateway, head and worker pod by creating them manually in a more Flow like topology with branching/merging
 async def test_deployments_flow_topology(
     complete_graph_dict, uses_before, uses_after, port_generator
@@ -77,16 +83,16 @@ async def test_deployments_flow_topology(
     deployments = [
         deployment_name
         for deployment_name in complete_graph_dict.keys()
-        if 'gateway' not in deployment_name
+        if "gateway" not in deployment_name
     ]
     started_deployments = []
-    deployments_addresses = '{'
+    deployments_addresses = "{"
     for deployment in deployments:
         head_port = port_generator()
         deployments_addresses += f'"{deployment}": ["0.0.0.0:{head_port}"],'
         regular_deployment = _create_regular_deployment(
             port=head_port,
-            name=f'{deployment}',
+            name=f"{deployment}",
             uses_before=uses_before,
             uses_after=uses_after,
             shards=2,
@@ -97,7 +103,7 @@ async def test_deployments_flow_topology(
 
     # remove last comma
     deployments_addresses = deployments_addresses[:-1]
-    deployments_addresses += '}'
+    deployments_addresses += "}"
     port = port_generator()
 
     deployments_metadata = '{"deployment0": {"key": "value"}}'
@@ -115,8 +121,8 @@ async def test_deployments_flow_topology(
     await asyncio.sleep(0.1)
 
     # send requests to the gateway
-    c = Client(host='localhost', port=port, asyncio=True)
-    responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+    c = Client(host="localhost", port=port, asyncio=True)
+    responses = c.post("/", inputs=async_inputs, request_size=1, return_responses=True)
     response_list = []
     async for response in responses:
         response_list.append(response)
@@ -136,7 +142,7 @@ async def test_deployments_flow_topology(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('polling', [PollingType.ALL, PollingType.ANY])
+@pytest.mark.parametrize("polling", [PollingType.ALL, PollingType.ANY])
 # test simple topology with shards
 async def test_deployments_shards(polling, port_generator):
     head_port = port_generator()
@@ -148,7 +154,7 @@ async def test_deployments_shards(polling, port_generator):
     deployments_metadata = '{"deployment0": {"key": "value"}}'
 
     deployment = _create_regular_deployment(
-        port=head_port, name='deployment', polling=polling, shards=10
+        port=head_port, name="deployment", polling=polling, shards=10
     )
     deployment.start()
 
@@ -159,8 +165,8 @@ async def test_deployments_shards(polling, port_generator):
 
     await asyncio.sleep(1.0)
 
-    c = Client(host='localhost', port=port, asyncio=True)
-    responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+    c = Client(host="localhost", port=port, asyncio=True)
+    responses = c.post("/", inputs=async_inputs, request_size=1, return_responses=True)
     response_list = []
     async for response in responses:
         response_list.append(response)
@@ -182,11 +188,11 @@ async def test_deployments_replicas(port_generator):
     )
 
     deployment = _create_regular_deployment(
-        port=head_port, name='deployment', replicas=10
+        port=head_port, name="deployment", replicas=10
     )
     deployment.start()
 
-    connections = [f'0.0.0.0:{port}' for port in deployment.ports]
+    connections = [f"0.0.0.0:{port}" for port in deployment.ports]
     deployments_addresses = f'{{"deployment0": {json.dumps(connections)}}}'
     deployments_metadata = '{"deployment0": {"key": "value"}}'
     gateway_deployment = _create_gateway_deployment(
@@ -196,8 +202,8 @@ async def test_deployments_replicas(port_generator):
 
     await asyncio.sleep(1.0)
 
-    c = Client(host='localhost', port=port, asyncio=True)
-    responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+    c = Client(host="localhost", port=port, asyncio=True)
+    responses = c.post("/", inputs=async_inputs, request_size=1, return_responses=True)
     response_list = []
     async for response in responses:
         response_list.append(response)
@@ -221,8 +227,8 @@ async def test_deployments_with_executor(port_generator):
 
     regular_deployment = _create_regular_deployment(
         port=head_port,
-        name='deployment',
-        executor='NameChangeExecutor',
+        name="deployment",
+        executor="NameChangeExecutor",
         uses_before=True,
         uses_after=True,
         polling=PollingType.ANY,
@@ -238,8 +244,8 @@ async def test_deployments_with_executor(port_generator):
 
     await asyncio.sleep(1.0)
 
-    c = Client(host='localhost', port=port, asyncio=True)
-    responses = c.post('/', inputs=async_inputs, request_size=1, return_responses=True)
+    c = Client(host="localhost", port=port, asyncio=True)
+    responses = c.post("/", inputs=async_inputs, request_size=1, return_responses=True)
     response_list = []
     async for response in responses:
         response_list.append(response.docs)
@@ -251,13 +257,13 @@ async def test_deployments_with_executor(port_generator):
     assert len(response_list[0]) == 4
 
     doc_texts = [doc.text for doc in response_list[0]]
-    assert doc_texts.count('client0-Request') == 1
-    assert doc_texts.count('deployment/uses_before-0') == 1
-    assert doc_texts.count('deployment/uses_after-0') == 1
+    assert doc_texts.count("client0-Request") == 1
+    assert doc_texts.count("deployment/uses_before-0") == 1
+    assert doc_texts.count("deployment/uses_after-0") == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('stream', [True, False])
+@pytest.mark.parametrize("stream", [True, False])
 async def test_deployments_with_replicas_advance_faster(port_generator, stream):
     head_port = port_generator()
     port = port_generator()
@@ -266,11 +272,11 @@ async def test_deployments_with_replicas_advance_faster(port_generator, stream):
     )
 
     deployment = _create_regular_deployment(
-        port=head_port, name='deployment', executor='FastSlowExecutor', replicas=10
+        port=head_port, name="deployment", executor="FastSlowExecutor", replicas=10
     )
     deployment.start()
 
-    connections = [f'0.0.0.0:{port}' for port in deployment.ports]
+    connections = [f"0.0.0.0:{port}" for port in deployment.ports]
     deployments_addresses = f'{{"deployment0": {json.dumps(connections)}}}'
     deployments_metadata = '{"deployment0": {"key": "value"}}'
 
@@ -281,10 +287,10 @@ async def test_deployments_with_replicas_advance_faster(port_generator, stream):
 
     await asyncio.sleep(1.0)
 
-    c = Client(host='localhost', port=port, asyncio=True)
-    input_docs = [Document(text='slow'), Document(text='fast')]
+    c = Client(host="localhost", port=port, asyncio=True)
+    input_docs = [Document(text="slow"), Document(text="fast")]
     responses = c.post(
-        '/', inputs=input_docs, request_size=1, return_responses=True, stream=stream
+        "/", inputs=input_docs, request_size=1, return_responses=True, stream=stream
     )
     response_list = []
     async for response in responses:
@@ -297,8 +303,8 @@ async def test_deployments_with_replicas_advance_faster(port_generator, stream):
     for response in response_list:
         assert len(response.docs) == 1
 
-    assert response_list[0].docs[0].text == 'fast'
-    assert response_list[1].docs[0].text == 'slow'
+    assert response_list[0].docs[0].text == "fast"
+    assert response_list[1].docs[0].text == "slow"
 
 
 class NameChangeExecutor(Executor):
@@ -316,13 +322,13 @@ class FastSlowExecutor(Executor):
     @requests
     def foo(self, docs, **kwargs):
         for doc in docs:
-            if doc.text == 'slow':
+            if doc.text == "slow":
                 time.sleep(1.0)
 
 
 def _create_regular_deployment(
     port,
-    name='',
+    name="",
     executor=None,
     uses_before=False,
     uses_after=False,
@@ -330,7 +336,7 @@ def _create_regular_deployment(
     shards=None,
     replicas=None,
 ):
-    args = set_deployment_parser().parse_args(['--port', str(port)])
+    args = set_deployment_parser().parse_args(["--port", str(port)])
     args.name = name
     if shards:
         args.shards = shards
@@ -338,11 +344,11 @@ def _create_regular_deployment(
         args.replicas = replicas
     args.polling = polling
     if executor:
-        args.uses = executor if executor else 'NameChangeExecutor'
+        args.uses = executor if executor else "NameChangeExecutor"
     if uses_after:
-        args.uses_after = executor if executor else 'NameChangeExecutor'
+        args.uses_after = executor if executor else "NameChangeExecutor"
     if uses_before:
-        args.uses_before = executor if executor else 'NameChangeExecutor'
+        args.uses_before = executor if executor else "NameChangeExecutor"
     return Deployment(args, include_gateway=False)
 
 
@@ -352,13 +358,13 @@ def _create_gateway_deployment(
     return Deployment(
         set_gateway_parser().parse_args(
             [
-                '--graph-description',
+                "--graph-description",
                 graph_description,
-                '--deployments-addresses',
+                "--deployments-addresses",
                 deployments_addresses,
-                '--deployments-metadata',
+                "--deployments-metadata",
                 deployments_metadata,
-                '--port',
+                "--port",
                 str(port),
             ]
         ),
@@ -368,17 +374,17 @@ def _create_gateway_deployment(
 
 async def async_inputs():
     for _ in range(20):
-        yield Document(text='client0-Request')
+        yield Document(text="client0-Request")
 
 
 class DummyExecutor(Executor):
-    @requests(on='/foo')
+    @requests(on="/foo")
     def foo(self, docs, **kwargs):
         ...
 
 
 @pytest.mark.parametrize(
-    'uses', [DummyExecutor, 'jinahub+docker://DummyHubExecutor', 'executor.yml']
+    "uses", [DummyExecutor, "jinahub+docker://DummyHubExecutor", "executor.yml"]
 )
 def test_deployment_uses(uses):
     depl = Deployment(uses=uses)
@@ -388,11 +394,11 @@ def test_deployment_uses(uses):
 
 
 @pytest.mark.parametrize(
-    'config_file,expected_replicas,expected_shards,expected_text',
+    "config_file,expected_replicas,expected_shards,expected_text",
     [
-        ('deployment-nested-executor-config.yml', 3, 2, 'hello'),
-        ('deployment-embedded-executor-config.yml', 2, 3, 'world'),
-        ('deployment-overridden-executor-config.yml', 3, 3, 'helloworld'),
+        ("deployment-nested-executor-config.yml", 3, 2, "hello"),
+        ("deployment-embedded-executor-config.yml", 2, 3, "world"),
+        ("deployment-overridden-executor-config.yml", 3, 3, "helloworld"),
     ],
 )
 def test_deployment_load_config(
@@ -403,7 +409,7 @@ def test_deployment_load_config(
     with depl:
         assert depl.args.replicas == expected_replicas
         assert depl.args.shards == expected_shards
-        docs = depl.post(on='/', inputs=DocumentArray.empty(5))
+        docs = depl.post(on="/", inputs=DocumentArray.empty(5))
         assert len(docs) == 5
         assert all(doc.text == expected_text for doc in docs)
 
@@ -411,11 +417,11 @@ def test_deployment_load_config(
 class MyServeExec(Executor):
     @requests
     def foo(self, docs, **kwargs):
-        docs.texts = ['foo' for _ in docs]
+        docs.texts = ["foo" for _ in docs]
 
-    @requests(on='/bar')
+    @requests(on="/bar")
     def bar(self, docs, **kwargs):
-        docs.texts = ['bar' for _ in docs]
+        docs.texts = ["bar" for _ in docs]
 
 
 @pytest.fixture()
@@ -436,15 +442,15 @@ def served_depl(request: FixtureRequest, exposed_port):
 
     stop_event = threading.Event()
 
-    kwargs = {'port': exposed_port}
+    kwargs = {"port": exposed_port}
     enable_dynamic_batching = request.param
     if enable_dynamic_batching:
-        kwargs['uses_dynamic_batching'] = {
-            '/bar': {'preferred_batch_size': 4, 'timeout': 5000}
+        kwargs["uses_dynamic_batching"] = {
+            "/bar": {"preferred_batch_size": 4, "timeout": 5000}
         }
 
     t = threading.Thread(
-        name='serve-depl',
+        name="serve-depl",
         target=serve_depl,
         args=(stop_event,),
         kwargs=kwargs,
@@ -458,44 +464,42 @@ def served_depl(request: FixtureRequest, exposed_port):
     t.join()
 
 
-@pytest.mark.parametrize('served_depl', [False, True], indirect=True)
+@pytest.mark.parametrize("served_depl", [False, True], indirect=True)
 def test_deployment_dynamic_batching(served_depl, exposed_port):
-    docs = Client(port=exposed_port).post(on='/bar', inputs=DocumentArray.empty(5))
-    assert docs.texts == ['bar' for _ in docs]
+    docs = Client(port=exposed_port).post(on="/bar", inputs=DocumentArray.empty(5))
+    assert docs.texts == ["bar" for _ in docs]
 
 
-@pytest.mark.parametrize('enable_dynamic_batching', [False, True])
+@pytest.mark.parametrize("enable_dynamic_batching", [False, True])
 def test_deployment_client_dynamic_batching(enable_dynamic_batching):
-    kwargs = {'port': random_port()}
+    kwargs = {"port": random_port()}
     if enable_dynamic_batching:
-        kwargs['uses_dynamic_batching'] = {
-            '/bar': {'preferred_batch_size': 4, 'timeout': 5000}
+        kwargs["uses_dynamic_batching"] = {
+            "/bar": {"preferred_batch_size": 4, "timeout": 5000}
         }
 
     depl = Deployment(uses=MyServeExec, **kwargs)
     with depl:
-        docs = depl.post(on='/bar', inputs=DocumentArray.empty(5))
+        docs = depl.post(on="/bar", inputs=DocumentArray.empty(5))
 
-    assert docs.texts == ['bar' for _ in docs]
+    assert docs.texts == ["bar" for _ in docs]
 
 
-@pytest.mark.parametrize('shards', [1, 2])
-@pytest.mark.parametrize('replicas', [1, 2, 3])
+@pytest.mark.parametrize("shards", [1, 2])
+@pytest.mark.parametrize("replicas", [1, 2, 3])
 def test_deployment_shards_replicas(shards, replicas):
-
     class PIDExecutor(Executor):
-
         @requests
         def foo(self, docs, **kwargs):
             import os
-            for doc in docs:
-                doc.tags['pid'] = os.getpid()
 
+            for doc in docs:
+                doc.tags["pid"] = os.getpid()
 
     dep = Deployment(uses=PIDExecutor, shards=shards, replicas=replicas)
 
     with dep:
-        docs = dep.post(on='/', inputs=DocumentArray.empty(20), request_size=1)
+        docs = dep.post(on="/", inputs=DocumentArray.empty(20), request_size=1)
 
-    returned_pids = set([doc.tags['pid'] for doc in docs])
+    returned_pids = set([doc.tags["pid"] for doc in docs])
     assert len(returned_pids) == shards * replicas

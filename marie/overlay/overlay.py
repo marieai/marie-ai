@@ -37,7 +37,6 @@ class OverlayProcessor(BaseHandler):
     ) -> None:
         super().__init__()
         checkpoint_dir = os.path.join(models_dir, "overlay")
-        checkpoint_dir = "/media/gbugaj/4C4219B54219A52C/transfer"
         self.cuda = cuda
         self.models_dir = models_dir
         self.work_dir = work_dir
@@ -55,7 +54,7 @@ class OverlayProcessor(BaseHandler):
             "./data",
             "--name",
             # "template_mask_global",
-            "hicfa_mask_local",  # hicfa_mask_local
+            "clean_mask",  # hicfa_mask_local
             "--model",
             "test",
             "--netG",
