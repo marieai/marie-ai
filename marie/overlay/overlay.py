@@ -37,6 +37,7 @@ class OverlayProcessor(BaseHandler):
     ) -> None:
         super().__init__()
         checkpoint_dir = os.path.join(models_dir, "overlay")
+        checkpoint_dir = "/home/greg/dev/pytorch-CycleGAN-and-pix2pix/checkpoints"
         self.cuda = cuda
         self.models_dir = models_dir
         self.work_dir = work_dir
@@ -54,7 +55,7 @@ class OverlayProcessor(BaseHandler):
             "./data",
             "--name",
             # "template_mask_global",
-            "claim_mask",
+            "hicfa_mask_local",
             "--model",
             "test",
             "--netG",
