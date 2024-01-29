@@ -210,3 +210,4 @@ playbook/*.retry
 
 /ansible/inventories/hosts.prod.yml
 ansible/inventories/hosts.dev.yml
+/examples/config.prod.json
