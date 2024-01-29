@@ -10,13 +10,16 @@ from functools import partial
 from multiprocessing import Queue
 from pathlib import Path
 
+import cv2
 import requests
 
 from examples.utils import online, setup_queue, setup_s3_storage
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.docs import load_image
 
 logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 # api_base_url = "http://127.0.0.1:51000/api"
@@ -62,6 +65,11 @@ def process_extract(
     s3_path = s3_asset_path(
         ref_id=filename, ref_type="batch_document_ocr", include_filename=True
     )
+
+    # Open and resave image to png
+    img = cv2.imread(file_location)
+    cv2.imwrite(file_location, img)
+
     status = StorageManager.write(file_location, s3_path, overwrite=True)
     logger.info(f"Uploaded {file_location} to {s3_path} : {status}")
     uid = str(uuid.uuid4())
@@ -118,27 +126,53 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
             continue
 
         print(img_path)
-
         resolved_output_path = os.path.join(
             output_path, img_path.relative_to(root_asset_dir)
         )
+
         output_dir = os.path.dirname(resolved_output_path)
         filename = os.path.basename(resolved_output_path)
         name = os.path.splitext(filename)[0]
         extension = os.path.splitext(filename)[1]
         os.makedirs(output_dir, exist_ok=True)
+
         json_output_path = os.path.join(output_dir, f"{name}.json")
 
         if extension.lower() not in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
             logger.warning(f"Skipping {img_path} : {extension} not supported")
             continue
 
+        # loaded, frames = load_image(str(img_path))
+        # continue
+        # re-save image to png
+        if False:
+            import PIL.Image
+
+            # conver path to string
+            # clean filename remove spaces, prenthesis, etc
+            filename = str(img_path)
+            # check if file has parenthesis in name
+            if False or "(" in filename or " " in filename:
+                print("filename has parenthesis", filename)
+                filename = filename.replace(" ", "_")
+                filename = filename.replace("(", "_")
+                filename = filename.replace(")", "_")
+                filename = filename.replace("[", "_")
+                filename = filename.replace("]", "_")
+                print("new filename", filename)
+                # check if new filename exists and remove it
+                # if os.path.exists(filename):
+                #     os.remove(filename)
+
+                # os.rename(str(img_path), filename)
+                PIL.Image.open(img_path).save(filename, format="png")
+
         # this is a hack to copy the annotations from the temp folder
         copy_from_temp = True
         if copy_from_temp:
             parent = os.path.basename(os.path.dirname(img_path))
             temp_dir = os.path.expanduser(
-                "~/datasets/private/corr-routing/ready/annotations_all/"
+                "~/datasets/private/corr-routing/annotations_all_tmp/"
             )
             temp_output_path = os.path.join(temp_dir, parent, f"{name}.json")
 
@@ -148,18 +182,23 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
                 shutil.copyfile(temp_output_path, json_output_path)
 
         if os.path.exists(json_output_path):
-            logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
+            # logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
+
+        # if not os.path.exists(json_output_path):
+        #     logger.warning(f" XXXXXXX {json_output_path} ")
+        #     continue
+
+        # print("Processing", img_path)
 
         json_result = process_extract(
             queue_id=default_queue_id,
             mode="multiline",
-            file_location=img_path,
+            file_location=str(img_path),
             stop_event=stop_event,
         )
 
         print(json_result)
-
         job_to_file[json_result["jobid"]] = {
             "file": img_path,
             "output_dir": output_dir,
@@ -177,11 +216,11 @@ def message_handler(stop_event, message):
         jobid = message["jobid"]
 
         print("message_handler : ", main_queue.qsize(), event, jobid)
+        print(message)
 
         if event != "extract.completed":
             return
 
-        print(message)
         completed_event = True
         payload = json.loads(message["payload"])
         ref_id = payload["metadata"]["ref_id"]
@@ -274,15 +313,15 @@ if __name__ == "__main__":
         # )
 
         process_dir(
-            "~/datasets/private/corr-routing/ready/images/",
-            "~/datasets/private/corr-routing/ready/annotations/",
+            "~/datasets/private/corr-routing/jpmc_01-22-2024/current",
+            "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/annotations",
             stop_event,
         )
 
     # join current thread / wait for event or we will get "cannot schedule new futures after interpreter shutdown"
 
     while True:
-        time.sleep(10)
+        time.sleep(10000)
     # get curren thread
     current_thread = threading.current_thread()
     current_thread.join()

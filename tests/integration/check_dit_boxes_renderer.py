@@ -40,7 +40,9 @@ if __name__ == "__main__":
     ensure_exists("/tmp/fragments")
 
     img_path = "~/tmp/PID_576_7188_0_150300411_4.tif"
-    img_path = "~/tmp/demo/merged-001_00001.png"
+    # img_path = "~/tmp/demo/merged-001_00001.png"
+    img_path = "~/tmp/blowsup-memory/194398480-extracted/194398480-0005.png"
+    img_path = "~/tmp/blowsup-memory/194398480-extracted/194398480-0003.png"
 
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
