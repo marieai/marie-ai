@@ -157,8 +157,8 @@ executors:
 
   - name: extract_t
     uses:
-#      jtype: TextExtractionExecutor
-      jtype: TextExtractionExecutorMock
+      jtype: TextExtractionExecutor
+#      jtype: TextExtractionExecutorMock
       with:
         storage:
           # postgresql configuration. Will be used only if value of backend is "psql"
@@ -172,16 +172,16 @@ executors:
             - model_name_or_path: 'marie/lmv3-medical-document-classification'
               type: 'transformers'
               device: 'cuda'
-              enabled: True
+              enabled: False
               name: 'medical_page_classifier'
             - model_name_or_path: 'marie/lmv3-medical-document-payer'
               type: 'transformers'
-              enabled: True
+              enabled: False
               device: 'cuda'
               name: 'medical_payer_classifier'
           page_indexer:
             - model_name_or_path: 'marie/layoutlmv3-medical-document-indexer'
-              enabled: True
+              enabled: False
               type: 'transformers'
               device: 'cuda'
               name: 'page_indexer_patient'
@@ -195,7 +195,7 @@ executors:
         py_modules:
           - marie.executor.text
     timeout_ready: 3000000
-    replicas: 2
+    replicas: 1
     #    replicas: ${{ CONTEXT.gpu_device_count }}
     env:
       CUDA_VISIBLE_DEVICES: RR

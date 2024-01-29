@@ -50,14 +50,13 @@ class TextExtractionExecutor(Executor, StorageMixin):
         ).logger
 
         # # sometimes we have CUDA/GPU support but want to only use CPU
-        # if not device:
-        #     device = "cuda" if torch.cuda.is_available() else "cpu"
-        # has_cuda = True if device == "cuda" and (
-        #             torch.cuda.is_available() and strtobool(os.environ.get("MARIE_DISABLE_CUDA", "false"))) else False
-        # if not has_cuda:
-        #     device = "cpu"
-        # self.device = device
         use_cuda = not strtobool(os.environ.get("MARIE_DISABLE_CUDA", "false"))
+
+        if not device:
+            device = torch.device(
+                "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
+            )
+            logger.warning(f"Device is not specified, using {device} as default device")
 
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")

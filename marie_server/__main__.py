@@ -265,6 +265,7 @@ def __main__(
     config = load_yaml(yml_config, substitute=True, context=context)
     prefetch = config.get("prefetch", 1)
 
+    # flow or deployment
     f = Flow.load_config(
         config,
         extra_search_paths=[os.path.dirname(inspect.getfile(inspect.currentframe()))],
@@ -275,6 +276,20 @@ def __main__(
         prefetch=prefetch,
         external=True,
     ).config_gateway(prefetch=prefetch)
+
+    if False:
+        f = Deployment.load_config(
+            config,
+            extra_search_paths=[
+                os.path.dirname(inspect.getfile(inspect.currentframe()))
+            ],
+            substitute=True,
+            context=context,
+            include_gateway=False,
+            noblock_on_start=False,
+            prefetch=prefetch,
+            external=True,
+        )
 
     marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
 

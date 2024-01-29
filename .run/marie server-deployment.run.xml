@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="marie server" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="marie server-deployment" type="PythonConfigurationType" factoryName="Python">
     <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -19,7 +19,7 @@
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
-    <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/marie.yml" />
+    <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/deployment.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

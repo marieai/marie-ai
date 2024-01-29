@@ -16,6 +16,7 @@ from marie.models.pix2pix.data import create_dataset
 from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
+from marie.models.utils import fill_gpu_memory, log_oom, torch_gc
 from marie.timer import Timer
 from marie.utils.image_utils import hash_frames_fast, imwrite, read_image, viewImage
 from marie.utils.onnx import OnnxModule
@@ -266,9 +267,8 @@ class OverlayProcessor(BaseHandler):
 
         return blended_img
 
-    @Timer(text="Segmented in {:.4f} seconds")
     def segment(
-        self, document_id: str, img_path: str, checksum: str = None
+        self, document_id: str, img_path: str, checksum: str = None, raise_oom=False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Segment form image and return original, mask, segmented images. If there is no mask extracted we return original
@@ -277,47 +277,60 @@ class OverlayProcessor(BaseHandler):
         :param document_id: unique document id
         :param img_path: image to process
         :param checksum: image checksum
+        :param raise_oom: raise out of memory exception
         :return: original, mask, segmented tuple of images in numpy format
         """
+        with Timer(text="segment in {:.4f} seconds"):
 
-        print(f"Creating overlay for : {document_id} > {img_path}")
+            if not os.path.exists(img_path):
+                raise Exception("File not found : {}".format(img_path))
 
-        if not os.path.exists(img_path):
-            raise Exception("File not found : {}".format(img_path))
+            name = document_id if checksum is None else checksum
 
-        name = document_id if checksum is None else checksum
+            work_dir = ensure_exists(os.path.join(self.work_dir, name, "work"))
+            debug_dir = ensure_exists(os.path.join(self.work_dir, name, "debug"))
+            dataroot_dir = ensure_exists(
+                os.path.join(self.work_dir, name, "dataroot_overlay")
+            )
+            dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
+            src_img = cv2.imread(img_path)
+            if len(src_img.shape) != 3:
+                raise Exception("Expected image shape is h,w,c")
 
-        work_dir = ensure_exists(os.path.join(self.work_dir, name, "work"))
-        debug_dir = ensure_exists(os.path.join(self.work_dir, name, "debug"))
-        dataroot_dir = ensure_exists(
-            os.path.join(self.work_dir, name, "dataroot_overlay")
-        )
-        dst_file_name = os.path.join(dataroot_dir, f"overlay_{name}.png")
-        src_img = cv2.imread(img_path)
-        if len(src_img.shape) != 3:
-            raise Exception("Expected image shape is h,w,c")
+            try:
+                # TODO : load image from memory rather than disk
+                real_img = self.preprocess(src_img)
+                imwrite(dst_file_name, real_img)
+                fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir)
 
-        # TODO : load image from memory rather than disk
-        real_img = self.preprocess(src_img)
-        imwrite(dst_file_name, real_img)
-        fake_mask = self.__extract_segmentation_mask(real_img, dataroot_dir)
+                # Unable to segment return empty mask
+                if np.array(fake_mask).size == 0:
+                    # create dummy white image
+                    real_img = np.ones(
+                        (src_img.shape[0], src_img.shape[1], 3), dtype=np.uint8
+                    )
+                    return real_img, fake_mask, real_img
 
-        # Unable to segment return empty mask
-        if np.array(fake_mask).size == 0:
-            print(f"Unable to segment image :{img_path}")
-            # create dummy white image
-            real_img = np.ones((src_img.shape[0], src_img.shape[1], 3), dtype=np.uint8)
-            return real_img, fake_mask, real_img
+                fake_mask, blended = self.postprocess(src_img, real_img, fake_mask)
 
-        fake_mask, blended = self.postprocess(src_img, real_img, fake_mask)
+                tm = time.time_ns()
+                if debug_visualization_enabled:
+                    imwrite(
+                        os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask
+                    )
 
-        tm = time.time_ns()
-        if debug_visualization_enabled:
-            imwrite(os.path.join(debug_dir, "overlay_{}.png".format(tm)), fake_mask)
+                return src_img, fake_mask, blended
+            except RuntimeError as e:
+                if "out of memory" in str(e) and not raise_oom:
+                    log_oom(e)
+                    if hasattr(torch.cuda, "empty_cache"):
+                        torch_gc()
+                    return self.segment(document_id, img_path, checksum, raise_oom=True)
+                else:
+                    raise e
+            finally:
+                torch_gc()
 
-        return src_img, fake_mask, blended
-
-    @Timer(text="SegmentedFrame in {:.4f} seconds")
     def segment_frame(
         self, document_id: str, frame: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -327,6 +340,7 @@ class OverlayProcessor(BaseHandler):
         :param document_id:
         :param frame:
         """
+
         frame_checksum = hash_frames_fast(frames=[frame])
         ensure_exists(os.path.join(self.work_dir, frame_checksum))
         img_path = os.path.join(

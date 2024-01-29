@@ -25,7 +25,7 @@ from marie.boxes.line_processor import find_line_number, line_merge
 from marie.constants import __model_path__, __config_dir__
 from marie.logging.logger import MarieLogger
 from marie.logging.profile import TimeContext
-from marie.models.utils import torch_gc
+from marie.models.utils import torch_gc, log_oom
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.overlap import merge_boxes
 from marie.utils.resize_image import resize_image
@@ -289,8 +289,6 @@ def crop_to_content_box(
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
-    # print("crop_to_content_box took {}s".format(dt))
-    # print("offset box: {}".format(offset))
     return offset, cropped
 
 
@@ -376,7 +374,6 @@ class OptimizedDetectronPredictor:
                 )
                 if self.half_precision:
                     image = image.half()
-                # image.to(self.cfg.MODEL.DEVICE)
 
                 inputs = {"image": image, "height": height, "width": width}
                 if self.profiler_enabled:
@@ -407,12 +404,12 @@ class OptimizedDetectronPredictor:
                 return predictions
         except RuntimeError as e:
             if "out of memory" in str(e) and not raise_oom:
-                print("| WARNING: ran out of memory")
+                log_oom(e)
                 for p in self.model.parameters():
                     if p.grad is not None:
                         del p.grad
                 if hasattr(torch.cuda, "empty_cache"):
-                    torch.cuda.empty_cache()
+                    torch_gc()
                 return self.invoke_model(original_image, raise_oom=True)
             else:
                 raise e
@@ -625,8 +622,6 @@ class BoxProcessorUlimDit(BoxProcessor):
                         box[2] - (offset[2] - offset[0]),
                         box[3] - (offset[3] - offset[1]),
                     ]
-
-                    # print(f"Snippet {i} : {box} -> {offset} -> {adj_box}")
                     bboxes[i] = adj_box
 
             # FIXME : This is a hack
