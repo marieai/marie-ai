@@ -24,7 +24,6 @@
 
 ### Attributes
 
-| `INITIALIZED`   |    |
-|-----------------|----|
-| `MODEL_SPEC`    |    |
-| `REGISTRY`      |    |
+| `MODEL_SPEC`   |    |
+|----------------|----|
+| `REGISTRY`     |    |

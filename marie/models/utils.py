@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import Optional, List, Union, Tuple
 
 import logging
@@ -104,6 +105,28 @@ def torch_gc():
             with torch.cuda.device(device_id):
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
+
+
+def log_oom(exc, logger: logging.Logger = logger):
+    """Log OOM exception and CUDA memory summary."""
+    msg = "OOM: Ran out of memory with exception: {}".format(exc)
+    logger.warning(msg)
+    if torch.cuda.is_available() and hasattr(torch.cuda, "memory_summary"):
+        for device_idx in range(torch.cuda.device_count()):
+            logger.warning(torch.cuda.memory_summary(device=device_idx))
+    sys.stderr.flush()
+
+
+def fill_gpu_memory(megabytes: int = 1024):
+    """create a large tensor and hold it in memory to simulate memory usage"""
+    # tensor of 1024 x 1024 x 4 bytes = 4 MB so 1024 x 1024 x 1024 x 4 bytes = 4 GB
+    data = torch.randn(
+        (1024 * 1024 // 4, megabytes), device="cuda:0", dtype=torch.float32
+    )
+    # zeros = torch.ones(1024, 1024, device="cuda:0", dtype=torch.float32)
+    # get the size of the tensor in bytes
+    size = data.element_size() * data.nelement()
+    logger.info(f"Tensor size : {size}")
 
 
 ################################################################

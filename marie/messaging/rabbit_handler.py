@@ -30,7 +30,9 @@ class RabbitMQToastHandler(ToastHandler):
     ) -> None:
         client = None
         try:
-            self.logger.info(f"Sending notification to RabbitMQ : {notification.event}")
+            self.logger.debug(
+                f"Sending notification to RabbitMQ : {notification.event}"
+            )
             if notification.api_key is None:
                 raise ValueError(
                     f"'api_key' not present in notification : {notification}"
