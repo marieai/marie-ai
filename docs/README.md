@@ -1,4 +1,8 @@
-# Marie-AI Documentaion
+# Marie-AI Documentation
+
+
+## Contribute to Documentation
+Please have a look at our [contribution guide](https://github.com/marieai/marie-ai/blob/main/docs/docs/getting-started/contributing/contributing.md) to see how to install the development environment and how to generate the documentation.
 
 
 ### Installation
