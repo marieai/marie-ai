@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import timeit
-from shutil import copyfile
 from typing import Tuple, Union
 
 import cv2
@@ -17,7 +16,7 @@ from marie.models.pix2pix.models import create_model
 from marie.models.pix2pix.options.test_options import TestOptions
 from marie.models.pix2pix.util.util import tensor2im
 from marie.timer import Timer
-from marie.utils.image_utils import hash_frames_fast, imwrite, read_image, viewImage
+from marie.utils.image_utils import hash_frames_fast, imwrite, read_image
 from marie.utils.onnx import OnnxModule
 from marie.utils.utils import ensure_exists
 
@@ -54,7 +53,7 @@ class OverlayProcessor(BaseHandler):
             "./data",
             "--name",
             # "template_mask_global",
-            "clean_mask",  # hicfa_mask_local
+            "claim_mask",  # hicfa_mask_local
             "--model",
             "test",
             "--netG",
@@ -317,6 +316,8 @@ class OverlayProcessor(BaseHandler):
         src_img = cv2.imread(img_path)
         if len(src_img.shape) != 3:
             raise Exception("Expected image shape is h,w,c")
+
+        return src_img, src_img, src_img
 
         # TODO : load image from memory rather than disk
         real_img = self.preprocess(src_img)
