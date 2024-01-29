@@ -1,0 +1,18 @@
+{
+  "api_base_url": "http://127.0.0.1:51000/api",
+  "api_key": "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ",
+  "default_queue_id": "0000-0000-0000-0000",
+  "storage": {
+    "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
+    "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
+    "S3_STORAGE_BUCKET_NAME": "marie",
+    "S3_ENDPOINT_URL": "http://localhost:8000",
+    "S3_ADDRESSING_STYLE": "path"
+  },
+  "queue": {
+    "hostname": "localhost",
+    "port": 5672,
+    "username": "guest",
+    "password": "guest"
+  }
+}
