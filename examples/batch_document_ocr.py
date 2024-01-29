@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import base64
 import json
 import logging
 import os
-import shutil
 import threading
 import time
 import uuid
@@ -11,6 +12,8 @@ from multiprocessing import Queue
 from pathlib import Path
 
 import requests
+from pydantic import BaseModel
+from pydantic.tools import parse_obj_as
 
 from examples.utils import online, setup_queue, setup_s3_storage
 from marie.pipe.components import s3_asset_path
@@ -19,31 +22,43 @@ from marie.storage import StorageManager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# api_base_url = "http://127.0.0.1:51000/api"
-api_base_url = "http://gext-02.rms-asp.com:5000/api"
-# api_base_url = "http://asp-gpu002.rms-asp.com:51000/api"
-endpoint_url = f"{api_base_url}/document/extract"
 
-default_queue_id = "0000-0000-0000-0000"
-api_key = "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ"
+def load_config(file_path):
+    with open(file_path, "r") as json_file:
+        config = json.load(json_file)
+    return config
 
-auth_headers = {
-    "Authorization": f"Bearer {api_key}",
-    "Content-Type": "application/json; charset=utf-8",
-}
+
+class ExtractConfig(BaseModel):
+    api_base_url: str
+    api_key: str
+    default_queue_id: str
+
 
 # kv_store = InMemoryKV()
-
 job_to_file = {}
 
 main_queue = Queue()
 
 
 def process_extract(
-    queue_id: str, mode: str, file_location: str, stop_event: threading.Event = None
+    mode: str,
+    file_location: str,
+    config: ExtractConfig,
+    stop_event: threading.Event = None,
 ) -> str:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
+
+    api_base_url = config.api_base_url
+    api_key = config.api_key
+    queue_id = config.default_queue_id
+    endpoint_url = f"{api_base_url}/document/extract"
+
+    auth_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
 
     logger.info(endpoint_url)
     if False and not online(api_base_url):
@@ -84,6 +99,9 @@ def process_extract(
                 "page_splitter": {
                     "enabled": False,
                 },
+                "page_cleaner": {
+                    "enabled": False,
+                },
             }
         ],
     }
@@ -109,7 +127,9 @@ def process_extract(
     return json_result
 
 
-def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
+def process_dir(
+    src_dir: str, output_dir: str, stop_event: threading.Event, config: ExtractConfig
+):
     root_asset_dir = os.path.expanduser(src_dir)
     output_path = os.path.expanduser(output_dir)
 
@@ -133,29 +153,15 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
             logger.warning(f"Skipping {img_path} : {extension} not supported")
             continue
 
-        # this is a hack to copy the annotations from the temp folder
-        copy_from_temp = True
-        if copy_from_temp:
-            parent = os.path.basename(os.path.dirname(img_path))
-            temp_dir = os.path.expanduser(
-                "~/datasets/private/corr-routing/ready/annotations_all/"
-            )
-            temp_output_path = os.path.join(temp_dir, parent, f"{name}.json")
-
-            if os.path.exists(temp_output_path) and not os.path.exists(
-                json_output_path
-            ):
-                shutil.copyfile(temp_output_path, json_output_path)
-
         if os.path.exists(json_output_path):
             logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
 
         json_result = process_extract(
-            queue_id=default_queue_id,
             mode="multiline",
             file_location=img_path,
             stop_event=stop_event,
+            config=config,
         )
 
         print(json_result)
@@ -166,8 +172,16 @@ def process_dir(src_dir: str, output_dir: str, stop_event: threading.Event):
             "filename": filename,
         }
 
+        # break
+
 
 def message_handler(stop_event, message):
+    """
+    Handle message from queue
+    :param stop_event:
+    :param message:
+    :return:
+    """
     completed_event = False
     try:
         if isinstance(message, str):
@@ -223,31 +237,47 @@ def message_handler(stop_event, message):
             # stop_event.set()
 
 
+def parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        default="config.dev.json",
+        help="Path to the config file.",
+    )
+
+    parser.add_argument(
+        "--input_dir",
+        type=str,
+        required=True,
+        help="Path to the input directory.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="Directory the output images will be written to.",
+    )
+    opt = parser.parse_args()
+    return opt
+
+
 if __name__ == "__main__":
     stop_event = threading.Event()
+    args = parse_args()
 
-    storage_config = {
-        "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
-        "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
-        "S3_STORAGE_BUCKET_NAME": "marie",
-        "S3_ENDPOINT_URL__": "http://localhost:8000",
-        "S3_ENDPOINT_URL": "http://172.16.11.163:8000",
-        "S3_ADDRESSING_STYLE": "path",
-    }
+    raw_config = load_config(args.config)
+    storage_config = raw_config["storage"]
+    queue_config = raw_config["queue"]
+    config = parse_obj_as(ExtractConfig, raw_config)
 
     setup_s3_storage(storage_config)
-
-    connection_config = {
-        "hostname__": "localhost",
-        "hostname": "172.16.11.162",
-        "port": 5672,
-        "username": "guest",
-        "password": "guest",
-    }
-
     setup_queue(
-        connection_config,
-        api_key,
+        queue_config,
+        config.api_key,
         "extract",
         "extract.#",
         stop_event,
@@ -255,29 +285,12 @@ if __name__ == "__main__":
         partial(message_handler, stop_event),
     )
 
-    # cleanup empty files, this can happen for example when the file is not an image or service fails
-    #  find $dir -size 0 -type f -delete
-
-    if True:
-        # process_dir(
-        #     # "~/datasets/private/medical_page_classification/small",
-        #     "~/datasets/private/data-hipa/medical_page_classification/raw",
-        #     "/home/greg/datasets/private/data-hipa/medical_page_classification/output/annotations/",
-        #     stop_event,
-        # )
-        #
-        # process_dir(
-        #     # "~/datasets/private/medical_page_classification/small",
-        #     "~/datasets/corr-routing/converted",
-        #     "~/datasets/corr-routing/output/annotations",
-        #     stop_event,
-        # )
-
-        process_dir(
-            "~/datasets/private/corr-routing/ready/images/",
-            "~/datasets/private/corr-routing/ready/annotations/",
-            stop_event,
-        )
+    process_dir(
+        src_dir=args.input_dir,
+        output_dir=args.output_dir,
+        stop_event=stop_event,
+        config=config,
+    )
 
     # join current thread / wait for event or we will get "cannot schedule new futures after interpreter shutdown"
 
@@ -294,3 +307,6 @@ if __name__ == "__main__":
             print("Exiting")
             # sys.exit(0) # exit the main thread
             os._exit(0)  # exit all threads
+
+    # cleanup empty files, this can happen for example when the file is not an image or service fails
+    #  find $dir -size 0 -type f -delete
