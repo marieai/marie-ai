@@ -120,11 +120,11 @@ const config = {
             items: [
               {
                 label: 'Blog',
-                to: 'http://www.gregbugaj.com',
+                to: 'https://www.gregbugaj.com',
               },
               {
                 label: 'GitHub',
-                href: 'http://github.com/gregbugaj/marie-ai',
+                href: 'https://github.com/gregbugaj/marie-ai',
               },
             ],
           },
