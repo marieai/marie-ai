@@ -21,6 +21,8 @@
 
 
 
+
+
 <a name=release-note-__version__
 =
 
@@ -1855,4 +1857,16 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  - [[```5c7a7123```](https://github.com/marieai/marie-ai/commit/5c7a71236f040db860a182545459e726893d44cf)] __-__ __fix__: version fix before release (*Marie Dev Bot*)
  - [[```542dcfc0```](https://github.com/marieai/marie-ai/commit/542dcfc0f0d04e941abf332cb27f227f98c0163f)] __-__ Update force-release.yml (*Greg*)
  - [[```1ddb8004```](https://github.com/marieai/marie-ai/commit/1ddb800486cac546577113fd56f95db357192a87)] __-__ working on decoupling OCR engines (*Marie Dev Bot*)~~
+
+<a name=release-note-3-0-26></a>
+## Release Note (`3.0.26`)
+
+> Release time: 2024-01-29 05:29:46
+
+<a name=release-note-3-0-26></a>
+## Release Note (`3.0.26`)
+
+> Release time: 2024-01-29 05:30:16
+
+
 

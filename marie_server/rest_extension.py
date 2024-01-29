@@ -314,7 +314,11 @@ async def process_document_request(
 
         return payload
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
+        # TODO :  handle exception
+        # raising the exception will cause the job to be marked as failed
+        # however, this causes the wrong error stacktrace to be sent to the client
+        # the original error stacktrace is lost
+        logger.error(f"Processing error: {e}", exc_info=True)
         raise e
 
 
@@ -345,6 +349,7 @@ async def process_request(
 
     status = "OK"
     job_tag = ""
+    silence_exceptions = strtobool(os.environ.get("MARIE_SILENCE_EXCEPTIONS", False))
 
     try:
         logger.info(f"Starting request: {job_id}")
@@ -374,24 +379,38 @@ async def process_request(
 
         return results
     except BaseException as e:
-        logger.error(f"processing error : {e}", exc_info=True)
-        status = "FAILED"
+        try:
+            logger.error(f"processing error : {e}", exc_info=True)
+            status = "FAILED"
 
-        # get the traceback and clear the frames to avoid memory leak
-        _, val, tb = sys.exc_info()
-        traceback.clear_frames(tb)
+            # get the traceback and clear the frames to avoid memory leak
+            _, val, tb = sys.exc_info()
+            traceback.clear_frames(tb)
 
-        filename = tb.tb_frame.f_code.co_filename
-        name = tb.tb_frame.f_code.co_name
-        line_no = tb.tb_lineno
+            filename = tb.tb_frame.f_code.co_filename
+            name = tb.tb_frame.f_code.co_name
+            line_no = tb.tb_lineno
 
-        exc = {
-            "type": type(e).__name__,
-            "message": str(e),
-            "filename": filename.split("/")[-1],
-            "name": name,
-            "line_no": line_no,
-        }
-        await mark_as_failed(
-            api_key, job_id, api_tag, job_tag, status, int(time.time()), exc
-        )
+            # print traceback
+            logger.error(f"Error: {e}", exc_info=True)
+            code = 500
+            detail = "Internal Server Error"
+
+            if not silence_exceptions:
+                detail = e.__str__()
+
+            exc = {
+                "type": type(e).__name__,
+                "message": detail,
+                "filename": filename.split("/")[-1],
+                "name": name,
+                "line_no": line_no,
+            }
+            await mark_as_failed(
+                api_key, job_id, api_tag, job_tag, status, int(time.time()), exc
+            )
+
+            return {"status": "error", "error": {"code": code, "message": detail}}
+        except Exception as e:
+            logger.error(f"Failure handling exception: {e}", exc_info=True)
+            raise e

@@ -91,7 +91,6 @@ class ExtractPipeline:
             device = "cpu"
 
         self.logger = MarieLogger(context=self.__class__.__name__)
-
         self.overlay_processor = setup_overlay(pipeline_config)
         self.ocr_engines = get_known_ocr_engines(device=device)
         self.document_classifiers = setup_classifiers(pipeline_config)
@@ -111,6 +110,7 @@ class ExtractPipeline:
         frames: Union[list[np.ndarray], list[Image.Image]],
         root_asset_dir: str,
         force: bool = False,
+        enabled: bool = True,
     ) -> list[np.ndarray]:
         """
         Segment the frames and return the segmented frames
@@ -119,8 +119,10 @@ class ExtractPipeline:
         :param frames: frames to segment
         :param root_asset_dir:  root directory to store the segmented frames
         :param force: force segmentation
+        :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
         :return:
         """
+        self.logger.info(f"Segmenting frames for {ref_id}")
 
         output_dir = ensure_exists(os.path.join(root_asset_dir, "clean"))
         filename, prefix, suffix = split_filename(ref_id)
@@ -128,21 +130,27 @@ class ExtractPipeline:
         clean_frames = []
 
         if force or file_count != len(frames):
-            self.logger.info(f"Segmenting frames for {ref_id}")
-
             for i, frame in enumerate(frames):
                 try:
                     doc_id = f"{prefix}_{i}"
-                    real, mask, clean = self.overlay_processor.segment_frame(
-                        doc_id, frame
-                    )
-                    clean_frames.append(clean)
+                    try:
+                        if enabled:
+                            real, mask, clean = self.overlay_processor.segment_frame(
+                                doc_id, frame
+                            )
+                        else:
+                            self.logger.debug(f"Skipping segmentation for {ref_id}")
+                            real, mask, clean = frame, None, frame
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Unable to segment document (using original frame) : {e}"
+                        )
+                        real, mask, clean = frame, None, frame
 
+                    clean_frames.append(clean)
                     # save real cleaned image
                     save_path = os.path.join(output_dir, f"{i}.tif")
                     save_frame_as_tiff_g4(clean, save_path)
-                    # imwrite(save_path, clean, dpi=(300, 300))
-
                     self.logger.info(f"Saved clean img : {save_path}")
                 except Exception as e:
                     self.logger.warning(f"Unable to segment document : {e}")
@@ -176,6 +184,16 @@ class ExtractPipeline:
         job_id: str,
         runtime_conf: Optional[dict[str, any]] = None,
     ) -> dict[str, any]:
+        """
+        Execute the pipeline for the document with the given frames.
+        :param ref_id: reference id of the document (e.g. file name)
+        :param ref_type: reference type of the document (e.g. invoice, receipt, etc)
+        :param frames: frames to process for the document (e.g. bursted pages)
+        :param root_asset_dir: root asset directory to store the results
+        :param job_id: job id to associate with the document
+        :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+        :return: metadata for the document (e.g. OCR results, classification results, etc)
+        """
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
 
@@ -189,24 +207,31 @@ class ExtractPipeline:
         )
 
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
+        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get("enabled", True)
 
-        self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
-        self.logger.info(f"page indexer enabled : {page_indexer_enabled}")
+        self.logger.info(
+            f"Feature : page classifier enabled : {page_classifier_enabled}"
+        )
+        self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
+        self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
+
         post_processing_pipeline = []
 
-        post_processing_pipeline.append(
-            ClassifierPipelineComponent(
-                name="classifier_pipeline_component",
-                document_classifiers=self.document_classifiers,
+        if page_classifier_enabled:
+            post_processing_pipeline.append(
+                ClassifierPipelineComponent(
+                    name="classifier_pipeline_component",
+                    document_classifiers=self.document_classifiers,
+                )
             )
-        )
 
-        post_processing_pipeline.append(
-            NamedEntityPipelineComponent(
-                name="ner_pipeline_component",
-                document_indexers=self.document_indexers,
+        if page_indexer_enabled:
+            post_processing_pipeline.append(
+                NamedEntityPipelineComponent(
+                    name="ner_pipeline_component",
+                    document_indexers=self.document_indexers,
+                )
             )
-        )
 
         metadata = {
             "ref_id": ref_id,
@@ -223,7 +248,9 @@ class ExtractPipeline:
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
 
-        clean_frames = self.segment(ref_id, frames, root_asset_dir)
+        clean_frames = self.segment(
+            ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
+        )
         ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
         metadata["ocr"] = ocr_results
 
@@ -353,22 +380,27 @@ class ExtractPipeline:
             self.logger.warning("runtime_conf is None, using default config")
             runtime_conf = {}
 
-        if regions and len(regions) > 0:
-            return self.execute_regions_pipeline(
-                ref_id,
-                ref_type,
-                frames,
-                regions,
-                root_asset_dir,
-                pms_mode,
-                coordinate_format,
-                job_id,
-                runtime_conf,
-            )
-        else:
-            return self.execute_frames_pipeline(
-                ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
-            )
+        try:
+
+            if regions and len(regions) > 0:
+                return self.execute_regions_pipeline(
+                    ref_id,
+                    ref_type,
+                    frames,
+                    regions,
+                    root_asset_dir,
+                    pms_mode,
+                    coordinate_format,
+                    job_id,
+                    runtime_conf,
+                )
+            else:
+                return self.execute_frames_pipeline(
+                    ref_id, ref_type, frames, root_asset_dir, job_id, runtime_conf
+                )
+        except Exception as e:
+            self.logger.error(f"Error executing pipeline : {e}")
+            raise e
 
     def render_text(self, frames, results, root_asset_dir) -> None:
         renderer = TextRenderer(config={"preserve_interword_spaces": True})

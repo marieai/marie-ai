@@ -1,8 +1,8 @@
 # marie.document.CraftOcrProcessor
 
-### *class* marie.document.CraftOcrProcessor(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True)
+### *class* marie.document.CraftOcrProcessor(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True, \*\*kwargs)
 
-#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True)
+#### \_\_init_\_(work_dir: str = '/tmp/icr', models_dir: str = '/mnt/marie/model_zoo/icr', cuda: bool = True, \*\*kwargs)
 
 ### Methods
 
@@ -15,6 +15,7 @@
 | `inference`(data, \*args, \*\*kwargs)                                                    | The Inference Function is used to make a prediction call on the given input request.                                           |
 | `initialize`(context)                                                                    | Initialize function loads the model.pt file and initialized the model object.                                                  |
 | `is_available`()                                                                         | Returns True if the processor is available for use                                                                             |
+| `optimize_model`(model)                                                                  | Optimizes the model for inference.                                                                                             |
 | `postprocess`(data)                                                                      | The post process function makes use of the output from the inference and converts into a Torchserve supported response output. |
 | `preprocess`(data)                                                                       | Preprocess function to convert the request input to a tensor(Torchserve supported format).                                     |
 | `recognize`(_id, key, img, boxes, fragments, lines)                                      | Recognize text from multiple images.                                                                                           |
