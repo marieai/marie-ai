@@ -32,6 +32,8 @@ from marie.utils.resize_image import resize_image
 
 import detectron2.data.transforms as T
 
+from marie.utils.types import strtobool
+
 
 def setup_cfg(args, device):
     """
@@ -304,7 +306,7 @@ class OptimizedDetectronPredictor:
         :param half_precision:   whether to use half precision or not (default: True) will only work on CUDA
         """
         self.logger = MarieLogger(self.__class__.__name__)
-        self.profiler_enabled = True
+        self.profiler_enabled = strtobool(os.environ.get("MARIE_PROFILER_ENABLED", False))
         self.half_precision = (
             True if half_precision and cfg.MODEL.DEVICE == "cuda" else False
         )
@@ -380,6 +382,9 @@ class OptimizedDetectronPredictor:
 
                     inputs = {"image": image, "height": height, "width": width}
                     if self.profiler_enabled:
+                        # ensure that output directory exists
+                        os.makedirs(os.path.expanduser("~/tmp/cuda-profiler"), exist_ok=True)
+
                         with profile(
                                 activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
                                 with_stack=True,
