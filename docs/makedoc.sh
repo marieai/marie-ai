@@ -38,5 +38,17 @@ cat <<EOF > $category_file
 }
 EOF
 
-echo "Building docosaurus site"
+echo "Building Docusaurus Site"
+
+export NVM_DIR="$HOME/.nvm"
+
+# check if nvm is installed
+if [ ! -d "$NVM_DIR" ]; then
+    echo "Installing nvm"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+fi
+
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+
+nvm use $(cat .nvmrc)
 yarn build
