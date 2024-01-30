@@ -811,7 +811,10 @@ class BoxProcessorUlimDit(BoxProcessor):
                 bboxes = bboxes[ind]
                 scores = scores[ind]
                 rect_from_poly = np.array(rect_from_poly)[ind]
-                fragments = np.array(fragments, dtype="object")[ind]
+                filtered_fragments = []
+                for i in ind:
+                    filtered_fragments.append(fragments[i])
+                fragments = filtered_fragments
             fragments = [np.array(f, dtype=np.uint8) for f in fragments]
 
             prediction_result = dict()
