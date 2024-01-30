@@ -2,7 +2,7 @@
 
 | [`BoxProcessorUlimDit`](generated/marie.boxes.BoxProcessorUlimDit.md#marie.boxes.BoxProcessorUlimDit)   | Document text box processor using DIT model from ULIM.   |
 |---------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| [`PSMode`](generated/marie.boxes.PSMode.md#marie.boxes.PSMode)                                          | Page Segmentation Modes                                  |
+| [`PSMode`](#marie.boxes.PSMode)                                                                         | Page Segmentation Modes                                  |
 
 ### *class* marie.boxes.PSMode(value)
 
