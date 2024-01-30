@@ -424,7 +424,6 @@ class OptimizedDetectronPredictor:
                 finally:
                     torch_gc()
 
-
     def optimize_model(self, model: nn.Module) -> Callable | Module:
         """Optimizes the model for inference. This method is called by the __init__ method."""
         try:
@@ -813,6 +812,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 scores = scores[ind]
                 rect_from_poly = np.array(rect_from_poly)[ind]
                 fragments = np.array(fragments, dtype="object")[ind]
+            fragments = [np.array(f, dtype=np.uint8) for f in fragments]
 
             prediction_result = dict()
             prediction_result["bboxes"] = bboxes
