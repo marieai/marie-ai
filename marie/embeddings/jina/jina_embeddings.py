@@ -97,7 +97,7 @@ class JinaEmbeddings(EmbeddingsBase):
 
                 result = EmbeddingsObject()
                 result.embeddings = embeddings
-                result.total_tokens = len(embeddings[0])
+                result.total_tokens = -1  # len(embeddings[0])
 
                 return result
             except Exception as e:

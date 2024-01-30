@@ -7,6 +7,11 @@ class EmbeddingsObject:
     """
 
     def __init__(self, embeddings: Optional[List[float]] = None, total_tokens: int = 0):
+        """
+        Constructor
+        :param embeddings: Embeddings list
+        :param total_tokens:  Total number of tokens
+        """
         self.embeddings = embeddings or []
         self.total_tokens = total_tokens
 

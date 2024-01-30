@@ -292,8 +292,6 @@ if __name__ == "__main__":
         config=config,
     )
 
-    # join current thread / wait for event or we will get "cannot schedule new futures after interpreter shutdown"
-
     while True:
         time.sleep(10)
     # get curren thread

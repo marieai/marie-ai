@@ -2,6 +2,7 @@ import pytest
 from numpy.linalg import norm
 
 from marie.embeddings.jina.jina_embeddings import JinaEmbeddings
+from marie.ocr.util import meta_to_text
 
 cos_sim = lambda a, b: (a @ b.T) / (norm(a) * norm(b))
 
