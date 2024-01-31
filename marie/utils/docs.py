@@ -193,7 +193,8 @@ def load_image(img_path, img_format: str = "cv") -> (bool, List[np.ndarray]):
 
     # img = skio.imread(img_path)  # RGB order
     img = Image.open(img_path).convert('RGB')
-    img = np.array(img)
+    img = np.array(img, dtype=np.uint8)
+
     # return True, [img]
 
     if img.shape[0] == 2:
