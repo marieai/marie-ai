@@ -6,10 +6,21 @@ from typing import Optional, Union
 import yaml
 
 
-def ensure_exists(dir_to_validate) -> str:
-    """Ensure directory exists"""
+def ensure_exists(
+    dir_to_validate, validate_dir_is_empty: Optional[bool] = False
+) -> str:
+    """Ensure directory exists and is empty if required.
+    :param dir_to_validate: Directory to validate.
+    :param validate_dir_is_empty: If True, the directory must be empty.
+    :return: Directory to validate.
+    """
     if not os.path.exists(dir_to_validate):
         os.makedirs(dir_to_validate, exist_ok=True)
+
+    if validate_dir_is_empty and os.path.exists(dir_to_validate):
+        if len(os.listdir(dir_to_validate)) > 0:
+            raise ValueError(f"Directory {dir_to_validate} is not empty.")
+
     return dir_to_validate
 
 
