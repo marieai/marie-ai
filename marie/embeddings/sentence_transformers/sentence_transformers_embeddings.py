@@ -56,7 +56,7 @@ class SentenceTransformerEmbeddings(EmbeddingsBase):
 
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Embeddings Jina : {model_name_or_path}")
+        self.logger.info(f"Embeddings sentence transformer : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
 
@@ -85,22 +85,24 @@ class SentenceTransformerEmbeddings(EmbeddingsBase):
 
         assert os.path.exists(model_name_or_path)
         self.logger.info(f"Resolved model : {model_name_or_path}")
-        self.model = SentenceTransformer(model_name_or_path)
+        self.model = SentenceTransformer(model_name_or_path, device=self.device.type)
 
     def get_embeddings(
         self, texts: List[str], truncation: bool = None, max_length: int = 256
     ) -> EmbeddingsObject:
-        with torch.no_grad():
-            try:
-                embeddings = self.model.encode(texts, batch_size=self.batch_size)
+        with torch.inference_mode():
+            with torch.no_grad():
+                try:
+                    # ensure that the model is on CPU
+                    embeddings = self.model.encode(texts, batch_size=self.batch_size)
 
-                result = EmbeddingsObject()
-                result.embeddings = embeddings
-                result.total_tokens = len(embeddings[0])
+                    result = EmbeddingsObject()
+                    result.embeddings = embeddings
+                    result.total_tokens = len(embeddings[0])
 
-                return result
-            except Exception as e:
-                self.logger.error(
-                    f"Error during inference: {e}", exc_info=self.show_error
-                )
-                return EmbeddingsObject()
+                    return result
+                except Exception as e:
+                    self.logger.error(
+                        f"Error during inference: {e}", exc_info=self.show_error
+                    )
+                    return EmbeddingsObject()

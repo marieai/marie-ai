@@ -2,7 +2,6 @@ ALTER SYSTEM SET max_connections = 500;
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
-
 CREATE TABLE IF NOT EXISTS embeddings (
   id SERIAL PRIMARY KEY,
   embedding vector,

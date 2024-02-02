@@ -34,12 +34,13 @@ def setup_storage():
 
 if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    os.environ["MARIE_DISABLE_CUDA"] = "True"
+    # os.environ["MARIE_DISABLE_CUDA"] = "True"
     torch.set_float32_matmul_precision('high')
 
     # setup_storage()
     MDC.put("request_id", "test")
     img_path = "~/tmp/address-001.png"
+    img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -52,8 +53,8 @@ if __name__ == "__main__":
     # StorageManager.write(img_path, s3_path, overwrite=True)
 
     pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
-    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=False)
+    # pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
+    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
 
     regions = [
         {
@@ -69,5 +70,6 @@ if __name__ == "__main__":
 
     for i in range(5):
         with TimeContext(f"### ExtractPipeline info [{i}]"):
-            results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), regions=regions)
+            # results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), regions=regions)
+            results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
             print(results)

@@ -15,6 +15,7 @@ from psycopg2 import pool  # noqa: F401
 from marie import Document, DocumentArray
 from marie.logging.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
+from marie.storage.pgvector.psycopg2 import register_vector
 from marie.utils.json import to_json
 
 
@@ -146,13 +147,16 @@ class PostgreSQLHandler:
 
     def _create_table(self):
         self._execute_sql_gracefully(
-            f"""CREATE TABLE IF NOT EXISTS {self.table} (
+            f"""
+            CREATE EXTENSION IF NOT EXISTS vector;
+            
+            CREATE TABLE IF NOT EXISTS {self.table} (
                 doc_id VARCHAR PRIMARY KEY,
                 ref_id VARCHAR(64) not null,
-                ref_type VARCHAR(32) not null,
+                ref_type VARCHAR(64) not null,
                 store_mode VARCHAR(32) not null,
                 tags JSONB,
-                embedding BYTEA,
+                embedding vector,
                 blob BYTEA,
                 content JSONB,
                 doc BYTEA,
@@ -207,6 +211,9 @@ class PostgreSQLHandler:
         :return record: List of Document's id added
         """
 
+        if "ref_id" not in kwargs or "ref_type" not in kwargs:
+            raise ValueError("ref_id and ref_type must be provided in kwargs.")
+
         ref_id = kwargs.pop("ref_id")
         ref_type = kwargs.pop("ref_type")
 
@@ -225,7 +232,8 @@ class PostgreSQLHandler:
                             ref_type,
                             store_mode,
                             to_json(doc.tags) if doc.tags is not None else None,
-                            doc.embedding.astype(self.dump_dtype).tobytes()
+                            # doc.embedding.astype(self.dump_dtype).tobytes()
+                            doc.embedding
                             if store_mode == "embedding" and doc.embedding is not None
                             else None,
                             doc.blob
@@ -405,6 +413,8 @@ class PostgreSQLHandler:
         # and maintain ACID-ity
         connection = self.postgreSQL_pool.getconn()
         connection.autocommit = False
+        # Register the vector type with psycopg2
+        register_vector(connection)
         return connection
 
     def get_size(self):
@@ -605,3 +615,34 @@ class PostgreSQLHandler:
         except Exception as e:
             self.logger.warning(f"Could not get size of snapshot: {e}")
         return 0
+
+    def similarity_search_with_score(self, query_vector, k=5):
+        """
+        Returns the top k similar vectors to the query vector.
+        """
+        with self._get_connection() as connection:
+            cursor = connection.cursor()
+            # # f" SELECT doc_id, embedding, ts_rank_cd(embedding, {query_vector}) AS score FROM {self.table} ORDER BY embedding <=> {query_vector} LIMIT {k}",
+            query = (
+                f" SELECT doc_id, embedding, 0 AS score FROM {self.table}"
+                f" ORDER BY embedding <=> %s LIMIT %s"
+            )
+            cursor.execute(
+                query,
+                (query_vector, k),
+            )
+            results = cursor.fetchall()
+            return results
+
+    def similarity_search(self, query_vector, k=5):
+        """
+        Returns the top k similar vectors to the query vector.
+        """
+        with self._get_connection() as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"SELECT doc_id, embedding FROM {self.table} ORDER BY embedding <-> {query_vector} LIMIT {k}",
+                {"query": query_vector},
+            )
+            results = cursor.fetchall()
+            return results
