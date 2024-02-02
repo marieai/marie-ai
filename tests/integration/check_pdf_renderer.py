@@ -8,6 +8,7 @@ from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
+from marie.document import TrOcrProcessor
 from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.numpyencoder import NumpyEncoder
 from marie.renderer.pdf_renderer import PdfRenderer
@@ -59,6 +60,9 @@ if __name__ == "__main__":
     ensure_exists("/tmp/fragments")
 
     img_path = "./assets/english/Lines/005.png"
+    img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
+    img_path = "~/tmp/analysis/marie-issues/106/195664193-0006.png"
+    img_path = os.path.expanduser(img_path)
 
     if not os.path.exists(img_path):
         raise Exception(f"File not found : {img_path}")
@@ -68,9 +72,9 @@ if __name__ == "__main__":
         image = cv2.imread(img_path)
 
         box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
-        # icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
         # icr = TesseractOcrProcessor(work_dir=work_dir_icr, cuda=True)
-        icr = CraftOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        # icr = CraftOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
         (
             boxes,

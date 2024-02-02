@@ -1,7 +1,8 @@
 version: "3.3"
 services:
   psql:
-    image: postgres:14.4
+#    image: postgres:14.4
+    image: pgvector/pgvector:pg16
     ports:
       - "5432:5432"
     expose:

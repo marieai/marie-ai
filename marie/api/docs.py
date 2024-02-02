@@ -20,6 +20,7 @@ class StorageDoc(BaseDoc):
     blob: Optional[Any]
     tensor: Optional[AnyTensor]
     tags: Optional[dict]  # type: ignore
+    embedding: Optional[AnyTensor]
 
 
 class MarieDoc(ImageDoc):

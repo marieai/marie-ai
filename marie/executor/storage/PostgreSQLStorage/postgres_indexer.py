@@ -12,7 +12,7 @@ from .postgreshandler import PostgreSQLHandler
 # https://github.com/jina-ai/executor-hnsw-postgres/blob/main/executor/postgres_indexer.py
 
 
-class PostgreSQLStorage(Executor):
+class PostgreSQLStorage:
     """:class:`PostgreSQLStorage` PostgreSQL-based Storage Indexer."""
 
     def __init__(
@@ -110,3 +110,15 @@ class PostgreSQLStorage(Executor):
                 "ref_type": parameters.get("ref_type"),
             },
         )
+
+    def similarity_search_with_score(self, query_vector, k=5):
+        """
+        Returns the top k similar vectors to the query vector.
+        """
+        return self.handler.similarity_search_with_score(query_vector, k)
+
+    def similarity_search(self, query_vector, k=5):
+        """
+        Returns the top k similar vectors to the query vector.
+        """
+        return self.handler.similarity_search(query_vector, k)

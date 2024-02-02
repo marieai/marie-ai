@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List
 
+import torch
+
 from marie.embeddings.embeddings_object import EmbeddingsObject
 from marie.logging.logger import MarieLogger
 
@@ -32,3 +34,10 @@ class EmbeddingsBase(ABC):
         :return: An EmbeddingsObject containing the embeddings and the metadata
         """
         pass
+
+    def get_embeddings_raw(
+        self, texts: List[str], truncation: bool = None, max_length: int = 256
+    ) -> List[List[float]]:
+        embed = self.get_embeddings(texts, truncation, max_length).embeddings
+        # convert from ndarray to numpy array
+        return embed
