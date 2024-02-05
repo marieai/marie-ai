@@ -9,7 +9,9 @@ version: "3.9"
 services:
   psql:
     container_name: marie-psql-server
-    image: postgres:${POSTGRES_VERSION}
+#    image: postgres:${POSTGRES_VERSION}
+    # pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg${POSTGRES_VERSION}
     command: postgres -c 'max_connections=200'
     restart: unless-stopped
     ports:
@@ -19,8 +21,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - psql_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/max_conns.sql
-#      - ./db/init.sql:/docker-entrypoint-initdb.d/create_tables.sql
+      - ./config/pgvector/init.sql:/docker-entrypoint-initdb.d/init.sql
 
 volumes:
   psql_data:
@@ -30,3 +31,12 @@ volumes:
 networks:
   public:
     external: true
+
+# ############### Docker Compose Commands ###############
+
+# docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
+
+# cleanup
+# docker volume rm marie-ai_psql_data  --force
+# docker container rm marie-psql-server  --force  --volumes
+# docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . down --remove-orphans
