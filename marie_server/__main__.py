@@ -1,12 +1,16 @@
 import inspect
+import logging
 import os
+
+os.environ['PYTHONASYNCIODEBUG'] = '1'
+
 import platform
 import sys
 import traceback
+import warnings
 from functools import partial
 from typing import Any, Dict, Optional
 
-from docarray import BaseDoc, DocList
 from rich.traceback import install
 
 import marie.helper
@@ -33,6 +37,9 @@ from marie.utils.types import strtobool
 from marie_server.rest_extension import extend_rest_interface
 
 DEFAULT_TERM_COLUMNS = 120
+
+logging.basicConfig(level=logging.DEBUG)
+warnings.resetwarnings()
 
 
 def setup_toast_events(toast_config: Dict[str, Any]):
@@ -276,20 +283,6 @@ def __main__(
         prefetch=prefetch,
         external=True,
     ).config_gateway(prefetch=prefetch)
-
-    if False:
-        f = Deployment.load_config(
-            config,
-            extra_search_paths=[
-                os.path.dirname(inspect.getfile(inspect.currentframe()))
-            ],
-            substitute=True,
-            context=context,
-            include_gateway=False,
-            noblock_on_start=False,
-            prefetch=prefetch,
-            external=True,
-        )
 
     marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
 

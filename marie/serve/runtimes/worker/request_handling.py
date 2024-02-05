@@ -915,7 +915,8 @@ class WorkerRequestHandler:
         :returns: the response request
         """
         self.logger.debug("recv a process_single_data request")
-        return await self.process_data([request], context, is_generator=is_generator)
+        val = await self.process_data([request], context, is_generator=is_generator)
+        return val
 
     async def stream_doc(
         self, request: SingleDocumentRequest, context: "grpc.aio.ServicerContext"

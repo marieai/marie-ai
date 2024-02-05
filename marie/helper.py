@@ -1038,6 +1038,8 @@ def get_or_reuse_loop():
         # create a new loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+    loop.set_debug(True)
     return loop
 
 

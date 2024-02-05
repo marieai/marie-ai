@@ -24,6 +24,7 @@ from examples.utils import (
 )
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.json import load_json_file, store_json_object
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -104,22 +105,29 @@ def process_request(
         json=json_payload,
     )
 
-    # if result.status_code != 200:
-    #     stop_event.set()
-    #     raise Exception(f"Error : {result}")
+    if result.status_code != 200:
+        logger.error(f"Error : {result}")
+        return None
 
-    json_result = result.json()
-    delta = time.time() - start
-    print(f"Request time : {delta}")
+    try:
+        json_result = result.json()
+        delta = time.time() - start
+        print(f"Request time : {delta}")
 
-    print(json_result)
-    job_to_file[json_result["jobid"]] = {
-        "file": file_location,
-        "output_dir": output_dir,
-        "filename": filename,
-    }
+        job_to_file[json_result["jobid"]] = {
+            "file": file_location,
+            "output_dir": output_dir,
+            "filename": filename,
+        }
 
-    return json_result
+        store_json_object(
+            job_to_file, os.path.join(config.working_dir, "job_to_file.json")
+        )
+
+        return json_result
+    except Exception as e:
+        logger.error(e)
+        return None
 
 
 def process_dir(
@@ -154,7 +162,7 @@ def process_dir(
 
         json_result = process_request(
             mode="multiline",
-            file_location=img_path,
+            file_location=str(img_path),
             output_dir=output_dir,
             stop_event=stop_event,
             config=config,
@@ -233,6 +241,7 @@ if __name__ == "__main__":
     storage_config = raw_config["storage"]
     queue_config = raw_config["queue"]
     config = parse_obj_as(ServiceConfig, raw_config)
+    config.working_dir = args.output_dir
 
     setup_s3_storage(storage_config)
     setup_queue(
@@ -244,6 +253,12 @@ if __name__ == "__main__":
         None,
         partial(message_handler, stop_event),
     )
+
+    if os.path.exists(os.path.join(config.working_dir, "job_to_file.json")):
+        logger.info(f"Loading job_to_file from {config.working_dir}")
+        job_to_file = load_json_file(
+            os.path.join(config.working_dir, "job_to_file.json")
+        )
 
     if os.path.isfile(args.input):
         process_request(
@@ -262,7 +277,7 @@ if __name__ == "__main__":
         )
 
     while True:
-        time.sleep(10)
+        time.sleep(100)
     # get curren thread
     current_thread = threading.current_thread()
     current_thread.join()

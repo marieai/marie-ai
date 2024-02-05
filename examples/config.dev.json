@@ -1,5 +1,5 @@
 {
-  "api_base_url": "http://127.0.0.1:51000/api",
+  "api_base_url": "http://192.168.102.53:51000/api",
   "api_key": "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ",
   "default_queue_id": "0000-0000-0000-0000",
   "storage": {

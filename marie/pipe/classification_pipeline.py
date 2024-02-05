@@ -70,6 +70,10 @@ class ClassificationPipeline:
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
 
+        if True:
+            self.logger.warning("TESTING MODE ")
+            return
+
         device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
         if device == "cuda" and not use_cuda:
             device = "cpu"

@@ -208,7 +208,7 @@ def get_fastapi_app(
                 output_doc_list_model=output_doc_model,
             )
 
-    from jina.serve.runtimes.gateway.health_model import JinaHealthModel
+    from marie.serve.runtimes.gateway.health_model import JinaHealthModel
 
     # `/ping` route is required by AWS Sagemaker
     @app.get(

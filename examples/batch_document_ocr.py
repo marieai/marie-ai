@@ -12,6 +12,7 @@ from multiprocessing import Queue
 from pathlib import Path
 
 import requests
+from docarray.documents import TextDoc
 from pydantic.tools import parse_obj_as
 
 from examples.utils import (
@@ -22,8 +23,10 @@ from examples.utils import (
     setup_queue,
     setup_s3_storage,
 )
+from marie import Client
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.json import load_json_file, store_json_object
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,21 +114,30 @@ def process_request(
         json=json_payload,
     )
 
-    # if result.status_code != 200:
-    #     stop_event.set()
-    #     raise Exception(f"Error : {result}")
+    if result.status_code != 200:
+        logger.error(f"Error : {result}")
+        return None
 
-    json_result = result.json()
-    delta = time.time() - start
-    print(f"Request time : {delta}")
+    try:
+        json_result = result.json()
+        delta = time.time() - start
+        print(f"Request time : {delta}")
 
-    job_to_file[json_result["jobid"]] = {
-        "file": file_location,
-        "output_dir": output_dir,
-        "filename": filename,
-    }
+        job_to_file[json_result["jobid"]] = {
+            "file": file_location,
+            "output_dir": output_dir,
+            "filename": filename,
+        }
 
-    return json_result
+        store_json_object(
+            job_to_file, os.path.join(config.working_dir, "job_to_file.json")
+        )
+
+        return json_result
+    except Exception as e:
+        print(e)
+        logger.error(e)
+        return None
 
 
 def process_dir(
@@ -143,6 +155,7 @@ def process_dir(
         resolved_output_path = os.path.join(
             output_path, img_path.relative_to(root_asset_dir)
         )
+
         output_dir = os.path.dirname(resolved_output_path)
         filename = os.path.basename(resolved_output_path)
         name = os.path.splitext(filename)[0]
@@ -160,13 +173,14 @@ def process_dir(
 
         json_result = process_request(
             mode="multiline",
-            file_location=img_path,
+            file_location=str(img_path),
             output_dir=output_dir,
             stop_event=stop_event,
             config=config,
         )
 
         print(json_result)
+        break
 
 
 def message_handler(stop_event, message):
@@ -232,6 +246,21 @@ def message_handler(stop_event, message):
 
 
 if __name__ == "__main__":
+
+    # client = Client(
+    #     host="0.0.0.0",
+    #     port=52000,
+    #     protocol="grpc",
+    #     request_size=-1,
+    #     # asyncio=True,
+    #     prefetch=1,
+    # )
+    #
+    # try:
+    #     client.post('', TextDoc(), request_size=1)
+    # except Exception as exc:
+    #     print(exc)
+
     stop_event = threading.Event()
     args = parse_args()
 
@@ -239,6 +268,7 @@ if __name__ == "__main__":
     storage_config = raw_config["storage"]
     queue_config = raw_config["queue"]
     config = parse_obj_as(ServiceConfig, raw_config)
+    config.working_dir = args.output_dir
 
     setup_s3_storage(storage_config)
     setup_queue(
@@ -250,6 +280,12 @@ if __name__ == "__main__":
         None,
         partial(message_handler, stop_event),
     )
+
+    if os.path.exists(os.path.join(config.working_dir, "job_to_file.json")):
+        logger.info(f"Loading job_to_file from {config.working_dir}")
+        job_to_file = load_json_file(
+            os.path.join(config.working_dir, "job_to_file.json")
+        )
 
     if os.path.isfile(args.input):
         process_request(
@@ -268,7 +304,7 @@ if __name__ == "__main__":
         )
 
     while True:
-        time.sleep(10)
+        time.sleep(100)
     # get curren thread
     current_thread = threading.current_thread()
     current_thread.join()
@@ -283,3 +319,5 @@ if __name__ == "__main__":
 
     # cleanup empty files, this can happen for example when the file is not an image or service fails
     #  find $dir -size 0 -type f -delete
+
+    # --config config.dev.json  --pipeline default --input ~/datasets/private/corr-routing/ready/images/ --output_dir ~/datasets/private/corr-routing/ready/annotations

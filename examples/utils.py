@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 from functools import partial
 from threading import Thread
+from typing import Optional
 
 import pika
 import requests
@@ -21,6 +22,7 @@ class ServiceConfig(BaseModel):
     api_base_url: str
     api_key: str
     default_queue_id: str
+    working_dir: Optional[str] = None
 
 
 def load_config(file_path):

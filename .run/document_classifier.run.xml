@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="batch_document_ocr" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+  <configuration default="false" name="document_classifier" type="PythonConfigurationType" factoryName="Python">
     <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -13,8 +13,8 @@
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/examples/batch_document_ocr.py" />
-    <option name="PARAMETERS" value="--config config.dev.json --pipeline default --input ~/tmp/analysis/marie-issues/108/195588965/195588965-0001.png --output_dir ~/tmp/analysis/marie-issues/108/195588965" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/examples/document_classifier.py" />
+    <option name="PARAMETERS" value="--config config.dev.json --pipeline default --input ~/tmp/PID_1925_9289_0_157186264_75P_WIDTH_1200.png --output_dir ~/tmp/analysis/document-classifier" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

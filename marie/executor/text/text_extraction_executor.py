@@ -390,6 +390,8 @@ class TextExtractionExecutorMock(Executor):
         frame_len = len(frames)
 
         print(f"{frame_len=}")
+
+        return {"status": "succeeded", "msg": "OK", "frame_len": frame_len}
         # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
 
         # return DocList[OutputDoc](

@@ -32,7 +32,7 @@ def test_timer_context(metrics_setup):
         name='time_taken', description='measure something'
     )
 
-    with MetricsTimer(summary_metric=summary, histogram=histogram):
+    csTimer(summary_metric=summary, histogram=histogram):
         _do_something()
 
     # Prometheus samples
