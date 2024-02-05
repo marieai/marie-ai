@@ -121,10 +121,14 @@ def process_extract(
     #     stop_event.set()
     #     raise Exception(f"Error : {result}")
 
-    json_result = result.json()
-    delta = time.time() - start
-    print(f"Request time : {delta}")
-    return json_result
+    try:
+        json_result = result.json()
+        delta = time.time() - start
+        print(f"Request time : {delta}")
+        return json_result
+    except Exception as e:
+        logger.error(e)
+        return None
 
 
 def process_dir(
@@ -165,6 +169,9 @@ def process_dir(
         )
 
         print(json_result)
+        if json_result is None:
+            logger.error(f"Error processing {img_path}")
+            continue
 
         job_to_file[json_result["jobid"]] = {
             "file": img_path,
@@ -293,7 +300,7 @@ if __name__ == "__main__":
     )
 
     while True:
-        time.sleep(10)
+        time.sleep(100)
     # get curren thread
     current_thread = threading.current_thread()
     current_thread.join()
