@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, Iterable, MutableMapping, Optional, OrderedDict
 
 from marie.excepts import BadConfigSource
+from marie.helper import get_or_reuse_loop
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 
@@ -49,11 +50,13 @@ class Toast:
             raise ValueError(f"'api_key' not present in notification : {notification}")
 
         tasks = [
-            asyncio.ensure_future(handler.notify(notification, **kwargs))
+            asyncio.ensure_future(
+                handler.notify(notification, **kwargs), loop=get_or_reuse_loop()
+            )
             for handler in Toast.__get_event_handlers(event)
         ]
-
-        # await asyncio.gather(*tasks)
+        print(tasks)
+        await asyncio.gather(*tasks)
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:

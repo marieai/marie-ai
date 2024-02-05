@@ -128,6 +128,13 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         if len(docs) > 1:
             return {"error": "expected single document"}
 
+        logger.warning(
+            f"TESTING Document classification request with {len(docs)} documents"
+        )
+        return {
+            "status": "succeeded",
+        }
+
         # load documents from specified document asset key
         doc = docs[0]
         docs = docs_from_asset(doc.asset_key, doc.pages)

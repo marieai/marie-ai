@@ -14,7 +14,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/examples/batch_document_ocr.py" />
-    <option name="PARAMETERS" value="--config config.dev.json --input_dir ~/datasets/private/corr-routing/ready/images/ --output_dir ~/datasets/private/corr-routing/ready/annotations" />
+    <option name="PARAMETERS" value="--config config.prod.json --input_dir ~/datasets/private/corr-routing/ready_extended/jpmc_01-22-2024/current --output_dir ~/datasets/private/corr-routing/ready_extended/jpmc_01-22-2024/ready/annotations" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

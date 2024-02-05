@@ -12,6 +12,7 @@ from marie import Client, Flow
 from marie._core.utils import run_background_task
 from marie.api import extract_payload_to_uri, value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc
+from marie.helper import get_or_reuse_loop
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
@@ -31,7 +32,7 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
         while len(pending) < limit:
             item = queue.get()
             # pending.add(run_background_task(item))
-            pending.add(asyncio.ensure_future(item))
+            pending.add(asyncio.ensure_future(item, loop=get_or_reuse_loop()))
 
         if not pending:
             continue
@@ -46,7 +47,7 @@ async def coro_consumer(queue: asyncio.Queue, limit: int = 2):
     async for scheduled_coro in coro_scheduler(queue, limit):
         try:
             await scheduled_coro
-            # run_background_task(coroutine=scheduled)
+            # run_background_task(coroutine=scheduled_coro)
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
             raise e
@@ -225,8 +226,9 @@ async def handle_request(
 
         logger.info(f"handle_request[{api_tag}] : {job_id}")
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
-
         use_queue = False
+
+        sync = True
 
         coroutine = process_request(
             api_key,
@@ -258,7 +260,9 @@ async def handle_request(
         else:
             # task = run_background_task(coroutine=coroutine)
             #  = [task]
-            future = [asyncio.ensure_future(coroutine)]
+            # get the loop and check if the loop is same as the current loop
+            future = [asyncio.ensure_future(coroutine, loop=get_or_reuse_loop())]
+            # future = [asyncio.ensure_future(coroutine)]
             if sync:
                 results = await asyncio.gather(*future, return_exceptions=True)
                 if isinstance(results[0], Exception):

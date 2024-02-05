@@ -12,28 +12,21 @@ from multiprocessing import Queue
 from pathlib import Path
 
 import requests
-from pydantic import BaseModel
 from pydantic.tools import parse_obj_as
 
-from examples.utils import online, setup_queue, setup_s3_storage
+from examples.utils import (
+    ServiceConfig,
+    load_config,
+    online,
+    parse_args,
+    setup_queue,
+    setup_s3_storage,
+)
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def load_config(file_path):
-    with open(file_path, "r") as json_file:
-        config = json.load(json_file)
-    return config
-
-
-class ExtractConfig(BaseModel):
-    api_base_url: str
-    api_key: str
-    default_queue_id: str
-
 
 # kv_store = InMemoryKV()
 job_to_file = {}
@@ -41,10 +34,11 @@ job_to_file = {}
 main_queue = Queue()
 
 
-def process_extract(
+def process_request(
     mode: str,
     file_location: str,
-    config: ExtractConfig,
+    output_dir: str,
+    config: ServiceConfig,
     stop_event: threading.Event = None,
 ) -> str:
     if not os.path.exists(file_location):
@@ -124,11 +118,18 @@ def process_extract(
     json_result = result.json()
     delta = time.time() - start
     print(f"Request time : {delta}")
+
+    job_to_file[json_result["jobid"]] = {
+        "file": file_location,
+        "output_dir": output_dir,
+        "filename": filename,
+    }
+
     return json_result
 
 
 def process_dir(
-    src_dir: str, output_dir: str, stop_event: threading.Event, config: ExtractConfig
+    src_dir: str, output_dir: str, stop_event: threading.Event, config: ServiceConfig
 ):
     root_asset_dir = os.path.expanduser(src_dir)
     output_path = os.path.expanduser(output_dir)
@@ -157,22 +158,15 @@ def process_dir(
             logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
 
-        json_result = process_extract(
+        json_result = process_request(
             mode="multiline",
             file_location=img_path,
+            output_dir=output_dir,
             stop_event=stop_event,
             config=config,
         )
 
         print(json_result)
-
-        job_to_file[json_result["jobid"]] = {
-            "file": img_path,
-            "output_dir": output_dir,
-            "filename": filename,
-        }
-
-        # break
 
 
 def message_handler(stop_event, message):
@@ -237,34 +231,6 @@ def message_handler(stop_event, message):
             # stop_event.set()
 
 
-def parse_args():
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        default="config.dev.json",
-        help="Path to the config file.",
-    )
-
-    parser.add_argument(
-        "--input_dir",
-        type=str,
-        required=True,
-        help="Path to the input directory.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        required=True,
-        help="Directory the output images will be written to.",
-    )
-    opt = parser.parse_args()
-    return opt
-
-
 if __name__ == "__main__":
     stop_event = threading.Event()
     args = parse_args()
@@ -272,7 +238,7 @@ if __name__ == "__main__":
     raw_config = load_config(args.config)
     storage_config = raw_config["storage"]
     queue_config = raw_config["queue"]
-    config = parse_obj_as(ExtractConfig, raw_config)
+    config = parse_obj_as(ServiceConfig, raw_config)
 
     setup_s3_storage(storage_config)
     setup_queue(
@@ -285,12 +251,21 @@ if __name__ == "__main__":
         partial(message_handler, stop_event),
     )
 
-    process_dir(
-        src_dir=args.input_dir,
-        output_dir=args.output_dir,
-        stop_event=stop_event,
-        config=config,
-    )
+    if os.path.isfile(args.input):
+        process_request(
+            mode="multiline",
+            file_location=args.input,
+            output_dir=args.output_dir,
+            stop_event=stop_event,
+            config=config,
+        )
+    else:
+        process_dir(
+            src_dir=args.input,
+            output_dir=args.output_dir,
+            stop_event=stop_event,
+            config=config,
+        )
 
     while True:
         time.sleep(10)
