@@ -1,6 +1,6 @@
 ---
 - name: Who Am I Status Check
-  hosts: ml.cluster
+  hosts: ml_cluster
 
   tasks:
   - name: User Info

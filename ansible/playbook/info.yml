@@ -1,6 +1,6 @@
 ---
 - name: Marie-AI cluster
-  hosts: ml.cluster
+  hosts: ml_cluster
   become_user: gpu-svc
   
   tasks:

@@ -1,6 +1,6 @@
 ---
 - name: Restart Docker service
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: false
 
 

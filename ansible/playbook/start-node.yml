@@ -1,11 +1,12 @@
 ---
 
 - name: Deploy to node
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: true
   vars:
     stack_name: "dev"
-    image_tag: 3.0.22-cuda
+    image_tag: 3.0.26-cuda
+    config_tagCORR: marie-3.0.2x-corr.yml
     config_tag: marie-3.0.21.yml
     server_port: 8080
   tasks:
@@ -43,6 +44,7 @@
           max-size: 100m
           max-file: 10
         env:
+          MARIE_CACHE_SKIP_LOAD: "true" # causes issues with docker
           MARIE_DEFAULT_MOUNT: "/etc/marie"
           MARIE_LOG_CONFIG: docker
           MARIE_DEPLOYMENT_NAME: marie
@@ -52,6 +54,12 @@
             "{{ lookup('ansible.builtin.env', 'JINA_LOG_LEVEL') | default('DEBUG', true) }}"
 #        ports:
 #          - "{{ server_port }}:8080"
+
+#        MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HOST=0.0.0.0
+#          MARIE_DEBUG: "1"
+#          MARIE_DEBUG_PORT: "5678"
+#          MARIE_DEBUG_WAIT_FOR_CLIENT: "1"
+#          MARIE_DEBUG_HOST: "0.0.0.0"
         volumes:
           - "/mnt/data/marie-ai/config:/etc/marie/config:ro"
           - "/mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw"
@@ -60,3 +68,11 @@
 # Docker debug command
 # docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)
 # docker run --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.18-cuda server --start --uses /etc/marie/config/service/marie.yml
+
+
+# Run interactive
+# /opt/venv/lib/python3.10/site-packages/marie_server#
+# docker run --rm  -it --entrypoint /bin/bash --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.25-cuda
+# pip install debugpy
+# /opt/venv/lib/python3.10/site-packages/marie_server#
+# MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HOST=0.0.0.0 marie server --start --uses /etc/marie/config/service/marie-3.0.2x-corr.yml

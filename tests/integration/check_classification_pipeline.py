@@ -23,8 +23,7 @@ def setup_storage():
             "S3_ACCESS_KEY_ID": "MARIEACCESSKEY",
             "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
             "S3_STORAGE_BUCKET_NAME": "marie",
-            "S3_ENDPOINT_URLXX": "http://localhost:8000",
-            "S3_ENDPOINT_URL": "http://gext-05.rms-asp.com:8000",
+            "S3_ENDPOINT_URL": "http://localhost:8000",
             "S3_ADDRESSING_STYLE": "path",
         }
     )
