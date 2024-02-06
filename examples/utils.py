@@ -1,18 +1,73 @@
 import json
 import logging
+import os
 import sys
 import threading
 from datetime import datetime
 from functools import partial
 from threading import Thread
+from typing import Optional
 
 import pika
 import requests
 from pika.exchange_type import ExchangeType
+from pydantic import BaseModel
 
 from marie.storage import S3StorageHandler, StorageManager
 
 logger = logging.getLogger(__name__)
+
+
+class ServiceConfig(BaseModel):
+    api_base_url: str
+    api_key: str
+    default_queue_id: str
+    working_dir: Optional[str] = None
+
+
+def load_config(file_path):
+    with open(file_path, "r") as json_file:
+        config = json.load(json_file)
+    return config
+
+
+def parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        default="config.dev.json",
+        help="Path to the config file.",
+    )
+
+    parser.add_argument(
+        "--input",
+        type=str,
+        required=True,
+        help="Path to the input directory.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="Directory the output images will be written to.",
+    )
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        required=True,
+        help="Pipeline to use.",
+        default="default",
+    )
+
+    opt = parser.parse_args()
+    opt.input = os.path.expanduser(opt.input)
+    opt.output_dir = os.path.expanduser(opt.output_dir)
+
+    return opt
 
 
 def setup_s3_storage(config: dict):

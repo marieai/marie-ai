@@ -1,13 +1,13 @@
 ---
 
 - name: pull image
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: true
 
   vars:
-    image_tag: 3.0.24-cpu
+    image_tag: 3.0.26-cuda
     default_image_tagXX: 3.0.24-cuda
-    default_image_tag: 3.0.24-cpu
+    default_image_tag: 3.0.26-cuda
 
   vars_prompt:
 

@@ -12,28 +12,24 @@ from multiprocessing import Queue
 from pathlib import Path
 
 import requests
-from pydantic import BaseModel
+from docarray.documents import TextDoc
 from pydantic.tools import parse_obj_as
 
-from examples.utils import online, setup_queue, setup_s3_storage
+from examples.utils import (
+    ServiceConfig,
+    load_config,
+    online,
+    parse_args,
+    setup_queue,
+    setup_s3_storage,
+)
+from marie import Client
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
+from marie.utils.json import load_json_file, store_json_object
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def load_config(file_path):
-    with open(file_path, "r") as json_file:
-        config = json.load(json_file)
-    return config
-
-
-class ExtractConfig(BaseModel):
-    api_base_url: str
-    api_key: str
-    default_queue_id: str
-
 
 # kv_store = InMemoryKV()
 job_to_file = {}
@@ -41,10 +37,11 @@ job_to_file = {}
 main_queue = Queue()
 
 
-def process_extract(
+def process_request(
     mode: str,
     file_location: str,
-    config: ExtractConfig,
+    output_dir: str,
+    config: ServiceConfig,
     stop_event: threading.Event = None,
 ) -> str:
     if not os.path.exists(file_location):
@@ -117,22 +114,34 @@ def process_extract(
         json=json_payload,
     )
 
-    # if result.status_code != 200:
-    #     stop_event.set()
-    #     raise Exception(f"Error : {result}")
+    if result.status_code != 200:
+        logger.error(f"Error : {result}")
+        return None
 
     try:
         json_result = result.json()
         delta = time.time() - start
         print(f"Request time : {delta}")
+
+        job_to_file[json_result["jobid"]] = {
+            "file": file_location,
+            "output_dir": output_dir,
+            "filename": filename,
+        }
+
+        store_json_object(
+            job_to_file, os.path.join(config.working_dir, "job_to_file.json")
+        )
+
         return json_result
     except Exception as e:
+        print(e)
         logger.error(e)
         return None
 
 
 def process_dir(
-    src_dir: str, output_dir: str, stop_event: threading.Event, config: ExtractConfig
+    src_dir: str, output_dir: str, stop_event: threading.Event, config: ServiceConfig
 ):
     root_asset_dir = os.path.expanduser(src_dir)
     output_path = os.path.expanduser(output_dir)
@@ -146,6 +155,7 @@ def process_dir(
         resolved_output_path = os.path.join(
             output_path, img_path.relative_to(root_asset_dir)
         )
+
         output_dir = os.path.dirname(resolved_output_path)
         filename = os.path.basename(resolved_output_path)
         name = os.path.splitext(filename)[0]
@@ -161,25 +171,16 @@ def process_dir(
             logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
 
-        json_result = process_extract(
+        json_result = process_request(
             mode="multiline",
-            file_location=img_path,
+            file_location=str(img_path),
+            output_dir=output_dir,
             stop_event=stop_event,
             config=config,
         )
 
         print(json_result)
-        if json_result is None:
-            logger.error(f"Error processing {img_path}")
-            continue
-
-        job_to_file[json_result["jobid"]] = {
-            "file": img_path,
-            "output_dir": output_dir,
-            "filename": filename,
-        }
-
-        # break
+        break
 
 
 def message_handler(stop_event, message):
@@ -244,42 +245,30 @@ def message_handler(stop_event, message):
             # stop_event.set()
 
 
-def parse_args():
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        default="config.dev.json",
-        help="Path to the config file.",
-    )
-
-    parser.add_argument(
-        "--input_dir",
-        type=str,
-        required=True,
-        help="Path to the input directory.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        required=True,
-        help="Directory the output images will be written to.",
-    )
-    opt = parser.parse_args()
-    return opt
-
-
 if __name__ == "__main__":
+
+    # client = Client(
+    #     host="0.0.0.0",
+    #     port=52000,
+    #     protocol="grpc",
+    #     request_size=-1,
+    #     # asyncio=True,
+    #     prefetch=1,
+    # )
+    #
+    # try:
+    #     client.post('', TextDoc(), request_size=1)
+    # except Exception as exc:
+    #     print(exc)
+
     stop_event = threading.Event()
     args = parse_args()
 
     raw_config = load_config(args.config)
     storage_config = raw_config["storage"]
     queue_config = raw_config["queue"]
-    config = parse_obj_as(ExtractConfig, raw_config)
+    config = parse_obj_as(ServiceConfig, raw_config)
+    config.working_dir = args.output_dir
 
     setup_s3_storage(storage_config)
     setup_queue(
@@ -292,12 +281,27 @@ if __name__ == "__main__":
         partial(message_handler, stop_event),
     )
 
-    process_dir(
-        src_dir=args.input_dir,
-        output_dir=args.output_dir,
-        stop_event=stop_event,
-        config=config,
-    )
+    if os.path.exists(os.path.join(config.working_dir, "job_to_file.json")):
+        logger.info(f"Loading job_to_file from {config.working_dir}")
+        job_to_file = load_json_file(
+            os.path.join(config.working_dir, "job_to_file.json")
+        )
+
+    if os.path.isfile(args.input):
+        process_request(
+            mode="multiline",
+            file_location=args.input,
+            output_dir=args.output_dir,
+            stop_event=stop_event,
+            config=config,
+        )
+    else:
+        process_dir(
+            src_dir=args.input,
+            output_dir=args.output_dir,
+            stop_event=stop_event,
+            config=config,
+        )
 
     while True:
         time.sleep(100)
@@ -315,3 +319,5 @@ if __name__ == "__main__":
 
     # cleanup empty files, this can happen for example when the file is not an image or service fails
     #  find $dir -size 0 -type f -delete
+
+    # --config config.dev.json  --pipeline default --input ~/datasets/private/corr-routing/ready/images/ --output_dir ~/datasets/private/corr-routing/ready/annotations

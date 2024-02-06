@@ -1,6 +1,6 @@
 ---
 - name: Marie-AI Cluster - GPU Info
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: false
 
   tasks:

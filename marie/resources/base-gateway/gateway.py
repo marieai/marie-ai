@@ -1,4 +1,4 @@
-from jina.serve.runtimes.gateway.gateway import BaseGateway
+from marie.serve.runtimes.gateway.gateway import BaseGateway
 
 class PlaceHolderGateway(BaseGateway):
     pass

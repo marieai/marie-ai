@@ -99,7 +99,7 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         Increment connection with address as in use
         :param address: Address of the connection
         """
-        self._logger.debug("Incrementing usage for address", address)
+        self._logger.debug(f"Incrementing usage for address : {address}")
         self.active_counter[address] = self.active_counter.get(address, 0) + 1
 
         self._logger.debug(f'incr_usage: self.active_counter: {self.active_counter}')
@@ -111,7 +111,7 @@ class LoadBalancer(metaclass=abc.ABCMeta):
         Decrement connection with address as not in use
         :param address: Address of the connection
         """
-        self._logger.debug("Decrementing usage for address", address)
+        self._logger.debug(f"Decrementing usage for address: {address}")
         self.active_counter[address] = max(0, self.active_counter.get(address, 0) - 1)
 
         self._logger.debug(f'decr_usage: self.active_counter: {self.active_counter}')

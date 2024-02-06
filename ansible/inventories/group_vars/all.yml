@@ -1,10 +1,8 @@
 ansible_connection: ssh
 
-# DOCS AND COR
+# The key used to connect to the remote machines is the same for all the machines
 ansible_ssh_private_key_file: ~/keys/gpu-cluster/gpu-svc.pem
 
-# SK
-#ansible_ssh_private_key_file: ~/keys/rmsadmin.pem
 ansible_python_interpreter: /usr/bin/python3
 
 # https://docs.ansible.com/ansible-core/2.14/playbook_guide/playbooks_privilege_escalation.html#playbooks-privilege-escalation
