@@ -13,13 +13,19 @@ from marie.boxes import PSMode
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent, PipelineComponent, PipelineContext
+from marie.pipe import (
+    ClassifierPipelineComponent,
+    NamedEntityPipelineComponent,
+    PipelineComponent,
+    PipelineContext,
+)
 from marie.pipe.components import (
     burst_frames,
     get_known_ocr_engines,
     ocr_frames,
     restore_assets,
     setup_classifiers,
+    setup_indexers,
     split_filename,
     store_assets,
 )
@@ -83,11 +89,17 @@ class ClassificationPipeline:
             pipeline_config, key="sub_classifier", device=device
         )
 
+        self.document_indexers = setup_indexers(pipeline_config)
+
         self.logger.info(
             f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
         )
         self.logger.info(
             f"Loaded sub-classifiers : {len(self.document_sub_classifiers)},  {self.document_sub_classifiers.keys()}"
+        )
+
+        self.logger.info(
+            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
         )
 
     def execute_frames_pipeline(
@@ -110,8 +122,12 @@ class ClassificationPipeline:
         page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
             "enabled", True
         )
+        page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
 
-        self.logger.info(f"page classifier enabled : {page_classifier_enabled}")
+        self.logger.info(
+            f"Feature : page classifier enabled : {page_classifier_enabled}"
+        )
+        self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
 
         processing_pipeline = [
             ClassifierPipelineComponent(
@@ -119,6 +135,14 @@ class ClassificationPipeline:
                 document_classifiers=self.document_classifiers,
             )
         ]
+
+        if page_indexer_enabled:
+            processing_pipeline.append(
+                NamedEntityPipelineComponent(
+                    name="ner_pipeline_component",
+                    document_indexers=self.document_indexers,
+                )
+            )
 
         metadata = {
             "ref_id": ref_id,
@@ -138,22 +162,33 @@ class ClassificationPipeline:
         metadata["ocr"] = ocr_results
 
         self.execute_pipeline(processing_pipeline, frames, ocr_results, metadata)
+
+        # store metadata for the document classification and OCR results
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
-
         del metadata["ocr"]
+
         return metadata
 
     def store_metadata(
-        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, any]
+        self,
+        ref_id: str,
+        ref_type: str,
+        root_asset_dir: str,
+        metadata: dict[str, any],
+        infix: str = "meta",
     ) -> None:
         """
         Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
+        :param ref_id: reference id of the document
+        :param ref_type: reference type of the document
+        :param root_asset_dir: root asset directory
+        :param metadata: metadata to store
+        :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
+        :return: None
         """
         filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(
-            root_asset_dir, f"{filename}.{self.pipeline_name}.classify.json"
-        )
+        metadata_path = os.path.join(root_asset_dir, f"{filename}.{infix}.json")
         self.logger.info(f"Storing metadata : {metadata_path}")
         store_json_object(metadata, metadata_path)
 
