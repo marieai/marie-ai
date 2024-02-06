@@ -1,6 +1,6 @@
 ---
 - name: Marie-AI Cluster - GPU Undervolt
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: false
 
   tasks:
@@ -20,9 +20,9 @@
   - debug: var=out.stdout_lines
 
 
-  # - name: Adjust GPU clock speed
-  #   ansible.builtin.shell: |
-  #       sudo nvidia-smi -lgc 0,2100
-  #   register: out
-  #   become_method: sudo
-  # - debug: var=out.stdout_lines
+  - name: Adjust GPU clock speed
+    ansible.builtin.shell: |
+        sudo nvidia-smi -lgc 0,2100
+    register: out
+    become_method: sudo
+  - debug: var=out.stdout_lines

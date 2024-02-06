@@ -1,6 +1,6 @@
 ---
 - name: Set up docker logging driver to local with rotate
-  hosts: ml.cluster
+  hosts: ml_cluster
   gather_facts: false
 
   vars:

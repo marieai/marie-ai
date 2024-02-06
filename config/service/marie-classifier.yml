@@ -103,9 +103,7 @@ with:
   discovery: True
   discovery_host: 127.0.0.1
   discovery_port: 8500
-  
-  host: 127.0.0.1
-  
+
   # monitoring
   monitoring: true
   port_monitoring: 57843
@@ -142,7 +140,7 @@ with:
       tags:
         - classify
 
-prefetch: 4
+prefetch: 1
 
 executors:
 #  - name: extract_executor
@@ -157,110 +155,91 @@ executors:
 #    env :
 #      CUDA_VISIBLE_DEVICES: RR
 
-  - name: extract_t
+  - name: classifier_t
     uses:
-      jtype: TextExtractionExecutor
-#      jtype: TextExtractionExecutorMock
+      jtype: DocumentClassificationExecutor
       with:
+        device : 'cuda'
         storage:
           # postgresql configuration. Will be used only if value of backend is "psql"
           psql:
             <<: *psql_conf_shared
-            default_table: extract_metadata
+            default_table: classifier_metadata
             enabled: True
         pipeline:
-          name: 'default'
+          name: 'default-corr' # name of the pipeline, used for logging and asset saving
+          device: 'cuda' # Force default to run on CPU or we will blow OOM
+          id2label:
+            '0': additional_information
+            '1': attorney
+            '2': auth_approval
+            '3': auth_denial
+            '4': bankruptcy
+            '5': cms_letter
+            '6': dispute
+            '7': eligibility
+            '8': medical_certificate
+            '9': medical_record
+            '10': misc
+            '11': newborn
+            '12': noop_blank
+            '13': noop_check
+            '14': noop_cover
+            '15': noop_envelope
+            '16': noop_eob
+            '17': noop_hicfa
+            '18': noop_notice
+            '19': noop_patpay
+            '20': noop_w9
+            '21': pa_162
+            '22': referral
+            '23': refund_request
+            '24': tax_1099
+
           page_classifier:
-            - model_name_or_path: 'marie/lmv3-medical-document-classification'
+            - model_name_or_path: 'rms/corr-layoutlmv3-classifier'
+              name: 'corr_page_classifier_layoutlmv3'
               type: 'transformers'
+              task: 'text-classification-multimodal'
               device: 'cuda'
-              enabled: False
-              name: 'medical_page_classifier'
-            - model_name_or_path: 'marie/lmv3-medical-document-payer'
+              enabled: True
+
+            - model_name_or_path: 'rms/corr-longformer-classifier'
+              task: 'text-classification'
+              name: 'corr_page_classifier_longformer'
               type: 'transformers'
-              enabled: False
+              enabled: True
+              batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
               device: 'cuda'
-              name: 'medical_payer_classifier'
-          page_indexer:
-            - model_name_or_path: 'marie/layoutlmv3-medical-document-indexer'
-              enabled: False
+
+          sub_classifier:
+            - model_name_or_path: 'rms/corr-auth-longformer-classifier'
+              task: 'text-classification'
+              name: 'corr_auth_sub_classifier'
               type: 'transformers'
+              enabled: True
+              batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
               device: 'cuda'
-              name: 'page_indexer_patient'
-              filter:
-                type: 'regex'
-                pattern: '.*'
-          page_splitter:
-            model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
-            enabled: True
+
+              id2label:
+                '0': auth_denial_in
+                '1': auth_denial_op
+
+          # Filter should be on the same level as the sub-classifier, for now this is just a global filter
+          filter:
+            type: 'exact'
+            pattern: 'auth_denial'
+
       metas:
         py_modules:
-          - marie.executor.text
+          - marie.executor.classifier
     timeout_ready: 3000000
-    replicas: 1
-    #    replicas: ${{ CONTEXT.gpu_device_count }}
+    #replicas: 1
+    replicas: ${{ CONTEXT.gpu_device_count }}
     env:
       CUDA_VISIBLE_DEVICES: RR
 
-#  - name: extract_xyz
-#    uses:
-#      jtype: TextExtractionExecutorMock
-#      metas:
-#        py_modules:
-#          - marie.executor.text
-#    timeout_ready: 3000000
-#    replicas: 1
-##    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
 
-#  - name: ner_t
-#    uses:
-#      jtype: NerExtractionExecutor
-#      with:
-#        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-##          - marie_server.executors.ner.mserve_torch
-#          - marie.executor.ner
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-
-#  - name: document_classifier
-#    uses:
-#      jtype: DocumentClassificationExecutor
-#      with:
-#        model_name_or_path :
-#          - 'marie/layoutlmv3-document-classification'
-#          - 'marie/layoutlmv3-document-classification'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-#          - marie.executor.classifier
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-##
-#  - name: overlay_t
-#    uses:
-#      jtype: OverlayExecutor
-#      with:
-#        model_name_or_path : 'rms/holder'
-#        <<: *storage_conf
-#        storage_enabled : True
-#      metas:
-#        py_modules:
-#          - marie.executor.overlay
-#    timeout_ready: 3000000
-#    replicas: 1
 
 # Authentication and Authorization configuration
 

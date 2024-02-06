@@ -1,6 +1,10 @@
+import asyncio
 import base64
 import os
 import uuid
+
+from docarray import DocList
+from docarray.documents import TextDoc
 
 from marie import Client
 from marie.executor.text import TextExtractionExecutor, TextExtractionExecutorMock
@@ -88,20 +92,27 @@ def check_executor(img_path: str):
 
 async def check_executor_via_client():
     # load payload from file
-    payload = load_json_file(os.path.join("/tmp/payloads", "payload.json"))
-    parameters, docs = parse_payload_to_docs_sync(payload)
-    parameters["payload"] = payload  # THIS IS TEMPORARY HERE
+
+    # payload = load_json_file(os.path.join("/tmp/payloads", "payload.json"))
+    # parameters, docs = parse_payload_to_docs_sync(payload)
+    parameters = {}
+    parameters["payload"] = {"payload": "test"}  # THIS IS TEMPORARY HERE
+    docs = DocList(TextDoc(text="test"))
 
     client = Client(
-        host="0.0.0.0", port=52000, protocol="grpc", request_size=1, asyncio=True
+        host="0.0.0.0", port=52000, protocol="grpc", request_size=-1, asyncio=True
     )
 
+    ready = await client.is_flow_ready()
+    print(f"Flow is ready: {ready}")
+
     async for resp in client.post(
-        "/text/extract",
+        "/document/classify",
         docs=docs,
         parameters=parameters,
         request_size=-1,
         return_responses=True,
+        return_exceptions=True,
     ):
         print(resp)
 
@@ -110,14 +121,14 @@ async def check_executor_via_client():
 
 if __name__ == "__main__":
     # setup_storage()
-    check_executor("~/tmp/4007/176080625.tif")
+    # check_executor("~/tmp/4007/176080625.tif")
 
-    if False:
+    if True:
         print("Main")
         loop = asyncio.get_event_loop()
         try:
             # asyncio.ensure_future(main_single())
-            # asyncio.ensure_future(check_executor_via_client())
+            asyncio.ensure_future(check_executor_via_client())
             loop.run_forever()
         except KeyboardInterrupt:
             pass

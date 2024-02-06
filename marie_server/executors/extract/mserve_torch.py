@@ -24,7 +24,8 @@ def extend_rest_interface_extract(
     @app.get("/api/document/extract", tags=["document", "rest-api"])
     async def text_extract_get(request: Request):
         logger.info("Executing text_extract_get")
-        return {"message": "reply"}
+        ready = await client.is_flow_ready()
+        return {"message": "text_extract_get", "ready": ready}
 
     @app.post(
         "/api/document/extract",
@@ -40,22 +41,25 @@ def extend_rest_interface_extract(
         """
 
         logger.debug(f"text_extract_post : {token}")
+        try:
+            global extract_flow_is_ready
+            if not extract_flow_is_ready and not await client.is_flow_ready():
+                raise HTTPException(status_code=503, detail="Flow is not yet ready")
+            extract_flow_is_ready = True
 
-        global extract_flow_is_ready
-        if not extract_flow_is_ready and not await client.is_flow_ready():
-            raise HTTPException(status_code=503, detail="Flow is not yet ready")
-        extract_flow_is_ready = True
-
-        return await handle_request(
-            token,
-            "extract",
-            request,
-            client,
-            process_document_request,
-            "/document/extract",
-            queue,
-            validate_payload_callback=None,
-        )
+            return await handle_request(
+                token,
+                "extract",
+                request,
+                client,
+                process_document_request,
+                "/document/extract",
+                queue,
+                validate_payload_callback=None,
+            )
+        except Exception as e:
+            logger.error(e)
+            raise HTTPException(status_code=500, detail="Internal Server Error")
 
     @app.get("/api/document/status", tags=["text", "rest-api"])
     async def text_status():
