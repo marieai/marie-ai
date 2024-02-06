@@ -119,6 +119,8 @@ class GRPCBaseClient(BaseClient):
                 ) as channel:
                     self.logger.debug(f"connected to {self.args.host}:{self.args.port}")
 
+                    # stream = False
+
                     with ProgressBar(
                         total_length=self._inputs_length, disable=not self.show_progress
                     ) as p_bar:

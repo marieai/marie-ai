@@ -123,10 +123,6 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         :param kwargs:
         :return:
         """
-        if len(docs) == 0:
-            return {"error": "empty payload"}
-        if len(docs) > 1:
-            return {"error": "expected single document"}
 
         logger.warning(
             f"TESTING Document classification request with {len(docs)} documents"
@@ -134,6 +130,11 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         return {
             "status": "succeeded",
         }
+
+        if len(docs) == 0:
+            return {"error": "empty payload"}
+        if len(docs) > 1:
+            return {"error": "expected single document"}
 
         # load documents from specified document asset key
         doc = docs[0]

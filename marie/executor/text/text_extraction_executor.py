@@ -374,6 +374,10 @@ class TextExtractionExecutorMock(Executor):
         logger.info(kwargs)
         logger.info(parameters)
 
+        if True:
+            self.logger.warning(f"REMOVE ME")
+            return {"status": "succeeded", "msg": "OK"}
+
         if len(docs) == 0:
             return {"error": "empty payload"}
         if len(docs) > 1:
