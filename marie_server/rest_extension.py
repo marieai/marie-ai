@@ -31,8 +31,8 @@ async def coro_scheduler(queue: asyncio.Queue, limit: int = 2) -> AsyncIterator:
         # print("size of pending = ", len(pending))
         while len(pending) < limit:
             item = queue.get()
-            # pending.add(run_background_task(item))
-            pending.add(asyncio.ensure_future(item, loop=get_or_reuse_loop()))
+            pending.add(run_background_task(item))
+            # pending.add(asyncio.ensure_future(item, loop=get_or_reuse_loop()))
 
         if not pending:
             continue
@@ -228,7 +228,22 @@ async def handle_request(
         sync = strtobool(value_from_payload_or_args(payload, "sync", default=False))
         use_queue = False
 
-        sync = True
+        # sync = False
+        #
+        # from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+        #
+        # streamer = GatewayStreamer.get_streamer()
+        # print("streamer = ", streamer)
+        #
+        # async for docs in streamer.stream_docs(
+        #     docs=DocList([AssetKeyDoc(asset_key="ABC")]),
+        #     exec_endpoint="/document/classify",
+        # ):
+        #     print("RESPONSE = ", docs)
+        #     doc = docs[0]
+        #     print("doc = ", doc)
+        #
+        # return {"jobid": job_id, "status": "ok"}
 
         coroutine = process_request(
             api_key,
@@ -261,8 +276,8 @@ async def handle_request(
             # task = run_background_task(coroutine=coroutine)
             #  = [task]
             # get the loop and check if the loop is same as the current loop
-            future = [asyncio.ensure_future(coroutine, loop=get_or_reuse_loop())]
-            # future = [asyncio.ensure_future(coroutine)]
+            # future = [asyncio.ensure_future(coroutine, loop=get_or_reuse_loop())]
+            future = [asyncio.ensure_future(coroutine)]
             if sync:
                 results = await asyncio.gather(*future, return_exceptions=True)
                 if isinstance(results[0], Exception):

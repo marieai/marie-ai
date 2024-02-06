@@ -58,6 +58,8 @@ def extend_rest_interface_classifier(
         logger.info(f"text_classify_post : {token}")
 
         global classifier_flow_is_ready
+        # classifier_flow_is_ready = True
+
         if not classifier_flow_is_ready and not await client.is_flow_ready():
             raise HTTPException(status_code=503, detail="Flow is not yet ready")
         classifier_flow_is_ready = True

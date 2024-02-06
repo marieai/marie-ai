@@ -2,7 +2,7 @@ import inspect
 import logging
 import os
 
-os.environ['PYTHONASYNCIODEBUG'] = '1'
+os.environ["PYTHONASYNCIODEBUG"] = "1"
 
 import platform
 import sys
@@ -285,7 +285,6 @@ def __main__(
     ).config_gateway(prefetch=prefetch)
 
     marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
-
     filter_endpoint()
     setup_server(config)
 
