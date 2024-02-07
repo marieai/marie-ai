@@ -3,17 +3,18 @@ from typing import List, Optional
 
 from docarray import DocList
 
-from marie.api.docs import MarieDoc
 from marie.base_handler import BaseHandler
 from marie.logging.logger import MarieLogger
 
+from ...api.docs import MarieDoc
 
-class BaseDocumentClassifier(BaseHandler):
+
+class BaseDocumentIndexer(BaseHandler):
     """
-    Base class for document classifiers.
+    Base class for document indexers (Named Entity Recognition, etc.).
 
-    This class provides a common interface for document classification models.
-    Subclasses should implement the `predict` method to perform the actual classification.
+    This class provides a common interface for document indexing models.
+    Subclasses should implement the `predict` method to perform the actual indexing.
 
     :param kwargs: Additional keyword arguments.
     """
@@ -33,15 +34,6 @@ class BaseDocumentClassifier(BaseHandler):
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
-        """
-        Predict the class labels for the given documents.
-
-        :param documents: List of documents to classify.
-        :param words: List of word tokens for each document.
-        :param boxes: List of bounding boxes for each document.
-        :param batch_size: Batch size for prediction.
-        :return: List of classified documents.
-        """
         pass
 
     def run(
@@ -52,13 +44,13 @@ class BaseDocumentClassifier(BaseHandler):
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
         """
-        Run the document classifier on the given documents.
+        Run the document indexer on the given documents.
 
-        :param documents: List of documents to classify.
-        :param words: List of word tokens for each document.
-        :param boxes: List of bounding boxes for each document.
-        :param batch_size: Batch size for prediction.
-        :return: List of classified documents.
+        :param documents: List of MarieDoc objects representing the documents to be indexed.
+        :param words: Optional list of word tokens for each document.
+        :param boxes: Optional list of bounding boxes for each word token in each document.
+        :param batch_size: Optional batch size for processing the documents.
+        :return: List of MarieDoc objects representing the indexed documents.
         """
         if documents:
             results = self.predict(
@@ -68,5 +60,5 @@ class BaseDocumentClassifier(BaseHandler):
             results = DocList[MarieDoc]()
 
         document_id = [document.id for document in documents]
-        self.logger.debug(f"Classified documents with IDs: {document_id}")
+        self.logger.debug(f"Indexed documents with IDs: {document_id}")
         return results
