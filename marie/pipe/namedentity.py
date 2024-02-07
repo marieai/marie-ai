@@ -12,7 +12,11 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         self, name: str, document_indexers: dict, logger: MarieLogger = None
     ) -> None:
         """
-        :param name: Will be passed to base class
+        Initialize the NamedEntityPipelineComponent.
+
+        :param name: The name of the pipeline component.
+        :param document_indexers: A dictionary containing document indexers.
+        :param logger: An optional logger for logging messages.
         """
         super().__init__(name, logger=logger)
         self.document_indexers = document_indexers
@@ -21,10 +25,19 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         self,
         documents: DocumentArray,
         context: Optional[PipelineContext] = None,
-        *,  # force users to use keyword arguments
+        *,
         words: List[List[str]] = None,
         boxes: List[List[List[int]]] = None,
     ) -> PipelineResult:
+        """
+        Predict the named entities in the documents.
+
+        :param documents: The input documents.
+        :param context: The pipeline context.
+        :param words: The list of words.
+        :param boxes: The list of boxes.
+        :return: The pipeline result.
+        """
         context["metadata"]["page_indexer"] = self.extract_named_entity(
             documents, words, boxes
         )
@@ -33,14 +46,13 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
 
     def extract_named_entity(self, documents: DocumentArray, words, boxes):
         """
-        Classify document at page level
+        Extract named entities from the documents.
 
-        :param documents: documents to classify
-        :param words: words
-        :param boxes: boxes
-        :return: classification results
+        :param documents: The documents to extract named entities from.
+        :param words: The list of words.
+        :param boxes: The list of boxes.
+        :return: The extracted named entities.
         """
-
         document_meta = []
         try:
             for key, document_indexer in self.document_indexers.items():
@@ -89,10 +101,6 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
                                 filtered_documents.append(document)
                                 continue
 
-                    # def extract(
-                    #         self, docs: DocumentArray, parameters: Optional[Dict] = None, *args, **kwargs
-                    # ):
-                    #
                     parameters = {
                         "ref_id": "test",
                         "ref_type": "pid",
