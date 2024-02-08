@@ -85,11 +85,14 @@ class ClassificationPipeline:
         self.document_classifiers = setup_classifiers(
             pipeline_config, key="page_classifier", device=device
         )
+
         self.document_sub_classifiers = setup_classifiers(
             pipeline_config, key="sub_classifier", device=device
         )
 
-        self.document_indexers = setup_indexers(pipeline_config)
+        self.document_indexers = setup_indexers(
+            pipeline_config, key="page_indexer", device=device
+        )
 
         self.logger.info(
             f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
@@ -136,13 +139,13 @@ class ClassificationPipeline:
             )
         ]
 
-        if page_indexer_enabled:
-            processing_pipeline.append(
-                NamedEntityPipelineComponent(
-                    name="ner_pipeline_component",
-                    document_indexers=self.document_indexers,
-                )
-            )
+        # if page_indexer_enabled:
+        #     processing_pipeline.append(
+        #         NamedEntityPipelineComponent(
+        #             name="ner_pipeline_component",
+        #             document_indexers=self.document_indexers,
+        #         )
+        #     )
 
         metadata = {
             "ref_id": ref_id,
@@ -290,29 +293,32 @@ class ClassificationPipeline:
         self.logger.info("### ClassificationPipeline results")
         self.logger.info(context["metadata"]["page_classifier"])
 
-        sub_classifier_pipeline = ClassifierPipelineComponent(
-            name="sub_classifier_pipeline",
-            document_classifiers=self.document_sub_classifiers,
-        )
-
-        # FIXME : This is a total hack
         page_classifier = context["metadata"]["page_classifier"]
-        pipeline_config = self.pipeline_config
-
-        has_filter = "filter" in pipeline_config
-        filter_pattern = None
-        filter_type = None
-
-        if has_filter:
-            filter_type = pipeline_config["filter"]["type"]
-            filter_pattern = pipeline_config["filter"]["pattern"]
 
         for idx, page_classifier_result in enumerate(page_classifier):
             for detail in page_classifier_result["details"]:
                 page = int(detail["page"])
                 classification = detail["classification"]
+                filtered_classifiers = {}
 
-                if classification == filter_pattern:
+                for key, val in self.document_sub_classifiers.items():
+                    fileter_config = val["filter"]
+                    filter_type = fileter_config["type"]
+                    filter_pattern = fileter_config["pattern"]
+
+                    if filter_type == "exact" and classification == filter_pattern:
+                        self.logger.info(f"Adding sub-classifier : {key}")
+                        filtered_classifiers[key] = val
+
+                if filtered_classifiers:
+                    self.logger.info(
+                        f"Filtered classifiers : {filtered_classifiers.keys()}"
+                    )
+                    sub_classifier_pipeline = ClassifierPipelineComponent(
+                        name="sub_classifier_pipeline",
+                        document_classifiers=filtered_classifiers,
+                    )
+
                     ctx = PipelineContext(pipeline_id="sub_classification_pipeline")
                     ctx["metadata"] = {}
                     pipe_results = sub_classifier_pipeline.run(
