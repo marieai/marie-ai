@@ -1,5 +1,6 @@
 import os
 from abc import ABC, abstractmethod
+from itertools import chain
 from typing import Any, Dict, List, Optional, Union
 
 import cv2
@@ -168,7 +169,6 @@ class OcrEngine(ABC):
         is_crop_to_content_enabled = kwargs.get("crop_to_content", False)
         padding = 0
 
-        # TODO: batch me
         for i, img in enumerate(frames):
             try:
                 if is_crop_to_content_enabled:
@@ -259,11 +259,6 @@ class OcrEngine(ABC):
 
         pages = {}
         for region in regions:
-            # if region["pageIndex"] in pages.keys():
-            #     pages[region["pageIndex"]].append(region)
-            # else:
-            #     pages[region["pageIndex"]] = [region]
-            #
             pages.setdefault(region["pageIndex"], []).append(region)
 
         # Batch region by page
@@ -271,10 +266,12 @@ class OcrEngine(ABC):
             # TODO : Introduce mini-batched by region to improve inference
             img = frames[page_index]
             x_batch, y_batch, w_batch, h_batch = img.shape[1], img.shape[0], 0, 0
+            region_ids = []
             for region in regions:
                 try:
                     self.logger.debug(f"Extracting box : {region}")
                     rid = region["id"]
+                    region_ids.append(rid)
                     x = region["x"]
                     y = region["y"]
                     w = region["w"]
@@ -305,14 +302,20 @@ class OcrEngine(ABC):
                         region_fragment = crop_to_content(region_fragment)
                         h = region_fragment.shape[0]
                         w = region_fragment.shape[1]
+                        padding = 4
 
-                    region_overlay = (
-                        np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8)
-                        * 255
-                    )
-                    region_overlay[
-                        padding : h + padding, padding : w + padding
-                    ] = region_fragment
+                    if padding != 0:
+                        region_overlay = (
+                            np.ones(
+                                (h + padding * 2, w + padding * 2, 3), dtype=np.uint8
+                            )
+                            * 255
+                        )
+                        region_overlay[
+                            padding : h + padding, padding : w + padding
+                        ] = region_fragment
+                    else:
+                        region_overlay = region_fragment
 
                     # cv2.imwrite(f"/tmp/marie/region_overlay_{page_index}_{rid}.png", region_overlay)
                     # each region can have its own segmentation mode
@@ -343,16 +346,11 @@ class OcrEngine(ABC):
 
             # use a crop of the image related to the batch
             batch_crop = img[y_batch : y_batch + h_batch, x_batch : x_batch + w_batch]
-            # Unpack results
-            (
-                boxes,
-                img_fragments,
-                lines,
-                _,
-                lines_bboxes,
-            ) = zip(*bbox_results_batch)
-
-            result, overlay_image = icr_processor.recognize(
+            (boxes, img_fragments, lines, _, lines_bboxes,) = (
+                list(chain.from_iterable(x))
+                for i, x in enumerate(zip(*bbox_results_batch))
+            )
+            batch_result, batch_overlay_image = icr_processor.recognize(
                 queue_id, checksum, batch_crop, boxes, img_fragments, lines
             )
 
@@ -362,29 +360,30 @@ class OcrEngine(ABC):
             del lines_bboxes
 
             if not filter_snippets:
-                result["overlay_b64"] = encodeToBase64(overlay_image)
+                batch_result["overlay_b64"] = encodeToBase64(batch_overlay_image)
 
-            result["id"] = rid
-            extended.append(result)
+            extended.append(batch_result)
 
-        # TODO : Implement rendering modes
-        # 1 - Simple
-        # 2 - Full
-        # 3 - HOCR
-        self.logger.debug(result)
-        rendering_mode = "simple"
-        region_result = {}
-        if rendering_mode == "simple":
-            if "lines" in result and len(result["lines"]) > 0:
-                lines = result["lines"]
-                line = lines[0]
-                region_result["id"] = rid
-                region_result["text"] = line["text"]
-                region_result["confidence"] = line["confidence"]
-                output.append(region_result)
-            else:
-                output.append({"id": rid, "text": "", "confidence": 0.0})
-
+            # TODO : Implement rendering modes
+            # 1 - Simple
+            # 2 - Full
+            # 3 - HOCR
+            rendering_mode = "simple"
+            if rendering_mode == "simple":
+                # unpack result from batch icr
+                if "words" in batch_result and len(batch_result["words"]) == len(
+                    region_ids
+                ):
+                    for words, rid in zip(batch_result["words"], region_ids):
+                        region_result = {
+                            "id": rid,
+                            "text": words["text"],
+                            "confidence": words["confidence"],
+                        }
+                        output.append(region_result)
+                else:
+                    for rid in region_ids:
+                        output.append({"id": rid, "text": "", "confidence": 0.0})
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
         # This is useful when we like to display or process image in the output but has significant payload overhead
 
