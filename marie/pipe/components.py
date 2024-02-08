@@ -210,7 +210,7 @@ def setup_classifiers(
     :param pipeline_config: pipeline configuration
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
-    :return: document classifiers
+    :return: map of document classifiers with their names as keys
     """
     use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
 
@@ -251,24 +251,36 @@ def setup_classifiers(
             raise BadConfigSource(f"Duplicate classifier name : {name}")
 
         if model_type == "transformers":
-            document_classifiers[name] = TransformersDocumentClassifier(
+            classifier = TransformersDocumentClassifier(
                 model_name_or_path=model_name_or_path,
                 batch_size=batch_size,
                 use_gpu=use_cuda,
                 task=task,
                 id2label=id2label,
             )
+
+            model_filter = config["filter"] if "filter" in config else {}
+            document_classifiers[name] = {
+                "classifier": classifier,
+                "filter": model_filter,
+            }
         else:
             raise ValueError(f"Invalid classifier type : {model_type}")
 
     return document_classifiers
 
 
-def setup_indexers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
+def setup_indexers(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_indexer",
+    device: str = "cuda",
+) -> dict[str, any]:
     """
-    Setup the document indexers(Named Entity Recognition)
+    Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
-    :return: document indexers
+    :param key: key to use in the pipeline config
+    :param device: device to use for classification (cpu or cuda)
+    :return: document classifiers
     """
 
     if pipeline_config is None:
@@ -276,9 +288,7 @@ def setup_indexers(pipeline_config: Optional[dict] = None) -> dict[str, any]:
         pipeline_config = {}
 
     document_indexers = dict()
-    configs = (
-        pipeline_config["page_indexer"] if "page_indexer" in pipeline_config else []
-    )
+    configs = pipeline_config[key] if key in pipeline_config else []
 
     for config in configs:
         if "model_name_or_path" not in config:

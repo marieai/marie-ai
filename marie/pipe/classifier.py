@@ -17,6 +17,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
         :param name: Will be passed to base class
         """
         super().__init__(name, logger=logger)
+        # ensure that the document_classifiers is a dictionary of document classifiers and filters
         self.document_classifiers = document_classifiers
 
     def predict(
@@ -48,7 +49,13 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
         """
 
         document_meta = []
-        for key, document_classifier in self.document_classifiers.items():
+        for key, classifier in self.document_classifiers.items():
+            if "classifier" not in classifier or "filter" not in classifier:
+                raise ValueError(f"Invalid classifier : {classifier}")
+
+            document_classifier = classifier["classifier"]
+            filter = classifier["filter"]
+
             meta = []
 
             try:

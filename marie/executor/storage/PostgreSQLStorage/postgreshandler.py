@@ -217,6 +217,7 @@ class PostgreSQLHandler:
         ref_id = kwargs.pop("ref_id")
         ref_type = kwargs.pop("ref_type")
 
+        return
         with self:
             cursor = self.connection.cursor()
             try:
