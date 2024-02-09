@@ -32,3 +32,14 @@ def test_max_page_with_expansion():
 
     assert changed is False
     assert frames[0].shape == (3200, 2600)
+
+
+
+def test_max_page_001():
+    frame = np.random.randint(0, 255, (4171, 2569), dtype=np.uint8)
+    src_frames = [frame]
+
+    changed, frames = ensure_max_page_size(src_frames)
+
+    assert changed is True
+    assert frames[0].shape == (3200, 2600)

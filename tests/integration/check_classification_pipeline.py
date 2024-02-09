@@ -1,7 +1,5 @@
 import os
 
-from transformers import AutoTokenizer, LongformerTokenizer
-
 from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__
 from marie.logging.mdc import MDC
@@ -45,7 +43,13 @@ if __name__ == "__main__":
         "~/datasets/private/corr-routing/faux/001/merged-001.tif"
         # "~/datasets/private/corr-routing/faux/002/merged-002.tif"
     )
-    # img_path = "~/tmp/PID_1925_9289_0_157186264.tif"
+
+    img_path = "~/tmp/PID_1925_9289_0_157186264.png"
+    img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/additional_information/08312023_734839_1_218_2.png"
+    img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/additional_information/09012023_734837_1_782___1_2.png"
+    img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/cms/08312023_772428_13_46_2.png"
+    img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/dispute/08312023_734913_1_4_2.png"
+    # img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/auth_denial/09012023_22572_5_647_3.png"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -59,12 +63,14 @@ if __name__ == "__main__":
 
     pipeline_config = load_yaml(
         os.path.join(
-            __config_dir__, "tests-integration", "pipeline-classify-001.partial.yml"
+            __config_dir__, "tests-integration", "pipeline-classify-002.partial.yml"
         )
     )
+
     pipeline = ClassificationPipeline(pipeline_config=pipeline_config["pipeline"])
 
     with TimeContext(f"### ClassificationPipeline info"):
         results = pipeline.execute(
             ref_id=filename, ref_type="pid", frames=frames_from_file(img_path)
         )
+        print(results)

@@ -222,7 +222,7 @@ executors:
               device: 'cuda'
 
               id2label:
-                '0': auth_denial_in
+                '0': auth_denial_ip
                 '1': auth_denial_op
 
           # Filter should be on the same level as the sub-classifier, for now this is just a global filter

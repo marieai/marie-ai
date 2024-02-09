@@ -1,0 +1,189 @@
+pipeline:
+ name: 'jpmc-corr' # name of the pipeline, used for logging and asset saving
+ device: 'cuda' # Force default to run on CPU or we will blow OOM
+ id2label:
+   '0': additional_information
+   '1': attorney
+   '2': auth_approval
+   '3': auth_denial
+   '4': bankruptcy
+   '5': cms
+   '6': dispute
+   '7': eligibility
+   '8': medical_record
+   '9': misc
+   '10': noop_blank
+   '11': noop_check
+   '12': noop_cover
+   '13': noop_envelope
+   '14': noop_eob
+   '15': noop_hicfa
+   '16': noop_notice
+   '17': noop_patpay
+   '18': noop_w9
+   '19': referral
+   '20': refund
+   '21': tax_1099
+
+
+ page_classifier:
+   - model_name_or_path: 'rms/corr-layoutlmv3-classifier-jpmc'
+     name: 'corr_layoutlmv3_classifier_jpmc'
+     type: 'transformers'
+     task: 'text-classification-multimodal'
+     device: 'cuda'
+     enabled: True
+
+   - model_name_or_path: 'rms/corr-longformer-classifier-jpmc'
+     name: 'corr_longformer_classifier_jpmc'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+ sub_classifier:
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-additional-information'
+     name: 'corr_longformer_jpmc_level2_additional_information'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': additional_information_additional_information
+       '1': additional_information_bill_denied
+       '2': additional_information_credentialing
+       '3': additional_information_no_record_of_patient
+
+     filter:
+       type: 'exact'
+       pattern: 'additional_information'
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-auth-denial'
+     name: 'corr_longformer_jpmc_level2_auth_denial'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': auth_denial_ip
+       '1': auth_denial_op
+
+     filter:
+       type: 'exact'
+       pattern: 'auth_denial'
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-cms'
+     name: 'corr_longformer_jpmc_level2_cms'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': cms_additional_information
+       '1': cms_bill_denied
+       '2': cms_bill_under_review
+       '3': cms_credentialing
+       '4': cms_prior_authorization
+       '5': cms_refund
+
+     filter:
+       type: 'exact'
+       pattern: 'cms'
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-dispute'
+     name: 'corr_longformer_jpmc_level2_dispute'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': dispute_overturned
+       '1': dispute_upheld
+
+     filter:
+       type: 'exact'
+       pattern: 'dispute'
+
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-eligibility'
+     name: 'corr_longformer_jpmc_level2_eligibility'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': eligibility_bill_denied
+       '1': eligibility_no_record_of_patient
+
+     filter:
+       type: 'exact'
+       pattern: 'eligibility'
+
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-medical-record'
+     name: 'corr_longformer_jpmc_level2_medical_record'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': medical_record_additional_information
+       '1': medical_record_bill_denied
+       '2': medical_record_bill_under_review
+       '3': medical_record_legal
+
+     filter:
+       type: 'exact'
+       pattern: 'medical_record'
+
+
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-misc'
+     name: 'corr_longformer_jpmc_level2_misc'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': misc_bill_denied
+       '1': misc_bill_under_review # typo fix from misc_bill_under_reivew to misc_bill_under_review
+       '2': misc_collections
+       '3': misc_credentialing
+       '4': misc_misc
+       '5': misc_return_to_sender
+
+     filter:
+       type: 'exact'
+       pattern: 'misc'
+
+
+   - model_name_or_path: 'rms/corr-longformer-jpmc-level2-refund'
+     name: 'corr_longformer_jpmc_level2_refund'
+     task: 'text-classification'
+     type: 'transformers'
+     enabled: True
+     batch_size: 1 # batch size > 1 causes errors due to wrong batch aggregation
+     device: 'cuda'
+
+     id2label:
+       '0': refund_collections
+       '1': refund_request
+
+     filter:
+       type: 'exact'
+       pattern: 'refund'
