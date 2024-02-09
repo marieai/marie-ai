@@ -255,20 +255,17 @@ class OcrEngine(ABC):
 
             # Additional fields are allowed (e.g. mode)
         bbox_results_batch = []
-        print(f'regions: {len(regions)}')
-
         pages = {}
         for region in regions:
             pages.setdefault(region["pageIndex"], []).append(region)
 
         # Batch region by page
         for page_index, regions in pages.items():
-            # TODO : Introduce mini-batched by region to improve inference
             img = frames[page_index]
             x_batch, y_batch, w_batch, h_batch = img.shape[1], img.shape[0], 0, 0
             region_ids = []
-            for region in regions:
-                try:
+            try:
+                for region in regions:
                     self.logger.debug(f"Extracting box : {region}")
                     rid = region["id"]
                     region_ids.append(rid)
@@ -340,24 +337,26 @@ class OcrEngine(ABC):
 
                     bbox_results_batch.append(bbox_results)
 
-                except Exception as ex:
-                    self.logger.error(ex)
-                    raise ex
+                # use a crop of the image related to the batch
+                batch_crop = img[
+                    y_batch : y_batch + h_batch, x_batch : x_batch + w_batch
+                ]
+                (boxes, img_fragments, lines, _, lines_bboxes,) = (
+                    list(chain.from_iterable(x))
+                    for i, x in enumerate(zip(*bbox_results_batch))
+                )
+                batch_result, batch_overlay_image = icr_processor.recognize(
+                    queue_id, checksum, batch_crop, boxes, img_fragments, lines
+                )
 
-            # use a crop of the image related to the batch
-            batch_crop = img[y_batch : y_batch + h_batch, x_batch : x_batch + w_batch]
-            (boxes, img_fragments, lines, _, lines_bboxes,) = (
-                list(chain.from_iterable(x))
-                for i, x in enumerate(zip(*bbox_results_batch))
-            )
-            batch_result, batch_overlay_image = icr_processor.recognize(
-                queue_id, checksum, batch_crop, boxes, img_fragments, lines
-            )
+                del boxes
+                del img_fragments
+                del lines
+                del lines_bboxes
 
-            del boxes
-            del img_fragments
-            del lines
-            del lines_bboxes
+            except Exception as ex:
+                self.logger.error(ex)
+                raise ex
 
             if not filter_snippets:
                 batch_result["overlay_b64"] = encodeToBase64(batch_overlay_image)
