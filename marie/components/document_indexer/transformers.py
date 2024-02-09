@@ -1,6 +1,6 @@
 import os
 import traceback
-from typing import Any, Callable, List, Optional, Sequence, Union
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -23,6 +23,16 @@ from transformers import (
 
 from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.constants import __model_path__
+from marie.executor.ner.utils import (
+    draw_box,
+    get_font,
+    get_random_color,
+    normalize_bbox,
+    unnormalize_box,
+    visualize_extract_kv,
+    visualize_icr,
+    visualize_prediction,
+)
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
@@ -30,9 +40,9 @@ from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
+from ...utils.docs import frames_from_docs
 from ...utils.json import load_json_file
 from ...utils.utils import ensure_exists
-from ..document_classifier.base import BaseDocumentClassifier
 from ..util import scale_bounding_box
 
 
@@ -50,7 +60,6 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         use_gpu: bool = True,
         top_k: Optional[int] = 1,
         task: str = "transformers-document-indexer",
-        labels: Optional[List[str]] = None,
         batch_size: int = 16,
         use_auth_token: Optional[Union[str, bool]] = None,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
@@ -117,9 +126,11 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         self.debug_scores = self.init_configuration["debug"]["scores"]
         self.debug_colors = self.init_configuration["debug"]["colors"]
 
-        labels = self.init_configuration["labels"]
+        self.labels = self.init_configuration["labels"]
 
-        self.model = self.__load_model(model_name_or_path, labels, self.device)
+        self.model = self.__load_model(
+            model_name_or_path, self.labels, self.device.type
+        )
         self.processor = self.__create_processor()
 
     def __create_processor(self):
@@ -211,7 +222,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         if len(documents) == 0:
             return documents
 
-        if self.task == "text-classification-multimodal":
+        if self.task == "transformers-document-indexer":
             assert (
                 words is not None and boxes is not None
             ), "words and boxes must be provided for sequence classification"
@@ -219,6 +230,241 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 len(documents) == len(words) == len(boxes)
             ), "documents, words and boxes must have the same length"
 
-        results = DocList[MarieDoc]()
+        # create a named tuple of (document, words, boxes) for each document
 
+        batchable_docs = DocList(
+            BatchableMarieDoc(
+                tensor=doc.tensor,
+                words=word,
+                boxes=box,
+            )
+            for doc, word, box in zip(documents, words, boxes)
+        )
+
+        labels = self.labels
+        frames = frames_from_docs(batchable_docs)
+        for batchable_doc, frame in zip(batchable_docs, frames):
+            t = batchable_doc.tensor
+            w = batchable_doc.words
+            b = batchable_doc.boxes
+            self.logger.info(f"Batchable Doc : {frame.shape}")
+
+            # Perform inference
+            self.logger.info(f"Performing inference")
+            # convert tensor to PIL image
+            z = t.astype(np.uint8)  # .transpose(1, 2, 0)
+            frame = Image.fromarray(z)
+            r = self.inference(
+                image=frame, words=w, boxes=b, labels=labels, threshold=0.5
+            )
+
+        results = DocList[MarieDoc]()
         return results
+
+    def inference(
+        self,
+        image: Any,
+        words: List[Any],
+        boxes: List[Any],
+        labels: List[str],
+        threshold: float,
+    ) -> Tuple[List, List, List]:
+        """Run Inference on the model with given processor"""
+        self.logger.info(f"Performing inference")
+        model = self.model
+        processor = self.processor
+        device = self.device
+
+        labels, id2label, label2id = self.get_label_info(labels)
+        os.environ["TOKENIZERS_PARALLELISM"] = "true"
+        self.logger.info(
+            f"Tokenizer parallelism: {os.environ.get('TOKENIZERS_PARALLELISM', 'true')}"
+        )
+
+        width, height = image.size
+        # partition the words and boxes into batches of 512 tokens with 128 stride
+        # stride is the number of tokens to move forward, this is to handle long documents that are larger than 512 tokens
+        # there will be overlap between the batches, so we will need to handle that later
+
+        self.logger.info("Named Entity Inference")
+        self.logger.info(f"Words : {len(words)} ::  {words}")
+        self.logger.info(f"Boxes : {len(boxes)}")
+        assert len(words) == len(boxes)
+
+        encoding = processor(
+            # fmt: off
+            image,
+            words,
+            boxes=boxes,
+            truncation=True,
+            return_offsets_mapping=True,
+            return_overflowing_tokens=True,
+            stride=128,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=512,
+            # fmt: on
+        )
+
+        offset_mapping_batched = encoding.pop("offset_mapping")
+        overflow_to_sample_mapping = encoding.pop("overflow_to_sample_mapping")
+        # encoding["pixel_values"] = torch.stack(encoding["pixel_values"], dim=0)
+
+        # Debug tensor info
+        self.debug_visuals = True
+        if self.debug_visuals:
+            img_tensor = encoding["pixel_values"]
+            img = Image.fromarray(
+                (img_tensor[0].cpu()).numpy().astype(np.uint8).transpose(1, 2, 0)
+            )
+            img.save(f"/tmp/tensors/tensor.png")
+
+        # ensure proper device placement
+        for k in encoding.keys():
+            if k != "pixel_values":
+                encoding[k] = encoding[k].to(device)
+            else:
+                encoding[k] = torch.cat([x.unsqueeze(0) for x in encoding[k]]).to(
+                    device
+                )
+
+        # Perform forward pass
+        with torch.inference_mode():
+            outputs = model(**encoding)
+            # Get the predictions and probabilities
+            probs = (
+                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
+            )
+            # The model outputs logits of shape (batch_size, seq_len, num_labels).
+            logits = outputs.logits
+            batch_size, seq_len, num_labels = logits.shape
+            # Get the predictions and bounding boxes by batch and convert to list
+            predictions_batched = logits.argmax(-1).squeeze().tolist()
+            token_boxes_batched = encoding.bbox.squeeze().tolist()
+            normalized_logits_batched = (
+                outputs.logits.softmax(dim=-1).squeeze().tolist()
+            )
+
+            # If batch size is 1, convert to list
+            if batch_size == 1:
+                predictions_batched = [predictions_batched]
+                token_boxes_batched = [token_boxes_batched]
+                normalized_logits_batched = [normalized_logits_batched]
+
+            out_prediction = []
+            out_boxes = []
+            out_scores = []
+
+            for batch_index in range(batch_size):
+                # Get the predictions and bounding boxes for the current batch
+                predictions = predictions_batched[batch_index]
+                token_boxes = token_boxes_batched[batch_index]
+                normalized_logits = normalized_logits_batched[batch_index]
+                offset_mapping = offset_mapping_batched[batch_index]
+
+                # TODO : Filer the results
+                # Filter the predictions and bounding boxes based on a threshold
+                # predictions = _filter(_predictions, probs, threshold)
+                # token_boxes = _filter(_token_boxes, probs, threshold)
+
+                # Only keep non-subword predictions
+                is_subword = np.array(offset_mapping.squeeze().tolist())[:, 0] != 0
+
+                true_predictions = [
+                    id2label[pred]
+                    for idx, pred in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
+
+                true_boxes = [
+                    unnormalize_box(box, width, height)
+                    for idx, box in enumerate(token_boxes)
+                    if not is_subword[idx]
+                ]
+                # convert boxes from float to int
+                true_boxes = [[int(b) for b in box] for box in true_boxes]
+
+                true_scores = [
+                    round(normalized_logits[idx][val], 6)
+                    for idx, val in enumerate(predictions)
+                    if not is_subword[idx]
+                ]
+
+                assert len(true_predictions) == len(true_boxes) == len(true_scores)
+
+                # Not sure why we have this, but we need to remove [0, 0, 0, 0] boxes
+                true_predictions = [
+                    pred
+                    for pred, box in zip(true_predictions, true_boxes)
+                    if box != [0, 0, 0, 0]
+                ]
+                true_boxes = [box for box in true_boxes if box != [0, 0, 0, 0]]
+                true_scores = [
+                    score
+                    for score, box in zip(true_scores, true_boxes)
+                    if box != [0, 0, 0, 0]
+                ]
+
+                # check if there are duplicate boxes (example : 159000444_1.png)
+                # why are there duplicate boxes??
+                for box in true_boxes:
+                    if true_boxes.count(box) > 1:
+                        self.logger.warning(f"Duplicate box found : {box}")
+                        current_idx = true_boxes.index(box)
+                        true_predictions.pop(current_idx)
+                        true_boxes.pop(current_idx)
+                        true_scores.pop(current_idx)
+
+                if batch_index > 0:
+                    for idx, box in enumerate(out_boxes):
+                        if box in true_boxes:
+                            current_idx = true_boxes.index(box)
+                            if true_scores[current_idx] >= out_scores[idx]:
+                                out_prediction[idx] = true_predictions[current_idx]
+                                out_scores[idx] = true_scores[current_idx]
+
+                            true_predictions.pop(current_idx)
+                            true_boxes.pop(current_idx)
+                            true_scores.pop(current_idx)
+
+                out_prediction.extend(true_predictions)
+                out_boxes.extend(true_boxes)
+                out_scores.extend(true_scores)
+
+        original_boxes = []
+        for box in boxes:
+            original_boxes.append([int(b) for b in unnormalize_box(box, width, height)])
+
+        # align words and boxes with predictions and scores
+        out_prediction, out_boxes, out_scores = self.align_predictions(
+            words, original_boxes, out_prediction, out_boxes, out_scores
+        )
+
+        assert len(out_prediction) == len(words)
+        return out_prediction, out_boxes, out_scores
+
+    def align_predictions(
+        self,
+        words,
+        original_boxes: [],
+        out_prediction: [],
+        out_boxes: [],
+        out_scores: [],
+    ):
+        """Align predictions with words and boxes"""
+
+        aligned_prediction = []
+        aligned_boxes = []
+        aligned_scores = []
+
+        for idx, word in enumerate(words):
+            box = original_boxes[idx]
+            if box in out_boxes:
+                current_idx = out_boxes.index(box)
+                aligned_prediction.append(out_prediction[current_idx])
+                aligned_boxes.append(out_boxes[current_idx])
+                aligned_scores.append(out_scores[current_idx])
+            else:
+                raise ValueError(f"Box not found for alignment: {box}")
+
+        return aligned_prediction, aligned_boxes, aligned_scores

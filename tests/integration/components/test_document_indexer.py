@@ -2,6 +2,7 @@ import multiprocessing
 import os
 
 import psutil
+import torch
 
 from marie.components import TransformersDocumentIndexer
 from marie.logging.profile import TimeContext
@@ -11,15 +12,22 @@ from marie.utils.docs import docs_from_file
 from marie.utils.json import load_json_file
 
 
-def test_named_entity_component():
-    # kwargs = {"__model_path__": __model_path__}
+def ensure_model(model_name_or_path):
+    kwargs = {
+        # "__model_path__": os.path.expanduser("~/tmp/models"),
+        "use_auth_token": False,
+    }  # custom model path
+    resolved_model_name_or_path = ModelRegistry.get(
+        model_name_or_path,
+        version=None,
+        raise_exceptions_for_missing_entries=True,
+        **kwargs,
+    )
+    return resolved_model_name_or_path
+
+
+def test_transformer_document_indexer():
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
-
-    import torch
-
-    # import intel_extension_for_pytorch as ipex
-    print(torch.__version__)
-    # print(ipex.__version__)
 
     os.environ["OMP_NUM_THREADS"] = str(multiprocessing.cpu_count())
     os.environ["OMP_SCHEDULE"] = "STATIC"
@@ -46,18 +54,3 @@ def test_named_entity_component():
 
             for document in results:
                 print("results", document)
-
-
-def ensure_model(model_name_or_path):
-    kwargs = {
-        # "__model_path__": os.path.expanduser("~/tmp/models"),
-        "use_auth_token": False,
-    }  # custom model path
-    resolved_model_name_or_path = ModelRegistry.get(
-        model_name_or_path,
-        version=None,
-        raise_exceptions_for_missing_entries=True,
-        **kwargs,
-    )
-    print("resolved_model_name_or_path", resolved_model_name_or_path)
-    return

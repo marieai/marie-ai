@@ -133,7 +133,8 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         docs = docs_from_asset(doc.asset_key, doc.pages)
 
         src_frames = frames_from_docs(docs)
-        changed, frames = ensure_max_page_size(src_frames)
+        changed, frames = ensure_max_page_size(src_frames, max_page_size=(2500, 3000))
+
         if changed:
             self.logger.warning(f"Page size of frames was changed ")
             for i, (s, f) in enumerate(zip(src_frames, frames)):
