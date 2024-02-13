@@ -25,7 +25,7 @@ class AdlibRenderer(ResultRenderer):
 
     @property
     def name(self):
-        return "AdlibRenderer"
+        return "MARIE-AI-AdlibRenderer"
 
     def write_adlib_summary_tree(
         self, frames, filename_generator: Callable[[int], str]

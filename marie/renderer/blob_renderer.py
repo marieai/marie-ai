@@ -17,7 +17,7 @@ class BlobRenderer(ResultRenderer):
 
     @property
     def name(self):
-        return "BlobRenderer"
+        return "MARIE-AI-BlobRenderer"
 
     # def render(self, img, result, output_filename):
     def __render_page(self, image: np.ndarray, result: Dict[str, Any], page_index: int):
@@ -29,6 +29,7 @@ class BlobRenderer(ResultRenderer):
         root.set("yres", "300")
         root.set("xres", "300")
         root.set("page", str(page_index))
+        root.set("producer", self.name)
 
         try:
             meta = result["meta"]
