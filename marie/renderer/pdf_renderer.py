@@ -171,8 +171,18 @@ class PdfRenderer(ResultRenderer):
         metadata = {
             '/Producer': self.name,
             '/Creator': self.name,
-            '/Number of Pages': str(num_pages),
         }
         writer.addMetadata(metadata)
         with open(output_filename, "wb") as output:
             writer.write(output)
+
+        with open(output_filename, "rb") as f:
+            pdf = PdfFileReader(f)
+            information = pdf.getDocumentInfo()
+            number_of_pages = pdf.getNumPages()
+
+            txt = f"""
+            Information about {output_filename}: 
+            Producer: {information.producer}
+            Number of pages: {number_of_pages} """
+            self.logger.info(txt)
