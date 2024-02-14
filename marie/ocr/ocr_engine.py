@@ -274,13 +274,13 @@ class OcrEngine(ABC):
                     w = region["w"]
                     h = region["h"]
 
-                    # we can also normalize region coordinate to start at 0, 0
                     if x < 0 or y < 0:
                         self.logger.warning(
                             f"Region has negative coordinates : {region}"
                         )
-                        output.append({"id": rid, "text": "", "confidence": 0.0})
-                        continue
+                        # normalize region to start from 0. ex: (0, y) | (x, 0) | (0, 0)
+                        x = max(x, 0)
+                        y = max(y, 0)
 
                     if w == 0 or h == 0:
                         self.logger.warning(
