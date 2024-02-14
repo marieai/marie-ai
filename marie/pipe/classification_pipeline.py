@@ -8,17 +8,13 @@ import torch
 from docarray import DocList
 from PIL import Image
 
-from marie.api.docs import MarieDoc
 from marie.boxes import PSMode
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
+from marie.logging.profile import TimeContext
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
-from marie.pipe import (
-    ClassifierPipelineComponent,
-    NamedEntityPipelineComponent,
-    PipelineComponent,
-    PipelineContext,
-)
+from marie.pipe import ClassifierPipelineComponent, PipelineComponent, PipelineContext
 from marie.pipe.components import (
     burst_frames,
     get_known_ocr_engines,
@@ -62,48 +58,94 @@ class ClassificationPipeline:
 
     def __init__(
         self,
-        pipeline_config: dict[str, any] = None,
+        pipelines_config: List[dict[str, any]] = None,
         **kwargs,
     ) -> None:
         # super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.pipeline_config = pipeline_config
-        self.pipeline_name = pipeline_config.get("name", "classification_pipeline")
+
+        self.pipelines_config = pipelines_config
+        self.default_pipeline_config = None
+
+        for conf in pipelines_config:
+            conf = conf["pipeline"]
+            if conf.get("default", False):
+                if self.default_pipeline_config is not None:
+                    raise BadConfigSource(
+                        "Invalid pipeline configuration, multiple defaults found"
+                    )
+                self.default_pipeline_config = conf
+
+        if self.default_pipeline_config is None:
+            raise BadConfigSource("Invalid pipeline configuration, default not found")
+
+        (
+            self.pipeline_name,
+            self.classifier_groups,
+            self.document_indexers,
+        ) = self.load_pipeline(self.default_pipeline_config)
 
         # sometimes we have CUDA/GPU support but want to only use CPU
+        # TODO : REFINE THIS
         use_cuda = torch.cuda.is_available()
+        device = "cpu" if not use_cuda else "cuda"
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
-
-        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
         self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
 
-        self.document_classifiers = setup_classifiers(
+    def load_pipeline(
+        self, pipeline_config: dict[str, any]
+    ) -> tuple[str, dict[str, any], dict[str, any]]:
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        use_cuda = torch.cuda.is_available()
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            use_cuda = False
+        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+        if device == "cuda" and not use_cuda:
+            device = "cpu"
+
+        if "name" not in pipeline_config:
+            raise BadConfigSource("Invalid pipeline config, missing name field")
+
+        pipeline_name = pipeline_config["name"]
+        document_classifiers = setup_classifiers(
             pipeline_config, key="page_classifier", device=device
         )
 
-        self.document_sub_classifiers = setup_classifiers(
+        document_sub_classifiers = setup_classifiers(
             pipeline_config, key="sub_classifier", device=device
         )
 
-        self.document_indexers = setup_indexers(
+        classifier_groups = dict()
+        for classifier_group, classifiers in document_classifiers.items():
+            sub_classifiers = document_sub_classifiers.get(classifier_group, {})
+            classifier_groups[classifier_group] = {
+                "group": classifier_group,
+                "classifiers": classifiers,
+                "sub_classifiers": sub_classifiers,
+            }
+
+        document_indexers = setup_indexers(
             pipeline_config, key="page_indexer", device=device
         )
+        # dump information about the loaded classifiers that are grouped by the classifier group
+        for classifier_group, classifiers in document_classifiers.items():
+            self.logger.info(
+                f"Loaded classifiers :{classifier_group},  {len(classifiers)},  {classifiers.keys()}"
+            )
+        for classifier_group, classifiers in document_sub_classifiers.items():
+            self.logger.info(
+                f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
+            )
+        self.logger.info(
+            f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
+        )
 
-        self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
-        )
-        self.logger.info(
-            f"Loaded sub-classifiers : {len(self.document_sub_classifiers)},  {self.document_sub_classifiers.keys()}"
-        )
-
-        self.logger.info(
-            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
-        )
+        return pipeline_name, classifier_groups, document_indexers
 
     def execute_frames_pipeline(
         self,
@@ -125,6 +167,16 @@ class ClassificationPipeline:
         page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
             "enabled", True
         )
+
+        # check if the current pipeline name is the default pipeline name
+        if "name" in runtime_conf:
+            expected_pipeline_name = runtime_conf["name"]
+            if expected_pipeline_name != self.pipeline_name:
+                self.logger.warning(
+                    f"pipeline name : {expected_pipeline_name}, expected : {self.pipeline_name} , reloading pipeline"
+                )
+                self.reload_pipeline(expected_pipeline_name)
+
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
 
         self.logger.info(
@@ -132,12 +184,8 @@ class ClassificationPipeline:
         )
         self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
 
-        processing_pipeline = [
-            ClassifierPipelineComponent(
-                name="classifier_pipeline",
-                document_classifiers=self.document_classifiers,
-            )
-        ]
+        for group, classifiers in self.classifier_groups.items():
+            self.logger.info(f"Loaded classifiers : {group}, {len(classifiers)}")
 
         # if page_indexer_enabled:
         #     processing_pipeline.append(
@@ -155,18 +203,39 @@ class ClassificationPipeline:
             "pages": f"{len(frames)}",
         }
 
-        # check if we have already processed this document and restore assets
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
         )
-
         burst_frames(ref_id, frames, root_asset_dir)
         ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
+
         metadata["ocr"] = ocr_results
+        metadata["classifications"] = []
 
-        self.execute_pipeline(processing_pipeline, frames, ocr_results, metadata)
+        # TODO : Need to refactor this
+        for group, classifier_group in self.classifier_groups.items():
+            self.logger.info(
+                f"Processing classifier pipeline/group :  {self.pipeline_name}, {group}"
+            )
+            document_classifiers = classifier_group["classifiers"]
+            sub_classifiers = classifier_group["sub_classifiers"]
 
-        # store metadata for the document classification and OCR results
+            processing_pipeline = [
+                ClassifierPipelineComponent(
+                    name="classifier_pipeline",
+                    document_classifiers=document_classifiers,
+                )
+            ]
+
+            results = self.execute_pipeline(
+                processing_pipeline, sub_classifiers, frames, ocr_results
+            )
+            metadata["classifications"].append(
+                {"group": group, "classification": results}
+            )
+
+            store_json_object(metadata, "~/tmp/classification.X.json")
+
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
@@ -255,10 +324,10 @@ class ClassificationPipeline:
     def execute_pipeline(
         self,
         processing_pipeline: List[PipelineComponent],
+        sub_classifiers: dict[str, any],
         frames: List,
         ocr_results: dict,
-        metadata: dict,
-    ) -> DocList[MarieDoc]:
+    ) -> dict[str, any]:
         """Execute processing pipeline"""
 
         words = []
@@ -301,7 +370,7 @@ class ClassificationPipeline:
                 classification = detail["classification"]
                 filtered_classifiers = {}
 
-                for key, val in self.document_sub_classifiers.items():
+                for key, val in sub_classifiers.items():
                     fileter_config = val["filter"]
                     filter_type = fileter_config["type"]
                     filter_pattern = fileter_config["pattern"]
@@ -329,10 +398,11 @@ class ClassificationPipeline:
                     )
                     detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
 
-        if False:
+        if True:
             store_json_object(
                 context["metadata"]["page_classifier"], "~/tmp/classification.json"
             )
+            store_json_object(context["metadata"], "~/tmp/classification-full.json")
 
         # Pivot the results to make it easier to work with by page
         class_by_page = {}
@@ -370,8 +440,38 @@ class ClassificationPipeline:
                 "best": score_by_page[page],
             }
 
-        metadata["classification"] = results
-        if False:
+        if True:
             store_json_object(results, "~/tmp/classification.pivot.json")
 
-        return documents
+        return results
+
+    def reload_pipeline(self, pipeline_name) -> None:
+        with TimeContext(f"### Reloading pipeline : {pipeline_name}", self.logger):
+            try:
+                self.logger.info(f"Reloading pipeline : {pipeline_name}")
+                if self.pipelines_config is None:
+                    raise BadConfigSource(
+                        "Invalid pipeline configuration, no pipelines found"
+                    )
+
+                pipeline_config = None
+                for conf in self.pipelines_config:
+                    conf = conf["pipeline"]
+                    if conf.get("name") == pipeline_name:
+                        pipeline_config = conf
+                        break
+
+                if pipeline_config is None:
+                    raise BadConfigSource(
+                        f"Invalid pipeline configuration, pipeline not found : {pipeline_name}"
+                    )
+
+                (
+                    self.pipeline_name,
+                    self.classifier_groups,
+                    self.document_indexers,
+                ) = self.load_pipeline(pipeline_config)
+                self.logger.info(f"Reloaded successfully pipeline : {pipeline_name} ")
+            except Exception as e:
+                self.logger.error(f"Error reloading pipeline : {e}")
+                raise e

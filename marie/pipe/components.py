@@ -210,7 +210,7 @@ def setup_classifiers(
     :param pipeline_config: pipeline configuration
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
-    :return: map of document classifiers with their names as keys
+    :return: map of document classifiers with their names as keys and classifier instances as values
     """
     use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
 
@@ -241,14 +241,26 @@ def setup_classifiers(
         model_type = config["type"] if "type" in config else "transformers"
         task = config["task"] if "task" in config else "text-classification"
         batch_size = config["batch_size"] if "batch_size" in config else 1
+        model_filter = config["filter"] if "filter" in config else {}
+
+        if "group" not in config:
+            raise BadConfigSource(f"Missing group in classifier config : {config}")
+
+        group = config["group"] if "group" in config else "default"
+
         id2label = (
             config["id2label"] if "id2label" in config else id2label
         )  # Override id2label if provided in config
 
         logger.info(f"Using model : {model_name_or_path} on device : {device}")
 
-        if name in document_classifiers:
-            raise BadConfigSource(f"Duplicate classifier name : {name}")
+        if group not in document_classifiers:
+            document_classifiers[group] = dict()
+
+        if name in document_classifiers[group]:
+            raise BadConfigSource(
+                f"Duplicate classifier name : {name} in group : {group}"
+            )
 
         if model_type == "transformers":
             classifier = TransformersDocumentClassifier(
@@ -259,9 +271,9 @@ def setup_classifiers(
                 id2label=id2label,
             )
 
-            model_filter = config["filter"] if "filter" in config else {}
-            document_classifiers[name] = {
+            document_classifiers[group][name] = {
                 "classifier": classifier,
+                "group": group,
                 "filter": model_filter,
             }
         else:
