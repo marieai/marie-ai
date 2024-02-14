@@ -132,6 +132,14 @@ if __name__ == "__main__":
             results=[results],
             output_filename=output_filename,
             **{
+                "overlay": True,
+            }
+        )
+        renderer.render(
+            frames=[image],
+            results=[results],
+            output_filename=output_filename.replace(".tif", "_clean.tif"),
+            **{
                 "overlay": False,
             }
         )

@@ -81,13 +81,30 @@ class TiffRenderer(ResultRenderer):
                             text = "".join([c + "\n" for c in text])
                             continue
 
-                    font_size = determine_font_size(h)
+                    # TIFF  rendering
+                    left_pad = 5
+                    px0 = x
+                    py0 = y
+                    lh = h
+
+                    # Find baseline for the word
+                    if wid in word2line:
+                        line = word2line[wid]
+                        line_bbox = line["bbox"]
+                        ly = line_bbox[1]
+                        lh = line_bbox[3]
+                        py0 = ly + lh * 0.2  # best fit
+                        # py0 = ly
+                        # py0 = img_h - ly - lh * 0.80
+                        # py0 = img_h - y # + (h / 2)
+
+                    font_size = determine_font_size(lh)
                     try:
                         font = ImageFont.truetype("Helvetica.ttf", font_size)
                     except IOError:
                         font = ImageFont.load_default()
 
-                    draw.text((x, y), text, font=font, fill=(0, 0, 0))
+                    draw.text((px0 + left_pad, py0), text, font=font, fill=(0, 0, 0))
 
             return img_pil
         except Exception as indent:
@@ -115,7 +132,6 @@ class TiffRenderer(ResultRenderer):
         metadata = {"Producer": self.name, "Number of Pages": len(images)}
         description = json.dumps(metadata)
         # Save as a multi-page TIFF
-        # images[0].save(output_filename, format='tiff', save_all=True, append_images=images[1:], compression="tiff_deflate", metadata=description, duration=500)
         with tifffile.TiffWriter(output_filename, bigtiff=True) as t:
             for img in images:
                 t.write(data=np.array(img), description=description, compression=8)

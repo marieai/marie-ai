@@ -168,10 +168,7 @@ class PdfRenderer(ResultRenderer):
                 logger.error(e, stack_info=True, exc_info=True)
 
         # add specific tag
-        metadata = {
-            '/Producer': self.name,
-            '/Creator': self.name,
-        }
+        metadata = {'/Producer': self.name}
         writer.addMetadata(metadata)
         with open(output_filename, "wb") as output:
             writer.write(output)
