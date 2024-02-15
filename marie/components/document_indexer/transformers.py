@@ -15,25 +15,27 @@ from transformers import (
 )
 
 from marie.components.document_indexer.base import BaseDocumentIndexer
-from marie.constants import __model_path__
+from marie.constants import __marie_home__, __model_path__
 from marie.executor.ner.utils import (
     draw_box,
     get_font,
     get_random_color,
+    normalize_bbox,
     unnormalize_box,
     visualize_extract_kv,
+    visualize_prediction,
 )
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
-from ...boxes.line_processor import find_line_number
+from ...boxes.line_processor import find_line_number, line_merge
 from ...logging.profile import TimeContext
 from ...ocr import CoordinateFormat
 from ...registry.model_registry import ModelRegistry
-from ...utils.docs import frames_from_docs
-from ...utils.json import load_json_file
+from ...utils.docs import convert_frames, frames_from_docs
+from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
 
 
@@ -57,6 +59,23 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         show_error: Optional[Union[str, bool]] = True,
         **kwargs,
     ):
+        """
+        Initializes the document indexer for Named Entity Extraction.
+
+        :param model_name_or_path: The name or path of the model to be used.
+        :param model_version: The version of the model. Defaults to None.
+        :param tokenizer: The tokenizer to be used. Defaults to None.
+        :param use_gpu: Whether to use GPU for processing. Defaults to True.
+        :param top_k: The number of top results to return. Defaults to 1.
+        :param task: The task to be performed. Defaults to "transformers-document-indexer".
+        :param batch_size: The size of the batch to be processed. Defaults to 16.
+        :param use_auth_token: The authentication token to be used. Defaults to None.
+        :param devices: The devices to be used for processing. Defaults to None.
+        :param show_error: Whether to show errors. Defaults to True.
+        :param kwargs: Additional keyword arguments.
+        :returns: None
+        """
+
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document indexer : {model_name_or_path}")
@@ -200,11 +219,33 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             value for probs, value in zip(probabilities, values) if probs >= threshold
         ]
 
+    def preprocess(
+        self, frames: List, words: List[List[str]], boxes: List[List[List[int]]]
+    ) -> Tuple[List, List, List]:
+
+        assert len(frames) == len(boxes) == len(words)
+        frames = convert_frames(frames, img_format="pil")
+        # return frames, words, boxes
+
+        normalized_boxes = []
+
+        for frame, box_set, word_set in zip(frames, boxes, words):
+            if not isinstance(frame, Image.Image):
+                raise "Frame should have been an PIL.Image instance"
+            nbox = []
+            for i, box in enumerate(box_set):
+                nbox.append(normalize_bbox(box_set[i], (frame.size[0], frame.size[1])))
+            normalized_boxes.append(nbox)
+
+        assert len(frames) == len(normalized_boxes) == len(words)
+
+        return frames, words, normalized_boxes
+
     def predict(
         self,
         documents: DocList[MarieDoc],
-        words: Optional[List[List[str]]] = None,
-        boxes: Optional[List[List[List[int]]]] = None,
+        words: List[List[str]] = None,
+        boxes: List[List[List[int]]] = None,
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
         if batch_size is None:
@@ -221,7 +262,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 len(documents) == len(words) == len(boxes)
             ), "documents, words and boxes must have the same length"
 
-        # create a named tuple of (document, words, boxes) for each document
+        frames = frames_from_docs(documents)
+        frames, words, boxes = self.preprocess(frames, words, boxes)
 
         batchable_docs = DocList(
             BatchableMarieDoc(
@@ -233,21 +275,64 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         )
 
         labels = self.labels
-        frames = frames_from_docs(batchable_docs)
-        for batchable_doc, frame in zip(batchable_docs, frames):
+        annotations = []
+
+        for k, (batchable_doc, _image) in enumerate(zip(batchable_docs, frames)):
             t = batchable_doc.tensor
             w = batchable_doc.words
             b = batchable_doc.boxes
-            self.logger.info(f"Batchable Doc : {frame.shape}")
+            self.logger.info(f"Batchable Doc : {_image}")
+
+            width = _image.size[0]
+            height = _image.size[1]
 
             # Perform inference
             self.logger.info(f"Performing inference")
-            # convert tensor to PIL image
-            z = t.astype(np.uint8)  # .transpose(1, 2, 0)
-            frame = Image.fromarray(z)
-            r = self.inference(
-                image=frame, words=w, boxes=b, labels=labels, threshold=0.5
+            true_predictions, true_boxes, true_scores = self.inference(
+                image=_image, words=w, boxes=b, labels=labels, threshold=0.5
             )
+
+            print("true_predictions", true_predictions)
+            print("true_boxes", true_boxes)
+            print("true_scores", true_scores)
+
+            # show detail scores
+            if self.debug_scores:
+                for i, val in enumerate(true_predictions):
+                    tp = true_predictions[i]
+                    score = true_scores[i]
+                    self.logger.debug(f" >> {tp} : {score}")
+
+            annotation = {
+                "meta": {"imageSize": {"width": width, "height": height}, "page": k},
+                "predictions": true_predictions,
+                "boxes": true_boxes,
+                "scores": true_scores,
+            }
+            annotations.append(annotation)
+
+            file_hash = "test"
+            if self.debug_visuals and self.debug_visuals_prediction:
+                output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
+                visualize_prediction(
+                    output_filename,
+                    _image,
+                    true_predictions,
+                    true_boxes,
+                    true_scores,
+                    label2color=self.debug_colors,
+                )
+
+        file_hash = "test"
+        annotation_json_path = os.path.join(
+            __marie_home__, "annotation", f"{file_hash}.json"
+        )
+        ensure_exists(os.path.join(__marie_home__, "annotation"))
+        store_json_object(annotations, annotation_json_path)
+
+        ner_results = self.postprocess(frames, annotations, words, boxes, file_hash)
+        print("ner_results", ner_results)
+        # self.persist(ref_id, ref_type, ner_results)
 
         results = DocList[MarieDoc]()
         return results
@@ -323,9 +408,6 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         with torch.inference_mode():
             outputs = model(**encoding)
             # Get the predictions and probabilities
-            probs = (
-                nn.softmax(outputs.logits.squeeze(), dim=1).max(dim=1).values.tolist()
-            )
             # The model outputs logits of shape (batch_size, seq_len, num_labels).
             logits = outputs.logits
             batch_size, seq_len, num_labels = logits.shape
@@ -441,8 +523,17 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         out_prediction: [],
         out_boxes: [],
         out_scores: [],
-    ):
-        """Align predictions with words and boxes"""
+    ) -> Tuple[List[str], List[List[int]], List[float]]:
+        """
+        Aligns the predictions with the words and boxes.
+
+        :param words: The words to be aligned with the predictions.
+        :param original_boxes: The original boxes to be aligned with the predictions.
+        :param out_prediction: The predictions to be aligned.
+        :param out_boxes: The boxes to be aligned with the predictions.
+        :param out_scores: The scores of the predictions.
+        :returns: Aligned predictions, boxes, and scores.
+        """
 
         aligned_prediction = []
         aligned_boxes = []
@@ -460,9 +551,16 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
         return aligned_prediction, aligned_boxes, aligned_scores
 
-    def postprocess(self, frames, annotations, ocr_results, file_hash):
+    def postprocess(
+        self,
+        frames,
+        annotations,
+        words: List[List[str]],
+        boxes: List[List[List[int]]],
+        file_hash,
+    ):
         """Post-process extracted data"""
-        assert len(annotations) == len(ocr_results) == len(frames)
+        assert len(annotations) == len(words) == len(boxes) == len(frames)
         for k, _image in enumerate(frames):
             if not isinstance(_image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
@@ -470,18 +568,18 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
         self.logger.debug("Changing coordinate format from xyxy->xywh")
 
-        for data in ocr_results:
-            for word in data["words"]:
-                word["box"] = CoordinateFormat.convert(
-                    word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
-                )
+        # for data in ocr_results:
+        #     for word in data["words"]:
+        #         word["box"] = CoordinateFormat.convert(
+        #             word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
+        #         )
 
-        for data in annotations:
-            for i, box in enumerate(data["boxes"]):
-                box = CoordinateFormat.convert(
-                    box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
-                )
-                data["boxes"][i] = box
+        # for data in annotations:
+        #     for i, box in enumerate(data["boxes"]):
+        #         box = CoordinateFormat.convert(
+        #             box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
+        #         )
+        #         data["boxes"][i] = box
 
         aggregated_ner = []
         aggregated_kv = []
@@ -492,12 +590,15 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         expected_keys = self.init_configuration["expected_keys"]
         expected_pair = self.init_configuration["expected_pair"]
 
-        for i, (ocr, annotation, frame) in enumerate(
-            zip(ocr_results, annotations, frames)
+        for i, (_boxes, _words, annotation, frame) in enumerate(
+            zip(boxes, words, annotations, frames)
         ):
             self.logger.info(f"Processing page # {i}")
+            frame_box = frame
+            if isinstance(frame, Image.Image):
+                frame_box = np.array(frame)
+            lines_bboxes = line_merge(frame_box, _boxes)
             # lines and boxes are already in the right reading order TOP->BOTTOM, LEFT-TO-RIGHT so no need to sort
-            lines_bboxes = np.array(ocr["meta"]["lines_bboxes"])
             true_predictions = annotation["predictions"]
             true_boxes = annotation["boxes"]
             true_scores = annotation["scores"]
