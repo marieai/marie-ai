@@ -234,8 +234,6 @@ class ClassificationPipeline:
                 {"group": group, "classification": results}
             )
 
-            store_json_object(metadata, "~/tmp/classification.X.json")
-
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
@@ -398,12 +396,6 @@ class ClassificationPipeline:
                     )
                     detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
 
-        if True:
-            store_json_object(
-                context["metadata"]["page_classifier"], "~/tmp/classification.json"
-            )
-            store_json_object(context["metadata"], "~/tmp/classification-full.json")
-
         # Pivot the results to make it easier to work with by page
         class_by_page = {}
         for idx, page_classifier_result in enumerate(page_classifier):
@@ -439,9 +431,6 @@ class ClassificationPipeline:
                 "details": class_by_page[page],
                 "best": score_by_page[page],
             }
-
-        if True:
-            store_json_object(results, "~/tmp/classification.pivot.json")
 
         return results
 

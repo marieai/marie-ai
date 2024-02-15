@@ -218,6 +218,8 @@ async def handle_request(
         MDC.put("request_id", job_id)
         payload = await request.json()
 
+        print("Payload:")
+        print(payload)
         if validate_payload_callback:
             status, msg = validate_payload_callback(payload)
             if not status:

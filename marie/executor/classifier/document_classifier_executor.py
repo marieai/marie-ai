@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 
 import torch
 from docarray import DocList
@@ -34,7 +34,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
-        pipeline: dict[str, any] = None,
+        pipelines: List[dict[str, any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -46,7 +46,7 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
         logger.info(f"Storage config: {storage}")
-        logger.info(f"Pipeline config: {pipeline}")
+        logger.info(f"Pipelines config: {pipelines}")
         logger.info(f"Device : {device}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
@@ -66,7 +66,9 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
         has_cuda = True if self.device.type.startswith("cuda") else False
 
         setup_torch_optimizations()
-        self.pipeline = ClassificationPipeline(pipeline_config=pipeline, cuda=has_cuda)
+        self.pipeline = ClassificationPipeline(
+            pipelines_config=pipelines, cuda=has_cuda
+        )
 
         instance_name = "not_defined"
         if kwargs is not None:
@@ -200,9 +202,6 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
                 f" checksum: {ref_id}, {ref_type},  {len(frames)}, {len(regions)}, {pms_mode},"
                 f" {coordinate_format}"
             )
-            payload_kwargs = {}
-            if "args" in payload:
-                payload_kwargs["args"] = payload["args"]
 
             runtime_conf = {}
             if "features" in payload:
