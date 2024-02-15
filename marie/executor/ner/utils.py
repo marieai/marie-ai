@@ -71,24 +71,32 @@ def visualize_prediction(
     label2color,
     fmt: str = 'PNG',
     dpi: Tuple[int, int] = None,
+    box_format="xyxy",
 ):
+    if not isinstance(frame, PIL.Image.Image):
+        raise ValueError("frame should be a PIL image")
     image = frame.copy()
+
     # https://stackoverflow.com/questions/54165439/what-are-the-exact-color-names-available-in-pils-imagedraw
     # label2color = get_label_colors()
     draw = ImageDraw.Draw(image, "RGBA")
-    font = get_font(14)
+    font = get_font(10)
 
     for prediction, box, score in zip(true_predictions, true_boxes, true_scores):
         # don't draw other
         label = prediction[2:]
         if not label:
             continue
+        # xywh -> x1y1x2y2
+        # if box_format == "xywh":
+        box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
+        print(box)
         predicted_label = iob_to_label(prediction).lower()
         draw.rectangle(box, outline=label2color[predicted_label.lower()], width=1)
         draw.text(
             (box[0] + 10, box[1] - 10),
-            text=f"{predicted_label} : {score}",
+            text=f"{predicted_label}",
             fill="red",
             font=font,
             width=1,
