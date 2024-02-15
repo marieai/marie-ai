@@ -74,7 +74,7 @@ if __name__ == "__main__":
         'name': 'jpmc-corr'
     }
 
-    runtime_conf = None
+    # runtime_conf = None
 
     with TimeContext(f"### ClassificationPipeline info"):
         results = pipeline.execute(

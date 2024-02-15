@@ -13,15 +13,22 @@ classifier_flow_is_ready = False
 
 def validate_payload(payload: dict) -> (bool, Optional[str]):
     """
-    Validate payload
+    Validate payload for the classify endpoint
+
     :param payload: The payload to validate
-    :return:
+    :return: True if the payload is valid, False otherwise, and an error message if the payload is invalid
     """
     if not payload:
         return False, "Payload is empty"
 
-    if "pipeline" not in payload:
-        return False, "Payload is missing pipeline field"
+    if "uri" not in payload:
+        return False, "Payload is missing uri field"
+
+    if "doc_id" not in payload:
+        return False, "Payload is missing doc_id field"
+
+    if "doc_type" not in payload:
+        return False, "Payload is missing doc_type field"
 
     return True, None
 
