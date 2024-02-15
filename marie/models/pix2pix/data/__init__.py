@@ -23,15 +23,13 @@ def find_dataset_using_name(dataset_name):
     and it is case-insensitive.
     """
 
-    # FIXME : this needs to be fixes as the import_module is not working
     mapping = {
         'single': SingleDataset,
         'base': None
     }
+    # return mapping[dataset_name]
 
-    return mapping[dataset_name]
-
-    dataset_filename = "data." + dataset_name + "_dataset"
+    dataset_filename = "marie.models.pix2pix.data." + dataset_name + "_dataset"
     datasetlib = importlib.import_module(dataset_filename)
 
     dataset = None
