@@ -23,6 +23,8 @@
 
 
 
+
+
 <a name=release-note-__version__
 =
 
@@ -1868,5 +1870,83 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
 
 > Release time: 2024-01-29 05:30:16
 
+<a name=release-note-3-0-28></a>
+## Release Note (`3.0.28`)
 
+> Release time: 2024-02-15 06:46:22
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Rithsek Ngem,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6c943478```](https://github.com/marieai/marie-ai/commit/6c943478243f3267dea0e3813fda9a67d98bbcd5)] __-__ add support for grouping classifiers (*Marie Dev Bot*)
+ - [[```7243d8ba```](https://github.com/marieai/marie-ai/commit/7243d8bad38dc3b3e1456677f541fb3f43ddffb8)] __-__ Document classification and document indexing(named entity recognition) have been reworked (*Marie Dev Bot*)
+ - [[```3cb13758```](https://github.com/marieai/marie-ai/commit/3cb137584e28fea62d6e23f54d243f226a38563c)] __-__ refactored how document filters work (*Marie Dev Bot*)
+ - [[```44de5961```](https://github.com/marieai/marie-ai/commit/44de596196ced524c8a0324e2b8e934b59266c9a)] __-__ integration cleanup (*Marie Dev Bot*)
+ - [[```7d9c781c```](https://github.com/marieai/marie-ai/commit/7d9c781c7c221e2f3b924774c86d4f42e8719a2a)] __-__ add support for pgvector (*Marie Dev Bot*)
+ - [[```7b8cfe83```](https://github.com/marieai/marie-ai/commit/7b8cfe83aaa7b0583839db9ed613227939f3f15b)] __-__ Initial work on document embeddings (*Marie Dev Bot*)
+ - [[```d763abbb```](https://github.com/marieai/marie-ai/commit/d763abbb7bb333749fee84a0e3ff07aa9e1509e5)] __-__ upgrade to docosaurus 3.1.1 (*Marie Dev Bot*)
+
+### 🐞 Bug fixes
+
+ - [[```a9dcc088```](https://github.com/marieai/marie-ai/commit/a9dcc0885d03ec6a4bba38c3e7a2aed99358a6fc)] __-__  Issue with Overload resolution; closes #104 (*Rithsek Ngem*)
+ - [[```0a8ee56b```](https://github.com/marieai/marie-ai/commit/0a8ee56b818ba70512a0295731ab240b7edd5a2b)] __-__ fixed issues with missing directory (*Marie Dev Bot*)
+
+### 🍹 Other Improvements
+
+ - [[```9adf3da4```](https://github.com/marieai/marie-ai/commit/9adf3da453f9508c9b67b4b80776c22a8eb61e30)] __-__ updated executors to use multiple pipleline configs (*Marie Dev Bot*)
+ - [[```ec2cf4bb```](https://github.com/marieai/marie-ai/commit/ec2cf4bb8a4c964d2cf0612a0ecc8cdbad8173e0)] __-__ refactoring Named Entity Extractor (*Marie Dev Bot*)
+ - [[```d47f865c```](https://github.com/marieai/marie-ai/commit/d47f865c53e448b043178cf0cf8cae7856d02049)] __-__ classification (*Marie Dev Bot*)
+ - [[```93548b72```](https://github.com/marieai/marie-ai/commit/93548b7248daaabf1013553156462de5bf58bf88)] __-__ add error handling (*Marie Dev Bot*)
+ - [[```d6a73fe7```](https://github.com/marieai/marie-ai/commit/d6a73fe7541f36bc33fa53dd614d84729451a433)] __-__ add missing docker files (*Marie Dev Bot*)
+ - [[```e7ff659e```](https://github.com/marieai/marie-ai/commit/e7ff659ecdca9b276e07560dc1b8d01c8bbc477b)] __-__ pgvector (*Marie Dev Bot*)
+ - [[```af840412```](https://github.com/marieai/marie-ai/commit/af840412c668f5f5b02c8c6bdc3b87fbe4756ea1)] __-__ fix : Issue with array brodcasting; closes #106 (*Marie Dev Bot*)
+ - [[```3ea21f7f```](https://github.com/marieai/marie-ai/commit/3ea21f7fdaf41fdf0416af1337525b2c988f53c7)] __-__ add notes (*Marie Dev Bot*)
+ - [[```1d7de69f```](https://github.com/marieai/marie-ai/commit/1d7de69ff27768249a3ee2698b421993301e8577)] __-__ __docs__: Updated docosaurus to 3.1.1 (*Marie Dev Bot*)
+ - [[```1b5c2736```](https://github.com/marieai/marie-ai/commit/1b5c2736a7609e132e29a1cf3fffed440021bc8b)] __-__ __version__: the next version will be 3.0.28 (*Marie Dev Bot*)
+ - [[```b03ffef8```](https://github.com/marieai/marie-ai/commit/b03ffef8456cf4064b3134048de9c42a5b2fe6ab)] __-__ testing bouding box processing (*Marie Dev Bot*)
+
+<a name=release-note-3-0-28></a>
+## Release Note (`3.0.28`)
+
+> Release time: 2024-02-15 06:48:56
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Rithsek Ngem,  🙇
+
+
+### 🆕 New Features
+
+ - [[```6c943478```](https://github.com/marieai/marie-ai/commit/6c943478243f3267dea0e3813fda9a67d98bbcd5)] __-__ add support for grouping classifiers (*Marie Dev Bot*)
+ - [[```7243d8ba```](https://github.com/marieai/marie-ai/commit/7243d8bad38dc3b3e1456677f541fb3f43ddffb8)] __-__ Document classification and document indexing(named entity recognition) have been reworked (*Marie Dev Bot*)
+ - [[```3cb13758```](https://github.com/marieai/marie-ai/commit/3cb137584e28fea62d6e23f54d243f226a38563c)] __-__ refactored how document filters work (*Marie Dev Bot*)
+ - [[```44de5961```](https://github.com/marieai/marie-ai/commit/44de596196ced524c8a0324e2b8e934b59266c9a)] __-__ integration cleanup (*Marie Dev Bot*)
+ - [[```7d9c781c```](https://github.com/marieai/marie-ai/commit/7d9c781c7c221e2f3b924774c86d4f42e8719a2a)] __-__ add support for pgvector (*Marie Dev Bot*)
+ - [[```7b8cfe83```](https://github.com/marieai/marie-ai/commit/7b8cfe83aaa7b0583839db9ed613227939f3f15b)] __-__ Initial work on document embeddings (*Marie Dev Bot*)
+ - [[```d763abbb```](https://github.com/marieai/marie-ai/commit/d763abbb7bb333749fee84a0e3ff07aa9e1509e5)] __-__ upgrade to docosaurus 3.1.1 (*Marie Dev Bot*)
+
+### 🐞 Bug fixes
+
+ - [[```a9dcc088```](https://github.com/marieai/marie-ai/commit/a9dcc0885d03ec6a4bba38c3e7a2aed99358a6fc)] __-__  Issue with Overload resolution; closes #104 (*Rithsek Ngem*)
+ - [[```0a8ee56b```](https://github.com/marieai/marie-ai/commit/0a8ee56b818ba70512a0295731ab240b7edd5a2b)] __-__ fixed issues with missing directory (*Marie Dev Bot*)
+
+### 🍹 Other Improvements
+
+ - [[```9adf3da4```](https://github.com/marieai/marie-ai/commit/9adf3da453f9508c9b67b4b80776c22a8eb61e30)] __-__ updated executors to use multiple pipleline configs (*Marie Dev Bot*)
+ - [[```ec2cf4bb```](https://github.com/marieai/marie-ai/commit/ec2cf4bb8a4c964d2cf0612a0ecc8cdbad8173e0)] __-__ refactoring Named Entity Extractor (*Marie Dev Bot*)
+ - [[```d47f865c```](https://github.com/marieai/marie-ai/commit/d47f865c53e448b043178cf0cf8cae7856d02049)] __-__ classification (*Marie Dev Bot*)
+ - [[```93548b72```](https://github.com/marieai/marie-ai/commit/93548b7248daaabf1013553156462de5bf58bf88)] __-__ add error handling (*Marie Dev Bot*)
+ - [[```d6a73fe7```](https://github.com/marieai/marie-ai/commit/d6a73fe7541f36bc33fa53dd614d84729451a433)] __-__ add missing docker files (*Marie Dev Bot*)
+ - [[```e7ff659e```](https://github.com/marieai/marie-ai/commit/e7ff659ecdca9b276e07560dc1b8d01c8bbc477b)] __-__ pgvector (*Marie Dev Bot*)
+ - [[```af840412```](https://github.com/marieai/marie-ai/commit/af840412c668f5f5b02c8c6bdc3b87fbe4756ea1)] __-__ fix : Issue with array brodcasting; closes #106 (*Marie Dev Bot*)
+ - [[```3ea21f7f```](https://github.com/marieai/marie-ai/commit/3ea21f7fdaf41fdf0416af1337525b2c988f53c7)] __-__ add notes (*Marie Dev Bot*)
+ - [[```1d7de69f```](https://github.com/marieai/marie-ai/commit/1d7de69ff27768249a3ee2698b421993301e8577)] __-__ __docs__: Updated docosaurus to 3.1.1 (*Marie Dev Bot*)
+ - [[```1b5c2736```](https://github.com/marieai/marie-ai/commit/1b5c2736a7609e132e29a1cf3fffed440021bc8b)] __-__ __version__: the next version will be 3.0.28 (*Marie Dev Bot*)
+ - [[```b03ffef8```](https://github.com/marieai/marie-ai/commit/b03ffef8456cf4064b3134048de9c42a5b2fe6ab)] __-__ testing bouding box processing (*Marie Dev Bot*)
 
