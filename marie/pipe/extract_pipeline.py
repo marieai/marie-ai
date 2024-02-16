@@ -33,7 +33,7 @@ from marie.pipe.components import (
     split_filename,
     store_assets,
 )
-from marie.renderer import PdfRenderer, PngRenderer, TextRenderer, TiffRenderer
+from marie.renderer import PdfRenderer, PngRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
 from marie.utils.docs import docs_from_image, frames_from_file
@@ -258,7 +258,6 @@ class ExtractPipeline:
 
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
-        self.render_tiff(ref_id, frames, ocr_results, root_asset_dir)
         # self.render_png(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
@@ -410,18 +409,6 @@ class ExtractPipeline:
             frames,
             results,
             output_file_or_dir=os.path.join(root_asset_dir, "results.txt"),
-        )
-
-    def render_tiff(self, ref_id: str, frames, results, root_asset_dir) -> None:
-        output_dir = ensure_exists(os.path.join(root_asset_dir, "tiff"))
-        renderer = TiffRenderer(config={})
-        renderer.render(
-            frames,
-            results,
-            output_filename=os.path.join(output_dir, "results_clean.tif"),
-            **{
-                "overlay": False,
-            },
         )
 
     def render_png(self, ref_id: str, frames, results, root_asset_dir) -> None:

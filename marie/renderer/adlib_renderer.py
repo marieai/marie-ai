@@ -25,7 +25,7 @@ class AdlibRenderer(ResultRenderer):
 
     @property
     def name(self):
-        return "MARIE-AI-AdlibRenderer"
+        return "AdlibRenderer"
 
     def write_adlib_summary_tree(
         self, frames, filename_generator: Callable[[int], str]
@@ -85,7 +85,7 @@ class AdlibRenderer(ResultRenderer):
             root.set("NUMBER", str(pagenumber))
             root.set("OCREndTime", "0")
             root.set("OCRStartTime", "0")
-            root.set("Producer", self.name)
+            root.set("Producer", "MARIE-AI")
             root.set("XRESOLUTION", str(dpi_x))
             root.set("YRESOLUTION", str(dpi_y))
 

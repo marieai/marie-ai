@@ -28,7 +28,7 @@ class PdfRenderer(ResultRenderer):
 
     @property
     def name(self):
-        return "MARIE-AI-PdfRenderer"
+        return "PdfRenderer"
 
     def __render_page(
         self,
@@ -168,7 +168,7 @@ class PdfRenderer(ResultRenderer):
                 logger.error(e, stack_info=True, exc_info=True)
 
         # add specific tag
-        metadata = {'/Producer': self.name}
+        metadata = {'/Producer': "MARIE-AI"}
         writer.addMetadata(metadata)
         with open(output_filename, "wb") as output:
             writer.write(output)

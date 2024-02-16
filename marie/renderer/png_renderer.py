@@ -1,11 +1,9 @@
-import json
 from os import PathLike
 from typing import Any, Callable, Dict, Optional, Union
 
 import cv2
 import numpy as np
-import tifffile
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
 from marie.logging.predefined import default_logger
 from marie.renderer.renderer import ResultRenderer
@@ -14,13 +12,13 @@ from marie.utils.draw_truetype import determine_font_size
 logger = default_logger
 
 
-class TiffRenderer(ResultRenderer):
+class PngRenderer(ResultRenderer):
     def __init__(self, config=None):
         super().__init__(config)
 
     @property
     def name(self):
-        return "MARIE-AI-TiffRenderer"
+        return "PngRenderer"
 
     def __render_page(
         self,
@@ -50,7 +48,6 @@ class TiffRenderer(ResultRenderer):
             img_h = image.shape[0]
             img_w = image.shape[1]
 
-            # only generate tiff with cleaned image
             if overlay:
                 img_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
                 draw = ImageDraw.Draw(img_pil)
@@ -81,7 +78,7 @@ class TiffRenderer(ResultRenderer):
                             text = "".join([c + "\n" for c in text])
                             continue
 
-                    # TIFF  rendering
+                    # PNG  rendering
                     left_pad = 5
                     px0 = x
                     py0 = y
@@ -118,27 +115,29 @@ class TiffRenderer(ResultRenderer):
         filename_generator: Optional[Callable[[int], str]] = None,
         **kwargs: Any,
     ) -> None:
-        """Renders the results into a multi-page TIFF file."""
+        """Renders the results into PNG files."""
 
         image_overlay = kwargs.get("overlay", True)
 
-        self.logger.debug(f'pages:  {len(frames)}')
-        self.logger.debug(f"Rendering TIFF [{image_overlay}]: {output_filename}")
-        images = [
-            self.__render_page(image, result, page_index, image_overlay)
-            for page_index, (image, result) in enumerate(zip(frames, results))
-        ]
+        self.logger.debug(f"Rendering PNG [{image_overlay}]: {output_filename}")
+        for page_index, (image, result) in enumerate(zip(frames, results)):
+            img_pil = self.__render_page(image, result, page_index, image_overlay)
 
-        metadata = {"Producer": self.name, "Number of Pages": len(images)}
-        description = json.dumps(metadata)
-        # Save as a multi-page TIFF
-        with tifffile.TiffWriter(output_filename, bigtiff=True) as t:
-            for img in images:
-                t.write(data=np.array(img), description=description, compression=8)
+            # Create PNG metadata
+            pnginfo = PngImagePlugin.PngInfo()
+            pnginfo.add_text('Producer', "MARIE-AI")
 
-        # check the annotated document has correct tag:
-        with tifffile.TiffFile(output_filename) as t:
-            page = t.pages[0]
-            des = page.tags["ImageDescription"].value
-            tags = json.loads(des)
-            self.logger.info(f'Tiff tag: {tags["Producer"]} {tags["Number of Pages"]}')
+            # Generate page-specific filename if a filename_generator is provided,
+            if filename_generator:
+                page_filename = filename_generator(page_index)
+            else:
+                page_filename = (
+                    f'{output_filename.replace(".png", f"_{page_index}.png")}'
+                )
+
+            # saving each page as png
+            img_pil.save(page_filename, format='PNG', pnginfo=pnginfo)
+
+        # check png tags
+        img = Image.open(f'{output_filename.replace(".png", f"_{0}.png")}')
+        self.logger.info(f'PNG Producer: {img.info["Producer"]}')
