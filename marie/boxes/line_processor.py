@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
 
 from marie.logging.predefined import default_logger as logger
 from marie.utils.overlap import find_overlap_vertical
@@ -101,6 +102,8 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
 def line_merge(image, bboxes) -> List[Any]:
     if len(bboxes) == 0:
         return []
+    if isinstance(image, Image.Image):
+        image = np.array(image)
     if image is not None:
         _h = image.shape[0]
         _w = image.shape[1]

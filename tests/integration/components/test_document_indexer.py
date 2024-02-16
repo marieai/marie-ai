@@ -39,9 +39,10 @@ def test_transformer_document_indexer():
 
     # return
     model_name_or_path = "rms/layoutlmv3-large-corr-ner"
-    ensure_model(model_name_or_path)
+    resolved_model_path = ensure_model(model_name_or_path)
+    print("resolved_model_path", resolved_model_path)
 
-    indexer = TransformersDocumentIndexer(model_name_or_path=model_name_or_path)
+    indexer = TransformersDocumentIndexer(model_name_or_path=resolved_model_path, devices=["cpu"])
     NITER = 1
 
     for i in range(NITER):
