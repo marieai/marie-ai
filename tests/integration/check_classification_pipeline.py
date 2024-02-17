@@ -60,7 +60,7 @@ if __name__ == "__main__":
 
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
-
+    #
     config = load_yaml(
         os.path.join(
             __config_dir__, "tests-integration", "pipeline-classify-005.partial.yml"

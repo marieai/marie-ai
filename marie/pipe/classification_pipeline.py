@@ -1,5 +1,6 @@
 import os
 import shutil
+from abc import abstractmethod
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -25,6 +26,7 @@ from marie.pipe.components import (
     split_filename,
     store_assets,
 )
+from marie.pipe.voting import ClassificationResult, MaxScoreVoter
 from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
@@ -61,7 +63,7 @@ class ClassificationPipeline:
         pipelines_config: List[dict[str, any]] = None,
         **kwargs,
     ) -> None:
-        # super().__init__(**kwargs)
+        super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(context=self.__class__.__name__)
 
@@ -407,11 +409,18 @@ class ClassificationPipeline:
                 detail["classifier"] = classifier
                 class_by_page[page].append(detail)
 
+        voter = MaxScoreVoter()
+
+        # Classification strategy: max_score, max_votes, max_score_with_diff
         # calculate max score for each page by max score
         score_by_page = {}
         for page, details in class_by_page.items():
             max_score = 0.0
+
             for detail in details:
+                print(detail)
+                result = ClassificationResult(**detail)
+
                 if page not in score_by_page:
                     score_by_page[page] = {}
 
