@@ -287,6 +287,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 self.task == "text-classification-multimodal"
                 or self.task == "text-classification"
             ):
+                print(prediction[0])
                 formatted_prediction = {
                     "label": prediction[0]["label"],
                     "score": prediction[0]["score"],
@@ -313,7 +314,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         :param top_k: number of predictions to return
         :return: prediction dictionary with label and score
         """
-
         if self.id2label is None:
             id2label = self.model.config.id2label
         else:

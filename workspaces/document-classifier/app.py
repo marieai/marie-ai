@@ -14,12 +14,10 @@ from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.ocr import DefaultOcrEngine, MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
+from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_image, frames_from_file
 
 use_cuda = torch.cuda.is_available()
-
-# # TODO : add support for dependency injection
-# MDC.put("request_id", "0")
 
 mock_ocr = False
 if mock_ocr:
@@ -39,7 +37,6 @@ def process_frames(
         frames = [frames]
 
     ocr_results = ocr_engine.extract(frames)
-    # classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
     documents = docs_from_image(frames)
 
     words = []
@@ -78,13 +75,19 @@ def process_all_frames(
     return results
 
 
-def process_selection(model_name_or_path: str, evt):
-    print("process_selection", evt)
+def process_selection(
+    model_name_or_path: str,
+    classifier: TransformersDocumentClassifier,
+    gallery_selection,
+):
+    print("process_selection")
     print("model_name_or_path", model_name_or_path)
     MDC.put("request_id", "3")
     filename = gallery_selection["name"]
     frame = frames_from_file(filename)[0]
-    results = process_frames(frame, model_name_or_path=model_name_or_path)
+    results = process_frames(
+        frame, model_name_or_path=model_name_or_path, classifier=classifier
+    )
 
     return results[0]
 
@@ -152,6 +155,7 @@ def interface(model_name_or_path: str, classifier: TransformersDocumentClassifie
             inputs=[src],
             outputs=[json_output],
         )
+
         btn_submit_selected.click(
             partial(process_selection, model_name_or_path, classifier),
             inputs=[gallery],
@@ -183,6 +187,20 @@ def parse_args():
     return args
 
 
+def ensure_model(model_name_or_path):
+    kwargs = {
+        # "__model_path__": os.path.expanduser("~/tmp/models"),
+        "use_auth_token": False,
+    }  # custom model path
+    resolved_model_name_or_path = ModelRegistry.get(
+        model_name_or_path,
+        version=None,
+        raise_exceptions_for_missing_entries=True,
+        **kwargs,
+    )
+    return resolved_model_name_or_path
+
+
 if __name__ == "__main__":
     import torch
 
@@ -192,7 +210,7 @@ if __name__ == "__main__":
     os.environ["MARIE_SUPPRESS_WARNINGS"] = "true"
 
     args = parse_args()
-    model_name_or_path = args.pretrained_model_name_or_path
+    model_name_or_path = ensure_model(args.pretrained_model_name_or_path)
 
     logger.info(f"Using model : {model_name_or_path}")
     classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
