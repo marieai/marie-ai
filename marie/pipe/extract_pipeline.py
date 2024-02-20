@@ -11,6 +11,7 @@ from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
+from marie.excepts import BadConfigSource
 from marie.common.file_io import get_file_count
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
@@ -29,6 +30,8 @@ from marie.pipe.components import (
     s3_asset_path,
     setup_classifiers,
     setup_indexers,
+    load_pipeline,
+    reload_pipeline,
     setup_overlay,
     split_filename,
     store_assets,
@@ -75,7 +78,7 @@ class ExtractPipeline:
 
     def __init__(
         self,
-        pipeline_config: dict[str, any] = None,
+        pipelines_config: dict[str, any] = None,
         cuda: bool = True,
         **kwargs,
     ) -> None:
@@ -86,18 +89,41 @@ class ExtractPipeline:
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
 
-        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+        device = pipelines_config.get("device", "cpu" if not use_cuda else "cuda")
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
+        self.load_pipeline = load_pipeline
+        self.reload_pipeline = reload_pipeline
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.overlay_processor = setup_overlay(pipeline_config)
+        self.default_pipeline_config = None
+
+        for conf in pipelines_config:
+            conf = conf["default"]
+            if conf.get("default", False):
+                if self.default_pipeline_config is not None:
+                    raise BadConfigSource(
+                        "Invalid pipeline configuration, multiple defaults found"
+                    )
+                self.default_pipeline_config = conf
+
+        if self.default_pipeline_config is None:
+            raise BadConfigSource("Invalid pipeline configuration, default not found")
+        
+        self.overlay_processor = setup_overlay(self.default_pipeline_config)
         self.ocr_engines = get_known_ocr_engines(device=device)
-        self.document_classifiers = setup_classifiers(pipeline_config)
-        self.document_indexers = setup_indexers(pipeline_config)
+
+        (
+            self.pipeline_name,
+            self.classifier_groups,
+            self.document_indexers,
+        ) = self.load_pipeline(self.default_pipeline_config)
+
+        # self.document_classifiers = setup_classifiers(pipeline_config)
+        # self.document_indexers = setup_indexers(pipeline_config)
 
         self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
+            f"Loaded classifiers : {len(self.classifier_groups)},  {self.classifier_groups.keys()}"
         )
 
         self.logger.info(
@@ -215,24 +241,16 @@ class ExtractPipeline:
         self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
         self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
 
+        # check if the current pipeline name is the default pipeline name
+        if "name" in runtime_conf:
+            expected_pipeline_name = runtime_conf["name"]
+            if expected_pipeline_name != self.pipeline_name:
+                self.logger.warning(
+                    f"pipeline name : {expected_pipeline_name}, expected : {self.pipeline_name} , reloading pipeline"
+                )
+                self.reload_pipeline(expected_pipeline_name)
+
         post_processing_pipeline = []
-
-        if page_classifier_enabled:
-            post_processing_pipeline.append(
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline_component",
-                    document_classifiers=self.document_classifiers,
-                )
-            )
-
-        if page_indexer_enabled:
-            post_processing_pipeline.append(
-                NamedEntityPipelineComponent(
-                    name="ner_pipeline_component",
-                    document_indexers=self.document_indexers,
-                )
-            )
-
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
@@ -240,6 +258,7 @@ class ExtractPipeline:
             "pages": f"{len(frames)}",
         }
 
+            
         # check if we have already processed this document and restore assets
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
@@ -253,8 +272,37 @@ class ExtractPipeline:
         )
         ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
         metadata["ocr"] = ocr_results
+        metadata["classifications"] = []
 
-        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+
+        # Extract and Classify now done in groups
+        for group, classifier_group in self.classifier_groups.items():
+            self.loggger.info(
+                f"Loaded extract group : {self.pipeline_name} : {group}"
+            )
+            document_classifiers = classifier_group["classifiers"]
+            post_processing_pipeline = []
+
+            if page_classifier_enabled:
+                post_processing_pipeline.append(
+                    ClassifierPipelineComponent(
+                        name="classifier_pipeline_component",
+                        document_classifiers=self.document_classifiers,
+                    )
+                )
+
+            if page_indexer_enabled:
+                post_processing_pipeline.append(
+                    NamedEntityPipelineComponent(
+                        name="ner_pipeline_component",
+                        document_indexers=self.document_indexers,
+                    )
+                )
+
+            results = self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+            metadata["classifications"].append(
+                {"group": group, "classification": results}
+            )
 
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
@@ -545,3 +593,45 @@ class ExtractPipeline:
                     documents = pipe_results.state
             except Exception as e:
                 self.logger.error(f"Error executing pipe : {e}")
+
+        # taken from classification_pipeline
+        page_classifier = context["metadata"]["page_classifier"]
+        
+        # Pivot the results to make it easier to work with by page
+        class_by_page = {}
+        for idx, page_classifier_result in enumerate(page_classifier):
+            classifier = page_classifier_result["classifier"]
+            for detail in page_classifier_result["details"]:
+                page = int(detail["page"])
+                if page not in class_by_page:
+                    class_by_page[page] = []
+                detail["classifier"] = classifier
+                class_by_page[page].append(detail)
+
+        # calculate max score for each page by max score
+        score_by_page = {}
+        for page, details in class_by_page.items():
+            max_score = 0.0
+            for detail in details:
+                if page not in score_by_page:
+                    score_by_page[page] = {}
+
+                score = float(detail["score"])
+                if score >= max_score:
+                    max_score = score
+                    score_by_page[page] = detail
+                    del detail["page"]
+
+        results = {
+            "strategy": "max_score",
+            "pages": {},
+        }
+
+        for page in list(class_by_page.keys()):
+            results["pages"][page] = {
+                "details": class_by_page[page],
+                "best": score_by_page[page],
+            }
+
+        return results
+

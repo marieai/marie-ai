@@ -14,6 +14,7 @@ from marie.excepts import BadConfigSource
 from marie.executor.ner import NerExtractionExecutor
 from marie.executor.util import setup_cache
 from marie.logging.predefined import default_logger as logger
+from marie.logging.profile import TimeContext
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, MockOcrEngine, VotingOcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
@@ -333,6 +334,87 @@ def setup_indexers(
 
     return document_indexers
 
+def load_pipeline(
+    self, pipeline_config: dict[str, any]
+) -> tuple[str, dict[str, any], dict[str, any]]:
+    # sometimes we have CUDA/GPU support but want to only use CPU
+    use_cuda = torch.cuda.is_available()
+    if os.environ.get("MARIE_DISABLE_CUDA"):
+        use_cuda = False
+    device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+    if device == "cuda" and not use_cuda:
+        device = "cpu"
+
+    if "name" not in pipeline_config:
+        raise BadConfigSource("Invalid pipeline config, missing name field")
+
+    pipeline_name = pipeline_config["name"]
+    document_classifiers = setup_classifiers(
+        pipeline_config, key="page_classifier", device=device
+    )
+
+    document_sub_classifiers = setup_classifiers(
+        pipeline_config, key="sub_classifier", device=device
+    )
+
+    classifier_groups = dict()
+    for classifier_group, classifiers in document_classifiers.items():
+        sub_classifiers = document_sub_classifiers.get(classifier_group, {})
+        classifier_groups[classifier_group] = {
+            "group": classifier_group,
+            "classifiers": classifiers,
+            "sub_classifiers": sub_classifiers,
+        }
+
+    document_indexers = setup_indexers(
+        pipeline_config, key="page_indexer", device=device
+    )
+    # dump information about the loaded classifiers that are grouped by the classifier group
+    for classifier_group, classifiers in document_classifiers.items():
+        self.logger.info(
+            f"Loaded classifiers :{classifier_group},  {len(classifiers)},  {classifiers.keys()}"
+        )
+    for classifier_group, classifiers in document_sub_classifiers.items():
+        self.logger.info(
+            f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
+        )
+    self.logger.info(
+        f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
+    )
+
+    return pipeline_name, classifier_groups, document_indexers
+
+
+def reload_pipeline(self, pipeline_name) -> None:
+    with TimeContext(f"### Reloading pipeline : {pipeline_name}", self.logger):
+        try:
+            self.logger.info(f"Reloading pipeline : {pipeline_name}")
+            if self.pipelines_config is None:
+                raise BadConfigSource(
+                    "Invalid pipeline configuration, no pipelines found"
+                )
+
+            pipeline_config = None
+            for conf in self.pipelines_config:
+                conf = conf["pipeline"]
+                if conf.get("name") == pipeline_name:
+                    pipeline_config = conf
+                    break
+
+            if pipeline_config is None:
+                raise BadConfigSource(
+                    f"Invalid pipeline configuration, pipeline not found : {pipeline_name}"
+                )
+
+            (
+                self.pipeline_name,
+                self.classifier_groups,
+                self.document_indexers,
+            ) = self.load_pipeline(pipeline_config)
+            self.logger.info(f"Reloaded successfully pipeline : {pipeline_name} ")
+        except Exception as e:
+            self.logger.error(f"Error reloading pipeline : {e}")
+            raise e
 
 def restore_assets(
     ref_id: str,
