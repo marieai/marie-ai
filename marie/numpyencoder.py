@@ -44,10 +44,14 @@ class NumpyEncoder(json.JSONEncoder):
         elif isinstance(obj, (np.ndarray,)):
             return obj.tolist()
 
-        elif isinstance(obj, (np.bool_)):
+        elif isinstance(obj, np.bool_):
             return bool(obj)
 
-        elif isinstance(obj, (np.void)):
+        elif isinstance(obj, np.void):
             return None
+
+        # check if pydantic model and convert to dict
+        elif hasattr(obj, "__dict__"):
+            return obj.__dict__
 
         return json.JSONEncoder.default(self, obj)
