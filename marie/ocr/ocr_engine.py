@@ -1,5 +1,6 @@
 import os
 from abc import ABC, abstractmethod
+from itertools import chain
 from typing import Any, Dict, List, Optional, Union
 
 import cv2
@@ -253,79 +254,99 @@ class OcrEngine(ABC):
                 raise Exception(f"Required key missing in region : {region}")
 
             # Additional fields are allowed (e.g. mode)
-
-        # TODO : Introduce mini-batched by region to improve inference
+        bbox_results_batch = []
+        pages = {}
         for region in regions:
+            pages.setdefault(region["pageIndex"], []).append(region)
+
+        # Batch region by page
+        for page_index, regions in pages.items():
+            img = frames[page_index]
+            x_batch, y_batch, w_batch, h_batch = img.shape[1], img.shape[0], 0, 0
+            region_ids = []
             try:
-                self.logger.debug(f"Extracting box : {region}")
-                rid = region["id"]
-                page_index = region["pageIndex"]
-                x = region["x"]
-                y = region["y"]
-                w = region["w"]
-                h = region["h"]
+                for region in regions:
+                    self.logger.debug(f"Extracting box : {region}")
+                    rid = region["id"]
+                    region_ids.append(rid)
+                    x = region["x"]
+                    y = region["y"]
+                    w = region["w"]
+                    h = region["h"]
 
-                img = frames[page_index]
+                    if w == 0 or h == 0:
+                        self.logger.warning(
+                            f"Region has zero width or height : {region}"
+                        )
+                        output.append({"id": rid, "text": "", "confidence": 0.0})
+                        continue
 
-                if w == 0 or h == 0:
-                    self.logger.warning(f"Region has zero width or height : {region}")
-                    output.append({"id": rid, "text": "", "confidence": 0.0})
-                    continue
+                    if y + h > img.shape[0] or x + w > img.shape[1]:
+                        self.logger.warning(f"Region out of bounds : {region}")
+                        output.append({"id": rid, "text": "", "confidence": 0.0})
+                        continue
 
-                if y + h > img.shape[0] or x + w > img.shape[1]:
-                    self.logger.warning(f"Region out of bounds : {region}")
-                    output.append({"id": rid, "text": "", "confidence": 0.0})
-                    continue
+                    # Update the size of the batch overlay
+                    x_batch = min(x, x_batch)
+                    y_batch = min(y, y_batch)
+                    w_batch = max(x + w, x_batch + w_batch) - x_batch
+                    h_batch = max(y + h, h_batch + y_batch) - y_batch
 
-                img = img[y : y + h, x : x + w].copy()
-                # allow for small padding around the component
-                padding = 4
-                if crop_to_content_enabled:
-                    img = crop_to_content(img)
-                    h = img.shape[0]
-                    w = img.shape[1]
+                    region_fragment = img[y : y + h, x : x + w].copy()
+                    # allow for small padding around the component
                     padding = 4
+                    if crop_to_content_enabled:
+                        region_fragment = crop_to_content(region_fragment)
+                        h = region_fragment.shape[0]
+                        w = region_fragment.shape[1]
+                        padding = 4
 
-                if padding != 0:
-                    overlay = (
-                        np.ones((h + padding * 2, w + padding * 2, 3), dtype=np.uint8)
-                        * 255
-                    )
-                    overlay[padding : h + padding, padding : w + padding] = img
-                else:
-                    overlay = img
+                    if padding != 0:
+                        region_overlay = (
+                            np.ones(
+                                (h + padding * 2, w + padding * 2, 3), dtype=np.uint8
+                            )
+                            * 255
+                        )
+                        region_overlay[
+                            padding : h + padding, padding : w + padding
+                        ] = region_fragment
+                    else:
+                        region_overlay = region_fragment
 
-                # cv2.imwrite(f"/tmp/marie/overlay_image_{page_index}_{rid}.png", overlay)
-                # each region can have its own segmentation mode
-                if "mode" in region:
-                    mode = PSMode.from_value(region["mode"])
-                else:
-                    mode = pms_mode
+                    # cv2.imwrite(f"/tmp/marie/region_overlay_{page_index}_{rid}.png", region_overlay)
+                    # each region can have its own segmentation mode
+                    if "mode" in region:
+                        mode = PSMode.from_value(region["mode"])
+                    else:
+                        mode = pms_mode
 
-                # create cache key from region id and overlay hash
-                overlay_hash = hash_frames_fast(overlay)
-                cache_key = f"{id(region)}_{overlay_hash}"
-                bbox_results = None
+                    # create cache key from region id and overlay hash
+                    region_overlay_hash = hash_frames_fast(region_overlay)
+                    cache_key = f"{id(region)}_{region_overlay_hash}"
+                    bbox_results = None
 
-                if cache_key in bbox_cache:
-                    bbox_results = bbox_cache[cache_key]
+                    if cache_key in bbox_cache:
+                        bbox_results = bbox_cache[cache_key]
 
-                if bbox_results is None:
-                    bbox_results = box_processor.extract_bounding_boxes(
-                        queue_id, checksum, overlay, psm=mode
-                    )
-                    bbox_cache[cache_key] = bbox_results
+                    if bbox_results is None:
+                        bbox_results = box_processor.extract_bounding_boxes(
+                            queue_id, checksum, region_overlay, psm=mode
+                        )
+                        bbox_cache[cache_key] = bbox_results
 
-                (
-                    boxes,
-                    img_fragments,
-                    lines,
-                    _,
-                    lines_bboxes,
-                ) = bbox_results
+                    bbox_results_batch.append(bbox_results)
 
-                result, overlay_image = icr_processor.recognize(
-                    queue_id, checksum, overlay, boxes, img_fragments, lines
+                # use a crop of the image related to the batch
+                batch_crop = img[
+                    y_batch : y_batch + h_batch, x_batch : x_batch + w_batch
+                ]
+                (boxes, img_fragments, lines, _, lines_bboxes,) = (
+                    list(chain.from_iterable(x))
+                    for i, x in enumerate(zip(*bbox_results_batch))
+                )
+                batch_result, batch_overlay_image = icr_processor.recognize(
+                    queue_id, checksum, batch_crop, boxes, img_fragments, lines
                 )
 
                 del boxes
@@ -333,34 +354,35 @@ class OcrEngine(ABC):
                 del lines
                 del lines_bboxes
 
-                if not filter_snippets:
-                    result["overlay_b64"] = encodeToBase64(overlay_image)
-
-                result["id"] = rid
-                extended.append(result)
-
-                # TODO : Implement rendering modes
-                # 1 - Simple
-                # 2 - Full
-                # 3 - HOCR
-                self.logger.debug(result)
-                rendering_mode = "simple"
-                region_result = {}
-                if rendering_mode == "simple":
-                    if "lines" in result and len(result["lines"]) > 0:
-                        lines = result["lines"]
-                        line = lines[0]
-                        region_result["id"] = rid
-                        region_result["text"] = line["text"]
-                        region_result["confidence"] = line["confidence"]
-                        output.append(region_result)
-                    else:
-                        output.append({"id": rid, "text": "", "confidence": 0.0})
-
             except Exception as ex:
                 self.logger.error(ex)
                 raise ex
 
+            if not filter_snippets:
+                batch_result["overlay_b64"] = encodeToBase64(batch_overlay_image)
+
+            extended.append(batch_result)
+
+            # TODO : Implement rendering modes
+            # 1 - Simple
+            # 2 - Full
+            # 3 - HOCR
+            rendering_mode = "simple"
+            if rendering_mode == "simple":
+                # unpack result from batch icr
+                if "words" in batch_result and len(batch_result["words"]) == len(
+                    region_ids
+                ):
+                    for words, rid in zip(batch_result["words"], region_ids):
+                        region_result = {
+                            "id": rid,
+                            "text": words["text"],
+                            "confidence": words["confidence"],
+                        }
+                        output.append(region_result)
+                else:
+                    for rid in region_ids:
+                        output.append({"id": rid, "text": "", "confidence": 0.0})
         # Filter out base 64 encoded fragments(fragment_b64, overlay_b64)
         # This is useful when we like to display or process image in the output but has significant payload overhead
 
