@@ -26,7 +26,7 @@ from marie.pipe.components import (
     split_filename,
     store_assets,
 )
-from marie.pipe.voting import ClassificationResult, MaxScoreVoter
+from marie.pipe.voting import ClassificationResult, get_voting_strategy
 from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import store_json_object
@@ -301,7 +301,7 @@ class ClassificationPipeline:
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
         # create backup name by appending a timestamp
-        if os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
+        if False:  # os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
             ts = datetime.now().strftime("%Y%m%d%H%M%S")
             shutil.move(
                 os.path.join("/tmp/generators", frame_checksum),
@@ -409,29 +409,19 @@ class ClassificationPipeline:
                 detail["classifier"] = classifier
                 class_by_page[page].append(detail)
 
-        voter = MaxScoreVoter()
+        prediction_agent = "majority"
+        voter = get_voting_strategy(prediction_agent, "abstain", max_diff=0.25)
 
         # Classification strategy: max_score, max_votes, max_score_with_diff
         # calculate max score for each page by max score
         score_by_page = {}
         for page, details in class_by_page.items():
-            max_score = 0.0
-
-            for detail in details:
-                print(detail)
-                result = ClassificationResult(**detail)
-
-                if page not in score_by_page:
-                    score_by_page[page] = {}
-
-                score = float(detail["score"])
-                if score >= max_score:
-                    max_score = score
-                    score_by_page[page] = detail
-                    del detail["page"]
+            classification_results = [ClassificationResult(**x) for x in details]
+            result = voter(classification_results)
+            score_by_page[page] = result
 
         results = {
-            "strategy": "max_score",
+            "strategy": prediction_agent,
             "pages": {},
         }
 

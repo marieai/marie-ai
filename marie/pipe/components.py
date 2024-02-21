@@ -531,12 +531,22 @@ def ocr_frames(
     else:
         json_path = os.path.join(output_dir, f"{prefix}.json")
 
+    print("force", force)
+    print('json_path', json_path)
+    print('exists', os.path.exists(json_path))
+
     if force or not os.path.exists(json_path):
-        logger.debug(f"Performing OCR : {json_path}")
+        logger.info(f"Performing OCR : {json_path}")
         results = engine.extract(frames, ps_mode, coord_format, regions)
         store_json_object(results, json_path)
+        print('exists2', os.path.exists(json_path))
     else:
         logger.debug(f"Skipping OCR : {json_path}")
         results = load_json_file(json_path)
 
     return results
+
+
+# force False
+# json_path /tmp/generators/f918a115f8474f63da92b4676483caf3/results/157154493_4.json
+# json_path 157154493_4.json
