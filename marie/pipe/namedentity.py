@@ -2,14 +2,21 @@ from abc import ABC
 from pprint import pprint
 from typing import List, Optional
 
+from docarray import DocList
+
 from marie import DocumentArray
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
 class NamedEntityPipelineComponent(PipelineComponent, ABC):
     def __init__(
-        self, name: str, document_indexers: dict, logger: MarieLogger = None
+        self,
+        name: str,
+        document_indexers: dict,
+        logger: MarieLogger = None,
+        silence_exceptions: bool = False,
     ) -> None:
         """
         Initialize the NamedEntityPipelineComponent.
@@ -17,8 +24,10 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         :param name: The name of the pipeline component.
         :param document_indexers: A dictionary containing document indexers.
         :param logger: An optional logger for logging messages.
+        :param silence_exceptions: Whether to suppress exceptions.
         """
         super().__init__(name, logger=logger)
+        self.silence_exceptions = silence_exceptions
         self.document_indexers = document_indexers
 
     def predict(
@@ -44,7 +53,9 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
 
         return PipelineResult(documents)
 
-    def extract_named_entity(self, documents: DocumentArray, words, boxes):
+    def extract_named_entity(
+        self, documents: DocumentArray, words, boxes
+    ) -> List[dict]:
         """
         Extract named entities from the documents.
 
@@ -54,78 +65,79 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         :return: The extracted named entities.
         """
         document_meta = []
-        try:
-            for key, document_indexer in self.document_indexers.items():
-                meta = []
+        for key, document_indexer in self.document_indexers.items():
+            meta = []
 
-                try:
-                    self.logger.info(f"Indexers document : {key}")
-                    indexer = document_indexer["indexer"]
+            try:
+                self.logger.info(f"Indexers document : {key}")
+                indexer = document_indexer["indexer"]
 
-                    has_filter = "filter" in document_indexer
-                    filtered_documents = []
-                    filter_pattern = None
-                    filter_type = None
+                has_filter = "filter" in document_indexer
+                filtered_documents = []
+                filter_pattern = None
+                filter_type = None
 
-                    if has_filter:
-                        indexer_filter = (
-                            document_indexer["filter"]
-                            if "filter" in document_indexer
-                            else {}
+                if has_filter:
+                    indexer_filter = (
+                        document_indexer["filter"]
+                        if "filter" in document_indexer
+                        else {}
+                    )
+                    filter_type = indexer_filter["type"]
+                    filter_pattern = indexer_filter["pattern"]
+
+                for document in documents:
+                    if "classification" not in document.tags:
+                        self.logger.warning(
+                            f"Document has no classification tag, adding to filtered documents"
                         )
-                        filter_type = indexer_filter["type"]
-                        filter_pattern = indexer_filter["pattern"]
+                        filtered_documents.append(document)
+                        continue
 
-                    for document in documents:
-                        if "classification" not in document.tags:
-                            self.logger.warning(
-                                f"Document has no classification tag, adding to filtered documents"
+                    classification = str(document.tags["classification"])
+                    if filter_type == "regex":
+                        import re
+
+                        if re.search(filter_pattern, classification):
+                            self.logger.info(
+                                f"Document classification matches filter : {classification} : {filter_pattern}"
+                            )
+                            meta.append(
+                                {
+                                    "classification": classification,
+                                    "pattern": filter_pattern,
+                                }
                             )
                             filtered_documents.append(document)
                             continue
+                    else:
+                        raise NotImplementedError("Exact filter not implemented")
 
-                        classification = document.tags["classification"]
-                        if filter_type == "regex":
-                            import re
+                results = indexer.run(
+                    documents=DocumentArray(filtered_documents),
+                    words=words,
+                    boxes=boxes,
+                )
 
-                            if re.search(filter_pattern, classification):
-                                self.logger.info(
-                                    f"Document classification matches filter : {classification} : {filter_pattern}"
-                                )
-                                meta.append(
-                                    {
-                                        "classification": classification,
-                                        "pattern": filter_pattern,
-                                    }
-                                )
-                                filtered_documents.append(document)
-                                continue
+                for rdoc, document in zip(results, filtered_documents):
+                    indexed_page = rdoc.tags.get("indexer", [])
+                    document_meta.append(
+                        {
+                            "indexer": key,
+                            "details": indexed_page,
+                        }
+                    )
 
-                    parameters = {
-                        "ref_id": "test",
-                        "ref_type": "pid",
+            except Exception as e:
+                if not self.silence_exceptions:
+                    raise ValueError("Error indexing document") from e
+
+                self.logger.warning("Error indexing document : ", exc_info=1)
+                document_meta.append(
+                    {
+                        "indexer": key,
+                        "details": {},
                     }
-
-                    indexed_docs = indexer.extract(
-                        docs=DocumentArray(filtered_documents), parameters=parameters
-                    )
-
-                    pprint(indexed_docs)
-                    document_meta.append(
-                        {
-                            "indexer": key,
-                            "details": indexed_docs,
-                        }
-                    )
-                except Exception as e:
-                    self.logger.error(f"Error classifying document : {e}")
-                    document_meta.append(
-                        {
-                            "indexer": key,
-                            "details": [],
-                        }
-                    )
-        except Exception as e:
-            self.logger.error(f"Error indexing document : {e}")
+                )
 
         return document_meta

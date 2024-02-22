@@ -20,7 +20,11 @@ class TieBreakPolicy(Enum):
 
 
 class VotingPolicy(Enum):
-    """A voting policy"""
+    """Policy indicating what voting strategy should be used.
+
+    MAJORITY: The voting strategy should be based on the majority of votes.
+    MAX_SCORE: The voting strategy should be based on the maximum score.
+    """
 
     MAJORITY = "majority"
     MAX_SCORE = "max_score"

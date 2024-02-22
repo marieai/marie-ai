@@ -1,6 +1,5 @@
 import os
 import shutil
-from abc import abstractmethod
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -13,12 +12,17 @@ from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.logging.profile import TimeContext
-from marie.ocr import CoordinateFormat
-from marie.ocr.util import get_words_and_boxes
-from marie.pipe import ClassifierPipelineComponent, PipelineComponent, PipelineContext
+from marie.models.utils import initialize_device_settings
+from marie.ocr import CoordinateFormat, OcrEngine
+from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
+from marie.pipe import (
+    ClassifierPipelineComponent,
+    NamedEntityPipelineComponent,
+    PipelineComponent,
+    PipelineContext,
+)
 from marie.pipe.components import (
     burst_frames,
-    get_known_ocr_engines,
     ocr_frames,
     restore_assets,
     setup_classifiers,
@@ -61,6 +65,7 @@ class ClassificationPipeline:
     def __init__(
         self,
         pipelines_config: List[dict[str, any]] = None,
+        device: Optional[str] = "cuda",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -82,26 +87,35 @@ class ClassificationPipeline:
         if self.default_pipeline_config is None:
             raise BadConfigSource("Invalid pipeline configuration, default not found")
 
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        resolved_devices, _ = initialize_device_settings(
+            devices=[device], use_cuda=True, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+        has_cuda = True if self.device.type.startswith("cuda") else False
+
+        self.ocr_engines = get_known_ocr_engines(
+            device=self.device.type, engine="default"
+        )
         (
             self.pipeline_name,
             self.classifier_groups,
             self.document_indexers,
-        ) = self.load_pipeline(self.default_pipeline_config)
-
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        # TODO : REFINE THIS
-        use_cuda = torch.cuda.is_available()
-        device = "cpu" if not use_cuda else "cuda"
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
-        if device == "cuda" and not use_cuda:
-            device = "cpu"
-
-        self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
+        ) = self.load_pipeline(
+            self.default_pipeline_config, self.ocr_engines["default"]
+        )
 
     def load_pipeline(
-        self, pipeline_config: dict[str, any]
+        self, pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
     ) -> tuple[str, dict[str, any], dict[str, any]]:
+
+        # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
         if os.environ.get("MARIE_DISABLE_CUDA"):
@@ -115,11 +129,11 @@ class ClassificationPipeline:
 
         pipeline_name = pipeline_config["name"]
         document_classifiers = setup_classifiers(
-            pipeline_config, key="page_classifier", device=device
+            pipeline_config, key="page_classifier", device=device, ocr_engine=ocr_engine
         )
 
         document_sub_classifiers = setup_classifiers(
-            pipeline_config, key="sub_classifier", device=device
+            pipeline_config, key="sub_classifier", device=device, ocr_engine=ocr_engine
         )
 
         classifier_groups = dict()
@@ -132,7 +146,7 @@ class ClassificationPipeline:
             }
 
         document_indexers = setup_indexers(
-            pipeline_config, key="page_indexer", device=device
+            pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
         )
         # dump information about the loaded classifiers that are grouped by the classifier group
         for classifier_group, classifiers in document_classifiers.items():
@@ -189,14 +203,6 @@ class ClassificationPipeline:
         for group, classifiers in self.classifier_groups.items():
             self.logger.info(f"Loaded classifiers : {group}, {len(classifiers)}")
 
-        # if page_indexer_enabled:
-        #     processing_pipeline.append(
-        #         NamedEntityPipelineComponent(
-        #             name="ner_pipeline_component",
-        #             document_indexers=self.document_indexers,
-        #         )
-        #     )
-
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
@@ -229,9 +235,18 @@ class ClassificationPipeline:
                 )
             ]
 
+            if page_indexer_enabled:
+                processing_pipeline.append(
+                    NamedEntityPipelineComponent(
+                        name="ner_pipeline_component",
+                        document_indexers=self.document_indexers,
+                    )
+                )
+
             results = self.execute_pipeline(
                 processing_pipeline, sub_classifiers, frames, ocr_results
             )
+
             metadata["classifications"].append(
                 {"group": group, "classification": results}
             )
@@ -360,9 +375,18 @@ class ClassificationPipeline:
 
         # TODO : This is temporary, we need to make this configurable
         self.logger.info("### ClassificationPipeline results")
-        self.logger.info(context["metadata"]["page_classifier"])
+        self.logger.info(context["metadata"])
 
-        page_classifier = context["metadata"]["page_classifier"]
+        page_indexer = (
+            context["metadata"]["page_indexer"]
+            if "page_indexer" in context["metadata"]
+            else []
+        )
+        page_classifier = (
+            context["metadata"]["page_classifier"]
+            if "page_classifier" in context["metadata"]
+            else []
+        )
 
         for idx, page_classifier_result in enumerate(page_classifier):
             for detail in page_classifier_result["details"]:

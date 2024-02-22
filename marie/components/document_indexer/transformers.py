@@ -14,7 +14,6 @@ from transformers import (
     LayoutLMv3TokenizerFast,
 )
 
-from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.constants import __marie_home__, __model_path__
 from marie.executor.ner.utils import (
     draw_box,
@@ -30,13 +29,17 @@ from marie.models.utils import initialize_device_settings
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
+from ...boxes import PSMode
 from ...boxes.line_processor import find_line_number, line_merge
 from ...logging.profile import TimeContext
-from ...ocr import CoordinateFormat
+from ...ocr import CoordinateFormat, OcrEngine
+from ...ocr.ocr_engine import reset_bbox_cache
+from ...ocr.util import get_known_ocr_engines
 from ...registry.model_registry import ModelRegistry
 from ...utils.docs import convert_frames, frames_from_docs
 from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
+from .base import BaseDocumentIndexer
 
 
 class TransformersDocumentIndexer(BaseDocumentIndexer):
@@ -57,6 +60,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         use_auth_token: Optional[Union[str, bool]] = None,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
+        ocr_engine: Optional[OcrEngine] = None,
         **kwargs,
     ):
         """
@@ -72,18 +76,17 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         :param use_auth_token: The authentication token to be used. Defaults to None.
         :param devices: The devices to be used for processing. Defaults to None.
         :param show_error: Whether to show errors. Defaults to True.
+        :param ocr_engine: The OCR engine to be used. Defaults to None, in which case the default OCR engine is used.
         :param kwargs: Additional keyword arguments.
         :returns: None
         """
 
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document indexer : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.task = task
-
-        self.logger.info(f"NER Extraction component : {model_name_or_path}")
+        self.logger.info(f"Document indexer : {model_name_or_path}")
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -142,6 +145,12 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             model_name_or_path, self.labels, self.device.type
         )
         self.processor = self.__create_processor()
+        if ocr_engine:
+            self.ocr_engine = ocr_engine
+        else:
+            self.logger.warning("Using default OCR engine for Document Indexing")
+            ocr_engines = get_known_ocr_engines(device="cuda", engine="default")
+            self.ocr_engine = ocr_engines["default"]
 
     def __create_processor(self):
         """prepare for the model"""
@@ -334,8 +343,99 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         print("ner_results", ner_results)
         # self.persist(ref_id, ref_type, ner_results)
 
-        results = DocList[MarieDoc]()
-        return results
+        for k, document in enumerate(documents):
+            if self.task == "transformers-document-indexer":
+                filtered_meta = [val for val in ner_results["meta"] if val["page"] == k]
+                filtered_kv = [val for val in ner_results["kv"] if val["page"] == k]
+                filtered_ner = [val for val in ner_results["ner"] if val["page"] == k]
+
+                document.tags["indexer"] = {
+                    "page": k,
+                    "meta": filtered_meta,
+                    "kv": filtered_kv,
+                    "ner": filtered_ner,
+                }
+            else:
+                raise ValueError(f"Unsupported task : {self.task}")
+        return documents
+
+    def decorate_aggregates_with_text(
+        self, aggregated_kv: list[dict], frames: List[Image.Image]
+    ):
+        """Decorate our answers with proper TEXT
+        Performing secondary OCR yields much better results as we are using RAW-LINE as our segmentation method
+        """
+        regions = []
+
+        def create_region(field_id, page_index, bbox):
+            box = np.array(bbox).astype(np.int32)
+            x, y, w, h = box
+            return {
+                "id": field_id,
+                "pageIndex": page_index,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            }
+
+        # aggregate results for OCR extraction
+        for k, agg_result in enumerate(aggregated_kv):
+            page_index = int(agg_result["page"])
+            category = agg_result["category"]
+
+            if "question" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_k",
+                        page_index,
+                        agg_result["value"]["question"]["bbox"],
+                    )
+                )
+
+            if "answer" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_v",
+                        page_index,
+                        agg_result["value"]["answer"]["bbox"],
+                    )
+                )
+
+        # nothing to decorate
+        if len(regions) == 0:
+            return
+
+        region_results = self.ocr_engine.extract(
+            frames,
+            PSMode.RAW_LINE,
+            CoordinateFormat.XYWH,
+            regions,
+            **{"filter_snippets": True},
+        )
+        reset_bbox_cache()
+
+        # possible failure in extracting data for region
+        if "regions" not in region_results:
+            self.logger.warning("No regions returned")
+            return
+        region_results = region_results["regions"]
+
+        # merge results
+        for k, agg_result in enumerate(aggregated_kv):
+            category = agg_result["category"]
+            for region in region_results:
+                rid = region["id"]
+                if rid == f"{category}_{k}_k":
+                    agg_result["value"]["question"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
+                if rid == f"{category}_{k}_v":
+                    agg_result["value"]["answer"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
 
     def inference(
         self,
@@ -773,7 +873,10 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:
                         key = ner_key["key"]
-                        if key in fields:
+                        if (
+                            key in fields
+                            and key not in possible_field_meta[field]["fields"]
+                        ):
                             possible_field_meta[field]["found"] = True
                             possible_field_meta[field]["fields"].append(key)
 
@@ -844,9 +947,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             if self.debug_visuals and self.debug_visuals_overlay:
                 viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
-        # TODO : IS THIS NEEDED ANYMORE ???
-        # self.decorate_aggregates_with_text(aggregated_ner, frames)
-        # self.decorate_aggregates_with_text(aggregated_kv, frames)
+        self.decorate_aggregates_with_text(aggregated_ner, frames)
+        self.decorate_aggregates_with_text(aggregated_kv, frames)
 
         # visualize results per page
         if self.debug_visuals and self.debug_visuals_ner:

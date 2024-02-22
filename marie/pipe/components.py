@@ -6,15 +6,12 @@ import numpy as np
 import torch
 from PIL import Image
 
-from marie.boxes import BoxProcessorUlimDit, PSMode
+from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
-from marie.components import TransformersDocumentClassifier
-from marie.document import TrOcrProcessor
+from marie.components import TransformersDocumentClassifier, TransformersDocumentIndexer
 from marie.excepts import BadConfigSource
-from marie.executor.ner import NerExtractionExecutor
-from marie.executor.util import setup_cache
 from marie.logging.predefined import default_logger as logger
-from marie.ocr import CoordinateFormat, DefaultOcrEngine, MockOcrEngine, VotingOcrEngine
+from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
 from marie.utils.json import load_json_file, store_json_object
@@ -93,69 +90,6 @@ def s3_asset_path(
     return ret_path
 
 
-def get_known_ocr_engines(device: str = "cuda", engine: str = None) -> dict[str, any]:
-    """
-    Get the known OCR engines
-    mock : Mock OCR engine, returns dummy results
-    default : Default OCR engine, uses the best OCR engine available on the system
-    best : Voting OCR engine, uses ensemble of OCR engines to perform OCR on the document
-
-    Most GPU will not have enough memory to run multiple OCR engines in parallel and hence it is recommended to use
-    the default OCR engine on GPU. If you have a large GPU with enough memory, you can use the best OCR engine.
-
-    :param device: device to use for OCR (cpu or cuda)
-    :param engine: engine to use for OCR (mock, default, best)
-    :return: OCR engines
-    """
-
-    use_cuda = False
-    if device == "cuda":
-        use_cuda = True
-
-    logger.info(f"Getting OCR engine using engine : {engine}, device : {device}")
-    setup_cache(list_of_models=None)
-
-    box_processor = BoxProcessorUlimDit(
-        work_dir=ensure_exists("/tmp/boxes"),
-        cuda=use_cuda,
-    )
-
-    trocr_processor = TrOcrProcessor(work_dir=ensure_exists("/tmp/icr"), cuda=use_cuda)
-
-    ocr_engines = dict()
-
-    if engine is None:
-        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda, box_processor=box_processor)
-        ocr_engines["default"] = DefaultOcrEngine(
-            cuda=use_cuda,
-            box_processor=box_processor,
-            default_ocr_processor=trocr_processor,
-        )
-        ocr_engines["best"] = VotingOcrEngine(
-            cuda=use_cuda,
-            box_processor=box_processor,
-            default_ocr_processor=trocr_processor,
-        )
-    elif engine == "mock":
-        ocr_engines["mock"] = MockOcrEngine(cuda=use_cuda, box_processor=box_processor)
-    elif engine == "default":
-        ocr_engines["default"] = DefaultOcrEngine(
-            cuda=use_cuda,
-            box_processor=box_processor,
-            default_ocr_processor=trocr_processor,
-        )
-    elif engine == "best":
-        ocr_engines["best"] = VotingOcrEngine(
-            cuda=use_cuda,
-            box_processor=box_processor,
-            default_ocr_processor=trocr_processor,
-        )
-    else:
-        raise ValueError(f"Invalid OCR engine : {engine}")
-
-    return ocr_engines
-
-
 def setup_overlay(
     pipeline_config: Optional[dict] = None,
     key: str = "page_overlay",
@@ -204,12 +138,14 @@ def setup_classifiers(
     pipeline_config: Optional[dict] = None,
     key: str = "page_classifier",
     device: str = "cuda",
+    ocr_engine: Optional[OcrEngine] = None,
 ) -> dict[str, any]:
     """
     Setup the document classifiers (Document Classification) for the pipeline
     :param pipeline_config: pipeline configuration
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
+    :param ocr_engine: OCR engine to use for the pipeline (default: None)
     :return: map of document classifiers with their names as keys and classifier instances as values
     """
     use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
@@ -286,12 +222,14 @@ def setup_indexers(
     pipeline_config: Optional[dict] = None,
     key: str = "page_indexer",
     device: str = "cuda",
+    ocr_engine: Optional[OcrEngine] = None,
 ) -> dict[str, any]:
     """
     Setup the document indexers(Named Entity Recognition) for the pipeline
     :param pipeline_config: pipeline configuration
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
+    :param ocr_engine: OCR engine to use for the pipeline (default: None)
     :return: document classifiers
     """
 
@@ -322,10 +260,14 @@ def setup_indexers(
             raise BadConfigSource(f"Duplicate indexer name : {name}")
 
         model_filter = config["filter"] if "filter" in config else {}
-        # FIXME : we should not be using NerExtractionExecutor directly here
+        # TODO: Add support for other indexer types
         if model_type == "transformers":
             document_indexers[name] = {
-                "indexer": NerExtractionExecutor(model_name_or_path=model_name_or_path),
+                "indexer": TransformersDocumentIndexer(
+                    model_name_or_path=model_name_or_path,
+                    devices=[device],
+                    ocr_engine=ocr_engine,
+                ),
                 "filter": model_filter,
             }
         else:
@@ -531,15 +473,10 @@ def ocr_frames(
     else:
         json_path = os.path.join(output_dir, f"{prefix}.json")
 
-    print("force", force)
-    print('json_path', json_path)
-    print('exists', os.path.exists(json_path))
-
     if force or not os.path.exists(json_path):
         logger.info(f"Performing OCR : {json_path}")
         results = engine.extract(frames, ps_mode, coord_format, regions)
         store_json_object(results, json_path)
-        print('exists2', os.path.exists(json_path))
     else:
         logger.debug(f"Skipping OCR : {json_path}")
         results = load_json_file(json_path)

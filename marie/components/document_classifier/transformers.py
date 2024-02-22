@@ -287,7 +287,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 self.task == "text-classification-multimodal"
                 or self.task == "text-classification"
             ):
-                print(prediction[0])
                 formatted_prediction = {
                     "label": prediction[0]["label"],
                     "score": prediction[0]["score"],
