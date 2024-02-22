@@ -49,7 +49,11 @@ if __name__ == "__main__":
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/additional_information/09012023_734837_1_782___1_2.png"
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/cms/08312023_772428_13_46_2.png"
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/dispute/08312023_734913_1_4_2.png"
-    # img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/auth_denial/09012023_22572_5_647_3.png"
+    img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985.tif"
+    img_path = "~/tmp/analysis/marie-issues/corr-failing/197107883/197107883.tif"
+    img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985-0001.png"
+    img_path = "~/tmp/analysis/marie-issues/corr-failing/196675912/196675912.tif"
+
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -63,7 +67,7 @@ if __name__ == "__main__":
     #
     config = load_yaml(
         os.path.join(
-            __config_dir__, "tests-integration", "pipeline-classify-005.partial.yml"
+            __config_dir__, "tests-integration", "pipeline-classify-006.partial.yml"
         )
     )
 
@@ -71,7 +75,7 @@ if __name__ == "__main__":
     pipeline = ClassificationPipeline(pipelines_config=pipelines_config)
 
     runtime_conf = {
-        'name': 'jpmc-corr'
+        # 'name': 'jpmc-corr'
     }
 
     # runtime_conf = None

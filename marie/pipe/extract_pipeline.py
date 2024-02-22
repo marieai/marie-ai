@@ -14,7 +14,7 @@ from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
-from marie.ocr.util import get_words_and_boxes
+from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
 from marie.pipe import (
     ClassifierPipelineComponent,
     NamedEntityPipelineComponent,
@@ -23,7 +23,6 @@ from marie.pipe import (
 )
 from marie.pipe.components import (
     burst_frames,
-    get_known_ocr_engines,
     ocr_frames,
     restore_assets,
     s3_asset_path,
