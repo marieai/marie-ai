@@ -208,7 +208,8 @@ class TrOcrProcessor(OcrProcessor):
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
-        beam = 3  # default beam size is 5
+        # TODO : make this configurable
+        beam = 1  # default beam size is 5
         (
             model,
             cfg,

@@ -1,13 +1,13 @@
+import re
 from abc import ABC
-from pprint import pprint
 from typing import List, Optional
 
 from docarray import DocList
 
-from marie import DocumentArray
-from marie.excepts import BadConfigSource
+from marie.api.docs import DOC_KEY_INDEXER, DOC_KEY_PAGE_NUMBER
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
+from marie.utils import filter_node
 
 
 class NamedEntityPipelineComponent(PipelineComponent, ABC):
@@ -28,11 +28,13 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         """
         super().__init__(name, logger=logger)
         self.silence_exceptions = silence_exceptions
+        if not isinstance(document_indexers, dict):
+            raise ValueError("document_indexers must be a dictionary")
         self.document_indexers = document_indexers
 
     def predict(
         self,
-        documents: DocumentArray,
+        documents: DocList,
         context: Optional[PipelineContext] = None,
         *,
         words: List[List[str]] = None,
@@ -54,7 +56,10 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
         return PipelineResult(documents)
 
     def extract_named_entity(
-        self, documents: DocumentArray, words, boxes
+        self,
+        documents: DocList,
+        words: List[List[str]] = None,
+        boxes: List[List[List[int]]] = None,
     ) -> List[dict]:
         """
         Extract named entities from the documents.
@@ -69,11 +74,14 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
             meta = []
 
             try:
-                self.logger.info(f"Indexers document : {key}")
+                self.logger.info(f"Indexing document : {key}")
                 indexer = document_indexer["indexer"]
 
                 has_filter = "filter" in document_indexer
-                filtered_documents = []
+                filtered_docs = []
+                filtered_words = []
+                filtered_boxes = []
+
                 filter_pattern = None
                 filter_type = None
 
@@ -86,57 +94,68 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
                     filter_type = indexer_filter["type"]
                     filter_pattern = indexer_filter["pattern"]
 
-                for document in documents:
+                for i, document in enumerate(documents):
+                    if i == 0:
+                        print(document)
+                        continue
+                    assert DOC_KEY_PAGE_NUMBER in document.tags
                     if "classification" not in document.tags:
                         self.logger.warning(
                             f"Document has no classification tag, adding to filtered documents"
                         )
-                        filtered_documents.append(document)
+                        filtered_docs.append(document)
+                        filtered_words.append(words[i])
+                        filtered_boxes.append(boxes[i])
                         continue
 
                     classification = str(document.tags["classification"])
                     if filter_type == "regex":
-                        import re
-
                         if re.search(filter_pattern, classification):
                             self.logger.info(
                                 f"Document classification matches filter : {classification} : {filter_pattern}"
                             )
-                            meta.append(
-                                {
-                                    "classification": classification,
-                                    "pattern": filter_pattern,
-                                }
-                            )
-                            filtered_documents.append(document)
+                            filtered_docs.append(document)
+                            filtered_words.append(words[i])
+                            filtered_boxes.append(boxes[i])
                             continue
                     else:
                         raise NotImplementedError("Exact filter not implemented")
 
                 results = indexer.run(
-                    documents=DocumentArray(filtered_documents),
-                    words=words,
-                    boxes=boxes,
+                    documents=DocList(filtered_docs),
+                    words=filtered_words,
+                    boxes=filtered_boxes,
                 )
 
-                for rdoc, document in zip(results, filtered_documents):
-                    indexed_page = rdoc.tags.get("indexer", [])
-                    document_meta.append(
+                for idx, (rdoc, document) in enumerate(zip(results, filtered_docs)):
+                    assert DOC_KEY_INDEXER in document.tags
+                    assert DOC_KEY_PAGE_NUMBER in document.tags
+                    indexed_values = document.tags[DOC_KEY_INDEXER]
+                    filter_node(indexed_values, filters=["page"])
+
+                    meta.append(
                         {
-                            "indexer": key,
-                            "details": indexed_page,
+                            # Using string to avoid type conversion issues
+                            "page": f"{document.tags[DOC_KEY_PAGE_NUMBER]}",
+                            "indexing": indexed_values,
                         }
                     )
+
+                document_meta.append(
+                    {
+                        "indexer": key,
+                        "details": meta,
+                    }
+                )
 
             except Exception as e:
                 if not self.silence_exceptions:
                     raise ValueError("Error indexing document") from e
-
                 self.logger.warning("Error indexing document : ", exc_info=1)
                 document_meta.append(
                     {
                         "indexer": key,
-                        "details": {},
+                        "details": [],
                     }
                 )
 

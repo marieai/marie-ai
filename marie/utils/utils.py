@@ -1,7 +1,7 @@
 import datetime
 import os
 import time
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import yaml
 
@@ -34,6 +34,23 @@ def batchify(iterable, batch_size=1):
     size = len(iterable)
     for ndx in range(0, size, batch_size):
         yield iterable[ndx : min(ndx + batch_size, size)]
+
+
+def filter_node(node: Any, filters: Union[list, tuple]) -> None:
+    """Filter node by removing keys from a dictionary or list of dictionaries"""
+    if isinstance(node, (list, tuple)):
+        for v in node:
+            filter_node(v, filters)
+    elif isinstance(node, dict):
+        for flt in filters:
+            try:
+                del node[flt]
+            except KeyError:
+                pass
+        for _, value in node.items():
+            filter_node(value, filters)
+    else:
+        pass
 
 
 class FileSystem:
