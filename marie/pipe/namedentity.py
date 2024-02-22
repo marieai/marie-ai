@@ -95,9 +95,6 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
                     filter_pattern = indexer_filter["pattern"]
 
                 for i, document in enumerate(documents):
-                    if i == 0:
-                        print(document)
-                        continue
                     assert DOC_KEY_PAGE_NUMBER in document.tags
                     if "classification" not in document.tags:
                         self.logger.warning(

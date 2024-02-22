@@ -331,6 +331,7 @@ class ClassificationPipeline:
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
         # create backup name by appending a timestamp
+        # TODO : Need to refactor this
         if False:  # os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
             ts = datetime.now().strftime("%Y%m%d%H%M%S")
             shutil.move(
