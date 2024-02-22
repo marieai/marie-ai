@@ -868,7 +868,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
             for field in possible_fields.keys():
                 fields = possible_fields[field]
-                possible_field_meta[field] = {"page": i, "found": False, "fields": []}
+                possible_field_meta[field] = {"found": False, "fields": []}
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:

@@ -66,6 +66,7 @@ class ClassificationPipeline:
         self,
         pipelines_config: List[dict[str, any]] = None,
         device: Optional[str] = "cuda",
+        silence_exceptions: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -74,6 +75,7 @@ class ClassificationPipeline:
 
         self.pipelines_config = pipelines_config
         self.default_pipeline_config = None
+        self.silence_exceptions = silence_exceptions
 
         for conf in pipelines_config:
             conf = conf["pipeline"]
@@ -219,6 +221,7 @@ class ClassificationPipeline:
 
         metadata["ocr"] = ocr_results
         metadata["classifications"] = []
+        metadata["indexers"] = []
 
         # TODO : Need to refactor this
         for group, classifier_group in self.classifier_groups.items():
@@ -248,7 +251,19 @@ class ClassificationPipeline:
             )
 
             metadata["classifications"].append(
-                {"group": group, "classification": results}
+                {
+                    "group": group,
+                    "classification": results["classifier"]
+                    if "classifier" in results
+                    else {},
+                }
+            )
+
+            metadata["indexers"].append(
+                {
+                    "group": group,
+                    "indexer": results["indexer"] if "indexer" in results else {},
+                }
             )
 
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
@@ -371,25 +386,27 @@ class ClassificationPipeline:
                         )
                     documents = pipe_results.state
             except Exception as e:
+                if not self.silence_exceptions:
+                    raise ValueError("Error executing pipe") from e
                 self.logger.error(f"Error executing pipe : {e}")
 
         # TODO : This is temporary, we need to make this configurable
         self.logger.info("### ClassificationPipeline results")
         self.logger.info(context["metadata"])
 
-        page_indexer = (
+        page_indexer_meta = (
             context["metadata"]["page_indexer"]
             if "page_indexer" in context["metadata"]
             else []
         )
-        page_classifier = (
+        page_classifier_meta = (
             context["metadata"]["page_classifier"]
             if "page_classifier" in context["metadata"]
             else []
         )
 
-        for idx, page_classifier_result in enumerate(page_classifier):
-            for detail in page_classifier_result["details"]:
+        for idx, page_result in enumerate(page_classifier_meta):
+            for detail in page_result["details"]:
                 page = int(detail["page"])
                 classification = detail["classification"]
                 filtered_classifiers = {}
@@ -422,40 +439,51 @@ class ClassificationPipeline:
                     )
                     detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
 
-        # Pivot the results to make it easier to work with by page
-        class_by_page = {}
-        for idx, page_classifier_result in enumerate(page_classifier):
-            classifier = page_classifier_result["classifier"]
-            for detail in page_classifier_result["details"]:
-                page = int(detail["page"])
-                if page not in class_by_page:
-                    class_by_page[page] = []
-                detail["classifier"] = classifier
-                class_by_page[page].append(detail)
-
-        prediction_agent = "majority"
-        voter = get_voting_strategy(prediction_agent, "abstain", max_diff=0.25)
-
+        # TODO : Read from config
         # Classification strategy: max_score, max_votes, max_score_with_diff
-        # calculate max score for each page by max score
+        prediction_agent = "majority"
+        tie_break_policy = "best_with_diff"
+        voter = get_voting_strategy(prediction_agent, tie_break_policy, max_diff=0.25)
+
+        class_by_page = self.group_results_by_page("classifier", page_classifier_meta)
         score_by_page = {}
         for page, details in class_by_page.items():
-            classification_results = [ClassificationResult(**x) for x in details]
-            result = voter(classification_results)
-            score_by_page[page] = result
+            score_by_page[page] = voter([ClassificationResult(**x) for x in details])
 
-        results = {
+        classifier_results = {
             "strategy": prediction_agent,
+            "tie_break_policy": tie_break_policy,
             "pages": {},
         }
 
         for page in list(class_by_page.keys()):
-            results["pages"][page] = {
+            classifier_results["pages"][page] = {
                 "details": class_by_page[page],
                 "best": score_by_page[page],
             }
 
-        return results
+        # Indexer results
+        indexer_by_page = self.group_results_by_page("indexer", page_indexer_meta)
+        indexer_results = {"strategy": "default", "pages": {}}
+
+        for page in list(indexer_by_page.keys()):
+            indexer_results["pages"][page] = {"details": indexer_by_page[page]}
+
+        return {"classifier": classifier_results, "indexer": indexer_results}
+
+    def group_results_by_page(self, group_key: str, page_meta: List[dict[str, any]]):
+        """Group the results by page"""
+        group_by_page = {}
+        for idx, page_result in enumerate(page_meta):
+            indexer = page_result[group_key]
+            for detail in page_result["details"]:
+                page = int(detail["page"])
+                if page not in group_by_page:
+                    group_by_page[page] = []
+                detail[group_key] = indexer
+                group_by_page[page].append(detail)
+
+        return group_by_page
 
     def reload_pipeline(self, pipeline_name) -> None:
         with TimeContext(f"### Reloading pipeline : {pipeline_name}", self.logger):
