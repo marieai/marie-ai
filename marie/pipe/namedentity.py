@@ -88,7 +88,8 @@ class NamedEntityPipelineComponent(PipelineComponent, ABC):
                         if filter_type == "regex":
                             import re
 
-                            if re.search(filter_pattern, classification):
+                            # convert dict to str for regex to work
+                            if re.search(filter_pattern, str(classification)):
                                 self.logger.info(
                                     f"Document classification matches filter : {classification} : {filter_pattern}"
                                 )

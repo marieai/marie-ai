@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
@@ -40,7 +40,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
-        pipeline: dict[str, any] = None,
+        pipelines: List[dict[str, any]] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -61,7 +61,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
         logger.info(f"Starting executor : {self.__class__.__name__}")
         logger.info(f"Runtime args : {kwargs.get('runtime_args')}")
         logger.info(f"Storage config: {storage}")
-        logger.info(f"Pipeline config: {pipeline}")
+        logger.info(f"Pipelines config: {pipelines}")
         logger.info(f"Device : {device}")
         logger.info(f"use_cuda : {use_cuda}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
@@ -101,7 +101,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
 
         setup_torch_optimizations(num_threads=num_threads)
         self.show_error = True  # show prediction errors
-        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=has_cuda)
+        self.pipeline = ExtractPipeline(pipelines_config=pipelines, cuda=has_cuda)
 
         instance_name = "not_defined"
         if kwargs is not None:

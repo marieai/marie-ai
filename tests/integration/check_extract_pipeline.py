@@ -40,6 +40,9 @@ if __name__ == "__main__":
     MDC.put("request_id", "test")
     img_path = "~/tmp/address-001.png"
     img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
+    img_path = "~/Desktop/11302023_21100_5_102_.tif"
+    # img_path = "~/Desktop/11302023_28082_5_452_.tif"
+
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -51,9 +54,11 @@ if __name__ == "__main__":
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
 
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
+
+    config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-001.partial.yml"))
     # pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
-    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
+    pipelines_config = config["pipelines"]
+    pipeline = ExtractPipeline(pipelines_config=pipelines_config, cuda=True)
 
     regions = [
         {

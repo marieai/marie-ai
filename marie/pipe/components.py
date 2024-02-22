@@ -334,6 +334,7 @@ def setup_indexers(
 
     return document_indexers
 
+
 def load_pipeline(
     self, pipeline_config: dict[str, any]
 ) -> tuple[str, dict[str, any], dict[str, any]]:
@@ -415,6 +416,7 @@ def reload_pipeline(self, pipeline_name) -> None:
         except Exception as e:
             self.logger.error(f"Error reloading pipeline : {e}")
             raise e
+
 
 def restore_assets(
     ref_id: str,
@@ -500,6 +502,28 @@ def store_assets(
         return StorageManager.list(s3_asset_base, return_full_path=True)
     except Exception as e:
         logger.error(f"Error storing assets : {e}")
+
+
+def store_metadata(
+    ref_id: str,
+    ref_type: str,
+    root_asset_dir: str,
+    metadata: dict[str, any],
+    infix: str = "meta",
+) -> None:
+    """
+    Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
+    :param ref_id: reference id of the document
+    :param ref_type: reference type of the document
+    :param root_asset_dir: root asset directory
+    :param metadata: metadata to store
+    :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
+    :return: None
+    """
+    filename, prefix, suffix = split_filename(ref_id)
+    metadata_path = os.path.join(root_asset_dir, f"{filename}.{infix}.json")
+    logger.info(f"Storing metadata : {metadata_path}")
+    store_json_object(metadata, metadata_path)
 
 
 def burst_frames(

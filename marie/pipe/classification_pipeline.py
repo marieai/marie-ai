@@ -27,6 +27,7 @@ from marie.pipe.components import (
     setup_indexers,
     split_filename,
     store_assets,
+    store_metadata,
 )
 from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast
@@ -189,33 +190,11 @@ class ClassificationPipeline:
                 {"group": group, "classification": results}
             )
 
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
 
         return metadata
-
-    def store_metadata(
-        self,
-        ref_id: str,
-        ref_type: str,
-        root_asset_dir: str,
-        metadata: dict[str, any],
-        infix: str = "meta",
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        :param ref_id: reference id of the document
-        :param ref_type: reference type of the document
-        :param root_asset_dir: root asset directory
-        :param metadata: metadata to store
-        :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
-        :return: None
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.{infix}.json")
-        self.logger.info(f"Storing metadata : {metadata_path}")
-        store_json_object(metadata, metadata_path)
 
     def execute(
         self,

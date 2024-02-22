@@ -19,7 +19,7 @@ pipelines:
           batch_size: 1
           device: 'cuda'
           name: 'medical_payer_classifier'
-          group: 'medical-classifier'
+          group: 'medical-payer-classifier'
 
       page_indexer:
         - model_name_or_path: 'rms/layoutlmv3-large-corr-ner'
@@ -31,6 +31,15 @@ pipelines:
             type: 'regex'
             pattern: '.*'
           group: 'medical-classifier'
+        - model_name_or_path: 'rms/layoutlmv3-large-corr-ner'
+          enabled: True
+          type: 'transformers'
+          device: 'cuda'
+          name: 'page_indexer_payer'
+          filter:
+            type: 'regex'
+            pattern: '.*'
+          group: 'medical-payer-classifier'
 
       page_splitter:
         model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'

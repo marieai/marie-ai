@@ -36,6 +36,7 @@ from marie.pipe.components import (
     setup_overlay,
     split_filename,
     store_assets,
+    store_metadata,
 )
 from marie.renderer import PdfRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
@@ -121,9 +122,6 @@ class ExtractPipeline:
             self.classifier_groups,
             self.document_indexers,
         ) = self.load_pipeline(self.default_pipeline_config)
-
-        # self.document_classifiers = setup_classifiers(pipeline_config)
-        # self.document_indexers = setup_indexers(pipeline_config)
 
         self.logger.info(
             f"Loaded classifiers : {len(self.classifier_groups)},  {self.classifier_groups.keys()}"
@@ -253,7 +251,6 @@ class ExtractPipeline:
                 )
                 self.reload_pipeline(expected_pipeline_name)
 
-        post_processing_pipeline = []
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
@@ -280,7 +277,7 @@ class ExtractPipeline:
         # Extract and Classify now done in groups
         for group, classifier_group in self.classifier_groups.items():
             self.logger.info(
-                f"Loaded extract pipeline/group : {self.pipeline_name} : {group}"
+                f"Loaded extract pipeline/group : {self.pipeline_name}, {group}"
             )
             document_classifiers = classifier_group["classifiers"]
             post_processing_pipeline = []
@@ -308,26 +305,19 @@ class ExtractPipeline:
                 {"group": group, "classification": results}
             )
 
+        if "page_classifier" in metadata:
+            del metadata["page_classifier"]
+
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
         self.render_blobs(ref_id, frames, ocr_results, root_asset_dir)
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
 
         self.pack_assets(ref_id, ref_type, root_asset_dir, metadata)
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
-        store_assets(ref_id, ref_type, root_asset_dir)
+        store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
 
         return metadata
-
-    def store_metadata(
-        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, any]
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
-        store_json_object(metadata, metadata_path)
 
     def execute_regions_pipeline(
         self,
@@ -370,6 +360,7 @@ class ExtractPipeline:
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
             "ocr": results,
         }
@@ -603,7 +594,7 @@ class ExtractPipeline:
         self.logger.info(context["metadata"]["page_classifier"])
 
         page_classifier = context["metadata"]["page_classifier"]
-        # taken from classification_pipeline
+
         # Pivot the results to make it easier to work with by page
         class_by_page = {}
         for idx, page_classifier_result in enumerate(page_classifier):
