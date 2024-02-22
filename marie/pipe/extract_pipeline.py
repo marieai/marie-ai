@@ -1,6 +1,7 @@
 import glob
 import os
 import shutil
+import types
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
@@ -11,8 +12,8 @@ from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
-from marie.excepts import BadConfigSource
 from marie.common.file_io import get_file_count
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_words_and_boxes
@@ -25,13 +26,13 @@ from marie.pipe import (
 from marie.pipe.components import (
     burst_frames,
     get_known_ocr_engines,
+    load_pipeline,
     ocr_frames,
+    reload_pipeline,
     restore_assets,
     s3_asset_path,
     setup_classifiers,
     setup_indexers,
-    load_pipeline,
-    reload_pipeline,
     setup_overlay,
     split_filename,
     store_assets,
@@ -78,7 +79,7 @@ class ExtractPipeline:
 
     def __init__(
         self,
-        pipelines_config: dict[str, any] = None,
+        pipelines_config: List[dict[str, any]] = None,
         cuda: bool = True,
         **kwargs,
     ) -> None:
@@ -89,17 +90,19 @@ class ExtractPipeline:
         if os.environ.get("MARIE_DISABLE_CUDA"):
             use_cuda = False
 
-        device = pipelines_config.get("device", "cpu" if not use_cuda else "cuda")
+        # device = pipelines_config.get("device", "cpu" if not use_cuda else "cuda")
+        device = "cpu" if not use_cuda else "cuda"
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
-        self.load_pipeline = load_pipeline
-        self.reload_pipeline = reload_pipeline
+        self.load_pipeline = types.MethodType(load_pipeline, self)
+        self.reload_pipeline = types.MethodType(reload_pipeline, self)
+        self.pipelines_config = pipelines_config
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.default_pipeline_config = None
 
         for conf in pipelines_config:
-            conf = conf["default"]
+            conf = conf["pipeline"]
             if conf.get("default", False):
                 if self.default_pipeline_config is not None:
                     raise BadConfigSource(
@@ -109,7 +112,7 @@ class ExtractPipeline:
 
         if self.default_pipeline_config is None:
             raise BadConfigSource("Invalid pipeline configuration, default not found")
-        
+
         self.overlay_processor = setup_overlay(self.default_pipeline_config)
         self.ocr_engines = get_known_ocr_engines(device=device)
 
@@ -255,10 +258,10 @@ class ExtractPipeline:
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
 
-            
         # check if we have already processed this document and restore assets
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
@@ -274,11 +277,10 @@ class ExtractPipeline:
         metadata["ocr"] = ocr_results
         metadata["classifications"] = []
 
-
         # Extract and Classify now done in groups
         for group, classifier_group in self.classifier_groups.items():
-            self.loggger.info(
-                f"Loaded extract group : {self.pipeline_name} : {group}"
+            self.logger.info(
+                f"Loaded extract pipeline/group : {self.pipeline_name} : {group}"
             )
             document_classifiers = classifier_group["classifiers"]
             post_processing_pipeline = []
@@ -287,7 +289,7 @@ class ExtractPipeline:
                 post_processing_pipeline.append(
                     ClassifierPipelineComponent(
                         name="classifier_pipeline_component",
-                        document_classifiers=self.document_classifiers,
+                        document_classifiers=document_classifiers,
                     )
                 )
 
@@ -299,7 +301,9 @@ class ExtractPipeline:
                     )
                 )
 
-            results = self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+            results = self.execute_pipeline(
+                post_processing_pipeline, frames, ocr_results, metadata
+            )
             metadata["classifications"].append(
                 {"group": group, "classification": results}
             )
@@ -594,9 +598,12 @@ class ExtractPipeline:
             except Exception as e:
                 self.logger.error(f"Error executing pipe : {e}")
 
-        # taken from classification_pipeline
+        # TODO : This is temporary, we need to make this configurable
+        self.logger.info("### ClassificationPipeline results")
+        self.logger.info(context["metadata"]["page_classifier"])
+
         page_classifier = context["metadata"]["page_classifier"]
-        
+        # taken from classification_pipeline
         # Pivot the results to make it easier to work with by page
         class_by_page = {}
         for idx, page_classifier_result in enumerate(page_classifier):
@@ -634,4 +641,3 @@ class ExtractPipeline:
             }
 
         return results
-

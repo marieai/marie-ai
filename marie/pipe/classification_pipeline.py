@@ -1,5 +1,6 @@
 import os
 import shutil
+import types
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -18,12 +19,12 @@ from marie.pipe import ClassifierPipelineComponent, PipelineComponent, PipelineC
 from marie.pipe.components import (
     burst_frames,
     get_known_ocr_engines,
+    load_pipeline,
     ocr_frames,
+    reload_pipeline,
     restore_assets,
     setup_classifiers,
     setup_indexers,
-    load_pipeline,
-    reload_pipeline,
     split_filename,
     store_assets,
 )
@@ -66,10 +67,10 @@ class ClassificationPipeline:
         # super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.load_pipeline = load_pipeline
+        self.load_pipeline = types.MethodType(load_pipeline, self)
 
         self.pipelines_config = pipelines_config
-        self.reload_pipeline = reload_pipeline
+        self.reload_pipeline = types.MethodType(reload_pipeline, self)
         self.default_pipeline_config = None
 
         for conf in pipelines_config:
@@ -100,7 +101,6 @@ class ClassificationPipeline:
             device = "cpu"
 
         self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
-
 
     def execute_frames_pipeline(
         self,

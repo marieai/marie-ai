@@ -1,0 +1,37 @@
+pipelines:
+  - pipeline:
+      name: 'default'
+      default: True
+      page_classifier:
+        - model_name_or_path: 'marie/lmv3-medical-document-classification'
+          type: 'transformers'
+          task: 'text-classification-multimodal'
+          device: 'cuda'
+          enabled: True
+          batch_size: 1
+          name: 'medical_page_classifier'
+          group: 'medical-classifier'
+
+        - model_name_or_path: 'marie/lmv3-medical-document-payer'
+          type: 'transformers'
+          task: 'text-classification-multimodal'
+          enabled: True
+          batch_size: 1
+          device: 'cuda'
+          name: 'medical_payer_classifier'
+          group: 'medical-classifier'
+
+      page_indexer:
+        - model_name_or_path: 'rms/layoutlmv3-large-corr-ner'
+          enabled: True
+          type: 'transformers'
+          device: 'cuda'
+          name: 'page_indexer_patient'
+          filter:
+            type: 'regex'
+            pattern: '.*'
+          group: 'medical-classifier'
+
+      page_splitter:
+        model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
+        enabled: True
