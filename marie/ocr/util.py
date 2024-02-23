@@ -14,7 +14,9 @@ from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists
 
 
-def get_words_and_boxes(ocr_results, page_index: int) -> tuple:
+def get_words_and_boxes(
+    ocr_results, page_index: int
+) -> tuple[list[str], list[list[int]]]:
     """
     Get words and boxes from OCR results.
     :param ocr_results:
