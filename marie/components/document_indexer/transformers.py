@@ -37,6 +37,7 @@ from ...ocr.ocr_engine import reset_bbox_cache
 from ...ocr.util import get_known_ocr_engines
 from ...registry.model_registry import ModelRegistry
 from ...utils.docs import convert_frames, frames_from_docs
+from ...utils.image_utils import hash_frames_fast
 from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
 from .base import BaseDocumentIndexer
@@ -275,7 +276,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             ), "documents, words and boxes must have the same length"
 
         frames = frames_from_docs(documents)
-        frames, words, boxes = self.preprocess(frames, words, boxes)
+        file_hash = hash_frames_fast(frames)
+        frames, words, boxes_normal = self.preprocess(frames, words, boxes)
 
         batchable_docs = DocList(
             BatchableMarieDoc(
@@ -283,30 +285,21 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 words=word,
                 boxes=box,
             )
-            for doc, word, box in zip(documents, words, boxes)
+            for doc, word, box in zip(documents, words, boxes_normal)
         )
-
-        labels = self.labels
         annotations = []
 
         for k, (batchable_doc, _image) in enumerate(zip(batchable_docs, frames)):
             t = batchable_doc.tensor
             w = batchable_doc.words
             b = batchable_doc.boxes
-            self.logger.info(f"Batchable Doc : {_image}")
 
             width = _image.size[0]
             height = _image.size[1]
 
-            # Perform inference
-            self.logger.info(f"Performing inference")
             true_predictions, true_boxes, true_scores = self.inference(
-                image=_image, words=w, boxes=b, labels=labels, threshold=0.5
+                image=_image, words=w, boxes=b, labels=self.labels, threshold=0.5
             )
-
-            print("true_predictions", true_predictions)
-            print("true_boxes", true_boxes)
-            print("true_scores", true_scores)
 
             # show detail scores
             if self.debug_scores:
@@ -323,7 +316,6 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             }
             annotations.append(annotation)
 
-            file_hash = "test"
             if self.debug_visuals and self.debug_visuals_prediction:
                 output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
                 visualize_prediction(
@@ -335,22 +327,21 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                     label2color=self.debug_colors,
                 )
 
-        file_hash = "test"
+        ensure_exists(os.path.join(__marie_home__, "annotation"))
         annotation_json_path = os.path.join(
             __marie_home__, "annotation", f"{file_hash}.json"
         )
-        ensure_exists(os.path.join(__marie_home__, "annotation"))
         store_json_object(annotations, annotation_json_path)
 
-        ner_results = self.postprocess(frames, annotations, words, boxes, file_hash)
-        print("ner_results", ner_results)
+        results = self.postprocess(frames, annotations, words, boxes, file_hash)
+        # TODO : persist results
         # self.persist(ref_id, ref_type, ner_results)
 
         for k, document in enumerate(documents):
             if self.task == "transformers-document-indexer":
-                filtered_meta = [val for val in ner_results["meta"] if val["page"] == k]
-                filtered_kv = [val for val in ner_results["kv"] if val["page"] == k]
-                filtered_ner = [val for val in ner_results["ner"] if val["page"] == k]
+                filtered_meta = [val for val in results["meta"] if val["page"] == k]
+                filtered_kv = [val for val in results["kv"] if val["page"] == k]
+                filtered_ner = [val for val in results["ner"] if val["page"] == k]
 
                 document.tags["indexer"] = {
                     "page": k,
@@ -359,7 +350,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                     "ner": filtered_ner,
                 }
             else:
-                raise ValueError(f"Unsupported task : {self.task}")
+                raise ValueError(f"Unsupported task: {self.task}")
         return documents
 
     def decorate_aggregates_with_text(
@@ -448,13 +439,14 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         labels: List[str],
         threshold: float,
     ) -> Tuple[List, List, List]:
-        """Run Inference on the model with given processor"
-        :param image: The image to be processed. This can be a PIL.Image or a tensor.
+        """Run Inference
+
+        :param image: The image to be processed. This can be a PIL.Image or numpy.
         :param words: The words to be processed.
-        :param boxes: The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized.
+        :param boxes: The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized to 1000
         :param labels: The labels to be used for inference.
         :param threshold: The threshold to be used for filtering the results.
-        :returns: The predictions, boxes, and scores.
+        :returns: The predictions, boxes (normalized), and scores.
         """
         self.logger.info(f"Performing inference")
         model = self.model
@@ -663,33 +655,26 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
     def postprocess(
         self,
-        frames,
-        annotations,
+        frames: List[Image.Image],
+        annotations: List[dict],
         words: List[List[str]],
         boxes: List[List[List[int]]],
         file_hash,
     ):
-        """Post-process extracted data"""
+        """Postprocess the results of the inference. This method is called by the predict method.
+        :param frames: The frames to be postprocessed.
+        :param annotations: The annotations to be postprocessed.
+        :param words:  The words to be processed.
+        :param boxes:   The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized to 1000
+        :param file_hash: The hash of the file to be postprocessed.
+        :returns: The postprocessed results.
+        """
+
+        self.logger.info(f"Postprocessing results")
         assert len(annotations) == len(words) == len(boxes) == len(frames)
         for k, _image in enumerate(frames):
             if not isinstance(_image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
-
-        # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
-        self.logger.debug("Changing coordinate format from xyxy->xywh")
-
-        # for data in ocr_results:
-        #     for word in data["words"]:
-        #         word["box"] = CoordinateFormat.convert(
-        #             word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
-        #         )
-
-        # for data in annotations:
-        #     for i, box in enumerate(data["boxes"]):
-        #         box = CoordinateFormat.convert(
-        #             box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
-        #         )
-        #         data["boxes"][i] = box
 
         aggregated_ner = []
         aggregated_kv = []
@@ -960,6 +945,13 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         self.decorate_aggregates_with_text(aggregated_ner, frames)
         self.decorate_aggregates_with_text(aggregated_kv, frames)
 
+        results = {
+            "meta": aggregated_meta,
+            "kv": aggregated_kv,
+            "ner": aggregated_ner,
+        }
+        self.logger.debug(f" results : {results}")
+
         # visualize results per page
         if self.debug_visuals and self.debug_visuals_ner:
             for k in range(0, len(frames)):
@@ -969,10 +961,4 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 items.extend([row for row in aggregated_ner if int(row["page"]) == k])
                 visualize_extract_kv(output_filename, frames[k], items)
 
-        results = {
-            "meta": aggregated_meta,
-            "kv": aggregated_kv,
-            "ner": aggregated_ner,
-        }
-        self.logger.debug(f" results : {results}")
         return results
