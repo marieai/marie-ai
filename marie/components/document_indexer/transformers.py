@@ -230,17 +230,20 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
     def preprocess(
         self, frames: List, words: List[List[str]], boxes: List[List[List[int]]]
-    ) -> Tuple[List, List, List]:
-
+    ) -> Tuple[List, List[List[str]], List[List[List[int]]]]:
+        """Preprocess the input data for inference. This method is called by the predict method.
+        :param frames: The frames to be preprocessed.
+        :param words: The words to be preprocessed.
+        :param boxes: The boxes to be preprocessed, in the format (x, y, w, h).
+        :returns: The preprocessed frames, words, and boxes (normalized).
+        """
         assert len(frames) == len(boxes) == len(words)
         frames = convert_frames(frames, img_format="pil")
-        # return frames, words, boxes
-
         normalized_boxes = []
 
         for frame, box_set, word_set in zip(frames, boxes, words):
             if not isinstance(frame, Image.Image):
-                raise "Frame should have been an PIL.Image instance"
+                raise ValueError("Frame should have been an PIL.Image instance")
             nbox = []
             for i, box in enumerate(box_set):
                 nbox.append(normalize_bbox(box_set[i], (frame.size[0], frame.size[1])))
@@ -253,8 +256,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
     def predict(
         self,
         documents: DocList[MarieDoc],
-        words: List[List[str]] = None,
-        boxes: List[List[List[int]]] = None,
+        words: List[List[str]],
+        boxes: List[List[List[int]]],
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
         if batch_size is None:
@@ -445,7 +448,14 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         labels: List[str],
         threshold: float,
     ) -> Tuple[List, List, List]:
-        """Run Inference on the model with given processor"""
+        """Run Inference on the model with given processor"
+        :param image: The image to be processed. This can be a PIL.Image or a tensor.
+        :param words: The words to be processed.
+        :param boxes: The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized.
+        :param labels: The labels to be used for inference.
+        :param threshold: The threshold to be used for filtering the results.
+        :returns: The predictions, boxes, and scores.
+        """
         self.logger.info(f"Performing inference")
         model = self.model
         processor = self.processor
@@ -613,7 +623,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             words, original_boxes, out_prediction, out_boxes, out_scores
         )
 
-        assert len(out_prediction) == len(words)
+        assert len(out_prediction) == len(words) == len(boxes)
         return out_prediction, out_boxes, out_scores
 
     def align_predictions(
