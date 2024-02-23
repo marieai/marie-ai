@@ -1,4 +1,5 @@
 import os
+from pprint import pprint
 
 from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__
@@ -71,7 +72,12 @@ if __name__ == "__main__":
         )
     )
 
-    pipelines_config = config["pipelines"]
+    config = load_yaml("/mnt/data/marie-ai/config/service/marie-classifier-3.0.28.yml")
+    # pprint(config)
+    # pprint(config['executors'][0]['uses']['with']['pipelines'])
+
+    # pipelines_config = config["pipelines"]
+    pipelines_config = config['executors'][0]['uses']['with']['pipelines']
     pipeline = ClassificationPipeline(pipelines_config=pipelines_config)
 
     runtime_conf = {
@@ -81,6 +87,15 @@ if __name__ == "__main__":
     # runtime_conf = None
 
     with TimeContext(f"### ClassificationPipeline info"):
+        results = pipeline.execute(
+            ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), runtime_conf=runtime_conf
+        )
+        print(results)
+
+        runtime_conf = {
+            'name': 'jpmc-corr'
+        }
+
         results = pipeline.execute(
             ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), runtime_conf=runtime_conf
         )

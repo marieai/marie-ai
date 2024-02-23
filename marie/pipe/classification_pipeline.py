@@ -69,7 +69,6 @@ class ClassificationPipeline:
         silence_exceptions: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(context=self.__class__.__name__)
 
