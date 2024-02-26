@@ -16,7 +16,7 @@ from PyPDF4.utils import PdfReadError
 
 from marie import Document, DocumentArray
 from marie._core.definitions.events import AssetKey
-from marie.api.docs import MarieDoc
+from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
 from marie.storage import StorageManager
 from marie.utils.utils import ensure_exists
@@ -344,18 +344,19 @@ def is_array_like(obj: Any) -> bool:
 
 
 def docs_from_image(src: Union[Any, List]) -> DocList[MarieDoc]:
-    """Create DocumentArray from image or array like object
+    """Create DocumentArray from image or array like object.
     Numpy ndarray or PIl Image ar supported
     """
-    arr = src
+    frames = src
     if not is_array_like(src):
-        arr = [src]
+        frames = [src]
 
     docs = DocList[MarieDoc]()
-    for img in arr:
-        if isinstance(img, Image.Image):
-            img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        doc = MarieDoc(tensor=img)
+    for i, frame in enumerate(frames):
+        if isinstance(frame, Image.Image):
+            frame = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
+        doc = MarieDoc(tensor=frame)
+        doc.tags[DOC_KEY_PAGE_NUMBER] = i
         docs.append(doc)
 
     return docs

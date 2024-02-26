@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Callable, Mapping, Tuple, TypeAlias, TypeVar
 
 from .. import check
-from .utils import FileSystem
+from .utils import FileSystem, filter_node
 
 K = TypeVar("K")
 T = TypeVar("T")

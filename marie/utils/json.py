@@ -42,7 +42,7 @@ def load_json_file(filename) -> Any:
 
 def deserialize_value(json_str) -> Any:
     """Deserialize a JSON string to an object."""
-    data = json.load(json_str)
+    data = json.loads(json_str)
     return data
 
 

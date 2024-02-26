@@ -91,9 +91,12 @@ def visualize_prediction(
         # if box_format == "xywh":
         box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
-        print(box)
         predicted_label = iob_to_label(prediction).lower()
-        draw.rectangle(box, outline=label2color[predicted_label.lower()], width=1)
+        draw.rectangle(
+            (box[0], box[1], box[2], box[3]),
+            outline=label2color[predicted_label.lower()],
+            width=1,
+        )
         draw.text(
             (box[0] + 10, box[1] - 10),
             text=f"{predicted_label}",

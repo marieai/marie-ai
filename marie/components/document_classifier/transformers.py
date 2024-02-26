@@ -313,7 +313,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         :param top_k: number of predictions to return
         :return: prediction dictionary with label and score
         """
-
         if self.id2label is None:
             id2label = self.model.config.id2label
         else:

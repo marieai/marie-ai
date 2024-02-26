@@ -3,21 +3,26 @@ from typing import List, Optional
 
 from docarray import DocList
 
-from marie.api.docs import MarieDoc
+from marie.api.docs import DOC_KEY_CLASSIFICATION, DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.logging.logger import MarieLogger
 from marie.pipe.base import PipelineComponent, PipelineContext, PipelineResult
 
 
 class ClassifierPipelineComponent(PipelineComponent, ABC):
     def __init__(
-        self, name: str, document_classifiers: dict, logger: MarieLogger = None
+        self,
+        name: str,
+        document_classifiers: dict,
+        logger: MarieLogger = None,
+        silence_exceptions: bool = False,
     ) -> None:
         """
-        :param document_classifiers:
-        :param name: Will be passed to base class
+        :param document_classifiers: A dictionary containing document classifiers.
+        :param name: Will be passed to base class for logging purposes
         """
         super().__init__(name, logger=logger)
-        # ensure that the document_classifiers is a dictionary of document classifiers and filters
+        if not isinstance(document_classifiers, dict):
+            raise ValueError("document_classifiers must be a dictionary")
         self.document_classifiers = document_classifiers
 
     def predict(
@@ -64,16 +69,17 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
                 )
 
                 for idx, document in enumerate(classified_docs):
-                    assert "classification" in document.tags
-                    classification = document.tags["classification"]
-                    # document.tags.pop("classification")
+                    assert DOC_KEY_PAGE_NUMBER in document.tags
+                    assert DOC_KEY_CLASSIFICATION in document.tags
+                    classification = document.tags[DOC_KEY_CLASSIFICATION]
 
                     assert "label" in classification
                     assert "score" in classification
                     meta.append(
                         {
-                            "page": f"{idx}",  # Using string to avoid type conversion issues
-                            "classification": classification["label"],
+                            "page": f"{document.tags[DOC_KEY_PAGE_NUMBER]}",
+                            # Using string to avoid type conversion issues
+                            "classification": str(classification["label"]),
                             "score": round(classification["score"], 4),
                         }
                     )

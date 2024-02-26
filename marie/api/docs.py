@@ -9,6 +9,11 @@ from docarray.typing import AnyTensor
 
 # It is important to note that if the documents are not serializable we can get number or wierd exceptions
 
+DOC_KEY_PAGE_NUMBER = "page_number"
+DOC_KEY_CLASSIFICATION = "classification"
+DOC_KEY_INDEXER = "indexer"
+DOC_KEY_ASSET_KEY = "asset_key"
+
 
 class AssetKeyDoc(BaseDoc):
     asset_key: str

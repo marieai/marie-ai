@@ -12,13 +12,11 @@ from marie.logging.predefined import default_logger as logger
 from marie.utils.overlap import find_overlap_vertical
 
 
-def find_line_number(lines, box):
+def find_line_number(lines: List[List[int]], box: List[int]) -> int:
     """Get line index for specific box
-    Args:
-        lines: all lines to check against in (x, y, w, h) format
-        box: box to check in (x, y, w, h) format
-    Returns:
-          line_number or -1 if line was not determined
+    :param lines: all lines to check against in (x, y, w, h) format
+    :param box: bounding box in (x, y, w, h)
+    :return: line_number or -1 if line was not determined
     """
     line_number = -1
     overlaps, indexes, scores = find_overlap_vertical(box, lines)
@@ -99,19 +97,27 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
     return lines_bboxes
 
 
-def line_merge(image, bboxes) -> List[Any]:
+def line_merge(
+    image, bboxes: List[List[int]], enable_visualization: Optional[bool] = True
+) -> List[List[int]]:
+    """Merge overlapping bounding boxes into lines
+
+    :param image: image to overlay the bounding boxes on
+    :param bboxes: list of bounding boxes in (x, y, w, h) format
+    :param enable_visualization:  enable visualization of the bounding boxes
+    :return: list of merged bounding boxes in (x, y, w, h) format
+    """
+
     if len(bboxes) == 0:
         return []
     if isinstance(image, Image.Image):
         image = np.array(image)
-    if image is not None:
-        _h = image.shape[0]
-        _w = image.shape[1]
-    else:
-        _h = 0
-        _w = 0
+    if image is None:
+        raise ValueError("Image is None or invalid.")
 
-    enable_visualization = True
+    _h = image.shape[0]
+    _w = image.shape[1]
+
     iou_scores = [0.8, 0.7, 0.6, 0.5, 0.4, 0.37, 0.35]
     no_change_count = 0
     min_change_count = 2
@@ -161,6 +167,5 @@ def line_merge(image, bboxes) -> List[Any]:
 
     y1 = merged_bboxes[:, 1]
     idxs = np.argsort(y1)
-    merged_bboxes = merged_bboxes[idxs]
 
-    return merged_bboxes
+    return merged_bboxes[idxs]

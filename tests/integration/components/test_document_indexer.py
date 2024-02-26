@@ -12,7 +12,8 @@ from marie.utils.docs import docs_from_file
 from marie.utils.json import load_json_file
 
 
-def ensure_model(model_name_or_path):
+def ensure_model(model_name_or_path: str) -> str:
+    """ Ensure model is available locally"""
     kwargs = {
         # "__model_path__": os.path.expanduser("~/tmp/models"),
         "use_auth_token": False,

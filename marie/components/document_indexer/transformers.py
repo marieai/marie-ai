@@ -14,7 +14,6 @@ from transformers import (
     LayoutLMv3TokenizerFast,
 )
 
-from marie.components.document_indexer.base import BaseDocumentIndexer
 from marie.constants import __marie_home__, __model_path__
 from marie.executor.ner.utils import (
     draw_box,
@@ -30,13 +29,18 @@ from marie.models.utils import initialize_device_settings
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
+from ...boxes import PSMode
 from ...boxes.line_processor import find_line_number, line_merge
 from ...logging.profile import TimeContext
-from ...ocr import CoordinateFormat
+from ...ocr import CoordinateFormat, OcrEngine
+from ...ocr.ocr_engine import reset_bbox_cache
+from ...ocr.util import get_known_ocr_engines
 from ...registry.model_registry import ModelRegistry
 from ...utils.docs import convert_frames, frames_from_docs
+from ...utils.image_utils import hash_frames_fast
 from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
+from .base import BaseDocumentIndexer
 
 
 class TransformersDocumentIndexer(BaseDocumentIndexer):
@@ -57,6 +61,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         use_auth_token: Optional[Union[str, bool]] = None,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
+        ocr_engine: Optional[OcrEngine] = None,
         **kwargs,
     ):
         """
@@ -72,18 +77,17 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         :param use_auth_token: The authentication token to be used. Defaults to None.
         :param devices: The devices to be used for processing. Defaults to None.
         :param show_error: Whether to show errors. Defaults to True.
+        :param ocr_engine: The OCR engine to be used. Defaults to None, in which case the default OCR engine is used.
         :param kwargs: Additional keyword arguments.
         :returns: None
         """
 
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document indexer : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.task = task
-
-        self.logger.info(f"NER Extraction component : {model_name_or_path}")
+        self.logger.info(f"Document indexer : {model_name_or_path}")
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -142,6 +146,12 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             model_name_or_path, self.labels, self.device.type
         )
         self.processor = self.__create_processor()
+        if ocr_engine:
+            self.ocr_engine = ocr_engine
+        else:
+            self.logger.warning("Using default OCR engine for Document Indexing")
+            ocr_engines = get_known_ocr_engines(device="cuda", engine="default")
+            self.ocr_engine = ocr_engines["default"]
 
     def __create_processor(self):
         """prepare for the model"""
@@ -221,17 +231,20 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
     def preprocess(
         self, frames: List, words: List[List[str]], boxes: List[List[List[int]]]
-    ) -> Tuple[List, List, List]:
-
+    ) -> Tuple[List, List[List[str]], List[List[List[int]]]]:
+        """Preprocess the input data for inference. This method is called by the predict method.
+        :param frames: The frames to be preprocessed.
+        :param words: The words to be preprocessed.
+        :param boxes: The boxes to be preprocessed, in the format (x, y, w, h).
+        :returns: The preprocessed frames, words, and boxes (normalized).
+        """
         assert len(frames) == len(boxes) == len(words)
         frames = convert_frames(frames, img_format="pil")
-        # return frames, words, boxes
-
         normalized_boxes = []
 
         for frame, box_set, word_set in zip(frames, boxes, words):
             if not isinstance(frame, Image.Image):
-                raise "Frame should have been an PIL.Image instance"
+                raise ValueError("Frame should have been an PIL.Image instance")
             nbox = []
             for i, box in enumerate(box_set):
                 nbox.append(normalize_bbox(box_set[i], (frame.size[0], frame.size[1])))
@@ -244,8 +257,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
     def predict(
         self,
         documents: DocList[MarieDoc],
-        words: List[List[str]] = None,
-        boxes: List[List[List[int]]] = None,
+        words: List[List[str]],
+        boxes: List[List[List[int]]],
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
         if batch_size is None:
@@ -263,7 +276,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             ), "documents, words and boxes must have the same length"
 
         frames = frames_from_docs(documents)
-        frames, words, boxes = self.preprocess(frames, words, boxes)
+        file_hash = hash_frames_fast(frames)
+        frames, words, boxes_normal = self.preprocess(frames, words, boxes)
 
         batchable_docs = DocList(
             BatchableMarieDoc(
@@ -271,30 +285,21 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 words=word,
                 boxes=box,
             )
-            for doc, word, box in zip(documents, words, boxes)
+            for doc, word, box in zip(documents, words, boxes_normal)
         )
-
-        labels = self.labels
         annotations = []
 
         for k, (batchable_doc, _image) in enumerate(zip(batchable_docs, frames)):
             t = batchable_doc.tensor
             w = batchable_doc.words
             b = batchable_doc.boxes
-            self.logger.info(f"Batchable Doc : {_image}")
 
             width = _image.size[0]
             height = _image.size[1]
 
-            # Perform inference
-            self.logger.info(f"Performing inference")
             true_predictions, true_boxes, true_scores = self.inference(
-                image=_image, words=w, boxes=b, labels=labels, threshold=0.5
+                image=_image, words=w, boxes=b, labels=self.labels, threshold=0.5
             )
-
-            print("true_predictions", true_predictions)
-            print("true_boxes", true_boxes)
-            print("true_scores", true_scores)
 
             # show detail scores
             if self.debug_scores:
@@ -311,7 +316,6 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             }
             annotations.append(annotation)
 
-            file_hash = "test"
             if self.debug_visuals and self.debug_visuals_prediction:
                 output_filename = f"/tmp/tensors/prediction_{file_hash}_{k}.png"
                 visualize_prediction(
@@ -323,19 +327,109 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                     label2color=self.debug_colors,
                 )
 
-        file_hash = "test"
+        ensure_exists(os.path.join(__marie_home__, "annotation"))
         annotation_json_path = os.path.join(
             __marie_home__, "annotation", f"{file_hash}.json"
         )
-        ensure_exists(os.path.join(__marie_home__, "annotation"))
         store_json_object(annotations, annotation_json_path)
 
-        ner_results = self.postprocess(frames, annotations, words, boxes, file_hash)
-        print("ner_results", ner_results)
+        results = self.postprocess(frames, annotations, words, boxes, file_hash)
+        # TODO : persist results
         # self.persist(ref_id, ref_type, ner_results)
 
-        results = DocList[MarieDoc]()
-        return results
+        for k, document in enumerate(documents):
+            if self.task == "transformers-document-indexer":
+                filtered_meta = [val for val in results["meta"] if val["page"] == k]
+                filtered_kv = [val for val in results["kv"] if val["page"] == k]
+                filtered_ner = [val for val in results["ner"] if val["page"] == k]
+
+                document.tags["indexer"] = {
+                    "page": k,
+                    "meta": filtered_meta,
+                    "kv": filtered_kv,
+                    "ner": filtered_ner,
+                }
+            else:
+                raise ValueError(f"Unsupported task: {self.task}")
+        return documents
+
+    def decorate_aggregates_with_text(
+        self, aggregated_kv: list[dict], frames: List[Image.Image]
+    ):
+        """Decorate our answers with proper TEXT
+        Performing secondary OCR yields much better results as we are using RAW-LINE as our segmentation method
+        """
+        regions = []
+
+        def create_region(field_id, page_index, bbox):
+            box = np.array(bbox).astype(np.int32)
+            x, y, w, h = box
+            return {
+                "id": field_id,
+                "pageIndex": page_index,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            }
+
+        # aggregate results for OCR extraction
+        for k, agg_result in enumerate(aggregated_kv):
+            page_index = int(agg_result["page"])
+            category = agg_result["category"]
+
+            if "question" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_k",
+                        page_index,
+                        agg_result["value"]["question"]["bbox"],
+                    )
+                )
+
+            if "answer" in agg_result["value"]:
+                regions.append(
+                    create_region(
+                        f"{category}_{k}_v",
+                        page_index,
+                        agg_result["value"]["answer"]["bbox"],
+                    )
+                )
+
+        # nothing to decorate
+        if len(regions) == 0:
+            return
+
+        region_results = self.ocr_engine.extract(
+            frames,
+            PSMode.RAW_LINE,
+            CoordinateFormat.XYWH,
+            regions,
+            **{"filter_snippets": True},
+        )
+        reset_bbox_cache()
+
+        # possible failure in extracting data for region
+        if "regions" not in region_results:
+            self.logger.warning("No regions returned")
+            return
+        region_results = region_results["regions"]
+
+        # merge results
+        for k, agg_result in enumerate(aggregated_kv):
+            category = agg_result["category"]
+            for region in region_results:
+                rid = region["id"]
+                if rid == f"{category}_{k}_k":
+                    agg_result["value"]["question"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
+                if rid == f"{category}_{k}_v":
+                    agg_result["value"]["answer"]["text"] = {
+                        "text": region["text"],
+                        "confidence": region["confidence"],
+                    }
 
     def inference(
         self,
@@ -345,7 +439,15 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         labels: List[str],
         threshold: float,
     ) -> Tuple[List, List, List]:
-        """Run Inference on the model with given processor"""
+        """Run Inference
+
+        :param image: The image to be processed. This can be a PIL.Image or numpy.
+        :param words: The words to be processed.
+        :param boxes: The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized to 1000
+        :param labels: The labels to be used for inference.
+        :param threshold: The threshold to be used for filtering the results.
+        :returns: The predictions, boxes (normalized), and scores.
+        """
         self.logger.info(f"Performing inference")
         model = self.model
         processor = self.processor
@@ -513,7 +615,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             words, original_boxes, out_prediction, out_boxes, out_scores
         )
 
-        assert len(out_prediction) == len(words)
+        assert len(out_prediction) == len(words) == len(boxes)
         return out_prediction, out_boxes, out_scores
 
     def align_predictions(
@@ -553,33 +655,26 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
     def postprocess(
         self,
-        frames,
-        annotations,
+        frames: List[Image.Image],
+        annotations: List[dict],
         words: List[List[str]],
         boxes: List[List[List[int]]],
         file_hash,
     ):
-        """Post-process extracted data"""
+        """Postprocess the results of the inference. This method is called by the predict method.
+        :param frames: The frames to be postprocessed.
+        :param annotations: The annotations to be postprocessed.
+        :param words:  The words to be processed.
+        :param boxes:   The boxes to be processed, in the format (x, y, w, h). Boxes should be normalized to 1000
+        :param file_hash: The hash of the file to be postprocessed.
+        :returns: The postprocessed results.
+        """
+
+        self.logger.info(f"Postprocessing results")
         assert len(annotations) == len(words) == len(boxes) == len(frames)
         for k, _image in enumerate(frames):
             if not isinstance(_image, Image.Image):
                 raise "Frame should have been an PIL.Image instance"
-
-        # need to normalize all data from XYXY to XYWH as the NER process required XYXY and assets were saved XYXY format
-        self.logger.debug("Changing coordinate format from xyxy->xywh")
-
-        # for data in ocr_results:
-        #     for word in data["words"]:
-        #         word["box"] = CoordinateFormat.convert(
-        #             word["box"], CoordinateFormat.XYXY, CoordinateFormat.XYWH
-        #         )
-
-        # for data in annotations:
-        #     for i, box in enumerate(data["boxes"]):
-        #         box = CoordinateFormat.convert(
-        #             box, CoordinateFormat.XYXY, CoordinateFormat.XYWH
-        #         )
-        #         data["boxes"][i] = box
 
         aggregated_ner = []
         aggregated_kv = []
@@ -768,12 +863,15 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
             for field in possible_fields.keys():
                 fields = possible_fields[field]
-                possible_field_meta[field] = {"page": i, "found": False, "fields": []}
+                possible_field_meta[field] = {"found": False, "fields": []}
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:
                         key = ner_key["key"]
-                        if key in fields:
+                        if (
+                            key in fields
+                            and key not in possible_field_meta[field]["fields"]
+                        ):
                             possible_field_meta[field]["found"] = True
                             possible_field_meta[field]["fields"].append(key)
 
@@ -844,9 +942,15 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             if self.debug_visuals and self.debug_visuals_overlay:
                 viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
-        # TODO : IS THIS NEEDED ANYMORE ???
-        # self.decorate_aggregates_with_text(aggregated_ner, frames)
-        # self.decorate_aggregates_with_text(aggregated_kv, frames)
+        self.decorate_aggregates_with_text(aggregated_ner, frames)
+        self.decorate_aggregates_with_text(aggregated_kv, frames)
+
+        results = {
+            "meta": aggregated_meta,
+            "kv": aggregated_kv,
+            "ner": aggregated_ner,
+        }
+        self.logger.debug(f" results : {results}")
 
         # visualize results per page
         if self.debug_visuals and self.debug_visuals_ner:
@@ -857,10 +961,4 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 items.extend([row for row in aggregated_ner if int(row["page"]) == k])
                 visualize_extract_kv(output_filename, frames[k], items)
 
-        results = {
-            "meta": aggregated_meta,
-            "kv": aggregated_kv,
-            "ner": aggregated_ner,
-        }
-        self.logger.debug(f" results : {results}")
         return results

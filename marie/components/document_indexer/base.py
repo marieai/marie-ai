@@ -30,8 +30,8 @@ class BaseDocumentIndexer(BaseHandler):
     def predict(
         self,
         documents: DocList[MarieDoc],
-        words: Optional[List[List[str]]] = None,
-        boxes: Optional[List[List[List[int]]]] = None,
+        words: Optional[List[List[str]]],
+        boxes: Optional[List[List[List[int]]]],
         batch_size: Optional[int] = None,
     ) -> DocList[MarieDoc]:
         pass
