@@ -107,7 +107,7 @@ class ClassificationPipeline:
         (
             self.pipeline_name,
             self.classifier_groups,
-            self.document_indexers,
+            self.indexer_groups,
         ) = self.load_pipeline(
             self.default_pipeline_config, self.ocr_engines["default"]
         )
@@ -149,6 +149,14 @@ class ClassificationPipeline:
         document_indexers = setup_indexers(
             pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
         )
+
+        indexer_groups = dict()
+        for group, indexer in document_indexers.items():
+            indexer_groups[group] = {
+                "group": group,
+                "indexer": indexer,
+            }
+
         # dump information about the loaded classifiers that are grouped by the classifier group
         for classifier_group, classifiers in document_classifiers.items():
             self.logger.info(
@@ -162,7 +170,7 @@ class ClassificationPipeline:
             f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
         )
 
-        return pipeline_name, classifier_groups, document_indexers
+        return pipeline_name, classifier_groups, indexer_groups
 
     def execute_frames_pipeline(
         self,
@@ -238,12 +246,14 @@ class ClassificationPipeline:
             ]
 
             if page_indexer_enabled:
-                processing_pipeline.append(
-                    NamedEntityPipelineComponent(
-                        name="ner_pipeline_component",
-                        document_indexers=self.document_indexers,
+                if group in self.indexer_groups:
+                    document_indexers = self.indexer_groups[group]["indexer"]
+                    processing_pipeline.append(
+                        NamedEntityPipelineComponent(
+                            name="ner_pipeline_component",
+                            document_indexers=document_indexers,
+                        )
                     )
-                )
 
             results = self.execute_pipeline(
                 processing_pipeline, sub_classifiers, frames, ocr_results
@@ -509,7 +519,7 @@ class ClassificationPipeline:
                 (
                     self.pipeline_name,
                     self.classifier_groups,
-                    self.document_indexers,
+                    self.indexer_groups,
                 ) = self.load_pipeline(pipeline_config)
                 self.logger.info(f"Reloaded successfully pipeline : {pipeline_name} ")
             except Exception as e:

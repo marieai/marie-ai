@@ -230,7 +230,7 @@ def setup_indexers(
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
     :param ocr_engine: OCR engine to use for the pipeline (default: None)
-    :return: document classifiers
+    :return: document classifiers grouped by their group names and indexed by their names
     """
 
     if pipeline_config is None:
@@ -259,17 +259,27 @@ def setup_indexers(
         if name in document_indexers:
             raise BadConfigSource(f"Duplicate indexer name : {name}")
 
+        if "group" not in config:
+            raise BadConfigSource(f"Missing group in indexer config : {config}")
+
+        group = config["group"] if "group" in config else "default"
+
+        if group not in document_indexers:
+            document_indexers[group] = dict()
+
         model_filter = config["filter"] if "filter" in config else {}
         # TODO: Add support for other indexer types
         if model_type == "transformers":
-            document_indexers[name] = {
+            document_indexers[group][name] = {
                 "indexer": TransformersDocumentIndexer(
                     model_name_or_path=model_name_or_path,
                     devices=[device],
                     ocr_engine=ocr_engine,
                 ),
                 "filter": model_filter,
+                "group": group,
             }
+
         else:
             raise ValueError(f"Invalid indexer type : {model_type}")
 
