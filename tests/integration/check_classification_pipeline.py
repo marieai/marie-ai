@@ -73,7 +73,7 @@ if __name__ == "__main__":
     )
 
     config = load_yaml("/mnt/data/marie-ai/config/service/marie-classifier-3.0.28.yml")
-    # pprint(config)
+    pprint(config)
     # pprint(config['executors'][0]['uses']['with']['pipelines'])
 
     # pipelines_config = config["pipelines"]

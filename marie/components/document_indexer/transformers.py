@@ -1,4 +1,5 @@
 import os
+from pprint import pprint
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -6,6 +7,7 @@ import torch
 import torch.nn as nn
 from docarray import DocList
 from PIL import Image, ImageDraw
+from pydantic import BaseModel
 from torch.nn import Module
 from transformers import (
     AutoModelForTokenClassification,
@@ -41,6 +43,52 @@ from ...utils.image_utils import hash_frames_fast
 from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
 from .base import BaseDocumentIndexer
+
+
+class DebugVisualsHandler:
+    def __init__(self, debug_visuals, frame):
+        self.debug_visuals = debug_visuals
+
+        self.viz_img = frame.copy()
+        self.draw = ImageDraw.Draw(self.viz_img, "RGBA")
+        self.font = get_font(14)
+
+    def draw_box(
+        self, bbox, text: Optional[str] = None, color_map: dict[str, str] = None
+    ) -> None:
+        if color_map is None:
+            color_map = {}
+        color = color_map[text] if text in color_map else get_random_color()
+
+        draw_box(
+            self.draw,
+            bbox,
+            text,
+            color,
+            self.font,
+        )
+
+    def save(self, output_filename: str):
+        self.viz_img.save(output_filename)
+
+
+class LineGroup(BaseModel):
+    bbox: list
+    key: str
+    line: int
+    score: float
+
+    class Config:
+        arbitrary_types_allowed = False
+
+
+class EntityGroup(BaseModel):
+    bbox: list
+    key: str
+    group: list[LineGroup]
+
+    class Config:
+        arbitrary_types_allowed = False
 
 
 class TransformersDocumentIndexer(BaseDocumentIndexer):
@@ -342,12 +390,14 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 filtered_meta = [val for val in results["meta"] if val["page"] == k]
                 filtered_kv = [val for val in results["kv"] if val["page"] == k]
                 filtered_ner = [val for val in results["ner"] if val["page"] == k]
+                filtered_groups = [val for val in results["groups"] if val["page"] == k]
 
                 document.tags["indexer"] = {
                     "page": k,
                     "meta": filtered_meta,
                     "kv": filtered_kv,
                     "ner": filtered_ner,
+                    "groups": filtered_groups,
                 }
             else:
                 raise ValueError(f"Unsupported task: {self.task}")
@@ -653,6 +703,107 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
         return aligned_prediction, aligned_boxes, aligned_scores
 
+    def group_composite_entities(
+        self,
+        entities_to_group: list[dict],
+        lines_bboxes: list[list[int]],
+        true_predictions: list[str],
+        true_boxes: list[list[int]],
+        true_scores: list[float],
+        frame,
+    ) -> dict[str, dict[str, EntityGroup]]:
+
+        visualizer = DebugVisualsHandler(self.debug_visuals, frame)
+
+        grouped_entities = {}
+
+        for entity in entities_to_group:
+            expected_keys = entity["entities"]
+            entity_name = entity["name"]
+
+            filtered_predictions = []
+            filtered_boxes = []
+            filtered_scores = []
+
+            for pred_idx, (prediction, pred_box, pred_score) in enumerate(
+                zip(true_predictions, true_boxes, true_scores)
+            ):
+                if prediction[2:] in expected_keys:
+                    filtered_predictions.append(prediction)
+                    filtered_boxes.append(pred_box)
+                    filtered_scores.append(pred_score)
+
+            groups = self.group_by_line(
+                lines_bboxes, filtered_boxes, filtered_predictions, filtered_scores
+            )
+            aggregated_keys = self.aggregate_groups_by_line(
+                expected_keys,
+                groups,
+                lines_bboxes,
+                filtered_boxes,
+                filtered_predictions,
+                filtered_scores,
+                visualizer,
+            )
+            self.fix_misslabeled_tokens(expected_keys, aggregated_keys)
+            visualizer.save(f"/tmp/tensors/extract_group_{entity_name}.png")
+
+            last_line = 0
+            group_id = 0
+            max_line_diff = 2
+            collected_groups = {}
+
+            for key, groups in aggregated_keys.items():
+                for group in groups:
+                    line_diff = group.line - last_line
+                    if last_line != 0 and line_diff > max_line_diff:
+                        group_id += 1
+                    if group_id not in collected_groups:
+                        collected_groups[group_id] = []
+                    collected_groups[group_id].append(group)
+                    last_line = group.line
+
+            merge_groups = {}
+
+            for group_id, group in collected_groups.items():
+                group = sorted(group, key=lambda x: x.bbox[0])
+                bboxes = [group.bbox for group in group]
+                visited = [False for _ in range(0, len(bboxes))]
+                for idx in range(0, len(bboxes)):
+                    if visited[idx]:
+                        continue
+                    ag_key = f"{group_id}_{idx}"
+                    visited[idx] = True
+                    overlaps, indexes, scores = find_overlap_horizontal(
+                        bboxes[idx], bboxes
+                    )
+                    merge_groups[ag_key] = [group[idx]]
+                    for _, overlap_idx in zip(overlaps, indexes):
+                        visited[overlap_idx] = True
+                        merge_groups[ag_key].append(group[overlap_idx])
+
+            for key, group in merge_groups.items():
+                sorted_group = sorted(group, key=lambda x: x.line)
+                bboxes = [g.bbox for g in sorted_group]
+                block = merge_bboxes_as_block(bboxes)
+                merge_groups[key] = EntityGroup(
+                    bbox=block,
+                    key=f"{entity_name}_{key}",
+                    group=sorted_group,
+                )
+
+            grouped_entities[entity_name] = merge_groups
+
+            for key, group in merge_groups.items():
+                visualizer = DebugVisualsHandler(self.debug_visuals, frame)
+
+                self.logger.info(f"Group : {key} : {group}")
+                bbox = group.bbox
+                visualizer.draw_box(bbox, key, color_map=None)
+                visualizer.save(f"/tmp/tensors/extract_group_{entity_name}_{key}.png")
+
+        return grouped_entities
+
     def postprocess(
         self,
         frames: List[Image.Image],
@@ -677,6 +828,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 raise "Frame should have been an PIL.Image instance"
 
         aggregated_ner = []
+        aggregated_groups = []
         aggregated_kv = []
         aggregated_meta = []
 
@@ -684,6 +836,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         expected_ner = self.init_configuration["expected_ner"]
         expected_keys = self.init_configuration["expected_keys"]
         expected_pair = self.init_configuration["expected_pair"]
+        entities_to_group = self.init_configuration["entities_to_group"]
 
         for i, (_boxes, _words, annotation, frame) in enumerate(
             zip(boxes, words, annotations, frames)
@@ -697,167 +850,34 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             true_predictions = annotation["predictions"]
             true_boxes = annotation["boxes"]
             true_scores = annotation["scores"]
+            visualizer = DebugVisualsHandler(self.debug_visuals, frame)
 
-            viz_img = frame.copy()
-            draw = ImageDraw.Draw(viz_img, "RGBA")
-            font = get_font(14)
-            # aggregate prediction by their line numbers
-
-            groups = {}
-            for pred_idx, (prediction, pred_box, pred_score) in enumerate(
-                zip(true_predictions, true_boxes, true_scores)
-            ):
-                # discard 'O' other
-                label = prediction[2:]
-                if not label:
-                    continue
-                # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
-                if np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or (
-                    pred_box[2] == 0 and pred_box[3] == 0
-                ):
-                    continue
-
-                line_number = find_line_number(lines_bboxes, pred_box)
-                if line_number not in groups:
-                    groups[line_number] = []
-                groups[line_number].append(pred_idx)
-
-            # aggregate boxes into key/value pairs via simple state machine for each line
-            aggregated_keys = {}
-
-            for line_idx, line_box in enumerate(lines_bboxes):
-                if line_idx not in groups:
-                    self.logger.debug(
-                        f"Line does not have any groups : {line_idx} : {line_box}"
-                    )
-                    continue
-
-                prediction_indexes = np.array(groups[line_idx])
-                line_aggregator = []
-
-                for key in expected_keys:
-                    spans = []
-                    skip_to = -1
-                    for m in range(0, len(prediction_indexes)):
-                        if skip_to != -1 and m <= skip_to:
-                            continue
-                        pred_idx = prediction_indexes[m]
-                        prediction = true_predictions[pred_idx]
-                        label = prediction[2:]
-                        aggregator = []
-
-                        if label == key:
-                            for n in range(m, len(prediction_indexes)):
-                                pred_idx = prediction_indexes[n]
-                                prediction = true_predictions[pred_idx]
-                                label = prediction[2:]
-                                if label != key:
-                                    break
-                                aggregator.append(pred_idx)
-                                skip_to = n
-
-                        if len(aggregator) > 0:
-                            spans.append(aggregator)
-
-                    if len(spans) > 0:
-                        line_aggregator.append({"key": key, "groups": spans})
-
-                true_predictions = np.array(true_predictions)
-                true_boxes = np.array(true_boxes)
-                true_scores = np.array(true_scores)
-
-                for line_agg in line_aggregator:
-                    field = line_agg["key"]
-                    group_indexes = line_agg["groups"]
-
-                    for group_index in group_indexes:
-                        bboxes = true_boxes[group_index]
-                        scores = true_scores[group_index]
-                        group_score = round(np.average(scores), 6)
-                        # create a bounding box around our blocks which could be possibly overlapping or being split
-                        group_bbox = merge_bboxes_as_block(bboxes)
-
-                        key_result = {
-                            "line": line_idx,
-                            "key": field,
-                            "bbox": group_bbox,
-                            "score": group_score,
-                        }
-
-                        if line_idx not in aggregated_keys:
-                            aggregated_keys[line_idx] = []
-                        aggregated_keys[line_idx].append(key_result)
-
-                        if self.debug_visuals:
-                            color_map = self.init_configuration["debug"]["colors"]
-                            color = (
-                                color_map[field]
-                                if field in color_map
-                                else get_random_color()
-                            )
-
-                            draw_box(
-                                draw,
-                                group_bbox,
-                                None,
-                                color,
-                                font,
-                            )
-
-            # check if we have possible overlaps when there is a mislabeled token, this could be a flag
-            # Strategy used here is a horizontal overlap, if we have it then we will aggregate them
-            # B-PAN I-PAN I-PAN B-PAN-ANS I-PAN
-            if self.init_configuration["mislabeled_token_strategy"] == "aggregate":
-                for key in expected_keys:
-                    for ag_key in aggregated_keys.keys():
-                        row_items = aggregated_keys[ag_key]
-                        bboxes = [row["bbox"] for row in row_items if row["key"] == key]
-                        visited = [False for _ in range(0, len(bboxes))]
-                        to_merge = {}
-
-                        for idx in range(0, len(bboxes)):
-                            if visited[idx]:
-                                continue
-                            visited[idx] = True
-                            box = bboxes[idx]
-                            overlaps, indexes, scores = find_overlap_horizontal(
-                                box, bboxes
-                            )
-                            to_merge[ag_key] = [idx]
-
-                            for _, overlap_idx in zip(overlaps, indexes):
-                                visited[overlap_idx] = True
-                                to_merge[ag_key].append(overlap_idx)
-
-                        for _k, idxs in to_merge.items():
-                            items = aggregated_keys[_k]
-                            items = np.array(items)
-                            # there is nothing to merge, except the original block
-                            if len(idxs) == 1:
-                                continue
-
-                            idxs = np.array(idxs)
-                            picks = items[idxs]
-                            remaining = np.delete(items, idxs)
-
-                            score_avg = round(
-                                np.average([item["score"] for item in picks]), 6
-                            )
-                            block = merge_bboxes_as_block(
-                                [item["bbox"] for item in picks]
-                            )
-
-                            new_item = picks[0]
-                            new_item["score"] = score_avg
-                            new_item["bbox"] = block
-
-                            aggregated_keys[_k] = np.concatenate(
-                                ([new_item], remaining)
-                            )
+            grouped_entities = {}
+            if entities_to_group is not None and len(entities_to_group) > 0:
+                grouped_entities = self.group_composite_entities(
+                    entities_to_group,
+                    lines_bboxes,
+                    true_predictions,
+                    true_boxes,
+                    true_scores,
+                    frame,
+                )
+            groups = self.group_by_line(
+                lines_bboxes, true_boxes, true_predictions, true_scores
+            )
+            aggregated_keys = self.aggregate_groups_by_line(
+                expected_keys,
+                groups,
+                lines_bboxes,
+                true_boxes,
+                true_predictions,
+                true_scores,
+                visualizer,
+            )
+            self.fix_misslabeled_tokens(expected_keys, aggregated_keys)
 
             # expected fields groups that indicate that the field could have been present
             # but it might not have been associated with KV pair mapping, does not apply to NER
-
             possible_fields = self.init_configuration["possible_fields"]
             possible_field_meta = {}
 
@@ -867,7 +887,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:
-                        key = ner_key["key"]
+                        key = ner_key.key
                         if (
                             key in fields
                             and key not in possible_field_meta[field]["fields"]
@@ -889,7 +909,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                     found_val = None
 
                     for ner_key in ner_keys:
-                        key = ner_key["key"]
+                        key = ner_key.key
                         if expected_question == key:
                             found_key = ner_key
                             continue
@@ -902,8 +922,8 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                                     break
 
                             if found_val is not None:
-                                bbox_q = found_key["bbox"]
-                                bbox_a = found_val["bbox"]
+                                bbox_q = found_key.bbox
+                                bbox_a = found_val.bbox
 
                                 if bbox_a[0] < bbox_q[0]:
                                     self.logger.warning(
@@ -911,13 +931,12 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                                     )
                                     continue
 
-                                category = found_key["key"]
                                 kv_result = {
                                     "page": i,
-                                    "category": category,
+                                    "category": found_key.key,
                                     "value": {
-                                        "question": found_key,
-                                        "answer": found_val,
+                                        "question": found_key.__dict__,
+                                        "answer": found_val.__dict__,
                                     },
                                 }
 
@@ -928,19 +947,71 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 for k in aggregated_keys.keys():
                     ner_keys = aggregated_keys[k]
                     for ner_key in ner_keys:
-                        key = ner_key["key"]
+                        key = ner_key.key
                         if key == tag:
                             ner_result = {
                                 "page": i,
                                 "category": tag,
                                 "value": {
-                                    "answer": ner_key,
+                                    "answer": ner_key.__dict__,
                                 },
                             }
                             aggregated_ner.append(ner_result)
 
+            # Collect grouped entities
+            pprint(grouped_entities)
+            for entity, groups in grouped_entities.items():
+
+                for group_id, group in groups.items():
+                    aggregated_entity_groups = []
+                    self.logger.info(f"Group : {entity} : {group_id} : {group}")
+
+                    for item in group.group:
+                        self.logger.info(f"Group : {entity} : {group_id} : {item}")
+                        ner_result = {
+                            "page": i,
+                            "category": f"{entity}_{group_id}_{item.key}",
+                            "value": {
+                                "answer": {
+                                    "bbox": item.bbox,
+                                },
+                            },
+                        }
+                        aggregated_entity_groups.append(ner_result)
+                    self.decorate_aggregates_with_text(aggregated_entity_groups, frames)
+
+                    entity_texts = "\n".join(
+                        [
+                            item["value"]["answer"]["text"]["text"]
+                            for item in aggregated_entity_groups
+                        ]
+                    )
+                    entity_text_confidence = round(
+                        np.average(
+                            [
+                                item["value"]["answer"]["text"]["confidence"]
+                                for item in aggregated_entity_groups
+                            ]
+                        ),
+                        6,
+                    )
+
+                    aggregated_groups.append(
+                        {
+                            "page": i,
+                            "category": entity,
+                            "value": {
+                                "answer": {
+                                    "bbox": group.bbox,
+                                    "text": entity_texts,
+                                    "confidence": entity_text_confidence,
+                                },
+                            },
+                        }
+                    )
+
             if self.debug_visuals and self.debug_visuals_overlay:
-                viz_img.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
+                visualizer.save(f"/tmp/tensors/extract_{file_hash}_{i}.png")
 
         self.decorate_aggregates_with_text(aggregated_ner, frames)
         self.decorate_aggregates_with_text(aggregated_kv, frames)
@@ -949,6 +1020,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
             "meta": aggregated_meta,
             "kv": aggregated_kv,
             "ner": aggregated_ner,
+            "groups": aggregated_groups,
         }
         self.logger.debug(f" results : {results}")
 
@@ -959,6 +1031,183 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                 items = []
                 items.extend([row for row in aggregated_kv if int(row["page"]) == k])
                 items.extend([row for row in aggregated_ner if int(row["page"]) == k])
+                items.extend(
+                    [row for row in aggregated_groups if int(row["page"]) == k]
+                )
+
                 visualize_extract_kv(output_filename, frames[k], items)
 
         return results
+
+    def fix_misslabeled_tokens(
+        self, expected_keys: list[str], aggregated_keys: dict[int, LineGroup]
+    ):
+        """Check if we have possible overlaps when there is a mislabeled token, this could be a flag
+            Strategy used here is a horizontal overlap, if we have it then we will aggregate them
+            B-PAN I-PAN I-PAN B-PAN-ANS I-PAN
+
+        :param expected_keys: list of expected keys
+        :param aggregated_keys:
+        :return:
+        """
+        if self.init_configuration["mislabeled_token_strategy"] == "aggregate":
+            for key in expected_keys:
+                for ag_key in aggregated_keys.keys():
+                    row_items = aggregated_keys[ag_key]
+                    bboxes = [row.bbox for row in row_items if row.key == key]
+                    visited = [False for _ in range(0, len(bboxes))]
+                    to_merge = {}
+
+                    for idx in range(0, len(bboxes)):
+                        if visited[idx]:
+                            continue
+                        visited[idx] = True
+                        box = bboxes[idx]
+                        overlaps, indexes, scores = find_overlap_horizontal(box, bboxes)
+                        to_merge[ag_key] = [idx]
+
+                        for _, overlap_idx in zip(overlaps, indexes):
+                            visited[overlap_idx] = True
+                            to_merge[ag_key].append(overlap_idx)
+
+                    for _k, idxs in to_merge.items():
+                        items = np.array(aggregated_keys[_k])
+                        # there is nothing to merge, except the original block
+                        if len(idxs) == 1:
+                            continue
+
+                        idxs = np.array(idxs)
+                        picks = items[idxs]
+                        remaining = np.delete(items, idxs)
+
+                        score_avg = round(np.average([item.score for item in picks]), 6)
+                        block = merge_bboxes_as_block([item.bbox for item in picks])
+
+                        new_item = picks[0]
+                        new_item.score = score_avg
+                        new_item.bbox = block
+
+                        aggregated_keys[_k] = np.concatenate(([new_item], remaining))
+        else:
+            raise NotImplementedError(
+                f"Mislabeled token strategy not supported : {self.init_configuration['mislabeled_token_strategy']}"
+            )
+
+    def aggregate_groups_by_line(
+        self,
+        expected_keys: list[str],
+        groups: dict[int, list[int]],
+        lines_bboxes: list[list[int]],
+        true_boxes: list[list[int]],
+        true_predictions: list[str],
+        true_scores: list[float],
+        visualizer: Optional[DebugVisualsHandler] = None,
+    ) -> dict:
+        """aggregate boxes into key/value pairs via simple state machine for each line"""
+        aggregated_keys = {}
+        for line_idx, line_box in enumerate(lines_bboxes):
+            if line_idx not in groups:
+                self.logger.debug(
+                    f"Line does not have any groups : {line_idx} : {line_box}"
+                )
+                continue
+
+            line_aggregation = self.group_horizontal_span(
+                expected_keys, groups[line_idx], true_predictions
+            )
+
+            true_boxes = np.array(true_boxes)
+            true_scores = np.array(true_scores)
+
+            for line_agg in line_aggregation:
+                field = line_agg["key"]
+                for group_index in line_agg["groups"]:
+                    group_score = round(np.average(true_scores[group_index]), 6)
+                    group_bbox = merge_bboxes_as_block(true_boxes[group_index])
+                    key_result = LineGroup(
+                        **{
+                            "line": line_idx,
+                            "key": field,
+                            "bbox": group_bbox,
+                            "score": group_score,
+                        }
+                    )
+                    if line_idx not in aggregated_keys:
+                        aggregated_keys[line_idx] = []
+                    aggregated_keys[line_idx].append(key_result)
+                    if self.debug_visuals and visualizer is not None:
+                        visualizer.draw_box(
+                            group_bbox,
+                            field,
+                            color_map=self.init_configuration["debug"]["colors"],
+                        )
+        return aggregated_keys
+
+    def group_horizontal_span(
+        self, expected_keys: list[str], prediction_indexes: [], true_predictions
+    ) -> list:
+        """group horizontal spans of the same key"""
+
+        line_aggregator = []
+        for key in expected_keys:
+            spans = []
+            skip_to = -1
+            for m in range(0, len(prediction_indexes)):
+                if skip_to != -1 and m <= skip_to:
+                    continue
+                pred_idx = prediction_indexes[m]
+                prediction = true_predictions[pred_idx]
+                label = prediction[2:]
+                aggregator = []
+
+                if label == key:
+                    for n in range(m, len(prediction_indexes)):
+                        pred_idx = prediction_indexes[n]
+                        prediction = true_predictions[pred_idx]
+                        label = prediction[2:]
+                        if label != key:
+                            break
+                        aggregator.append(pred_idx)
+                        skip_to = n
+
+                if len(aggregator) > 0:
+                    spans.append(aggregator)
+
+            if len(spans) > 0:
+                line_aggregator.append({"key": key, "groups": spans})
+        return line_aggregator
+
+    def group_by_line(
+        self,
+        lines_bboxes: list[list[int]],
+        true_boxes: list[list[int]],
+        true_predictions: list[str],
+        true_scores: list[float],
+    ) -> dict:
+        """Aggregate prediction by their line numbers
+        :param lines_bboxes: list of lines bounding boxes
+        :param true_boxes: list of boxes
+        :param true_predictions: list of predictions
+        :param true_scores: list of scores
+        """
+
+        groups = {}
+        for pred_idx, (prediction, pred_box, pred_score) in enumerate(
+            zip(true_predictions, true_boxes, true_scores)
+        ):
+            # discard 'O' other
+            label = prediction[2:]
+            if not label:
+                continue
+            # two labels that need to be removed [0.0, 0.0, 0.0, 0.0]  [2578.0, 3 3292.0, 0.0, 0.0]
+            if np.array_equal(pred_box, [0.0, 0.0, 0.0, 0.0]) or (
+                pred_box[2] == 0 and pred_box[3] == 0
+            ):
+                continue
+
+            line_number = find_line_number(lines_bboxes, pred_box)
+            if line_number not in groups:
+                groups[line_number] = []
+            groups[line_number].append(pred_idx)
+
+        return groups
