@@ -234,9 +234,9 @@ def main():
             st.checkbox("Use container width", value=False, key="use_container_width")
 
             st.write("Boxes - original/converted:")
-            fr = pd.DataFrame()
+            rows = []
             for s, r, z in zip(resized_boxes, raw_boxes, raw_boxes_xywh):
-                fr = fr.append(
+                rows.append(
                     {
                         "sx1": s[0],
                         "sy1": s[1],
@@ -250,10 +250,11 @@ def main():
                         "y": z[1],
                         "w": z[2],
                         "h": z[3],
-                    },
-                    ignore_index=True,
+                    }
                 )
-            st.dataframe(fr, use_container_width=st.session_state.use_container_width)
+
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=st.session_state.use_container_width)
 
             st.write("Received the following sample:")
             st.success(matching_request)
