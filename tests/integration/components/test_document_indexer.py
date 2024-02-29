@@ -47,7 +47,8 @@ def test_transformer_document_indexer():
     ocr_engine = MockOcrEngine()
     ocr_engine = None
 
-    indexer = TransformersDocumentIndexer(model_name_or_path=resolved_model_path, devices=["cpu"], ocr_engine=ocr_engine)
+    indexer = TransformersDocumentIndexer(model_name_or_path=resolved_model_path, devices=["cpu"],
+                                          ocr_engine=ocr_engine)
     NITER = 1
 
     for i in range(NITER):
