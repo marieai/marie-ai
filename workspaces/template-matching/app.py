@@ -40,7 +40,9 @@ class ImageUtils:
         else:
             return raw_image, (width, height)
 
-    def get_canvas(self, resized_image, key="canvas", update_streamlit=True):
+    def get_canvas(
+        self, resized_image, key="canvas", update_streamlit=True, mode="rect"
+    ):
         """Retrieves the canvas to receive the bounding boxes
         Args:
         resized_image(Image.Image): the resized uploaded image
@@ -58,7 +60,7 @@ class ImageUtils:
             update_streamlit=update_streamlit,
             height=960,
             width=960,
-            drawing_mode="rect",
+            drawing_mode=mode,
             key=key,
         )
         return canvas_result
@@ -109,8 +111,13 @@ def main():
             .stDeployButton {display:none;}
             footer {visibility: hidden;}
             #stDecoration {display:none;}
+            #MainMenu, header, footer {visibility: hidden;}
             
-            div[class^='block-container'] { padding-top: 0rem; }
+            div[class^='block-container'] { padding-top: 0.5rem; }
+            
+            .st-emotion-cache-16txtl3{
+                padding: 2.7rem 0.6rem
+            }
         </style>
     """,
         unsafe_allow_html=True,
@@ -124,43 +131,45 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # stroke_width = st.sidebar.slider("Stroke width: ", 1, 25, 3)
-    # drawing_mode = "rect"
-    # stroke_color = st.sidebar.color_picker("Stroke color hex: ")
-    # bg_color = st.sidebar.color_picker("Background color hex: ", "#eee")
-    # # bg_image = st.sidebar.file_uploader("Background image:", type=["png", "jpg"])
+    st.sidebar.write("Matching parameters")
+    scol1, scol2 = st.sidebar.columns([5, 5])
 
-    max_matches_number = st.sidebar.number_input(
-        "Max matches", min_value=1, max_value=10, value=1, step=1, format="%d"
-    )
-    score_threshold_number = st.sidebar.number_input(
-        "Match threshold",
-        min_value=1,
-        max_value=100,
-        value=40,
-        step=1,
-        format="%d",
-    )
+    with scol1:
+        max_matches_number = st.number_input(
+            "Max matches", min_value=1, max_value=10, value=1, step=1, format="%d"
+        )
+    with scol2:
+        score_threshold_number = st.number_input(
+            "Match threshold",
+            min_value=1,
+            max_value=100,
+            value=40,
+            step=1,
+            format="%d",
+        )
 
+    scol1, scol2 = st.sidebar.columns([5, 5])
+    with scol1:
+        window_size_h = st.number_input(
+            "Window size height(px)",
+            min_value=128,
+            max_value=512,
+            value=256,
+            step=1,
+            format="%d",
+        )
+    with scol2:
+        window_size_w = st.number_input(
+            "Window size width(px)",
+            min_value=128,
+            max_value=512,
+            value=256,
+            step=1,
+            format="%d",
+        )
     st.sidebar.divider()
 
-    window_size_h = st.sidebar.number_input(
-        "Window size height(px)",
-        min_value=128,
-        max_value=512,
-        value=256,
-        step=1,
-        format="%d",
-    )
-    window_size_w = st.sidebar.number_input(
-        "Window size width(px)",
-        min_value=128,
-        max_value=512,
-        value=256,
-        step=1,
-        format="%d",
-    )
-    st.sidebar.divider()
+    mode = "transform" if st.sidebar.checkbox("Move ROIs", False) else "rect"
 
     uploaded_image = st.sidebar.file_uploader(
         "Upload template source: ",
@@ -187,11 +196,10 @@ def main():
                 resized_image, resized_size = utils.resize_image(raw_image)
                 # read bbox input
                 canvas_result = utils.get_canvas(
-                    resized_image, key="canvas-source", update_streamlit=True
+                    resized_image, key="canvas-source", update_streamlit=True, mode=mode
                 )
         with col2:
             # st.header("Matching target")
-
             if uploaded_target is not None:
                 raw_image_target, raw_size_target = utils.read_image(uploaded_target)
                 resized_image_target, resized_size_target = utils.resize_image(

@@ -1,4 +1,6 @@
 import os
+from abc import abstractmethod
+from dataclasses import dataclass
 from pprint import pprint
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -43,6 +45,7 @@ from ...utils.image_utils import hash_frames_fast
 from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
 from .base import BaseDocumentIndexer
+from .validator import AddressValidator
 
 
 class DebugVisualsHandler:
@@ -72,23 +75,20 @@ class DebugVisualsHandler:
         self.viz_img.save(output_filename)
 
 
-class LineGroup(BaseModel):
+@dataclass
+class LineGroup:
     bbox: list
     key: str
     line: int
     score: float
 
-    class Config:
-        arbitrary_types_allowed = False
 
-
-class EntityGroup(BaseModel):
+@dataclass
+class EntityGroup:
     bbox: list
     key: str
     group: list[LineGroup]
-
-    class Config:
-        arbitrary_types_allowed = False
+    components: list[str]
 
 
 class TransformersDocumentIndexer(BaseDocumentIndexer):
@@ -784,12 +784,16 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
 
             for key, group in merge_groups.items():
                 sorted_group = sorted(group, key=lambda x: x.line)
+                component_keys = list(set([g.key for g in sorted_group]))
+
                 bboxes = [g.bbox for g in sorted_group]
                 block = merge_bboxes_as_block(bboxes)
+
                 merge_groups[key] = EntityGroup(
                     bbox=block,
                     key=f"{entity_name}_{key}",
                     group=sorted_group,
+                    components=component_keys,
                 )
 
             grouped_entities[entity_name] = merge_groups
@@ -837,6 +841,9 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         expected_keys = self.init_configuration["expected_keys"]
         expected_pair = self.init_configuration["expected_pair"]
         entities_to_group = self.init_configuration["entities_to_group"]
+        entities_to_group_by_name = {
+            entity['name']: entity for entity in entities_to_group
+        }
 
         for i, (_boxes, _words, annotation, frame) in enumerate(
             zip(boxes, words, annotations, frames)
@@ -959,7 +966,6 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                             aggregated_ner.append(ner_result)
 
             # Collect grouped entities
-            pprint(grouped_entities)
             for entity, groups in grouped_entities.items():
 
                 for group_id, group in groups.items():
@@ -996,15 +1002,39 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                         6,
                     )
 
+                    validated = False
+                    validated_entity = None
+                    entity_config = entities_to_group_by_name[entity]
+
+                    if "validation" in entity_config:
+                        validator = entity_config["validation"]  # type: ignore
+                        if "type" not in validator:
+                            raise ValueError("Validation type not found")
+                        validation_type = validator["type"]
+                        if validation_type == "address":
+                            try:
+                                validator = AddressValidator()
+                                validated_entity = validator(entity_texts)
+                                validated = True
+                            except Exception as err:
+                                self.logger.warning(
+                                    f"Address validation failed(using default): {err}"
+                                )
+
                     aggregated_groups.append(
                         {
                             "page": i,
                             "category": entity,
+                            "components": group.components,
                             "value": {
                                 "answer": {
                                     "bbox": group.bbox,
                                     "text": entity_texts,
                                     "confidence": entity_text_confidence,
+                                    "validation": {
+                                        "validated": validated,
+                                        "text": validated_entity,
+                                    },
                                 },
                             },
                         }
