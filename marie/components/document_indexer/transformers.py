@@ -1029,8 +1029,11 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
                             "value": {
                                 "answer": {
                                     "bbox": group.bbox,
-                                    "text": entity_texts,
-                                    "confidence": entity_text_confidence,
+                                    "text": {
+                                        "text": entity_texts,
+                                        "confidence": entity_text_confidence,
+                                    },
+                                    "confidence": 1,
                                     "validation": {
                                         "validated": validated,
                                         "text": validated_entity,
