@@ -9,9 +9,8 @@ from PIL import Image
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
 from marie.document import TrOcrProcessor
-from marie.document.craft_ocr_processor import CraftOcrProcessor
 from marie.numpyencoder import NumpyEncoder
-from marie.renderer.pdf_renderer import PdfRenderer
+from marie.renderer.png_renderer import PngRenderer
 from marie.utils.utils import ensure_exists
 
 
@@ -59,9 +58,6 @@ if __name__ == "__main__":
     work_dir_icr = ensure_exists("/tmp/icr")
     ensure_exists("/tmp/fragments")
 
-    img_path = "./assets/english/Lines/005.png"
-    img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
-    img_path = "~/tmp/analysis/marie-issues/106/195664193-0006.png"
     img_path = "~/Desktop/11302023_28082_5_452_.tif"
     img_path = os.path.expanduser(img_path)
 
@@ -74,8 +70,6 @@ if __name__ == "__main__":
 
         box = BoxProcessorUlimDit(work_dir=work_dir_boxes, cuda=True)
         icr = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
-        # icr = TesseractOcrProcessor(work_dir=work_dir_icr, cuda=True)
-        # icr = CraftOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
         (
             boxes,
@@ -91,7 +85,9 @@ if __name__ == "__main__":
         )
 
         print("Results -----------------")
-        print(result)
+        print(result['meta'])
+        print(result['words'])
+        print(result['lines'])
         cv2.imwrite("/tmp/fragments/overlay.png", overlay_image)
         json_path = os.path.join("/tmp/fragments", "results.json")
 
@@ -105,15 +101,16 @@ if __name__ == "__main__":
                 indent=2,
                 cls=NumpyEncoder,
             )
+
     if True:
         key = img_path.split("/")[-1]
         image = cv2.imread(img_path)
 
-        output_filename = "/tmp/fragments/result.pdf"
-        print("Testing pdf render")
+        output_filename = "/tmp/fragments/result.png"
+        print("Testing PNG render")
         results = from_json_file("/tmp/fragments/results.json")
 
-        renderer = PdfRenderer(config={"preserve_interword_spaces": True})
+        renderer = PngRenderer(config={"preserve_interword_spaces": True})
         renderer.render(
             frames=[image],
             results=[results],
@@ -122,11 +119,10 @@ if __name__ == "__main__":
                 "overlay": True,
             }
         )
-
         renderer.render(
             frames=[image],
             results=[results],
-            output_filename=output_filename.replace(".pdf", "_clean.pdf"),
+            output_filename=output_filename.replace(".png", "_clean.png"),
             **{
                 "overlay": False,
             }
