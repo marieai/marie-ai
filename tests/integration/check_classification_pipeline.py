@@ -11,6 +11,7 @@ from marie.pipe.extract_pipeline import split_filename
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
 from marie.utils.docs import frames_from_file
+from marie.utils.json import store_json_object
 
 
 def setup_storage():
@@ -50,10 +51,10 @@ if __name__ == "__main__":
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/additional_information/09012023_734837_1_782___1_2.png"
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/cms/08312023_772428_13_46_2.png"
     img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/dispute/08312023_734913_1_4_2.png"
-    img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985.tif"
-    img_path = "~/tmp/analysis/marie-issues/corr-failing/197107883/197107883.tif"
-    img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985-0001.png"
-    img_path = "~/tmp/analysis/marie-issues/corr-failing/196675912/196675912.tif"
+    # img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985.tif"
+    # img_path = "~/tmp/analysis/marie-issues/corr-failing/197107883/197107883.tif"
+    # img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985-0001.png"
+    # img_path = "~/tmp/analysis/marie-issues/corr-failing/196675912/196675912.tif"
 
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
@@ -100,3 +101,4 @@ if __name__ == "__main__":
             ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), runtime_conf=runtime_conf
         )
         print(results)
+        store_json_object(results, f"/tmp/generators/results.json")
