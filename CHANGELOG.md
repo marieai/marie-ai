@@ -25,6 +25,9 @@
 
 
 
+
+
+
 <a name=release-note-__version__
 =
 
@@ -1949,4 +1952,133 @@ __version__ = "3.0.03" __version__ = "3.0.02" __version__ = "3.0.0" __version__ 
  - [[```1d7de69f```](https://github.com/marieai/marie-ai/commit/1d7de69ff27768249a3ee2698b421993301e8577)] __-__ __docs__: Updated docosaurus to 3.1.1 (*Marie Dev Bot*)
  - [[```1b5c2736```](https://github.com/marieai/marie-ai/commit/1b5c2736a7609e132e29a1cf3fffed440021bc8b)] __-__ __version__: the next version will be 3.0.28 (*Marie Dev Bot*)
  - [[```b03ffef8```](https://github.com/marieai/marie-ai/commit/b03ffef8456cf4064b3134048de9c42a5b2fe6ab)] __-__ testing bouding box processing (*Marie Dev Bot*)
+
+<a name=release-note-3-0-29></a>
+## Release Note (`3.0.29`)
+
+> Release time: 2024-03-04 11:13:03
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg Bugaj,  Rithsek Ngem,  🙇
+
+
+### 🆕 New Features
+
+ - [[```97bb7793```](https://github.com/marieai/marie-ai/commit/97bb779307b2191b6269f3f5ac29d7a4c196f319)] __-__ add validation to Document Indexer (*Marie Dev Bot*)
+ - [[```55b47796```](https://github.com/marieai/marie-ai/commit/55b47796dfe7c7355b6ce10c1ff8a17ba63beccc)] __-__ fix streamlit security issue (*Marie Dev Bot*)
+ - [[```ef0c8e80```](https://github.com/marieai/marie-ai/commit/ef0c8e80a25c1b49d3ddec2c96f06469db2920dd)] __-__ add support for multiline entity grouping (*Marie Dev Bot*)
+ - [[```5f1abfe8```](https://github.com/marieai/marie-ai/commit/5f1abfe87969d537ab8838e129a0746933644b98)] __-__ Refactor document intexers and classifiers (*Marie Dev Bot*)
+ - [[```57ec0cfd```](https://github.com/marieai/marie-ai/commit/57ec0cfd9c5e7891f3b18757c6391dc54b790989)] __-__ refactoring Document Indexer (*Marie Dev Bot*)
+ - [[```2caadcb7```](https://github.com/marieai/marie-ai/commit/2caadcb7d28dcb1bf98078b426c91dc38db78d90)] __-__ Add new voting strategy feature (*Marie Dev Bot*)
+
+### 🐞 Bug fixes
+
+ - [[```71a57d62```](https://github.com/marieai/marie-ai/commit/71a57d62bac71cae83f2cec64547addebf42a159)] __-__ add support for extracting version numbers (*Marie Dev Bot*)
+ - [[```227cabbb```](https://github.com/marieai/marie-ai/commit/227cabbb24ad0a4b73f98d43442189fc708b9068)] __-__ updated to be compatible withi dataframes 2 (*Marie Dev Bot*)
+ - [[```cbdd39d8```](https://github.com/marieai/marie-ai/commit/cbdd39d805177d2a1de33470120e7d40eac7b4c3)] __-__ Fixed issue with normalized bounding boxes in document indexer (*Marie Dev Bot*)
+
+### 🧼 Code Refactoring
+
+ - [[```732471a6```](https://github.com/marieai/marie-ai/commit/732471a6b0a4d6140be964a66a1e2b62edbdee77)] __-__ &#34;batch ner ocr&#34; (*Rithsek Ngem*)
+
+### 🍹 Other Improvements
+
+ - [[```760f39be```](https://github.com/marieai/marie-ai/commit/760f39befe155ca6c7373236b89a7c6a88340451)] __-__ remove stale files (*Greg Bugaj*)
+ - [[```8464e33f```](https://github.com/marieai/marie-ai/commit/8464e33f224e61bc693e7add54dbd190a1881922)] __-__ version bump (*Greg Bugaj*)
+ - [[```687626c3```](https://github.com/marieai/marie-ai/commit/687626c3ed39fe44b2daf3d082ae24fe0da2dec6)] __-__ cleanup (*Marie Dev Bot*)
+ - [[```eb105423```](https://github.com/marieai/marie-ai/commit/eb105423efef1355e23b562e2405a62501369f24)] __-__ template matching (*Marie Dev Bot*)
+ - [[```036892c6```](https://github.com/marieai/marie-ai/commit/036892c63d4098750088b03a3fcb0dd70bcc2d5c)] __-__ changed schema for entity (*Marie Dev Bot*)
+ - [[```4dd42f07```](https://github.com/marieai/marie-ai/commit/4dd42f070c8c1e742886e0487045553a6bd09e6c)] __-__ wip (*Marie Dev Bot*)
+ - [[```de76c7a4```](https://github.com/marieai/marie-ai/commit/de76c7a427be9f04d9d14743a9c6989e2b392654)] __-__ cleanup of invalid configs (*Marie Dev Bot*)
+ - [[```8462c5f8```](https://github.com/marieai/marie-ai/commit/8462c5f84d28a75516b93c4ef7d90cd9a71b3f64)] __-__ classifier voting (*Marie Dev Bot*)
+ - [[```02e23605```](https://github.com/marieai/marie-ai/commit/02e236057f4b182417c356cb58911bfc7fda6386)] __-__ document indexing (*Marie Dev Bot*)
+ - [[```3115eb7d```](https://github.com/marieai/marie-ai/commit/3115eb7dd0b97990ee2251b1941e9165e389bc39)] __-__ __version__: the next version will be 3.0.29 (*Marie Dev Bot*)
+
+<a name=release-note-3-0-29></a>
+## Release Note (`3.0.29`)
+
+> Release time: 2024-03-04 11:20:12
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg Bugaj,  Rithsek Ngem,  🙇
+
+
+### 🆕 New Features
+
+ - [[```97bb7793```](https://github.com/marieai/marie-ai/commit/97bb779307b2191b6269f3f5ac29d7a4c196f319)] __-__ add validation to Document Indexer (*Marie Dev Bot*)
+ - [[```55b47796```](https://github.com/marieai/marie-ai/commit/55b47796dfe7c7355b6ce10c1ff8a17ba63beccc)] __-__ fix streamlit security issue (*Marie Dev Bot*)
+ - [[```ef0c8e80```](https://github.com/marieai/marie-ai/commit/ef0c8e80a25c1b49d3ddec2c96f06469db2920dd)] __-__ add support for multiline entity grouping (*Marie Dev Bot*)
+ - [[```5f1abfe8```](https://github.com/marieai/marie-ai/commit/5f1abfe87969d537ab8838e129a0746933644b98)] __-__ Refactor document intexers and classifiers (*Marie Dev Bot*)
+ - [[```57ec0cfd```](https://github.com/marieai/marie-ai/commit/57ec0cfd9c5e7891f3b18757c6391dc54b790989)] __-__ refactoring Document Indexer (*Marie Dev Bot*)
+ - [[```2caadcb7```](https://github.com/marieai/marie-ai/commit/2caadcb7d28dcb1bf98078b426c91dc38db78d90)] __-__ Add new voting strategy feature (*Marie Dev Bot*)
+
+### 🐞 Bug fixes
+
+ - [[```71a57d62```](https://github.com/marieai/marie-ai/commit/71a57d62bac71cae83f2cec64547addebf42a159)] __-__ add support for extracting version numbers (*Marie Dev Bot*)
+ - [[```227cabbb```](https://github.com/marieai/marie-ai/commit/227cabbb24ad0a4b73f98d43442189fc708b9068)] __-__ updated to be compatible withi dataframes 2 (*Marie Dev Bot*)
+ - [[```cbdd39d8```](https://github.com/marieai/marie-ai/commit/cbdd39d805177d2a1de33470120e7d40eac7b4c3)] __-__ Fixed issue with normalized bounding boxes in document indexer (*Marie Dev Bot*)
+
+### 🧼 Code Refactoring
+
+ - [[```732471a6```](https://github.com/marieai/marie-ai/commit/732471a6b0a4d6140be964a66a1e2b62edbdee77)] __-__ &#34;batch ner ocr&#34; (*Rithsek Ngem*)
+
+### 🍹 Other Improvements
+
+ - [[```760f39be```](https://github.com/marieai/marie-ai/commit/760f39befe155ca6c7373236b89a7c6a88340451)] __-__ remove stale files (*Greg Bugaj*)
+ - [[```8464e33f```](https://github.com/marieai/marie-ai/commit/8464e33f224e61bc693e7add54dbd190a1881922)] __-__ version bump (*Greg Bugaj*)
+ - [[```687626c3```](https://github.com/marieai/marie-ai/commit/687626c3ed39fe44b2daf3d082ae24fe0da2dec6)] __-__ cleanup (*Marie Dev Bot*)
+ - [[```eb105423```](https://github.com/marieai/marie-ai/commit/eb105423efef1355e23b562e2405a62501369f24)] __-__ template matching (*Marie Dev Bot*)
+ - [[```036892c6```](https://github.com/marieai/marie-ai/commit/036892c63d4098750088b03a3fcb0dd70bcc2d5c)] __-__ changed schema for entity (*Marie Dev Bot*)
+ - [[```4dd42f07```](https://github.com/marieai/marie-ai/commit/4dd42f070c8c1e742886e0487045553a6bd09e6c)] __-__ wip (*Marie Dev Bot*)
+ - [[```de76c7a4```](https://github.com/marieai/marie-ai/commit/de76c7a427be9f04d9d14743a9c6989e2b392654)] __-__ cleanup of invalid configs (*Marie Dev Bot*)
+ - [[```8462c5f8```](https://github.com/marieai/marie-ai/commit/8462c5f84d28a75516b93c4ef7d90cd9a71b3f64)] __-__ classifier voting (*Marie Dev Bot*)
+ - [[```02e23605```](https://github.com/marieai/marie-ai/commit/02e236057f4b182417c356cb58911bfc7fda6386)] __-__ document indexing (*Marie Dev Bot*)
+ - [[```3115eb7d```](https://github.com/marieai/marie-ai/commit/3115eb7dd0b97990ee2251b1941e9165e389bc39)] __-__ __version__: the next version will be 3.0.29 (*Marie Dev Bot*)
+
+<a name=release-note-3-0-29></a>
+## Release Note (`3.0.29`)
+
+> Release time: 2024-03-04 11:21:11
+
+
+
+🙇 We'd like to thank all contributors for this new release! In particular,
+ Marie Dev Bot,  Greg Bugaj,  Rithsek Ngem,  🙇
+
+
+### 🆕 New Features
+
+ - [[```97bb7793```](https://github.com/marieai/marie-ai/commit/97bb779307b2191b6269f3f5ac29d7a4c196f319)] __-__ add validation to Document Indexer (*Marie Dev Bot*)
+ - [[```55b47796```](https://github.com/marieai/marie-ai/commit/55b47796dfe7c7355b6ce10c1ff8a17ba63beccc)] __-__ fix streamlit security issue (*Marie Dev Bot*)
+ - [[```ef0c8e80```](https://github.com/marieai/marie-ai/commit/ef0c8e80a25c1b49d3ddec2c96f06469db2920dd)] __-__ add support for multiline entity grouping (*Marie Dev Bot*)
+ - [[```5f1abfe8```](https://github.com/marieai/marie-ai/commit/5f1abfe87969d537ab8838e129a0746933644b98)] __-__ Refactor document intexers and classifiers (*Marie Dev Bot*)
+ - [[```57ec0cfd```](https://github.com/marieai/marie-ai/commit/57ec0cfd9c5e7891f3b18757c6391dc54b790989)] __-__ refactoring Document Indexer (*Marie Dev Bot*)
+ - [[```2caadcb7```](https://github.com/marieai/marie-ai/commit/2caadcb7d28dcb1bf98078b426c91dc38db78d90)] __-__ Add new voting strategy feature (*Marie Dev Bot*)
+
+### 🐞 Bug fixes
+
+ - [[```71a57d62```](https://github.com/marieai/marie-ai/commit/71a57d62bac71cae83f2cec64547addebf42a159)] __-__ add support for extracting version numbers (*Marie Dev Bot*)
+ - [[```227cabbb```](https://github.com/marieai/marie-ai/commit/227cabbb24ad0a4b73f98d43442189fc708b9068)] __-__ updated to be compatible withi dataframes 2 (*Marie Dev Bot*)
+ - [[```cbdd39d8```](https://github.com/marieai/marie-ai/commit/cbdd39d805177d2a1de33470120e7d40eac7b4c3)] __-__ Fixed issue with normalized bounding boxes in document indexer (*Marie Dev Bot*)
+
+### 🧼 Code Refactoring
+
+ - [[```732471a6```](https://github.com/marieai/marie-ai/commit/732471a6b0a4d6140be964a66a1e2b62edbdee77)] __-__ &#34;batch ner ocr&#34; (*Rithsek Ngem*)
+
+### 🍹 Other Improvements
+
+ - [[```760f39be```](https://github.com/marieai/marie-ai/commit/760f39befe155ca6c7373236b89a7c6a88340451)] __-__ remove stale files (*Greg Bugaj*)
+ - [[```8464e33f```](https://github.com/marieai/marie-ai/commit/8464e33f224e61bc693e7add54dbd190a1881922)] __-__ version bump (*Greg Bugaj*)
+ - [[```687626c3```](https://github.com/marieai/marie-ai/commit/687626c3ed39fe44b2daf3d082ae24fe0da2dec6)] __-__ cleanup (*Marie Dev Bot*)
+ - [[```eb105423```](https://github.com/marieai/marie-ai/commit/eb105423efef1355e23b562e2405a62501369f24)] __-__ template matching (*Marie Dev Bot*)
+ - [[```036892c6```](https://github.com/marieai/marie-ai/commit/036892c63d4098750088b03a3fcb0dd70bcc2d5c)] __-__ changed schema for entity (*Marie Dev Bot*)
+ - [[```4dd42f07```](https://github.com/marieai/marie-ai/commit/4dd42f070c8c1e742886e0487045553a6bd09e6c)] __-__ wip (*Marie Dev Bot*)
+ - [[```de76c7a4```](https://github.com/marieai/marie-ai/commit/de76c7a427be9f04d9d14743a9c6989e2b392654)] __-__ cleanup of invalid configs (*Marie Dev Bot*)
+ - [[```8462c5f8```](https://github.com/marieai/marie-ai/commit/8462c5f84d28a75516b93c4ef7d90cd9a71b3f64)] __-__ classifier voting (*Marie Dev Bot*)
+ - [[```02e23605```](https://github.com/marieai/marie-ai/commit/02e236057f4b182417c356cb58911bfc7fda6386)] __-__ document indexing (*Marie Dev Bot*)
+ - [[```3115eb7d```](https://github.com/marieai/marie-ai/commit/3115eb7dd0b97990ee2251b1941e9165e389bc39)] __-__ __version__: the next version will be 3.0.29 (*Marie Dev Bot*)
 
