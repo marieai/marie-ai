@@ -1,4 +1,6 @@
+import base64
 import logging
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
@@ -131,7 +133,7 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    st.sidebar.write("Matching parameters")
+    st.sidebar.write("Matching parameters X")
     scol1, scol2 = st.sidebar.columns([5, 5])
 
     with scol1:
@@ -241,15 +243,36 @@ def main():
             # Boolean to resize the dataframe, stored as a session state variable
             st.checkbox("Use container width", value=False, key="use_container_width")
 
-            st.write("Boxes - original/converted:")
+            st.write("Boxes - original/converted")
+
+            column_configuration = {
+                "snippet": st.column_config.ImageColumn(
+                    "snippet", help="The user's avatar", width=224
+                ),
+            }
+
+            def image_to_base64(img) -> str:
+                with BytesIO() as buffer:
+                    img.save(buffer, "png")  # or 'jpeg'
+                    return base64.b64encode(buffer.getvalue()).decode()
+
+            def image_formatter(img) -> str:
+                return f"data:image/png;base64,{image_to_base64(img)}"
+
             rows = []
-            for s, r, z in zip(resized_boxes, raw_boxes, raw_boxes_xywh):
+            for i, (s, r, z) in enumerate(
+                zip(resized_boxes, raw_boxes, raw_boxes_xywh)
+            ):
+                snippet = raw_image.crop(r)
+                snippet.save(f"/tmp/template/snippet_{i}.png")
+
                 rows.append(
                     {
-                        "sx1": s[0],
-                        "sy1": s[1],
-                        "sx2": s[2],
-                        "sy2": s[3],
+                        "snippet": image_formatter(snippet),
+                        # "sx1": s[0],
+                        # "sy1": s[1],
+                        # "sx2": s[2],
+                        # "sy2": s[3],
                         "x1": r[0],
                         "y1": r[1],
                         "x2": r[2],
@@ -262,7 +285,11 @@ def main():
                 )
 
             df = pd.DataFrame(rows)
-            st.dataframe(df, use_container_width=st.session_state.use_container_width)
+            st.dataframe(
+                df,
+                use_container_width=st.session_state.use_container_width,
+                column_config=column_configuration,
+            )
 
             st.write("Received the following sample:")
             st.success(matching_request)
