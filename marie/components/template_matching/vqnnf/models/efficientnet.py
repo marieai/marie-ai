@@ -5,11 +5,13 @@ from torch import nn
 
 
 class EfficientNetHyperColumn(nn.Module):
-    def __init__(self, model_name, in_channels=3, num_features=256, stride=1):
+    def __init__(
+        self, model_name, in_channels=3, num_features=256, stride=1, weights_path=None
+    ):
         super().__init__()
         self.stride = stride
         self.num_features = num_features  # 40, 80, 192, 512
-        self.model = EfficientNet.from_pretrained(model_name)
+        self.model = EfficientNet.from_pretrained(model_name, weights_path=weights_path)
 
     def forward(self, x):
         _, _, h, w = x.shape

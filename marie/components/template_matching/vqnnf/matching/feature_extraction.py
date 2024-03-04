@@ -18,21 +18,20 @@ class ToTensor(object):
 
 
 class PixelFeatureExtractor:
-    def __init__(self, model_name, num_features, device="0"):
+    def __init__(self, model_name, num_features, device="0", weights_path=None):
         self.device = torch.device(
             f"cuda:{device}" if torch.cuda.is_available() else "cpu"
         )
         self.num_features = num_features
-
         if self.num_features != 27:
             if "resnet" in model_name:
                 self.model = ResNetHyperColumn(model_name, 3, num_features).to(
                     self.device
                 )
             elif "efficientnet" in model_name:
-                self.model = EfficientNetHyperColumn(model_name, 3, num_features).to(
-                    self.device
-                )
+                self.model = EfficientNetHyperColumn(
+                    model_name, 3, num_features, weights_path=weights_path
+                ).to(self.device)
             else:
                 raise ValueError("Model name must be either resnet or efficientnet")
         else:

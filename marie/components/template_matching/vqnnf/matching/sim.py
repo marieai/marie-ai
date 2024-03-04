@@ -187,6 +187,9 @@ def similarity_score(template, query, metric) -> float:
     max_h = int(max(image1_gray.shape[0], image2_gray.shape[0])) + 0
     max_w = int(max(image1_gray.shape[1], image2_gray.shape[1])) + 0
 
+    max_w = 224
+    max_h = 224
+
     image1_gray = cv2.resize(image1_gray, (max_w, max_h), interpolation=cv2.INTER_CUBIC)
     image2_gray = cv2.resize(image2_gray, (max_w, max_h), interpolation=cv2.INTER_CUBIC)
 
@@ -217,14 +220,15 @@ def similarity_score(template, query, metric) -> float:
     global idx
     idx += 1
 
-    fd_1, hog_image_1 = extract_hog_features(image1_gray, 1, "cpu")
-    fd_2, hog_image_2 = extract_hog_features(image2_gray, 1, "cpu")
+    if False:
+        fd_1, hog_image_1 = extract_hog_features(image1_gray, 1, "cpu")
+        fd_2, hog_image_2 = extract_hog_features(image2_gray, 1, "cpu")
 
-    image1_gray = hog_image_1
-    image2_gray = hog_image_2
+        image1_gray = hog_image_1
+        image2_gray = hog_image_2
 
-    cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", hog_image_1)
-    cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", hog_image_2)
+        cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", hog_image_1)
+        cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", hog_image_2)
 
     # # 0 = Background, 1 = Object
     # bin_image1 = np.where(hog_image_1 > 0, 0, 1)

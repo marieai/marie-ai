@@ -1,6 +1,6 @@
 import os
 import time
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from .vqnnf.matching.template_matching import VQNNFMatcher
 
 def augment_document(glow_radius, glow_strength, src_image):
     if True:
+        return src_image
         img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
         return img_blurred
 
@@ -113,7 +114,11 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
-        self.feature_extractor_sim = self.feature_extractor
+
+        # self.feature_extractor_sim = self.feature_extractor
+        self.feature_extractor_sim = PixelFeatureExtractor(
+            model_name=self.model_name, num_features=self.n_feature
+        )
 
     def predict(
         self,
@@ -128,7 +133,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         region: tuple[int, int, int, int] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
-    ) -> list[tuple[int, int, int, int]]:
+    ) -> list[dict[str, tuple[int, int, Any, Any] | Any]]:
 
         feature_extractor = self.feature_extractor
 
@@ -143,6 +148,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         ws = []
         hs = []
         predictions = []
+        score_threshold = 0.60
 
         for idx, (template_raw, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
@@ -162,7 +168,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
-            glow_strength = 1  # 0: no glow, no maximum
+            glow_strength = 0  # 0: no glow, no maximum
             glow_radius = 25  # blur radius
 
             # Only modify the RED channel
@@ -267,9 +273,13 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 query_pred_snippet_features.reshape(1, -1),
             )
             sim = sim.cpu().numpy()[0]
-            print("sim", sim)
+            print("sim query/template", sim)
             # sim_val = sim_val
             sim_val = (sim_val + sim) / 2
+            # sim_val = sim_val
+
+            if sim_val < score_threshold:
+                continue
 
             if True:  # verbose:
                 cv2.imwrite(
@@ -309,8 +319,21 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 }
             )
 
-            cv2.imwrite(f"/tmp/dim/{idx}_query_pd_snippet.png", query_pred_snippet)
-            cv2.imwrite(f"/tmp/dim/{idx}_template_snippet.png", template_snippet)
+            cv2.imwrite(
+                f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
+                query_pred_snippet,
+            )
+            cv2.imwrite(
+                f"/tmp/dim/{idx}_template_snippet_{round(sim_val, 3)}.png",
+                template_snippet,
+            )
+
+            if True:
+                stacked = np.hstack((template_snippet, query_pred_snippet))
+                cv2.imwrite(
+                    f"/tmp/dim/final/stacked_{idx}_{round(sim_val, 3)}.png",
+                    stacked,
+                )
 
             break
 
