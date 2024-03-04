@@ -31,15 +31,13 @@ def find_model_using_name(model_name):
     and it is case-insensitive.
     """
 
-    # FIXME : this needs to be fixes as the import_module is not working
     mapping = {
         'test': TestModel,
         'base': BaseModel
     }
+    # return mapping[model_name]
 
-    return mapping[model_name]
-
-    model_filename = "models." + model_name + "_model"
+    model_filename = "marie.models.pix2pix.models." + model_name + "_model"
     modellib = importlib.import_module(model_filename)
     model = None
     target_model_name = model_name.replace('_', '') + 'model'

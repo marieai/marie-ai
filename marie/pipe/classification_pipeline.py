@@ -1,19 +1,18 @@
 import os
 import shutil
+import types
 from datetime import datetime
 from typing import List, Optional, Union
 
 import numpy as np
-import torch
 from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
-from marie.logging.profile import TimeContext
 from marie.models.utils import initialize_device_settings
-from marie.ocr import CoordinateFormat, OcrEngine
+from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
 from marie.pipe import (
     ClassifierPipelineComponent,
@@ -23,17 +22,16 @@ from marie.pipe import (
 )
 from marie.pipe.components import (
     burst_frames,
+    load_pipeline,
     ocr_frames,
+    reload_pipeline,
     restore_assets,
-    setup_classifiers,
-    setup_indexers,
-    split_filename,
     store_assets,
+    store_metadata,
 )
 from marie.pipe.voting import ClassificationResult, get_voting_strategy
 from marie.utils.docs import docs_from_image
 from marie.utils.image_utils import hash_frames_fast
-from marie.utils.json import store_json_object
 from marie.utils.utils import ensure_exists
 
 
@@ -71,8 +69,10 @@ class ClassificationPipeline:
     ) -> None:
         self.show_error = True  # show prediction errors
         self.logger = MarieLogger(context=self.__class__.__name__)
+        self.load_pipeline = types.MethodType(load_pipeline, self)
 
         self.pipelines_config = pipelines_config
+        self.reload_pipeline = types.MethodType(reload_pipeline, self)
         self.default_pipeline_config = None
         self.silence_exceptions = silence_exceptions
 
@@ -111,66 +111,6 @@ class ClassificationPipeline:
         ) = self.load_pipeline(
             self.default_pipeline_config, self.ocr_engines["default"]
         )
-
-    def load_pipeline(
-        self, pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
-    ) -> tuple[str, dict[str, any], dict[str, any]]:
-
-        # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
-        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
-        if device == "cuda" and not use_cuda:
-            device = "cpu"
-
-        if "name" not in pipeline_config:
-            raise BadConfigSource("Invalid pipeline config, missing name field")
-
-        pipeline_name = pipeline_config["name"]
-        document_classifiers = setup_classifiers(
-            pipeline_config, key="page_classifier", device=device, ocr_engine=ocr_engine
-        )
-
-        document_sub_classifiers = setup_classifiers(
-            pipeline_config, key="sub_classifier", device=device, ocr_engine=ocr_engine
-        )
-
-        classifier_groups = dict()
-        for classifier_group, classifiers in document_classifiers.items():
-            sub_classifiers = document_sub_classifiers.get(classifier_group, {})
-            classifier_groups[classifier_group] = {
-                "group": classifier_group,
-                "classifiers": classifiers,
-                "sub_classifiers": sub_classifiers,
-            }
-
-        document_indexers = setup_indexers(
-            pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
-        )
-
-        indexer_groups = dict()
-        for group, indexer in document_indexers.items():
-            indexer_groups[group] = {
-                "group": group,
-                "indexer": indexer,
-            }
-
-        # dump information about the loaded classifiers that are grouped by the classifier group
-        for classifier_group, classifiers in document_classifiers.items():
-            self.logger.info(
-                f"Loaded classifiers :{classifier_group},  {len(classifiers)},  {classifiers.keys()}"
-            )
-        for classifier_group, classifiers in document_sub_classifiers.items():
-            self.logger.info(
-                f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
-            )
-        self.logger.info(
-            f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
-        )
-
-        return pipeline_name, classifier_groups, indexer_groups
 
     def execute_frames_pipeline(
         self,
@@ -275,33 +215,11 @@ class ClassificationPipeline:
                 }
             )
 
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
 
         return metadata
-
-    def store_metadata(
-        self,
-        ref_id: str,
-        ref_type: str,
-        root_asset_dir: str,
-        metadata: dict[str, any],
-        infix: str = "meta",
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        :param ref_id: reference id of the document
-        :param ref_type: reference type of the document
-        :param root_asset_dir: root asset directory
-        :param metadata: metadata to store
-        :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
-        :return: None
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.{infix}.json")
-        self.logger.info(f"Storing metadata : {metadata_path}")
-        store_json_object(metadata, metadata_path)
 
     def execute(
         self,
@@ -494,34 +412,3 @@ class ClassificationPipeline:
                 group_by_page[page].append(detail)
 
         return group_by_page
-
-    def reload_pipeline(self, pipeline_name) -> None:
-        with TimeContext(f"### Reloading pipeline : {pipeline_name}", self.logger):
-            try:
-                self.logger.info(f"Reloading pipeline : {pipeline_name}")
-                if self.pipelines_config is None:
-                    raise BadConfigSource(
-                        "Invalid pipeline configuration, no pipelines found"
-                    )
-
-                pipeline_config = None
-                for conf in self.pipelines_config:
-                    conf = conf["pipeline"]
-                    if conf.get("name") == pipeline_name:
-                        pipeline_config = conf
-                        break
-
-                if pipeline_config is None:
-                    raise BadConfigSource(
-                        f"Invalid pipeline configuration, pipeline not found : {pipeline_name}"
-                    )
-
-                (
-                    self.pipeline_name,
-                    self.classifier_groups,
-                    self.indexer_groups,
-                ) = self.load_pipeline(pipeline_config)
-                self.logger.info(f"Reloaded successfully pipeline : {pipeline_name} ")
-            except Exception as e:
-                self.logger.error(f"Error reloading pipeline : {e}")
-                raise e

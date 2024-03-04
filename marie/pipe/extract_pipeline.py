@@ -1,18 +1,20 @@
 import glob
 import os
 import shutil
+import types
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
-import torch
 from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
+from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
+from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
 from marie.pipe import (
@@ -23,21 +25,22 @@ from marie.pipe import (
 )
 from marie.pipe.components import (
     burst_frames,
+    load_pipeline,
     ocr_frames,
+    reload_pipeline,
     restore_assets,
     s3_asset_path,
-    setup_classifiers,
-    setup_indexers,
     setup_overlay,
     split_filename,
     store_assets,
+    store_metadata,
 )
+from marie.pipe.voting import ClassificationResult, get_voting_strategy
 from marie.renderer import PdfRenderer, TextRenderer
 from marie.renderer.adlib_renderer import AdlibRenderer
 from marie.renderer.blob_renderer import BlobRenderer
 from marie.utils.docs import docs_from_image, frames_from_file
 from marie.utils.image_utils import hash_frames_fast
-from marie.utils.json import store_json_object
 from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
@@ -74,33 +77,66 @@ class ExtractPipeline:
 
     def __init__(
         self,
-        pipeline_config: dict[str, any] = None,
+        pipelines_config: List[dict[str, any]] = None,
         cuda: bool = True,
+        device: Optional[str] = "cuda",
+        silence_exceptions: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.show_error = True  # show prediction errors
-        # sometimes we have CUDA/GPU support but want to only use CPU
-        use_cuda = torch.cuda.is_available()
-        if os.environ.get("MARIE_DISABLE_CUDA"):
-            use_cuda = False
-
-        device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
-        if device == "cuda" and not use_cuda:
-            device = "cpu"
-
         self.logger = MarieLogger(context=self.__class__.__name__)
-        self.overlay_processor = setup_overlay(pipeline_config)
-        self.ocr_engines = get_known_ocr_engines(device=device)
-        self.document_classifiers = setup_classifiers(pipeline_config)
-        self.document_indexers = setup_indexers(pipeline_config)
+        self.load_pipeline = types.MethodType(load_pipeline, self)
 
-        self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
+        self.pipelines_config = pipelines_config
+        self.reload_pipeline = types.MethodType(reload_pipeline, self)
+        self.default_pipeline_config = None
+        self.silence_exceptions = silence_exceptions
+
+        for conf in pipelines_config:
+            conf = conf["pipeline"]
+            if conf.get("default", False):
+                if self.default_pipeline_config is not None:
+                    raise BadConfigSource(
+                        "Invalid pipeline configuration, multiple defaults found"
+                    )
+                self.default_pipeline_config = conf
+
+        if self.default_pipeline_config is None:
+            raise BadConfigSource("Invalid pipeline configuration, default not found")
+
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        resolved_devices, _ = initialize_device_settings(
+            devices=[device], use_cuda=True, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+        has_cuda = True if self.device.type.startswith("cuda") else False
+
+        self.overlay_processor = setup_overlay(self.default_pipeline_config)
+        self.ocr_engines = get_known_ocr_engines(
+            device=self.device.type, engine="default"
+        )
+
+        (
+            self.pipeline_name,
+            self.classifier_groups,
+            self.indexer_groups,
+        ) = self.load_pipeline(
+            self.default_pipeline_config, self.ocr_engines["default"]
         )
 
         self.logger.info(
-            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
+            f"Loaded classifiers : {len(self.classifier_groups)},  {self.classifier_groups.keys()}"
+        )
+
+        self.logger.info(
+            f"Loaded indexers : {len(self.indexer_groups)},  {self.indexer_groups.keys()}"
         )
 
     def segment(
@@ -214,28 +250,20 @@ class ExtractPipeline:
         self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
         self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
 
-        post_processing_pipeline = []
-
-        if page_classifier_enabled:
-            post_processing_pipeline.append(
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline_component",
-                    document_classifiers=self.document_classifiers,
+        # check if the current pipeline name is the default pipeline name
+        if "name" in runtime_conf:
+            expected_pipeline_name = runtime_conf["name"]
+            if expected_pipeline_name != self.pipeline_name:
+                self.logger.warning(
+                    f"pipeline name : {expected_pipeline_name}, expected : {self.pipeline_name} , reloading pipeline"
                 )
-            )
-
-        if page_indexer_enabled:
-            post_processing_pipeline.append(
-                NamedEntityPipelineComponent(
-                    name="ner_pipeline_component",
-                    document_indexers=self.document_indexers,
-                )
-            )
+                self.reload_pipeline(expected_pipeline_name)
 
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
 
@@ -246,14 +274,58 @@ class ExtractPipeline:
 
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
-
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )
         ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
         metadata["ocr"] = ocr_results
+        metadata["classifications"] = []
+        metadata["indexers"] = []
 
-        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+        # Extract and Classify now done in groups
+        for group, classifier_group in self.classifier_groups.items():
+            self.logger.info(
+                f"Loaded extract pipeline/group : {self.pipeline_name}, {group}"
+            )
+            document_classifiers = classifier_group["classifiers"]
+            sub_classifiers = classifier_group["sub_classifiers"]
+            post_processing_pipeline = []
+
+            if page_classifier_enabled:
+                post_processing_pipeline.append(
+                    ClassifierPipelineComponent(
+                        name="classifier_pipeline_component",
+                        document_classifiers=document_classifiers,
+                    )
+                )
+
+            if page_indexer_enabled:
+                if group in self.indexer_groups:
+                    document_indexers = self.indexer_groups[group]["indexer"]
+                    post_processing_pipeline.append(
+                        NamedEntityPipelineComponent(
+                            name="ner_pipeline_component",
+                            document_indexers=document_indexers,
+                        )
+                    )
+
+            results = self.execute_pipeline(
+                post_processing_pipeline, sub_classifiers, frames, ocr_results
+            )
+            metadata["classifications"].append(
+                {
+                    "group": group,
+                    "classification": results["classifier"]
+                    if "classifier" in results
+                    else {},
+                }
+            )
+            metadata["indexers"].append(
+                {
+                    "group": group,
+                    "indexer": results["indexer"] if "indexer" in results else {},
+                }
+            )
 
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
@@ -261,20 +333,10 @@ class ExtractPipeline:
         self.render_adlib(ref_id, frames, ocr_results, root_asset_dir)
 
         self.pack_assets(ref_id, ref_type, root_asset_dir, metadata)
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir)
 
         return metadata
-
-    def store_metadata(
-        self, ref_id: str, ref_type: str, root_asset_dir: str, metadata: dict[str, any]
-    ) -> None:
-        """
-        Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
-        """
-        filename, prefix, suffix = split_filename(ref_id)
-        metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
-        store_json_object(metadata, metadata_path)
 
     def execute_regions_pipeline(
         self,
@@ -317,6 +379,7 @@ class ExtractPipeline:
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
             "ocr": results,
         }
@@ -509,13 +572,12 @@ class ExtractPipeline:
     def execute_pipeline(
         self,
         processing_pipeline: List[PipelineComponent],
+        sub_classifiers: dict[str, any],
         frames: List,
         ocr_results: dict,
-        metadata: dict,
+        # metadata: dict,
     ):
-        """Execute the post processing pipeline
-        TODO : This is temporary, we need to make this configurable
-        """
+        """Execute the post processing pipeline"""
         words = []
         boxes = []
         documents = docs_from_image(frames)
@@ -530,7 +592,7 @@ class ExtractPipeline:
         assert len(words) == len(boxes)
 
         context = PipelineContext(pipeline_id="post_processing_pipeline")
-        context["metadata"] = metadata
+        context["metadata"] = {}  # metadata
 
         for pipe in processing_pipeline:
             try:
@@ -544,3 +606,98 @@ class ExtractPipeline:
                     documents = pipe_results.state
             except Exception as e:
                 self.logger.error(f"Error executing pipe : {e}")
+
+        # TODO : This is temporary, we need to make this configurable
+        self.logger.info("### ClassificationPipeline results")
+        self.logger.info(context["metadata"])
+
+        page_indexer_meta = (
+            context["metadata"]["page_indexer"]
+            if "page_indexer" in context["metadata"]
+            else []
+        )
+        page_classifier_meta = (
+            context["metadata"]["page_classifier"]
+            if "page_classifier" in context["metadata"]
+            else []
+        )
+
+        for idx, page_result in enumerate(page_classifier_meta):
+            for detail in page_result["details"]:
+                page = int(detail["page"])
+                classification = detail["classification"]
+                filtered_classifiers = {}
+
+                for key, val in sub_classifiers.items():
+                    fileter_config = val["filter"]
+                    filter_type = fileter_config["type"]
+                    filter_pattern = fileter_config["pattern"]
+
+                    if filter_type == "exact" and classification == filter_pattern:
+                        self.logger.info(f"Adding sub-classifier : {key}")
+                        filtered_classifiers[key] = val
+
+                if filtered_classifiers:
+                    self.logger.info(
+                        f"Filtered classifiers : {filtered_classifiers.keys()}"
+                    )
+                    sub_classifier_pipeline = ClassifierPipelineComponent(
+                        name="sub_classifier_pipeline",
+                        document_classifiers=filtered_classifiers,
+                    )
+
+                    ctx = PipelineContext(pipeline_id="sub_classification_pipeline")
+                    ctx["metadata"] = {}
+                    pipe_results = sub_classifier_pipeline.run(
+                        documents[page : page + 1],
+                        ctx,
+                        words=[words[page]],
+                        boxes=[boxes[page]],
+                    )
+                    detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
+
+        # TODO : Read from config
+        # Classification strategy: max_score, max_votes, max_score_with_diff
+        prediction_agent = "majority"
+        tie_break_policy = "best_with_diff"
+        voter = get_voting_strategy(prediction_agent, tie_break_policy, max_diff=0.25)
+
+        class_by_page = self.group_results_by_page("classifier", page_classifier_meta)
+        score_by_page = {}
+        for page, details in class_by_page.items():
+            score_by_page[page] = voter([ClassificationResult(**x) for x in details])
+
+        classifier_results = {
+            "strategy": prediction_agent,
+            "tie_break_policy": tie_break_policy,
+            "pages": {},
+        }
+
+        for page in list(class_by_page.keys()):
+            classifier_results["pages"][page] = {
+                "details": class_by_page[page],
+                "best": score_by_page[page],
+            }
+
+        # Indexer results
+        indexer_by_page = self.group_results_by_page("indexer", page_indexer_meta)
+        indexer_results = {"strategy": "default", "pages": {}}
+
+        for page in list(indexer_by_page.keys()):
+            indexer_results["pages"][page] = {"details": indexer_by_page[page]}
+
+        return {"classifier": classifier_results, "indexer": indexer_results}
+
+    def group_results_by_page(self, group_key: str, page_meta: List[dict[str, any]]):
+        """Group the results by page"""
+        group_by_page = {}
+        for idx, page_result in enumerate(page_meta):
+            indexer = page_result[group_key]
+            for detail in page_result["details"]:
+                page = int(detail["page"])
+                if page not in group_by_page:
+                    group_by_page[page] = []
+                detail[group_key] = indexer
+                group_by_page[page].append(detail)
+
+        return group_by_page
