@@ -160,27 +160,32 @@ executors:
           - pipeline:
               name: 'default'
               default: True
-              device: 'cuda'
               page_classifier:
                 - model_name_or_path: 'marie/lmv3-medical-document-classification'
                   type: 'transformers'
+                  task: 'text-classification-multimodal'
                   device: 'cuda'
                   enabled: True
+                  batch_size: 1
                   name: 'medical_page_classifier'
-                  group: 'corr-classifier'
+                  group: 'medical-page-classifier'
+
                 - model_name_or_path: 'marie/lmv3-medical-document-payer'
                   type: 'transformers'
-                  enabled: false
+                  task: 'text-classification-multimodal'
+                  enabled: True
+                  batch_size: 1
                   device: 'cuda'
                   name: 'medical_payer_classifier'
-                  group: 'corr-payer-classifier'
+                  group: 'medical-payer-classifier'
+
               page_indexer:
-                - model_name_or_path: 'marie/layoutlmv3-medical-document-indexer'
-                  enabled: false
+                - model_name_or_path: 'rms/layoutlmv3-large-corr-ner'
+                  enabled: True
                   type: 'transformers'
                   device: 'cuda'
                   name: 'page_indexer_patient'
-                  group: 'corr-classifier'
+                  group: 'medical-payer-classifier'
                   filter:
                     type: 'regex'
                     pattern: '.*'
@@ -195,67 +200,6 @@ executors:
     #    replicas: ${{ CONTEXT.gpu_device_count }}
     env:
       CUDA_VISIBLE_DEVICES: RR
-
-#  - name: extract_xyz
-#    uses:
-#      jtype: TextExtractionExecutorMock
-#      metas:
-#        py_modules:
-#          - marie.executor.text
-#    timeout_ready: 3000000
-#    replicas: 1
-##    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-
-#  - name: ner_t
-#    uses:
-#      jtype: NerExtractionExecutor
-#      with:
-#        model_name_or_path : 'rms/layoutlmv3-large-corr-ner'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-##          - marie_server.executors.ner.mserve_torch
-#          - marie.executor.ner
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-
-#  - name: document_classifier
-#    uses:
-#      jtype: DocumentClassificationExecutor
-#      with:
-#        model_name_or_path :
-#          - 'marie/layoutlmv3-document-classification'
-#          - 'marie/layoutlmv3-document-classification'
-#        <<: *psql_conf_shared
-#        storage_enabled : False
-#      metas:
-#        py_modules:
-#          - marie.executor.classifier
-#    timeout_ready: 3000000
-##    replicas: 1
-#    replicas: ${{ CONTEXT.gpu_device_count }}
-#    env :
-#      CUDA_VISIBLE_DEVICES: RR
-##
-#  - name: overlay_t
-#    uses:
-#      jtype: OverlayExecutor
-#      with:
-#        model_name_or_path : 'rms/holder'
-#        <<: *storage_conf
-#        storage_enabled : True
-#      metas:
-#        py_modules:
-#          - marie.executor.overlay
-#    timeout_ready: 3000000
-#    replicas: 1
-
 # Authentication and Authorization configuration
 
 auth:

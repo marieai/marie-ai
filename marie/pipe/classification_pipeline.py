@@ -107,7 +107,7 @@ class ClassificationPipeline:
         (
             self.pipeline_name,
             self.classifier_groups,
-            self.document_indexers,
+            self.indexer_groups,
         ) = self.load_pipeline(
             self.default_pipeline_config, self.ocr_engines["default"]
         )
@@ -186,12 +186,14 @@ class ClassificationPipeline:
             ]
 
             if page_indexer_enabled:
-                processing_pipeline.append(
-                    NamedEntityPipelineComponent(
-                        name="ner_pipeline_component",
-                        document_indexers=self.document_indexers,
+                if group in self.indexer_groups:
+                    document_indexers = self.indexer_groups[group]["indexer"]
+                    processing_pipeline.append(
+                        NamedEntityPipelineComponent(
+                            name="ner_pipeline_component",
+                            document_indexers=document_indexers,
+                        )
                     )
-                )
 
             results = self.execute_pipeline(
                 processing_pipeline, sub_classifiers, frames, ocr_results

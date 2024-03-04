@@ -119,12 +119,14 @@ class ExtractPipeline:
         has_cuda = True if self.device.type.startswith("cuda") else False
 
         self.overlay_processor = setup_overlay(self.default_pipeline_config)
-        self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
+        self.ocr_engines = get_known_ocr_engines(
+            device=self.device.type, engine="default"
+        )
 
         (
             self.pipeline_name,
             self.classifier_groups,
-            self.document_indexers,
+            self.indexer_groups,
         ) = self.load_pipeline(
             self.default_pipeline_config, self.ocr_engines["default"]
         )
@@ -134,7 +136,7 @@ class ExtractPipeline:
         )
 
         self.logger.info(
-            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
+            f"Loaded indexers : {len(self.indexer_groups)},  {self.indexer_groups.keys()}"
         )
 
     def segment(
@@ -298,12 +300,14 @@ class ExtractPipeline:
                 )
 
             if page_indexer_enabled:
-                post_processing_pipeline.append(
-                    NamedEntityPipelineComponent(
-                        name="ner_pipeline_component",
-                        document_indexers=self.document_indexers,
+                if group in self.indexer_groups:
+                    document_indexers = self.indexer_groups[group]["indexer"]
+                    post_processing_pipeline.append(
+                        NamedEntityPipelineComponent(
+                            name="ner_pipeline_component",
+                            document_indexers=document_indexers,
+                        )
                     )
-                )
 
             results = self.execute_pipeline(
                 post_processing_pipeline, sub_classifiers, frames, ocr_results
@@ -330,7 +334,7 @@ class ExtractPipeline:
 
         self.pack_assets(ref_id, ref_type, root_asset_dir, metadata)
         store_metadata(ref_id, ref_type, root_asset_dir, metadata)
-        store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
+        store_assets(ref_id, ref_type, root_asset_dir)
 
         return metadata
 

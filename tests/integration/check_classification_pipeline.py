@@ -55,9 +55,6 @@ if __name__ == "__main__":
     img_path = "~/tmp/analysis/marie-issues/corr-failing/197333985/197333985-0001.png"
     img_path = "~/tmp/analysis/marie-issues/corr-failing/196675912/196675912.tif"
 
-    # img_path = "~/datasets/private/corr-routing/jpmc_01-22-2024/ready/images/LEVEL_1/auth_denial/09012023_22572_5_647_3.png"
-    # img_path = "~/Desktop/11302023_21100_5_102_.tif"
-    img_path = "~/Desktop/11302023_28082_5_452_.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -68,16 +65,16 @@ if __name__ == "__main__":
 
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
-
+    #
     config = load_yaml(
         os.path.join(
-            __config_dir__, "tests-integration", "pipeline-classify-004.partial.yml"
+            __config_dir__, "tests-integration", "pipeline-classify-006.partial.yml"
         )
     )
 
     config = load_yaml("/mnt/data/marie-ai/config/service/marie-classifier-3.0.28.yml")
     pprint(config)
-    pprint(config['executors'][0]['uses']['with']['pipelines'])
+    # pprint(config['executors'][0]['uses']['with']['pipelines'])
 
     # pipelines_config = config["pipelines"]
     pipelines_config = config['executors'][0]['uses']['with']['pipelines']
@@ -86,6 +83,8 @@ if __name__ == "__main__":
     runtime_conf = {
         # 'name': 'jpmc-corr'
     }
+
+    # runtime_conf = None
 
     with TimeContext(f"### ClassificationPipeline info"):
         results = pipeline.execute(

@@ -6,6 +6,7 @@ import torch
 
 from marie.components import TransformersDocumentIndexer
 from marie.logging.profile import TimeContext
+from marie.ocr import MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
@@ -43,7 +44,11 @@ def test_transformer_document_indexer():
     resolved_model_path = ensure_model(model_name_or_path)
     print("resolved_model_path", resolved_model_path)
 
-    indexer = TransformersDocumentIndexer(model_name_or_path=resolved_model_path, devices=["cpu"])
+    ocr_engine = MockOcrEngine()
+    ocr_engine = None
+
+    indexer = TransformersDocumentIndexer(model_name_or_path=resolved_model_path, devices=["cpu"],
+                                          ocr_engine=ocr_engine)
     NITER = 1
 
     for i in range(NITER):

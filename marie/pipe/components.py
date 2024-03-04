@@ -231,7 +231,7 @@ def setup_indexers(
     :param key: key to use in the pipeline config
     :param device: device to use for classification (cpu or cuda)
     :param ocr_engine: OCR engine to use for the pipeline (default: None)
-    :return: document classifiers
+    :return: document classifiers grouped by their group names and indexed by their names
     """
 
     if pipeline_config is None:
@@ -260,17 +260,27 @@ def setup_indexers(
         if name in document_indexers:
             raise BadConfigSource(f"Duplicate indexer name : {name}")
 
+        if "group" not in config:
+            raise BadConfigSource(f"Missing group in indexer config : {config}")
+
+        group = config["group"] if "group" in config else "default"
+
+        if group not in document_indexers:
+            document_indexers[group] = dict()
+
         model_filter = config["filter"] if "filter" in config else {}
         # TODO: Add support for other indexer types
         if model_type == "transformers":
-            document_indexers[name] = {
+            document_indexers[group][name] = {
                 "indexer": TransformersDocumentIndexer(
                     model_name_or_path=model_name_or_path,
                     devices=[device],
                     ocr_engine=ocr_engine,
                 ),
                 "filter": model_filter,
+                "group": group,
             }
+
         else:
             raise ValueError(f"Invalid indexer type : {model_type}")
 
@@ -314,6 +324,14 @@ def load_pipeline(
     document_indexers = setup_indexers(
         pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
     )
+
+    indexer_groups = dict()
+    for group, indexer in document_indexers.items():
+        indexer_groups[group] = {
+            "group": group,
+            "indexer": indexer,
+        }
+
     # dump information about the loaded classifiers that are grouped by the classifier group
     for classifier_group, classifiers in document_classifiers.items():
         self.logger.info(
@@ -327,7 +345,7 @@ def load_pipeline(
         f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
     )
 
-    return pipeline_name, classifier_groups, document_indexers
+    return pipeline_name, classifier_groups, indexer_groups
 
 
 def reload_pipeline(self, pipeline_name) -> None:
@@ -354,7 +372,7 @@ def reload_pipeline(self, pipeline_name) -> None:
             (
                 self.pipeline_name,
                 self.classifier_groups,
-                self.document_indexers,
+                self.indexer_groups,
             ) = self.load_pipeline(pipeline_config, self.ocr_engines["default"])
             self.logger.info(f"Reloaded successfully pipeline : {pipeline_name} ")
         except Exception as e:

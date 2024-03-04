@@ -195,8 +195,11 @@ def merge_bboxes_as_block(bboxes):
 
     min_x = bboxes[:, 0].min()
     min_y = bboxes[:, 1].min()
-    max_h = bboxes[:, 3].max()
+    # max_h = bboxes[:, 3].max()
+
+    max_h = (bboxes[:, 1] + bboxes[:, 3]).max() - min_y
     max_w = (bboxes[:, 0] + bboxes[:, 2]).max() - min_x
+
     block = [min_x, min_y, max_w, max_h]
     block = [round(k, 6) for k in block]
 

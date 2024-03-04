@@ -1,0 +1,5 @@
+[ui]
+hideTopBar = true
+
+[client]
+toolbarMode = "minimal"
