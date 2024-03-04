@@ -152,7 +152,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 # Optimize model for Inference time
                 for param in model.parameters():
                     param.grad = None
-                print("**** COMPILING NER Model***")
                 import torch._dynamo as dynamo
 
                 # Default torchinductor causes OOM when running on 24GB GPU, cache memory is never relased
@@ -165,7 +164,6 @@ class NerExtractionExecutor(Executor, StorageMixin):
                 model = torch.compile(
                     model, mode="max-autotune", fullgraph=True, backend="cudagraphs"
                 )
-                print("**** COMPILED ***")
             except Exception as e:
                 self.logger.error(f"Failed to compile model : {e}")
 
