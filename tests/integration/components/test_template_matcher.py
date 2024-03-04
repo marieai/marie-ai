@@ -8,16 +8,11 @@ import numpy as np
 import psutil
 import torch
 
-from marie.components.template_matching.dim_template_matching import (
-    DeepDimTemplateMatcher,
-)
 from marie.components.template_matching.vqnnf_template_matching import (
     VQNNFTemplateMatcher,
 )
 from marie.logging.profile import TimeContext
-from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file, frames_from_docs
-from marie.utils.json import load_json_file
 from marie.utils.resize_image import resize_image
 
 # 110328
@@ -84,8 +79,8 @@ def test_template_matcher():
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
             # docs_from_file("./assets/template_matching/sample-005.png")
-            # docs_from_file("./assets/template_matching/sample-001.png")
-            docs_from_file("./assets/template_matching/sample-001-95_percent.png")
+            docs_from_file("./assets/template_matching/sample-001.png")
+            # docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
         )
 
@@ -128,8 +123,8 @@ def test_template_matcher():
             },
         }
 
-        key = "005-A"
-        # key = "002-A"
+        # key = "001-A"
+        key = "002-A"
 
         template_coords = samples[key]["coords"]
         frames_t = frames_from_docs(docs_from_file(samples[key]["image"]))

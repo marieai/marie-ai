@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 from io import BytesIO
 
 import numpy as np
@@ -22,25 +23,9 @@ class ImageUtils:
     def resize_image(self, raw_image, square=960):
         """Resize the mask so it fits inside a 544x544 square"""
         width, height = raw_image.size
+        # return raw_image.resize((width, height)), (width, height)
 
-        # Check if the image resolution is larger than
-        if width > square or height > square:
-            # Calculate the aspect ratio
-            aspect_ratio = width / height
-
-            # Calculate the new dimensions to fit within 960x544 frame
-            if aspect_ratio > square / square:
-                resized_width = square
-                resized_height = int(resized_width / aspect_ratio)
-            else:
-                resized_height = square
-                resized_width = int(resized_height * aspect_ratio)
-
-            # Resize the image
-            resized_image = raw_image.resize((resized_width, resized_height))
-            return resized_image, (resized_width, resized_height)
-        else:
-            return raw_image, (width, height)
+        return raw_image.resize((square, square)), (square, square)
 
     def get_canvas(
         self, resized_image, key="canvas", update_streamlit=True, mode="rect"
@@ -70,19 +55,27 @@ class ImageUtils:
     def get_resized_boxes(self, canvas_result):
         """Get the resized boxes from the canvas result"""
         objects = canvas_result.json_data["objects"]
+        print("canvas_result.image_data", canvas_result.image_data.shape)
+
+        """Resize the image to the provided resolution."""
         resized_boxes = []
-        for object in objects:
-            left, top = object["left"], object["top"]  # upper left corner
-            width, height = object["width"], object["height"]  # box width and height
+        for obj in objects:
+            print('object', obj)
+            left, top = int(obj["left"]), int(obj["top"])  # upper left corner
+            width, height = int(obj["width"]), int(
+                obj["height"]
+            )  # box width and height
             right, bottom = left + width, top + height  # lower right corner
             resized_boxes.append([left, top, right, bottom])
         return resized_boxes
 
     def get_raw_boxes(self, resized_boxes, raw_size, resized_size):
         """Convert the resized boxes to raw boxes"""
+
         raw_width, raw_height = raw_size
         resized_width, resized_height = resized_size
         raw_boxes = []
+
         for box in resized_boxes:
             left, top, right, bottom = box
             raw_left = int(left * raw_width / resized_width)
@@ -225,6 +218,9 @@ def main():
 
     with st.container():
         if submit:
+            print('raw_size', raw_size)
+            print('resized_size', resized_size)
+
             resized_boxes = utils.get_resized_boxes(canvas_result)
             # left_upper point and right_lower point : [x1, y1, x2, y2]
             raw_boxes = utils.get_raw_boxes(resized_boxes, raw_size, resized_size)
@@ -232,22 +228,19 @@ def main():
             raw_boxes_xywh = [
                 [box[0], box[1], box[2] - box[0], box[3] - box[1]] for box in raw_boxes
             ]
-
             matching_request = {
                 "image": raw_image,
                 "bboxes": raw_boxes,
                 "boxes_xywh": raw_boxes_xywh,
             }
 
-            # create a pandas dataframe
-            # Boolean to resize the dataframe, stored as a session state variable
             st.checkbox("Use container width", value=False, key="use_container_width")
-
             st.write("Boxes - original/converted")
 
+            max_width = max([box[2] - box[0] for box in raw_boxes])
             column_configuration = {
                 "snippet": st.column_config.ImageColumn(
-                    "snippet", help="The user's avatar", width=224
+                    "snippet", help="Document snippet", width=max_width
                 ),
             }
 
@@ -259,7 +252,9 @@ def main():
             def image_formatter(img) -> str:
                 return f"data:image/png;base64,{image_to_base64(img)}"
 
+            os.makedirs("/tmp/template", exist_ok=True)
             rows = []
+
             for i, (s, r, z) in enumerate(
                 zip(resized_boxes, raw_boxes, raw_boxes_xywh)
             ):
@@ -269,10 +264,10 @@ def main():
                 rows.append(
                     {
                         "snippet": image_formatter(snippet),
-                        # "sx1": s[0],
-                        # "sy1": s[1],
-                        # "sx2": s[2],
-                        # "sy2": s[3],
+                        "sx1": s[0],
+                        "sy1": s[1],
+                        "sx2": s[2],
+                        "sy2": s[3],
                         "x1": r[0],
                         "y1": r[1],
                         "x2": r[2],
