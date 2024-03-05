@@ -11,7 +11,9 @@ class EfficientNetHyperColumn(nn.Module):
         super().__init__()
         self.stride = stride
         self.num_features = num_features  # 40, 80, 192, 512
-        self.model = EfficientNet.from_pretrained(model_name, weights_path=weights_path)
+        self.model = EfficientNet.from_pretrained(
+            model_name, weights_path=weights_path, advprop=False
+        )
 
     def forward(self, x):
         _, _, h, w = x.shape

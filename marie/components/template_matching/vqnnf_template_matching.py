@@ -5,15 +5,102 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 import torch
+from PIL import Image, ImageDraw
 from torch import nn
+from transformers import (
+    AutoModel,
+    CLIPModel,
+    CLIPProcessor,
+    CLIPTokenizer,
+    LayoutLMv3FeatureExtractor,
+    LayoutLMv3Processor,
+    LayoutLMv3TokenizerFast,
+)
 
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...embeddings.transformers.transformers_embeddings import TransformersEmbeddings
 from .base import BaseTemplateMatcher
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
-from .vqnnf.matching.sim import similarity_score
+from .vqnnf.matching.sim import crop_to_content, resize_image, similarity_score
 from .vqnnf.matching.template_matching import VQNNFMatcher
+
+
+def get_model_info_clip(model_ID, device):
+    model = CLIPModel.from_pretrained(model_ID).to(device)
+    processor = CLIPProcessor.from_pretrained(model_ID)
+    tokenizer = CLIPTokenizer.from_pretrained(model_ID)
+
+    return model, processor, tokenizer
+
+
+def get_model_info(model_id, device):
+    """prepare for the model"""
+    # Method:2 Create Layout processor with custom future extractor
+    # Max model size is 512, so we will need to handle any documents larger than that
+    pretrained_model_name_or_path = "microsoft/layoutlmv3-base"
+    model = AutoModel.from_pretrained(pretrained_model_name_or_path).to(device)
+    feature_extractor = LayoutLMv3FeatureExtractor(
+        apply_ocr=False, do_resize=True, resample=Image.BILINEAR
+    )
+    tokenizer = LayoutLMv3TokenizerFast.from_pretrained(pretrained_model_name_or_path)
+    processor = LayoutLMv3Processor(
+        feature_extractor=feature_extractor, tokenizer=tokenizer
+    )
+
+    return model, processor, tokenizer
+
+
+def get_single_text_embedding(model, tokenizer, text):
+    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    text_embeddings = model.get_text_features(**inputs)
+    embedding_as_np = text_embeddings.cpu().detach().numpy()
+    return embedding_as_np
+
+
+def get_single_image_embedding_clip(
+    model, processor, image, words, boxes, device
+):  ## resize the image to 224x224
+
+    return get_single_text_embedding(model, processor, text=" ".join(words))
+    # image = image.resize((224, 224))
+    image = processor(text=None, images=image, return_tensors="pt")["pixel_values"].to(
+        device
+    )
+
+    embedding = model.get_image_features(image)
+    # convert the embeddings to numpy array
+    embedding_as_np = embedding.cpu().detach().numpy()
+    return embedding_as_np
+
+
+def get_single_image_embedding(model, processor, image, words, boxes, device):
+    ## resize the image to 224x224
+    # image = image.resize((224, 224))
+    encoding = processor(
+        # fmt: off
+        image,
+        words,
+        boxes=boxes,
+        truncation=True,
+        padding="max_length",
+        return_tensors="pt",
+        max_length=512,
+        # fmt: on
+    ).to(model.device)
+
+    # get embeddings from the model
+    with torch.no_grad():
+        model_output = model(**encoding)
+        # get the last_hidden_state from the model_output
+        image_features = model_output.last_hidden_state
+        # get the mean of the features
+        image_features = image_features.mean(dim=1)
+        # convert the embeddings to numpy array
+        image_features_as_np = image_features.cpu().detach().numpy()
+
+        return image_features_as_np
 
 
 def augment_document(glow_radius, glow_strength, src_image):
@@ -49,6 +136,22 @@ def augment_document(glow_radius, glow_strength, src_image):
 
 def odd(f):
     return int(np.ceil(f)) // 2 * 2 + 1
+
+
+model_ID = "openai/clip-vit-base-patch32"  # "openai/clip-vit-base-patch32"
+# Get model, processor & tokenizer
+model, processor, tokenizer = get_model_info(model_ID, device="cuda")
+
+embeddings_processor = TransformersEmbeddings(
+    model_name_or_path="hf://microsoft/layoutlmv3-base"
+)
+
+
+def get_embedding_feaature(image: Image, words: list, boxes: list) -> np.ndarray:
+    embedding = embeddings_processor.get_embeddings(
+        texts=words, boxes=boxes, image=Image.fromarray(image)
+    )
+    return embedding.embeddings
 
 
 class VQNNFTemplateMatcher(BaseTemplateMatcher):
@@ -168,7 +271,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
-            glow_strength = 0  # 0: no glow, no maximum
+            glow_strength = 1  # 0: no glow, no maximum
             glow_radius = 25  # blur radius
 
             # Only modify the RED channel
@@ -257,26 +360,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
-
-            sim_val = similarity_score(template_snippet, query_pred_snippet, "ssim")
-            similarities.append(sim_val)
-
-            t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-            q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-
-            template_snippet_features = self.feature_extractor_sim.get_features(t)
-            query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
-
-            cosine = nn.CosineSimilarity(dim=1)
-            sim = cosine(
-                template_snippet_features.reshape(1, -1),
-                query_pred_snippet_features.reshape(1, -1),
-            )
-            sim = sim.cpu().numpy()[0]
-            print("sim query/template", sim)
-            # sim_val = sim_val
-            sim_val = (sim_val + sim) / 2
-            # sim_val = sim_val
+            sim_val = self.score(template_snippet, query_pred_snippet)
 
             if sim_val < score_threshold:
                 continue
@@ -319,14 +403,15 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 }
             )
 
-            cv2.imwrite(
-                f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
-                query_pred_snippet,
-            )
-            cv2.imwrite(
-                f"/tmp/dim/{idx}_template_snippet_{round(sim_val, 3)}.png",
-                template_snippet,
-            )
+            if False:
+                cv2.imwrite(
+                    f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
+                    query_pred_snippet,
+                )
+                cv2.imwrite(
+                    f"/tmp/dim/{idx}_template_snippet_{round(sim_val, 3)}.png",
+                    template_snippet,
+                )
 
             if True:
                 stacked = np.hstack((template_snippet, query_pred_snippet))
@@ -338,3 +423,54 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             break
 
         return predictions
+
+    def score(self, template_snippet, query_pred_snippet) -> float:
+        t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+        q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+
+        template_snippet_features = self.feature_extractor_sim.get_features(t)
+        query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
+
+        cosine = nn.CosineSimilarity(dim=1)
+        feature_sim = cosine(
+            template_snippet_features.reshape(1, -1),
+            query_pred_snippet_features.reshape(1, -1),
+        )
+
+        if True:
+            words = ["claim", "provider"]
+            boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
+
+            template_snippet_features = get_embedding_feaature(t, words, boxes)
+            query_pred_snippet_features = get_embedding_feaature(
+                q,
+                words=["claim"],
+                boxes=[[0, 0, 100, 100]],
+            )
+
+            cosine = nn.CosineSimilarity(dim=1)
+            embedding_sim = cosine(
+                torch.from_numpy(template_snippet_features.reshape(1, -1)),
+                torch.from_numpy(query_pred_snippet_features.reshape(1, -1)),
+            )
+
+            embedding_sim = embedding_sim.cpu().numpy()[0]
+
+        feature_sim = feature_sim.cpu().numpy()[0]
+        # mask_val = mask_iou(t, q)
+        print("sim query/template", feature_sim, embedding_sim)
+        sim_val = (feature_sim + embedding_sim) / 2
+
+        return sim_val
+
+
+def mask_iou(mask1, mask2):
+    # convert to binary
+    mask1 = mask1 > 0
+    mask2 = mask2 > 0
+
+    intersection = np.logical_and(mask1, mask2)
+    union = np.logical_or(mask1, mask2)
+    iou_score = np.sum(intersection) / np.sum(union)
+    # save the masks
+    return iou_score
