@@ -177,7 +177,7 @@ def test_template_matcher():
 
         window_size = (128, 384)
         window_size = (384, 384)
-        window_size = (512, 512)
+        # window_size = (512, 512)
 
         for c in template_coords:
             x, y, w, h = c

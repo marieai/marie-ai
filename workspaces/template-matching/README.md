@@ -23,3 +23,13 @@ Disable XSRF protection in the server by adding the following line to the `appli
 ```bash 
 --server.enableXsrfProtection=false
 ```
+
+## References
+
+[Metrics Reloaded: Recommendations for image analysis
+validation
+](https://arxiv.org/pdf/2206.01653.pdf)
+
+[Enhancing Multimodal Understanding with CLIP-Based Image-to-Text Transformation](https://arxiv.org/pdf/2206.01653.pdf)
+
+
