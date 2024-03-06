@@ -4,6 +4,8 @@ from typing import List, Optional, Union
 
 import cv2
 import numpy as np
+import torch
+from fast_pytorch_kmeans import KMeans
 from PIL import Image
 from sahi.postprocess.combine import (
     GreedyNMMPostprocess,
@@ -116,7 +118,6 @@ class BaseTemplateMatcher(ABC):
             class_agnostic=postprocess_class_agnostic,
         )
 
-        print(postprocess)
         for i, (frame, region) in enumerate(zip(frames, regions)):
             self.logger.info(f"matching frame {i} region: {region}")
             # check depth and number of channels
@@ -219,9 +220,10 @@ class BaseTemplateMatcher(ABC):
 
             result_bboxes = []
             result_labels = []
-            results_scores = []
+            result_scores = []
+            result_features = []
+            result_snippets = []
 
-            score_threshold = 0.001
             score_threshold = 0.30
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
@@ -240,7 +242,6 @@ class BaseTemplateMatcher(ABC):
                     downscale_factor,
                     batch_size,
                 )
-                self.logger.info(f"predictions: {predictions}")
 
                 for prediction in predictions:
                     bbox = prediction["bbox"]
@@ -250,13 +251,22 @@ class BaseTemplateMatcher(ABC):
                         bbox[2],
                         bbox[3],
                     ]
-
+                    snippet = patch[
+                        bbox[1] : bbox[1] + bbox[3], bbox[0] : bbox[0] + bbox[2]
+                    ]
+                    result_snippets.append(snippet)
                     result_bboxes.append(shifted_bbox)
                     result_labels.append(prediction["label"])
-                    results_scores.append(prediction["score"])
+                    result_scores.append(prediction["score"])
+                    result_features.append(prediction["query_feature"])
 
-            result_bboxes, result_labels, results_scores = self.filter_scores(
-                result_bboxes, result_labels, results_scores, score_threshold
+            result_bboxes, result_labels, result_scores = self.filter_scores(
+                result_bboxes,
+                result_labels,
+                result_scores,
+                result_features,
+                result_snippets,
+                score_threshold,
             )
 
             print("bboxes before : ", result_bboxes)
@@ -264,7 +274,7 @@ class BaseTemplateMatcher(ABC):
             result_bboxes = [
                 bbox
                 for _, bbox in sorted(
-                    zip(results_scores, result_bboxes),
+                    zip(result_scores, result_bboxes),
                     key=lambda pair: pair[0],
                     reverse=True,
                 )
@@ -272,22 +282,20 @@ class BaseTemplateMatcher(ABC):
             result_labels = [
                 label
                 for _, label in sorted(
-                    zip(results_scores, result_labels),
+                    zip(result_scores, result_labels),
                     key=lambda pair: pair[0],
                     reverse=True,
                 )
             ]
 
-            results_scores = sorted(results_scores, reverse=True)
+            result_scores = sorted(result_scores, reverse=True)
 
             object_prediction_list: List[
                 ObjectPrediction
             ] = self.to_object_prediction_list(
-                result_bboxes, result_labels, results_scores
+                result_bboxes, result_labels, result_scores
             )
 
-            # postprocess predictions
-            # postprocess matching predictions
             if postprocess is not None:
                 object_prediction_list = postprocess(object_prediction_list)
 
@@ -300,19 +308,31 @@ class BaseTemplateMatcher(ABC):
             # flatten the object_result_map
             result_bboxes = []
             result_labels = []
-            results_scores = []
+            result_scores = []
+            result_snippets = []
+            idx = 0
 
             for label, predictions in object_result_map.items():
                 for prediction in predictions:
+                    snippet = frame[
+                        prediction["bbox"][1] : prediction["bbox"][1]
+                        + prediction["bbox"][3],
+                        prediction["bbox"][0] : prediction["bbox"][0]
+                        + prediction["bbox"][2],
+                    ]
                     result_bboxes.append(prediction["bbox"])
                     result_labels.append(prediction["label"])
-                    results_scores.append(prediction["score"])
+                    result_scores.append(prediction["score"])
+                    result_snippets.append(snippet)
+
+                    cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
+                    idx += 1
 
             results[i] = {"frame": i, "predictions": object_result_map}
 
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             self.visualize_object_predictions(
-                result_bboxes, result_labels, results_scores, frame, i
+                result_bboxes, result_labels, result_scores, frame, i
             )
 
             time_end = time.time() - time_start
@@ -360,16 +380,44 @@ class BaseTemplateMatcher(ABC):
         cv2.imwrite(f"/tmp/dim/results_frame_{index}.png", frame)
 
     def filter_scores(
-        self, bboxes, labels, scores, score_threshold
-    ) -> tuple[list, list, list]:
+        self, bboxes, labels, scores, features, snippets, score_threshold
+    ) -> tuple[list, list, list, list]:
         """
         Filter out scores below the threshold.
         :param bboxes: bounding boxes
         :param labels: labels to filter
         :param scores:  scores to filter
+        :param features: features to filter
+        :param snippets: snippets to filter
         :param score_threshold:
         :return:
         """
+        assert (
+            len(bboxes) == len(labels) == len(scores) == len(features) == len(snippets)
+        )
+        if False:
+            # perform KNN on the features to filter out the scores
+            features = np.array(features)
+            # input must be a 2d tensor with shape: [n_samples, n_features]
+            features = features.reshape(-1, 768)
+            print("features : ", features.shape)
+            import matplotlib.pyplot as plt
+
+            n_clusters = 4
+            features_tensor = torch.from_numpy(features).float()
+            clusterer = KMeans(n_clusters=n_clusters, verbose=2)
+            k_values = clusterer.fit_predict(features_tensor)
+            codebook = clusterer.centroids
+            k_values = k_values.numpy()
+
+            for k in range(n_clusters):
+                filtered = [
+                    snippets[i] for i in range(len(snippets)) if k_values[i] == k
+                ]
+                j = 0
+                for f in filtered:
+                    cv2.imwrite(f"/tmp/dim/cluster_{k}_{j}.png", f)
+                    j += 1
 
         bboxes = [
             bbox for bbox, score in zip(bboxes, scores) if score > score_threshold
