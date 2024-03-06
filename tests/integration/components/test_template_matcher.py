@@ -82,6 +82,7 @@ def test_template_matcher():
             docs_from_file("./assets/template_matching/sample-001.png")
             # docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
+            # docs_from_file("/home/gbugaj/tmp/medrx/pid/173358514/PID_749_7449_0_157676683.png")
         )
 
         samples = {

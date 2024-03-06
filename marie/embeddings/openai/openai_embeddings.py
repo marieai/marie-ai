@@ -16,7 +16,9 @@ from marie.registry.model_registry import ModelRegistry
 class OpenAIEmbeddings(EmbeddingsBase):
     def __init__(
         self,
-        model_name_or_path: Union[str, os.PathLike] = "openai/clip-vit-base-patch32",
+        model_name_or_path: Union[
+            str, os.PathLike
+        ] = None,  # "openai/clip-vit-base-patch32",
         model_version: Optional[str] = None,
         use_gpu: bool = True,
         batch_size: int = 16,
@@ -55,7 +57,6 @@ class OpenAIEmbeddings(EmbeddingsBase):
 
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
-        self.model_name_or_path = model_name_or_path
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -72,21 +73,20 @@ class OpenAIEmbeddings(EmbeddingsBase):
             "__model_path__": __model_path__,
             "use_auth_token": use_auth_token,
         }
-        if False:
-            model_name_or_path = ModelRegistry.get(
-                model_name_or_path,
-                version=None,
-                raise_exceptions_for_missing_entries=True,
-                **registry_kwargs,
-            )
+
+        self.model_name_or_path = ModelRegistry.get(
+            model_name_or_path,
+            version=None,
+            raise_exceptions_for_missing_entries=True,
+            **registry_kwargs,
+        )
 
         self.model, self.processor, self.tokenizer = self.setup_model(
-            model_name_or_path, self.device
+            self.model_name_or_path, self.device
         )
 
     def setup_model(self, model_name_or_path, device: str = "cuda"):
         """prepare for the model"""
-        model_name_or_path = "openai/clip-vit-base-patch16"
         model = CLIPModel.from_pretrained(model_name_or_path).to(device)
         processor = CLIPProcessor.from_pretrained(model_name_or_path)
         tokenizer = CLIPTokenizer.from_pretrained(model_name_or_path)
@@ -102,6 +102,7 @@ class OpenAIEmbeddings(EmbeddingsBase):
         boxes: List[List[int]] = None,
         **kwargs,
     ) -> EmbeddingsObject:
+
         with torch.inference_mode():
             try:
                 embeddings = self.get_single_image_embedding(
@@ -124,12 +125,13 @@ class OpenAIEmbeddings(EmbeddingsBase):
     ) -> np.ndarray:
 
         with torch.inference_mode():
-            # image = image.resize((224, 224))
-            image = processor(text=None, images=image, return_tensors="pt")[
-                "pixel_values"
-            ].to(model.device)
-
-            embedding = model.get_image_features(image)
+            print(" get_single_image_embedding ", image)
+            # write the image tot temp file
+            # image.save(f"/tmp/dim/embed/temp_{image}.png")
+            inputs = processor(text=None, images=image, return_tensors="pt").to(
+                model.device
+            )
+            embedding = model.get_image_features(**inputs)
             # convert the embeddings to numpy array
             embedding_as_np = embedding.cpu().detach().numpy()
             return embedding_as_np

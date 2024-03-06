@@ -12,6 +12,7 @@ from marie.models.utils import initialize_device_settings
 
 from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
 from ...embeddings.transformers.transformers_embeddings import TransformersEmbeddings
+from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
 from .vqnnf.matching.template_matching import VQNNFMatcher
@@ -57,15 +58,21 @@ embeddings_processorXX = TransformersEmbeddings(
 )
 
 embeddings_processor = OpenAIEmbeddings(
-    model_name_or_path="hf://openai/clip-vit-large-patch14"
+    # model_name_or_path="hf://openai/clip-vit-large-patch14"
+    model_name_or_path="marie/clip-vit-base-patch32"
     # model_name_or_path="hf://openai/clip-vit-base-patch32"
 )
 
 
-def get_embedding_feature(image: Image, words: list, boxes: list) -> np.ndarray:
+def get_embedding_feature(image: np.ndarray, words: list, boxes: list) -> np.ndarray:
+    # This is a pre-processing step to get the embeddings for the words and boxes in the image
+    print("embedding image", image.shape)
+    # image1 = resize_image(image, (72, 224))[0]
+    image1 = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     embedding = embeddings_processor.get_embeddings(
-        texts=words, boxes=boxes, image=Image.fromarray(image)
+        texts=words, boxes=boxes, image=image1
     )
+
     return embedding.embeddings
 
 
@@ -170,9 +177,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         for idx, (template_raw, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
         ):
-            print("template_label", template_label)
-            print("template_bbox", template_bbox)
-
+            # print("template_label", template_label)
+            # print("template_bbox", template_bbox)
             x, y, w, h = [int(t) for t in template_bbox]
 
             template_plot = cv2.rectangle(
@@ -343,9 +349,16 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         return predictions
 
     def score(self, template_snippet, query_pred_snippet) -> float:
+
+        print("template_snippet", template_snippet.shape)
+        print("query_pred_snippet", query_pred_snippet.shape)
+
         # resize the images to be the same size
-        t = cv2.resize(template_snippet, (244, 244), interpolation=cv2.INTER_AREA)
-        q = cv2.resize(query_pred_snippet, (244, 244), interpolation=cv2.INTER_AREA)
+        t = resize_image(template_snippet, (72, 224))[0]
+        q = resize_image(query_pred_snippet, (72, 224))[0]
+
+        # t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+        # q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
 
         template_snippet_features = self.feature_extractor_sim.get_features(t)
         query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
@@ -356,25 +369,19 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             query_pred_snippet_features.reshape(1, -1),
         )
 
-        if True:
-            words = ["claim", "provider"]
-            boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
+        # TODO : add the embedding similarity for the text
+        words = ["claim", "provider"]
+        boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
 
-            template_snippet_features = get_embedding_feature(t, words, boxes)
-            query_pred_snippet_features = get_embedding_feature(
-                q,
-                words=["claim"],
-                boxes=[[0, 0, 100, 100]],
-            )
+        template_snippet_features = get_embedding_feature(t, words=[], boxes=[])
+        query_pred_snippet_features = get_embedding_feature(q, words=[], boxes=[])
 
-            cosine = nn.CosineSimilarity(dim=1)
-            embedding_sim = cosine(
-                torch.from_numpy(template_snippet_features.reshape(1, -1)),
-                torch.from_numpy(query_pred_snippet_features.reshape(1, -1)),
-            )
+        embedding_sim = cosine(
+            torch.from_numpy(template_snippet_features.reshape(1, -1)),
+            torch.from_numpy(query_pred_snippet_features.reshape(1, -1)),
+        )
 
-            embedding_sim = embedding_sim.cpu().numpy()[0]
-
+        embedding_sim = embedding_sim.cpu().numpy()[0]
         feature_sim = feature_sim.cpu().numpy()[0]
         # mask_val = mask_iou(t, q)
         print("sim query/template", feature_sim, embedding_sim)
