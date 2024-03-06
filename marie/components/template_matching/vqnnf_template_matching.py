@@ -1,106 +1,20 @@
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Union
 
-import cv2
 import numpy as np
 import torch
-from PIL import Image, ImageDraw
+from PIL import Image
 from torch import nn
-from transformers import (
-    AutoModel,
-    CLIPModel,
-    CLIPProcessor,
-    CLIPTokenizer,
-    LayoutLMv3FeatureExtractor,
-    LayoutLMv3Processor,
-    LayoutLMv3TokenizerFast,
-)
 
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
 from ...embeddings.transformers.transformers_embeddings import TransformersEmbeddings
 from .base import BaseTemplateMatcher
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
-from .vqnnf.matching.sim import crop_to_content, resize_image, similarity_score
 from .vqnnf.matching.template_matching import VQNNFMatcher
-
-
-def get_model_info_clip(model_ID, device):
-    model = CLIPModel.from_pretrained(model_ID).to(device)
-    processor = CLIPProcessor.from_pretrained(model_ID)
-    tokenizer = CLIPTokenizer.from_pretrained(model_ID)
-
-    return model, processor, tokenizer
-
-
-def get_model_info(model_id, device):
-    """prepare for the model"""
-    # Method:2 Create Layout processor with custom future extractor
-    # Max model size is 512, so we will need to handle any documents larger than that
-    pretrained_model_name_or_path = "microsoft/layoutlmv3-base"
-    model = AutoModel.from_pretrained(pretrained_model_name_or_path).to(device)
-    feature_extractor = LayoutLMv3FeatureExtractor(
-        apply_ocr=False, do_resize=True, resample=Image.BILINEAR
-    )
-    tokenizer = LayoutLMv3TokenizerFast.from_pretrained(pretrained_model_name_or_path)
-    processor = LayoutLMv3Processor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer
-    )
-
-    return model, processor, tokenizer
-
-
-def get_single_text_embedding(model, tokenizer, text):
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    text_embeddings = model.get_text_features(**inputs)
-    embedding_as_np = text_embeddings.cpu().detach().numpy()
-    return embedding_as_np
-
-
-def get_single_image_embedding_clip(
-    model, processor, image, words, boxes, device
-):  ## resize the image to 224x224
-
-    return get_single_text_embedding(model, processor, text=" ".join(words))
-    # image = image.resize((224, 224))
-    image = processor(text=None, images=image, return_tensors="pt")["pixel_values"].to(
-        device
-    )
-
-    embedding = model.get_image_features(image)
-    # convert the embeddings to numpy array
-    embedding_as_np = embedding.cpu().detach().numpy()
-    return embedding_as_np
-
-
-def get_single_image_embedding(model, processor, image, words, boxes, device):
-    ## resize the image to 224x224
-    # image = image.resize((224, 224))
-    encoding = processor(
-        # fmt: off
-        image,
-        words,
-        boxes=boxes,
-        truncation=True,
-        padding="max_length",
-        return_tensors="pt",
-        max_length=512,
-        # fmt: on
-    ).to(model.device)
-
-    # get embeddings from the model
-    with torch.no_grad():
-        model_output = model(**encoding)
-        # get the last_hidden_state from the model_output
-        image_features = model_output.last_hidden_state
-        # get the mean of the features
-        image_features = image_features.mean(dim=1)
-        # convert the embeddings to numpy array
-        image_features_as_np = image_features.cpu().detach().numpy()
-
-        return image_features_as_np
 
 
 def augment_document(glow_radius, glow_strength, src_image):
@@ -138,16 +52,17 @@ def odd(f):
     return int(np.ceil(f)) // 2 * 2 + 1
 
 
-model_ID = "openai/clip-vit-base-patch32"  # "openai/clip-vit-base-patch32"
-# Get model, processor & tokenizer
-model, processor, tokenizer = get_model_info(model_ID, device="cuda")
-
-embeddings_processor = TransformersEmbeddings(
+embeddings_processorXX = TransformersEmbeddings(
     model_name_or_path="hf://microsoft/layoutlmv3-base"
 )
 
+embeddings_processor = OpenAIEmbeddings(
+    model_name_or_path="hf://openai/clip-vit-large-patch14"
+    # model_name_or_path="hf://openai/clip-vit-base-patch32"
+)
 
-def get_embedding_feaature(image: Image, words: list, boxes: list) -> np.ndarray:
+
+def get_embedding_feature(image: Image, words: list, boxes: list) -> np.ndarray:
     embedding = embeddings_processor.get_embeddings(
         texts=words, boxes=boxes, image=Image.fromarray(image)
     )
@@ -218,9 +133,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             model_name=self.model_name, num_features=self.n_feature
         )
 
-        # self.feature_extractor_sim = self.feature_extractor
         self.feature_extractor_sim = PixelFeatureExtractor(
-            model_name=self.model_name, num_features=self.n_feature
+            model_name=self.model_name, num_features=192
         )
 
     def predict(
@@ -251,7 +165,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         ws = []
         hs = []
         predictions = []
-        score_threshold = 0.60
+        score_threshold = 0.50
 
         for idx, (template_raw, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
@@ -360,7 +274,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
-            sim_val = self.score(template_snippet, query_pred_snippet)
+            sim_val, query_pred_snippet_f, template_snippet_f = self.score(
+                template_snippet, query_pred_snippet
+            )
 
             if sim_val < score_threshold:
                 continue
@@ -400,6 +316,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     "label": template_label,
                     "score": round(sim_val, 3),
                     "similarity": round(sim_val, 3),
+                    "query_feature": query_pred_snippet_f,
+                    "template_feature": template_snippet_f,
                 }
             )
 
@@ -425,8 +343,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         return predictions
 
     def score(self, template_snippet, query_pred_snippet) -> float:
-        t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-        q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+        # resize the images to be the same size
+        t = cv2.resize(template_snippet, (244, 244), interpolation=cv2.INTER_AREA)
+        q = cv2.resize(query_pred_snippet, (244, 244), interpolation=cv2.INTER_AREA)
 
         template_snippet_features = self.feature_extractor_sim.get_features(t)
         query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
@@ -441,8 +360,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             words = ["claim", "provider"]
             boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
 
-            template_snippet_features = get_embedding_feaature(t, words, boxes)
-            query_pred_snippet_features = get_embedding_feaature(
+            template_snippet_features = get_embedding_feature(t, words, boxes)
+            query_pred_snippet_features = get_embedding_feature(
                 q,
                 words=["claim"],
                 boxes=[[0, 0, 100, 100]],
@@ -460,8 +379,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         # mask_val = mask_iou(t, q)
         print("sim query/template", feature_sim, embedding_sim)
         sim_val = (feature_sim + embedding_sim) / 2
+        sim_val = embedding_sim
 
-        return sim_val
+        return sim_val, query_pred_snippet_features, template_snippet_features
 
 
 def mask_iou(mask1, mask2):
@@ -474,3 +394,128 @@ def mask_iou(mask1, mask2):
     iou_score = np.sum(intersection) / np.sum(union)
     # save the masks
     return iou_score
+
+
+import cv2
+
+
+def compare_histograms(img1, img2):
+    # Read the images in grayscale
+
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # Calculate histograms
+    hist1 = cv2.calcHist([img1], [0], None, [2], [0, 256])
+    hist2 = cv2.calcHist([img2], [0], None, [2], [0, 256])
+
+    # Normalize histograms
+    cv2.normalize(hist1, hist1, norm_type=cv2.NORM_L1)
+    cv2.normalize(hist2, hist2, norm_type=cv2.NORM_L1)
+
+    # Calculate histogram comparison metrics
+    intersection = cv2.compareHist(hist1, hist2, cv2.HISTCMP_INTERSECT)
+    correlation = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    chi_squared = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
+
+    return intersection, correlation, chi_squared
+
+
+def compare_images_with_sift(img1, img2):
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # Initialize SIFT detector
+    sift = cv2.SIFT_create()
+
+    # Detect keypoints and compute descriptors
+    kp1, des1 = sift.detectAndCompute(img1, None)
+    kp2, des2 = sift.detectAndCompute(img2, None)
+
+    # Initialize a brute force matcher
+    bf = cv2.BFMatcher()
+
+    # Match descriptors
+    matches = bf.knnMatch(des1, des2, k=2)
+
+    # Apply ratio test
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.50 * n.distance:
+            good_matches.append(m)
+
+    # Calculate the percentage of matching keypoints
+    percentage_matching_keypoints = (len(good_matches) / min(len(kp1), len(kp2))) * 100
+
+    return percentage_matching_keypoints
+
+
+def compare_images(img1, img2):
+    # Read the images
+
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # Check if images have the same dimensions
+    if img1.shape != img2.shape:
+        print("Images have different dimensions")
+        return
+
+    # Compute the absolute difference between the images
+    diff = cv2.absdiff(img1, img2)
+
+    # Count the number of non-zero pixels in the difference image
+    num_diff_pixels = cv2.countNonZero(diff)
+
+    # Calculate the percentage of difference
+    total_pixels = img1.shape[0] * img1.shape[1]
+    percentage_diff = (num_diff_pixels / total_pixels) * 100
+
+    return percentage_diff
+
+
+def compare_images_with_window(img1, img2, window_size):
+    # Read the images
+    # Check if images have the same dimensions
+    if img1.shape != img2.shape:
+        print("Images have different dimensions")
+        return
+
+    # convert to grayscale
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+    # Calculate the number of rows and columns for the sliding window
+    rows = img1.shape[0] // window_size
+    cols = img1.shape[1] // window_size
+
+    # Initialize total number of differing pixels
+    total_diff_pixels = 0
+
+    # Iterate through each window and compare the corresponding patches of pixels
+    for r in range(rows):
+        for c in range(cols):
+            # Extract patches from both images
+            patch_img1 = img1[
+                r * window_size : (r + 1) * window_size,
+                c * window_size : (c + 1) * window_size,
+            ]
+            patch_img2 = img2[
+                r * window_size : (r + 1) * window_size,
+                c * window_size : (c + 1) * window_size,
+            ]
+
+            # Calculate the absolute difference between the patches
+            diff = cv2.absdiff(patch_img1, patch_img2)
+
+            # Count the number of non-zero pixels in the difference patch
+            num_diff_pixels = cv2.countNonZero(diff)
+
+            # Add the number of differing pixels to the total
+            total_diff_pixels += num_diff_pixels
+
+    # Calculate the percentage of difference
+    total_pixels = img1.shape[0] * img1.shape[1]
+    percentage_diff = (total_diff_pixels / total_pixels) * 100
+
+    return percentage_diff

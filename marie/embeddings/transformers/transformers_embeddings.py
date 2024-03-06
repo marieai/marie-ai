@@ -115,6 +115,10 @@ class TransformersEmbeddings(EmbeddingsBase):
         boxes: List[List[int]] = None,
         **kwargs,
     ) -> EmbeddingsObject:
+
+        # ensure images is 224x224
+        image = image.resize((224, 224))
+
         with torch.no_grad():
             try:
                 embeddings = self.get_single_image_embedding(
