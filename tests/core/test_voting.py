@@ -4,6 +4,19 @@ from marie.pipe.model import ClassificationResult
 from marie.pipe.voting import get_voting_strategy
 
 
+def test_model_conversion():
+    raw_obj = {'page': '0', 'classification': 'misc', 'score': 0.9958, 'sub_classifier': [
+        {'classifier': 'corr_longformer_X_level2_misc',
+         'details': [{'page': '0', 'classification': 'misc_credentialing', 'score': 0.6762}]}],
+               'classifier': 'corr_longformer_classifier_X'}
+
+    result = ClassificationResult(**raw_obj)
+    print(result)
+
+    # serialize back to dict
+    assert result.dict() == raw_obj
+
+
 def test_voting_majority():
     voter = get_voting_strategy("majority")
 

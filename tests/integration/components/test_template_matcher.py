@@ -79,8 +79,8 @@ def test_template_matcher():
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
             # docs_from_file("./assets/template_matching/sample-005.png")
-            docs_from_file("./assets/template_matching/sample-001.png")
-            # docs_from_file("./assets/template_matching/sample-001-95_percent.png")
+            # docs_from_file("./assets/template_matching/sample-001.png")
+            docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
             # docs_from_file("/home/gbugaj/tmp/medrx/pid/173358514/PID_749_7449_0_157676683.png")
         )
@@ -124,8 +124,8 @@ def test_template_matcher():
             },
         }
 
-        # key = "001-A"
         key = "002-A"
+        # key = "002-A"
 
         template_coords = samples[key]["coords"]
         frames_t = frames_from_docs(docs_from_file(samples[key]["image"]))
@@ -217,7 +217,7 @@ def test_template_matcher():
                 template_frames=template_frames,
                 template_boxes=template_bboxes,
                 template_labels=template_labels,
-                score_threshold=0.65,
+                score_threshold=0.80,
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,

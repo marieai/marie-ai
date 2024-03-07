@@ -1,10 +1,10 @@
 import os
 from typing import List, Optional, Union
 
-import clip
 import numpy as np
 import torch
 from PIL import Image
+from transformers import CLIPModel, CLIPProcessor, CLIPTokenizer
 
 from marie.constants import __model_path__
 from marie.embeddings.base import EmbeddingsBase
@@ -13,7 +13,7 @@ from marie.models.utils import initialize_device_settings
 from marie.registry.model_registry import ModelRegistry
 
 
-class OpenAIEmbeddings(EmbeddingsBase):
+class OpenAITransformerEmbeddings(EmbeddingsBase):
     def __init__(
         self,
         model_name_or_path: Union[
@@ -81,21 +81,25 @@ class OpenAIEmbeddings(EmbeddingsBase):
             **registry_kwargs,
         )
 
-        self.model, self.processor = self.setup_model(
+        self.model, self.processor, self.tokenizer = self.setup_model(
             self.model_name_or_path, self.device
         )
 
     def setup_model(self, model_name_or_path, device: str = "cuda"):
         """prepare for the model"""
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 
-        model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
         checkpoint = torch.load(
-            "/mnt/data/marie-ai/model_zoo/clip/snippet/clip-vit-base-patch32/clip_16_0.1068115234375_params_clip.pth",
+            "/mnt/data/marie-ai/model_zoo/clip/snippet/clip-vit-base-patch32/pytorch_model.bin",
             map_location=device,
         )
+        print(checkpoint.keys())
         model.load_state_dict(checkpoint['model_state_dict'])
 
-        return model, preprocess
+        processor = CLIPProcessor.from_pretrained(model_name_or_path)
+        tokenizer = CLIPTokenizer.from_pretrained(model_name_or_path)
+
+        return model, processor, tokenizer
 
     def get_embeddings(
         self,
@@ -129,10 +133,13 @@ class OpenAIEmbeddings(EmbeddingsBase):
     ) -> np.ndarray:
 
         with torch.inference_mode():
+            print(" get_single_image_embedding ", image)
             # write the image tot temp file
             # image.save(f"/tmp/dim/embed/temp_{image}.png")
-            src = processor(image).unsqueeze(0).to(self.device)
-            embedding = model.encode_image(src)
+            inputs = processor(text=None, images=image, return_tensors="pt").to(
+                model.device
+            )
+            embedding = model.get_image_features(**inputs)
             # convert the embeddings to numpy array
             embedding_as_np = embedding.cpu().detach().numpy()
             return embedding_as_np

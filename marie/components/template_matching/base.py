@@ -224,8 +224,6 @@ class BaseTemplateMatcher(ABC):
             result_features = []
             result_snippets = []
 
-            score_threshold = 0.30
-
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
                 offset_x, offset_y = offset
 
