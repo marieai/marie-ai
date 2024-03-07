@@ -144,6 +144,7 @@ class MajorityVoter(VotingStrategy):
             score=round(total_score / len(candidates), 4),
             page=candidates[0].page,
             classifier=",".join([r.classifier for r in candidates]),
+            sub_classifier=candidates[0].sub_classifier,  # get first sub_classifier
         )
 
 
@@ -216,6 +217,7 @@ class MaxScoreVoter(VotingStrategy):
                     score=result.score * self.weights[i],
                     page=result.page,
                     classifier=result.classifier,
+                    sub_classifier=result.sub_classifier,
                 )
                 for i, result in enumerate(results)
             ]

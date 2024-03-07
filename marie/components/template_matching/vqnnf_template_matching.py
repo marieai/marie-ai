@@ -2,6 +2,7 @@ import os
 import time
 from typing import Any, List, Optional, Union
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -141,7 +142,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         )
 
         self.feature_extractor_sim = PixelFeatureExtractor(
-            model_name=self.model_name, num_features=192
+            model_name=self.model_name, num_features=512
         )
 
     def predict(
@@ -166,13 +167,12 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         temp_hs = []
         image_sizes = []
         temp_match_time = []
-        kmeans_time = []
         xs = []
         ys = []
         ws = []
         hs = []
+
         predictions = []
-        score_threshold = 0.50
 
         for idx, (template_raw, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
@@ -287,7 +287,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             if sim_val < score_threshold:
                 continue
 
-            if True:  # verbose:
+            if False:  # verbose:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_template_nnf.png",
                     cv2.applyColorMap(
@@ -370,7 +370,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         )
 
         # TODO : add the embedding similarity for the text
-        words = ["claim", "provider"]
+        words = ["word-a", "word-1"]
         boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
 
         template_snippet_features = get_embedding_feature(t, words=[], boxes=[])
@@ -386,143 +386,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         # mask_val = mask_iou(t, q)
         print("sim query/template", feature_sim, embedding_sim)
         sim_val = (feature_sim + embedding_sim) / 2
-        sim_val = embedding_sim
+        # sim_val = embedding_sim
 
         return sim_val, query_pred_snippet_features, template_snippet_features
-
-
-def mask_iou(mask1, mask2):
-    # convert to binary
-    mask1 = mask1 > 0
-    mask2 = mask2 > 0
-
-    intersection = np.logical_and(mask1, mask2)
-    union = np.logical_or(mask1, mask2)
-    iou_score = np.sum(intersection) / np.sum(union)
-    # save the masks
-    return iou_score
-
-
-import cv2
-
-
-def compare_histograms(img1, img2):
-    # Read the images in grayscale
-
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-    # Calculate histograms
-    hist1 = cv2.calcHist([img1], [0], None, [2], [0, 256])
-    hist2 = cv2.calcHist([img2], [0], None, [2], [0, 256])
-
-    # Normalize histograms
-    cv2.normalize(hist1, hist1, norm_type=cv2.NORM_L1)
-    cv2.normalize(hist2, hist2, norm_type=cv2.NORM_L1)
-
-    # Calculate histogram comparison metrics
-    intersection = cv2.compareHist(hist1, hist2, cv2.HISTCMP_INTERSECT)
-    correlation = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
-    chi_squared = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-
-    return intersection, correlation, chi_squared
-
-
-def compare_images_with_sift(img1, img2):
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-    # Initialize SIFT detector
-    sift = cv2.SIFT_create()
-
-    # Detect keypoints and compute descriptors
-    kp1, des1 = sift.detectAndCompute(img1, None)
-    kp2, des2 = sift.detectAndCompute(img2, None)
-
-    # Initialize a brute force matcher
-    bf = cv2.BFMatcher()
-
-    # Match descriptors
-    matches = bf.knnMatch(des1, des2, k=2)
-
-    # Apply ratio test
-    good_matches = []
-    for m, n in matches:
-        if m.distance < 0.50 * n.distance:
-            good_matches.append(m)
-
-    # Calculate the percentage of matching keypoints
-    percentage_matching_keypoints = (len(good_matches) / min(len(kp1), len(kp2))) * 100
-
-    return percentage_matching_keypoints
-
-
-def compare_images(img1, img2):
-    # Read the images
-
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-    # Check if images have the same dimensions
-    if img1.shape != img2.shape:
-        print("Images have different dimensions")
-        return
-
-    # Compute the absolute difference between the images
-    diff = cv2.absdiff(img1, img2)
-
-    # Count the number of non-zero pixels in the difference image
-    num_diff_pixels = cv2.countNonZero(diff)
-
-    # Calculate the percentage of difference
-    total_pixels = img1.shape[0] * img1.shape[1]
-    percentage_diff = (num_diff_pixels / total_pixels) * 100
-
-    return percentage_diff
-
-
-def compare_images_with_window(img1, img2, window_size):
-    # Read the images
-    # Check if images have the same dimensions
-    if img1.shape != img2.shape:
-        print("Images have different dimensions")
-        return
-
-    # convert to grayscale
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-
-    # Calculate the number of rows and columns for the sliding window
-    rows = img1.shape[0] // window_size
-    cols = img1.shape[1] // window_size
-
-    # Initialize total number of differing pixels
-    total_diff_pixels = 0
-
-    # Iterate through each window and compare the corresponding patches of pixels
-    for r in range(rows):
-        for c in range(cols):
-            # Extract patches from both images
-            patch_img1 = img1[
-                r * window_size : (r + 1) * window_size,
-                c * window_size : (c + 1) * window_size,
-            ]
-            patch_img2 = img2[
-                r * window_size : (r + 1) * window_size,
-                c * window_size : (c + 1) * window_size,
-            ]
-
-            # Calculate the absolute difference between the patches
-            diff = cv2.absdiff(patch_img1, patch_img2)
-
-            # Count the number of non-zero pixels in the difference patch
-            num_diff_pixels = cv2.countNonZero(diff)
-
-            # Add the number of differing pixels to the total
-            total_diff_pixels += num_diff_pixels
-
-    # Calculate the percentage of difference
-    total_pixels = img1.shape[0] * img1.shape[1]
-    percentage_diff = (total_diff_pixels / total_pixels) * 100
-
-    return percentage_diff
