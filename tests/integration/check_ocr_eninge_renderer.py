@@ -1,6 +1,5 @@
 import glob
 import os
-from typing import Dict
 
 import cv2
 import torch
@@ -12,7 +11,6 @@ from marie.renderer import PdfRenderer
 from marie.renderer.text_renderer import TextRenderer
 from marie.timer import Timer
 from marie.utils.docs import frames_from_file
-from marie.utils.image_utils import crop_to_content
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 
@@ -53,7 +51,6 @@ def process_file(ocr_engine: OcrEngine, img_path: str):
 
         # frames = [crop_to_content(frame, True) for frame in frames]
         extract_bouding_boxes(img_path, json_path, ngram=2)
-
 
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
         renderer.render(
@@ -101,36 +98,41 @@ def extract_bouding_boxes(img_path: str, metadata_path: str, ngram: int = 2):
         words.append(page_words)
         boxes.append(page_boxes)
 
-    from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
-
-    fname  = os.path.basename(img_path).split(".")[0]
+    from marie.utils.overlap import merge_bboxes_as_block
+    expected_ngrams = [] # LOAD FROM JSON
+    fname = os.path.basename(img_path).split(".")[0]
+    expected_ngrams = [normalize_label(n) for n in expected_ngrams]
     # create n-gram for each page and store it in a separate file
     k = 0
-    for page_idx in range(len(frames)):
-        page_words = words[page_idx]
-        page_boxes = boxes[page_idx]
+    ngrams = [1, 2, 3]
+    for ngram in ngrams:
+        for page_idx in range(len(frames)):
+            page_words = words[page_idx]
+            page_boxes = boxes[page_idx]
 
-        for i in range(len(page_words) - ngram + 1):
-            ngram_words = page_words[i:i + ngram]
-            ngram_boxes = page_boxes[i:i + ngram]
-            print(ngram_words, ngram_boxes)
-            # create a new frame with the ngram
-            # create a new ocr result with the ngram
-            # store the new frame and the new ocr result in a new file
+            for i in range(len(page_words) - ngram + 1):
+                ngram_words = page_words[i:i + ngram]
+                ngram_boxes = page_boxes[i:i + ngram]
+                print(ngram_words, ngram_boxes)
+                # create a new frame with the ngram
+                # create a new ocr result with the ngram
+                # store the new frame and the new ocr result in a new file
 
-            # convert ngram_words to a key
-            key = "_".join(ngram_words)
-            key = normalize_label(key)
-            print(key)
-            # create ngram snippet
-            ngram_frame = frames[page_idx]
-            box = merge_bboxes_as_block(ngram_boxes)
-            x, y, w, h = box
-            snippet = ngram_frame[y: y + h, x: x + w:]
-            # store the snippet
-            k += 1
-            ensure_exists(f"/tmp/fragments/converted/{key}")
-            cv2.imwrite(f"/tmp/fragments/converted/{key}/{fname}_{k}.png", snippet)
+                # convert ngram_words to a key
+                key = "_".join(ngram_words)
+                key = normalize_label(key)
+                if key not in expected_ngrams:
+                    continue
+                print(key)
+                # create ngram snippet
+                ngram_frame = frames[page_idx]
+                box = merge_bboxes_as_block(ngram_boxes)
+                x, y, w, h = box
+                snippet = ngram_frame[y: y + h, x: x + w:]
+                # store the snippet
+                k += 1
+                ensure_exists(f"/tmp/fragments/converted/{key}")
+                cv2.imwrite(f"/tmp/fragments/converted/{key}/{fname}_{k}.png", snippet)
 
 
 if __name__ == "__main__":
@@ -141,6 +143,7 @@ if __name__ == "__main__":
     img_path = "~/tmp/4007/176073139.tif"
     img_path = "~/tmp/demo/159581778_1.png"
     img_path = os.path.expanduser("~/tmp/demo")
+    # img_path = os.path.expanduser("/home/gbugaj/dev/marieai/marie-ai/assets/template_matching/sample-001.png")
 
     use_cuda = torch.cuda.is_available()
     ocr_engine = DefaultOcrEngine(cuda=use_cuda)

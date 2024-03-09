@@ -8,27 +8,30 @@ import numpy as np
 import psutil
 import torch
 
+from marie.components.template_matching.meta_template_matching import (
+    MetaTemplateMatcher,
+)
 from marie.components.template_matching.vqnnf_template_matching import (
     VQNNFTemplateMatcher,
 )
 from marie.logging.profile import TimeContext
 from marie.utils.docs import docs_from_file, frames_from_docs
+from marie.utils.json import load_json_file
 from marie.utils.resize_image import resize_image
 
-# 110328
 
 # extract windows snippet from the input image centered around the template
 def extract_windows(
-    image: np.ndarray,  # h, w, c
-    template_frames: Tuple[np.ndarray],  # h, w, c
-    template_bboxes: Tuple[Tuple[int]],  # x, y, w, h
-    window_size: Tuple[int],  # h, w
+        image: np.ndarray,  # h, w, c
+        template_frames: Tuple[np.ndarray],  # h, w, c
+        template_bboxes: Tuple[Tuple[int]],  # x, y, w, h
+        window_size: Tuple[int],  # h, w
 ):
     windows = []
     for template_frame, template_bbox in zip(template_frames, template_bboxes):
         x, y, w, h = template_bbox
         # extract window from the input image
-        window = image[y : y + h, x : x + w, :]
+        window = image[y: y + h, x: x + w, :]
         # resize the window to the desired size
         window, _ = resize_image(
             window,
@@ -74,13 +77,17 @@ def test_template_matcher():
 
     # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
     matcher = VQNNFTemplateMatcher(model_name_or_path="NONE")
+    # matcher = MetaTemplateMatcher(model_name_or_path="NONE")
 
     for i in range(1):
+
+        ocr_results = load_json_file("./assets/template_matching/sample-001.png.meta.json")
+
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
             # docs_from_file("./assets/template_matching/sample-005.png")
-            # docs_from_file("./assets/template_matching/sample-001.png")
-            docs_from_file("./assets/template_matching/sample-001-95_percent.png")
+            docs_from_file("./assets/template_matching/sample-001.png")
+            # docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
             # docs_from_file("/home/gbugaj/tmp/medrx/pid/173358514/PID_749_7449_0_157676683.png")
         )
@@ -105,6 +112,7 @@ def test_template_matcher():
                 "label": "CLAIM PROVIDER",
                 "coords": [[127, 92, 234, 27]],  # -002 :
                 "image": "./assets/template_matching/template-002.png",
+                "text": "CLAIM PROVIDER",
             },
             "002-B": {
                 "label": "CLAIM",
@@ -133,6 +141,7 @@ def test_template_matcher():
         template_bboxes = []
         template_frames = []
         template_labels = []
+        template_text = []
 
         if False:
             # test window size
@@ -147,7 +156,7 @@ def test_template_matcher():
             for idx, c in enumerate(template_coords):
                 frame = frames[idx]
                 x, y, w, h = c
-                template = frames[0][y : y + h, x : x + w, :]
+                template = frames[0][y: y + h, x: x + w, :]
 
                 cx = x + w // 2
                 cy = y + h // 2
@@ -161,7 +170,7 @@ def test_template_matcher():
                 y1 = max(0, cy - wh // 2)
                 w1 = min(frame_shape[1], ww)
                 h1 = min(frame_shape[0], wh)
-                window = frame[y1 : y1 + h1, x1 : x1 + w1, :]
+                window = frame[y1: y1 + h1, x1: x1 + w1, :]
 
                 cv2.imwrite(f"/tmp/dim/template.png", template)
                 cv2.imwrite(f"/tmp/dim/window.png", window)
@@ -186,7 +195,7 @@ def test_template_matcher():
             coord = c
 
             if False:
-                template = frames_t[0][y : y + h, x : x + w, :]
+                template = frames_t[0][y: y + h, x: x + w, :]
                 # center the template in same size as the input image
                 template, coord = resize_image(
                     template,
@@ -197,7 +206,7 @@ def test_template_matcher():
 
         for c in template_coords:
             x, y, w, h = c
-            template = frames_t[0][y : y + h, x : x + w, :]
+            template = frames_t[0][y: y + h, x: x + w, :]
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
@@ -209,18 +218,22 @@ def test_template_matcher():
             template_frames.append(template)
             template_bboxes.append(coord)
             template_labels.append("test")
+            template_text.append(samples[key].get("text", ""))
+
             cv2.imwrite(f"/tmp/dim/template.png", template)
 
         with TimeContext(f"Eval # {i}"):
-            results = matcher.run(
-                frames=frames,
-                template_frames=template_frames,
-                template_boxes=template_bboxes,
-                template_labels=template_labels,
-                score_threshold=0.80,
-                max_overlap=0.5,
-                max_objects=2,
-                window_size=window_size,
-                downscale_factor=1,
-            )
+            results = matcher.run(frames=frames,
+                                  # TODO: convert to Pydantic model
+                                  template_frames=template_frames,
+                                  template_boxes=template_bboxes,
+                                  template_labels=template_labels,
+                                  template_text=template_text,
+
+                                  metadata=ocr_results,
+                                  score_threshold=0.80,
+                                  max_overlap=0.5,
+                                  max_objects=2,
+                                  window_size=window_size,
+                                  downscale_factor=1)
             print(results)

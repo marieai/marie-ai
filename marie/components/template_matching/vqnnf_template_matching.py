@@ -19,44 +19,9 @@ from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
 from .vqnnf.matching.template_matching import VQNNFMatcher
 
 
-def augment_document(glow_radius, glow_strength, src_image):
-    if True:
-        return src_image
-        img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
-        return img_blurred
-
-    # dilate and erode to get the glow
-    # img_blurred = cv2.erode(src_image, np.ones((3, 3), np.uint8), iterations=1)
-    img_dilated = cv2.dilate(src_image, np.ones((3, 3), np.uint8), iterations=2)
-
-    # change the color of dilated image
-    img_dilated[:, :, 0] = 255
-    overlay = cv2.addWeighted(img_dilated, 0.4, src_image, 1, 1).astype(np.uint8)
-    return overlay
-
-    # img_dilated = cv2.GaussianBlur(img_dilated, (glow_radius, glow_radius), 1)
-    # img_dilated = img_dilated.astype(np.uint8)
-    # img_dilated = cv2.addWeighted(src_image, 1, img_dilated, 1, 0)
-
-    max_val = np.max(img_blurred, axis=2)
-    # max_val[max_val < 160] = 160
-    # max_val[max_val > 200] = 255
-    max_val = max_val.astype(np.uint8)
-    max_val = np.stack(
-        [max_val, np.zeros_like(max_val), np.zeros_like(max_val)], axis=2
-    )
-
-    max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
-    return max_val
-
-
 def odd(f):
     return int(np.ceil(f)) // 2 * 2 + 1
 
-
-embeddings_processorXX = TransformersEmbeddings(
-    model_name_or_path="hf://microsoft/layoutlmv3-base"
-)
 
 embeddings_processor = OpenAIEmbeddings(
     # model_name_or_path="hf://openai/clip-vit-large-patch14"
@@ -112,7 +77,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
         """
-        super().__init__(**kwargs)
+        super().__init__(True, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document matcher : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
@@ -152,21 +117,13 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
-        max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
         batch_size: Optional[int] = None,
-    ) -> list[dict[str, tuple[int, int, Any, Any] | Any]]:
+        words: list[str] = None,
+        word_boxes: list[tuple[int, int, int, int]] = None,
+    ) -> list[tuple[int, int, int, int]]:
 
         feature_extractor = self.feature_extractor
 
-        similarities = []
-        temp_ws = []
-        temp_hs = []
-        image_sizes = []
-        temp_match_time = []
         xs = []
         ys = []
         ws = []
@@ -190,26 +147,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
-
-            glow_strength = 1  # 0: no glow, no maximum
-            glow_radius = 25  # blur radius
-
-            # Only modify the RED channel
-            if glow_strength > 0:
-                template_image = cv2.cvtColor(template_image, cv2.COLOR_RGB2BGR)
-                query_image = cv2.cvtColor(query_image, cv2.COLOR_RGB2BGR)
-
-                template_image = augment_document(
-                    glow_radius, glow_strength, template_image
-                )
-                query_image = augment_document(glow_radius, glow_strength, query_image)
-
-                # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_template_GLOW.png", template_image)
-                # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_query_GLOW.png", query_image)
-
-                # expect RGB images
-                template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
-                query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
             cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
             cv2.imwrite("/tmp/dim/query_image.png", query_image)
@@ -280,12 +217,19 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
-            sim_val, query_pred_snippet_f, template_snippet_f = self.score(
-                template_snippet, query_pred_snippet
-            )
+            sim_val = self.score(template_snippet, query_pred_snippet)
 
             if sim_val < score_threshold:
                 continue
+
+            predictions.append(
+                {
+                    "bbox": image_pd,
+                    "label": template_label,
+                    "score": round(sim_val, 3),
+                    "similarity": round(sim_val, 3),
+                }
+            )
 
             if False:  # verbose:
                 cv2.imwrite(
@@ -315,17 +259,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                         cv2.COLORMAP_JET,
                     ),
                 )
-
-            predictions.append(
-                {
-                    "bbox": image_pd,
-                    "label": template_label,
-                    "score": round(sim_val, 3),
-                    "similarity": round(sim_val, 3),
-                    "query_feature": query_pred_snippet_f,
-                    "template_feature": template_snippet_f,
-                }
-            )
 
             if False:
                 cv2.imwrite(
@@ -386,6 +319,5 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         # mask_val = mask_iou(t, q)
         print("sim query/template", feature_sim, embedding_sim)
         sim_val = (feature_sim + embedding_sim) / 2
-        # sim_val = embedding_sim
 
-        return sim_val, query_pred_snippet_features, template_snippet_features
+        return sim_val

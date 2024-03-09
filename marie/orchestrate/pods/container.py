@@ -158,21 +158,7 @@ def _docker_run(
                 'The image may run with poor performance or fail if run via emulation.'
             )
     docker_kwargs = args.docker_kwargs or {}
-    container = client.containers.run(
-        uses_img,
-        _args,
-        detach=True,
-        auto_remove=True,
-        ports=ports,
-        name=container_name,
-        volumes=_volumes,
-        network_mode=net_mode,
-        entrypoint=args.entrypoint,
-        extra_hosts={__docker_host__: 'host-gateway'},
-        device_requests=device_requests,
-        environment=envs,
-        **docker_kwargs,
-    )
+    container = client.containers.run(uses_img, _args, **docker_kwargs)
     return container
 
 

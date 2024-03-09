@@ -66,7 +66,7 @@ def run_raft(
         raft_id,
         raft_dir,
         args.name,
-        executor_target,
+        score_threshold=executor_target,
         **raft_configuration,
     )
 
