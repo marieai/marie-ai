@@ -18,6 +18,7 @@ from sahi.prediction import ObjectPrediction, PredictionResult
 from sahi.slicing import slice_image
 
 from marie.logging.logger import MarieLogger
+from marie.ocr.util import get_words_and_boxes
 
 POSTPROCESS_NAME_TO_CLASS = {
     "GREEDYNMM": GreedyNMMPostprocess,
@@ -30,10 +31,11 @@ POSTPROCESS_NAME_TO_CLASS = {
 class BaseTemplateMatcher(ABC):
     def __init__(
         self,
+        slicing_enabled: bool = True,
         **kwargs,
     ) -> None:
-        super().__init__()
         self.logger = MarieLogger(self.__class__.__name__).logger
+        self.slicing_enabled = slicing_enabled
 
     @abstractmethod
     def predict(
@@ -43,12 +45,9 @@ class BaseTemplateMatcher(ABC):
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
-        max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
         batch_size: Optional[int] = None,
+        words: list[str] = None,
+        word_boxes: list[tuple[int, int, int, int]] = None,
     ) -> list[tuple[int, int, int, int]]:
         """
         Find all possible templates locations above a score-threshold, provided a list of templates to search and an image.
@@ -62,6 +61,8 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_text: list[str],
+        metadata: Optional[Union[dict, list]] = None,
         score_threshold: float = 0.45,
         max_overlap: float = 0.5,
         max_objects: int = 1,
@@ -73,12 +74,17 @@ class BaseTemplateMatcher(ABC):
         """
         Search each template in the images, and return the best `max_objects` locations which offer the best score and which do not overlap.
 
+        :param metadata:
         :param frames: A list of images in which to perform the search, it should be the same depth and number of channels that of the templates.
-        :param templates: A list of templates as numpy array to search in each image.
-        :param labels: A list of labels for each template. The length of this list should be the same as the length of the templates list.
+
+        :param template_frames: A list of templates as numpy array to search in each image.
+        :param template_boxes: A list of bounding boxes for each template. The length of this list should be the same as the length of the templates list.
+        :param template_labels: A list of labels for each template. The length of this list should be the same as the length of the templates list.
+        :param metadata: A list of metadata for each frame. The length of this list should be the same as the length of the frames list.
         :param score_threshold: The minimum score to consider a match.
         :param max_overlap: The maximum overlap to consider a match. This is the maximal value for the ratio of the Intersection Over Union (IoU) area between a pair of bounding boxes.
         :param max_objects: The maximum number of objects to return.
+        :param window_size: The size of the window to use for the search in the format (width, height).
         :param regions: A list of regions of interest in the images in the format (x, y, width, height). If None, the whole image is considered.
         :param downscale_factor: The factor by which to downscale the images before performing the search. This is useful to speed up the search.
         :param batch_size: The batch size to use for the prediction.
@@ -122,6 +128,11 @@ class BaseTemplateMatcher(ABC):
             self.logger.info(f"matching frame {i} region: {region}")
             # check depth and number of channels
             assert frame.ndim == 3
+
+            page_words = []
+            page_boxes = []
+            if metadata is not None:
+                page_words, page_boxes = get_words_and_boxes(metadata, i)
 
             # validate the template frames are the same size as the window size
             for template_frame, template_boxe in zip(template_frames, template_boxes):
@@ -221,7 +232,6 @@ class BaseTemplateMatcher(ABC):
             result_bboxes = []
             result_labels = []
             result_scores = []
-            result_features = []
             result_snippets = []
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
@@ -233,12 +243,8 @@ class BaseTemplateMatcher(ABC):
                     template_boxes,
                     template_labels,
                     score_threshold,
-                    max_overlap,
                     max_objects,
-                    window_size,
                     region,
-                    downscale_factor,
-                    batch_size,
                 )
 
                 for prediction in predictions:
@@ -256,18 +262,14 @@ class BaseTemplateMatcher(ABC):
                     result_bboxes.append(shifted_bbox)
                     result_labels.append(prediction["label"])
                     result_scores.append(prediction["score"])
-                    result_features.append(prediction["query_feature"])
 
             result_bboxes, result_labels, result_scores = self.filter_scores(
                 result_bboxes,
                 result_labels,
                 result_scores,
-                result_features,
                 result_snippets,
                 score_threshold,
             )
-
-            print("bboxes before : ", result_bboxes)
 
             result_bboxes = [
                 bbox
@@ -378,45 +380,18 @@ class BaseTemplateMatcher(ABC):
         cv2.imwrite(f"/tmp/dim/results_frame_{index}.png", frame)
 
     def filter_scores(
-        self, bboxes, labels, scores, features, snippets, score_threshold
+        self, bboxes, labels, scores, snippets, score_threshold
     ) -> tuple[list, list, list, list]:
         """
         Filter out scores below the threshold.
         :param bboxes: bounding boxes
         :param labels: labels to filter
         :param scores:  scores to filter
-        :param features: features to filter
         :param snippets: snippets to filter
         :param score_threshold:
         :return:
         """
-        assert (
-            len(bboxes) == len(labels) == len(scores) == len(features) == len(snippets)
-        )
-        if False:
-            # perform KNN on the features to filter out the scores
-            features = np.array(features)
-            # input must be a 2d tensor with shape: [n_samples, n_features]
-            features = features.reshape(-1, 768)
-            print("features : ", features.shape)
-            import matplotlib.pyplot as plt
-
-            n_clusters = 4
-            features_tensor = torch.from_numpy(features).float()
-            clusterer = KMeans(n_clusters=n_clusters, verbose=2)
-            k_values = clusterer.fit_predict(features_tensor)
-            codebook = clusterer.centroids
-            k_values = k_values.numpy()
-
-            for k in range(n_clusters):
-                filtered = [
-                    snippets[i] for i in range(len(snippets)) if k_values[i] == k
-                ]
-                j = 0
-                for f in filtered:
-                    cv2.imwrite(f"/tmp/dim/cluster_{k}_{j}.png", f)
-                    j += 1
-
+        assert len(bboxes) == len(labels) == len(scores) == len(snippets)
         bboxes = [
             bbox for bbox, score in zip(bboxes, scores) if score > score_threshold
         ]
