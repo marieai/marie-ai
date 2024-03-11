@@ -44,8 +44,9 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        batch_size: Optional[int] = None,
+        batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
     ) -> list[tuple[int, int, int, int]]:
@@ -61,7 +62,7 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
-        template_text: list[str],
+        template_texts: list[str] = None,
         metadata: Optional[Union[dict, list]] = None,
         score_threshold: float = 0.45,
         max_overlap: float = 0.5,
@@ -80,6 +81,7 @@ class BaseTemplateMatcher(ABC):
         :param template_frames: A list of templates as numpy array to search in each image.
         :param template_boxes: A list of bounding boxes for each template. The length of this list should be the same as the length of the templates list.
         :param template_labels: A list of labels for each template. The length of this list should be the same as the length of the templates list.
+        :param template_texts: A list of text for each template. The length of this list should be the same as the length of the templates list.
         :param metadata: A list of metadata for each frame. The length of this list should be the same as the length of the frames list.
         :param score_threshold: The minimum score to consider a match.
         :param max_overlap: The maximum overlap to consider a match. This is the maximal value for the ratio of the Intersection Over Union (IoU) area between a pair of bounding boxes.
@@ -192,16 +194,24 @@ class BaseTemplateMatcher(ABC):
 
             # for profiling
             durations_in_seconds = dict()
-
             # currently only 1 batch supported
             num_batch = 1
+
             # convert to PIL image
             image = Image.fromarray(frame)
-            slice_height = window_size[0]
-            slice_width = window_size[1]
-            overlap_height_ratio = 0.2
-            overlap_width_ratio = 0.2
-            output_file_name = "frame_"
+
+            if self.slicing_enabled:
+                slice_height = window_size[0]
+                slice_width = window_size[1]
+                overlap_height_ratio = 0.2
+                overlap_width_ratio = 0.2
+                output_file_name = "frame_"
+            else:
+                slice_height = frame.shape[0]
+                slice_width = frame.shape[1]
+                overlap_height_ratio = 0
+                overlap_width_ratio = 0
+                output_file_name = None
 
             # create slices from full image
             time_start = time.time()
@@ -217,6 +227,7 @@ class BaseTemplateMatcher(ABC):
             )
 
             num_slices = len(slice_image_result)
+            print('num_slices : ', num_slices)
             time_end = time.time() - time_start
             durations_in_seconds["slice"] = time_end
 
@@ -242,9 +253,11 @@ class BaseTemplateMatcher(ABC):
                     template_frames,
                     template_boxes,
                     template_labels,
+                    template_texts,
                     score_threshold,
                     max_objects,
-                    region,
+                    words=page_words,
+                    word_boxes=page_boxes,
                 )
 
                 for prediction in predictions:

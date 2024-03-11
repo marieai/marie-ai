@@ -77,7 +77,7 @@ def test_template_matcher():
 
     # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
     matcher = VQNNFTemplateMatcher(model_name_or_path="NONE")
-    # matcher = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher = MetaTemplateMatcher(model_name_or_path="NONE")
 
     for i in range(1):
 
@@ -141,7 +141,7 @@ def test_template_matcher():
         template_bboxes = []
         template_frames = []
         template_labels = []
-        template_text = []
+        template_texts = []
 
         if False:
             # test window size
@@ -218,7 +218,7 @@ def test_template_matcher():
             template_frames.append(template)
             template_bboxes.append(coord)
             template_labels.append("test")
-            template_text.append(samples[key].get("text", ""))
+            template_texts.append(samples[key].get("text", ""))
 
             cv2.imwrite(f"/tmp/dim/template.png", template)
 
@@ -228,7 +228,7 @@ def test_template_matcher():
                                   template_frames=template_frames,
                                   template_boxes=template_bboxes,
                                   template_labels=template_labels,
-                                  template_text=template_text,
+                                  template_texts=template_texts,
 
                                   metadata=ocr_results,
                                   score_threshold=0.80,

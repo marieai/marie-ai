@@ -79,27 +79,27 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        batch_size: Optional[int] = None,
+        batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
     ) -> list[tuple[int, int, int, int]]:
 
         predictions = []
+        if words is None or word_boxes is None:
+            self.logger.warning("No words or word_boxes provided. Skipping prediction.")
+            return predictions
 
-        for idx, (template_raw, template_bbox, template_label) in enumerate(
-            zip(template_frames, template_boxes, template_labels)
+        assert len(words) == len(word_boxes)
+        assert len(template_frames) == len(template_boxes)
+        assert len(template_texts) == len(template_labels)
+
+        for idx, (template_text, template_label) in enumerate(
+            zip(template_texts, template_labels)
         ):
-            # print("template_label", template_label)
-            # print("template_bbox", template_bbox)
-            x, y, w, h = [int(t) for t in template_bbox]
-
-            template_plot = cv2.rectangle(
-                template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
-            )
-
-            template_image = template_raw.copy()
-            query_image = frame.copy()
+            print("template_label", template_label)
+            print("template_text", template_text)
 
         return predictions
 

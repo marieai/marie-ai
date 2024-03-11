@@ -116,8 +116,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        batch_size: Optional[int] = None,
+        batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
     ) -> list[tuple[int, int, int, int]]:
