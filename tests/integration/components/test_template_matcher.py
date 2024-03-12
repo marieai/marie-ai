@@ -8,6 +8,9 @@ import numpy as np
 import psutil
 import torch
 
+from marie.components.template_matching.composite_template_maching import (
+    CompositeTemplateMatcher,
+)
 from marie.components.template_matching.meta_template_matching import (
     MetaTemplateMatcher,
 )
@@ -76,8 +79,10 @@ def test_template_matcher():
     torch.set_num_threads(psutil.cpu_count(logical=False))
 
     # matcher = DeepDimTemplateMatcher(model_name_or_path="vgg19")
-    matcher = VQNNFTemplateMatcher(model_name_or_path="NONE")
-    matcher = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
+    matcher_meta = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher = CompositeTemplateMatcher(matchers=[matcher_vqnnft, matcher_meta])
+    # matcher = CompositeTemplateMatcher(matchers=[matcher_vqnnft])
 
     for i in range(1):
 
@@ -112,7 +117,7 @@ def test_template_matcher():
                 "label": "CLAIM PROVIDER",
                 "coords": [[127, 92, 234, 27]],  # -002 :
                 "image": "./assets/template_matching/template-002.png",
-                "text": "CLAIM PROVIDER",
+                "text": "CLAIM PROVIDER :",
             },
             "002-B": {
                 "label": "CLAIM",
@@ -237,3 +242,5 @@ def test_template_matcher():
                                   window_size=window_size,
                                   downscale_factor=1)
             print(results)
+
+

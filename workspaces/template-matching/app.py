@@ -1,13 +1,30 @@
 import base64
+import json
 import logging
 import os
 from io import BytesIO
 
+import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
+
+from marie import __version__ as marie_version
+from marie.utils.resize_image import resize_image
+
+print("marie_version", marie_version)
+
+
+@st.cache_resource
+def get_template_matcher():
+    from marie.components.template_matching.vqnnf_template_matching import (
+        VQNNFTemplateMatcher,
+    )
+
+    matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
+    return matcher_vqnnft
 
 
 class ImageUtils:
@@ -16,7 +33,7 @@ class ImageUtils:
 
     def read_image(self, uploaded_image):
         """Read the uploaded image"""
-        raw_image = Image.open(uploaded_image)
+        raw_image = Image.open(uploaded_image).convert("RGB")
         width, height = raw_image.size
         return raw_image, (width, height)
 
@@ -84,6 +101,12 @@ class ImageUtils:
             raw_bottom = int(bottom * raw_height / resized_height)
             raw_boxes.append([raw_left, raw_top, raw_right, raw_bottom])
         return raw_boxes
+
+
+@st.cache_resource
+def get_ocr_processor():
+    model = 'ABC Model'
+    return model
 
 
 def main():
@@ -166,6 +189,10 @@ def main():
 
     mode = "transform" if st.sidebar.checkbox("Move ROIs", False) else "rect"
 
+    reinforce_mode = (
+        True if st.sidebar.checkbox("Reinforce mode(OCR) ", False) else False
+    )
+
     uploaded_image = st.sidebar.file_uploader(
         "Upload template source: ",
         type=["jpg", "jpeg", "png", "webp"],
@@ -200,8 +227,10 @@ def main():
                 resized_image_target, resized_size_target = utils.resize_image(
                     raw_image_target
                 )
-                canvas_resultZ = utils.get_canvas(
-                    resized_image_target, key="canvas-target", update_streamlit=False
+                canvas_output = utils.get_canvas(
+                    resized_image_target,
+                    key="canvas-target",
+                    update_streamlit=True,
                 )
 
             if False:
@@ -217,6 +246,11 @@ def main():
                         st.dataframe(objects)
 
     with st.container():
+
+        if reinforce_mode:
+            processor = get_ocr_processor()
+            st.write("OCR processor", processor)
+
         if submit:
             print('raw_size', raw_size)
             print('resized_size', resized_size)
@@ -255,10 +289,10 @@ def main():
             os.makedirs("/tmp/template", exist_ok=True)
             rows = []
 
-            for i, (s, r, z) in enumerate(
+            for i, (s, result, z) in enumerate(
                 zip(resized_boxes, raw_boxes, raw_boxes_xywh)
             ):
-                snippet = raw_image.crop(r)
+                snippet = raw_image.crop(result)
                 snippet.save(f"/tmp/template/snippet_{i}.png")
 
                 rows.append(
@@ -268,10 +302,10 @@ def main():
                         "sy1": s[1],
                         "sx2": s[2],
                         "sy2": s[3],
-                        "x1": r[0],
-                        "y1": r[1],
-                        "x2": r[2],
-                        "y2": r[3],
+                        "x1": result[0],
+                        "y1": result[1],
+                        "x2": result[2],
+                        "y2": result[3],
                         "x": z[0],
                         "y": z[1],
                         "w": z[2],
@@ -288,6 +322,84 @@ def main():
 
             st.write("Received the following sample:")
             st.success(matching_request)
+            matcher = get_template_matcher()
+            window_size = (512, 512)
+
+            template_frames = []
+            template_bboxes = []
+            template_labels = []
+            template_texts = []
+
+            for i, (s, result, z) in enumerate(
+                zip(resized_boxes, raw_boxes, raw_boxes_xywh)
+            ):
+                raw_image = raw_image.convert("RGB")
+                print(raw_image)
+                frame = np.array(raw_image)
+                print(frame.shape)
+                x, y, w, h = z
+                template = frame[y : y + h, x : x + w, :]
+                cv2.imwrite(f"/tmp/template/template_frame_{i}.png", template)
+
+                template, coord = resize_image(
+                    template,
+                    desired_size=window_size,
+                    color=(255, 255, 255),
+                    keep_max_size=True,
+                )
+
+                cv2.imwrite(f"/tmp/template/template_{i}.png", template)
+
+                template_frames.append(template)
+                template_bboxes.append(coord)
+                template_labels.append(f"label_{i}")
+                template_texts.append("")
+                ocr_results = None
+
+                results = matcher.run(
+                    frames=[frame],
+                    # TODO: convert to Pydantic model
+                    template_frames=template_frames,
+                    template_boxes=template_bboxes,
+                    template_labels=template_labels,
+                    template_texts=template_texts,
+                    metadata=ocr_results,
+                    score_threshold=0.80,
+                    max_overlap=0.5,
+                    max_objects=2,
+                    window_size=window_size,
+                    downscale_factor=1,
+                )
+                print(results)
+                rows = []
+                for result in results:
+                    snippet = frame[
+                        result.bbox[1] : result.bbox[1] + result.bbox[3],
+                        result.bbox[0] : result.bbox[0] + result.bbox[2],
+                    ]
+                    snippet = Image.fromarray(snippet)
+                    snippet.save(f"/tmp/template/snippet_{i}.png")
+
+                    rows.append(
+                        {
+                            "snippet": image_formatter(snippet),
+                            "label": result.label,
+                            "score": result.score,
+                            "x": result.bbox[0],
+                            "y": result.bbox[1],
+                            "w": result.bbox[2],
+                            "h": result.bbox[3],
+                        }
+                    )
+
+            df = pd.DataFrame(rows)
+            st.dataframe(
+                df,
+                use_container_width=st.session_state.use_container_width,
+                column_config=column_configuration,
+            )
+
+            st.image(resized_image_target)
 
 
 if __name__ == "__main__":
