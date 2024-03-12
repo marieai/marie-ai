@@ -15,6 +15,7 @@ from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
 from ...embeddings.transformers.transformers_embeddings import TransformersEmbeddings
 from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
+from .model import TemplateMatchResult
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
 from .vqnnf.matching.template_matching import VQNNFMatcher
 
@@ -32,7 +33,6 @@ embeddings_processor = OpenAIEmbeddings(
 
 def get_embedding_feature(image: np.ndarray, words: list, boxes: list) -> np.ndarray:
     # This is a pre-processing step to get the embeddings for the words and boxes in the image
-    print("embedding image", image.shape)
     # image1 = resize_image(image, (72, 224))[0]
     image1 = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     embedding = embeddings_processor.get_embeddings(
@@ -121,7 +121,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
-    ) -> list[tuple[int, int, int, int]]:
+    ) -> list[TemplateMatchResult]:
 
         feature_extractor = self.feature_extractor
 
@@ -149,9 +149,10 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
-            cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
-            cv2.imwrite("/tmp/dim/query_image.png", query_image)
-            cv2.imwrite("/tmp/dim/template_image.png", template_image)
+            if False:
+                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
+                cv2.imwrite("/tmp/dim/query_image.png", query_image)
+                cv2.imwrite("/tmp/dim/template_image.png", template_image)
 
             template_image_features = feature_extractor.get_features(template_image)
 
@@ -224,12 +225,12 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 continue
 
             predictions.append(
-                {
-                    "bbox": image_pd,
-                    "label": template_label,
-                    "score": round(sim_val, 3),
-                    "similarity": round(sim_val, 3),
-                }
+                TemplateMatchResult(
+                    bbox=image_pd,
+                    label=template_label,
+                    score=sim_val,
+                    similarity=sim_val,
+                )
             )
 
             if False:  # verbose:
@@ -272,6 +273,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 )
 
             if True:
+                print("template_snippet", template_snippet.shape)
+                print("query_pred_snippet", query_pred_snippet.shape)
+
                 stacked = np.hstack((template_snippet, query_pred_snippet))
                 cv2.imwrite(
                     f"/tmp/dim/final/stacked_{idx}_{round(sim_val, 3)}.png",

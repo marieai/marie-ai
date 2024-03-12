@@ -4,19 +4,18 @@ from typing import List, Optional, Union
 
 import cv2
 import numpy as np
-import torch
-from fast_pytorch_kmeans import KMeans
+import sahi.annotation as BoundingBox
 from PIL import Image
 from sahi.postprocess.combine import (
     GreedyNMMPostprocess,
     LSNMSPostprocess,
     NMMPostprocess,
     NMSPostprocess,
-    PostprocessPredictions,
 )
-from sahi.prediction import ObjectPrediction, PredictionResult
+from sahi.prediction import ObjectPrediction, PredictionScore
 from sahi.slicing import slice_image
 
+from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.ocr.util import get_words_and_boxes
 
@@ -49,7 +48,7 @@ class BaseTemplateMatcher(ABC):
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
-    ) -> list[tuple[int, int, int, int]]:
+    ) -> list[TemplateMatchResult]:
         """
         Find all possible templates locations above a score-threshold, provided a list of templates to search and an image.
         Resulting detections are not filtered by NMS and thus might overlap.Use :meth:`~:run` to perform the search with NMS.
@@ -71,7 +70,7 @@ class BaseTemplateMatcher(ABC):
         regions: list[tuple[int, int, int, int]] = None,
         downscale_factor: int = 1,
         batch_size: Optional[int] = None,
-    ) -> dict[str, list[tuple[int, int, int, int]]]:
+    ) -> list[TemplateMatchResult]:
         """
         Search each template in the images, and return the best `max_objects` locations which offer the best score and which do not overlap.
 
@@ -90,7 +89,7 @@ class BaseTemplateMatcher(ABC):
         :param regions: A list of regions of interest in the images in the format (x, y, width, height). If None, the whole image is considered.
         :param downscale_factor: The factor by which to downscale the images before performing the search. This is useful to speed up the search.
         :param batch_size: The batch size to use for the prediction.
-        :return: A dictionary of lists of bounding boxes in the format (x, y, width, height) for each label per frame.
+        :return: A list of TemplateMatchResults
         """
 
         # assertions can be disabled via the the -O flag  (python -O)
@@ -106,35 +105,18 @@ class BaseTemplateMatcher(ABC):
 
         assert len(frames) == len(regions)
 
-        results = {}
+        results = []
+        postprocess = self.setup_postprocess()
 
-        postprocess_type = "GREEDYNMM"
-        postprocess_match_metric = "IOS"
-        postprocess_match_threshold = 0.5
-        postprocess_class_agnostic = False
-
-        # init match postprocess instance
-        if postprocess_type not in POSTPROCESS_NAME_TO_CLASS.keys():
-            raise ValueError(
-                f"postprocess_type should be one of {list(POSTPROCESS_NAME_TO_CLASS.keys())} but given as {postprocess_type}"
-            )
-
-        postprocess_constructor = POSTPROCESS_NAME_TO_CLASS[postprocess_type]
-        postprocess = postprocess_constructor(
-            match_threshold=postprocess_match_threshold,
-            match_metric=postprocess_match_metric,
-            class_agnostic=postprocess_class_agnostic,
-        )
-
-        for i, (frame, region) in enumerate(zip(frames, regions)):
-            self.logger.info(f"matching frame {i} region: {region}")
+        for frame_idx, (frame, region) in enumerate(zip(frames, regions)):
+            self.logger.info(f"matching frame {frame_idx} region: {region}")
             # check depth and number of channels
             assert frame.ndim == 3
 
             page_words = []
             page_boxes = []
             if metadata is not None:
-                page_words, page_boxes = get_words_and_boxes(metadata, i)
+                page_words, page_boxes = get_words_and_boxes(metadata, frame_idx)
 
             # validate the template frames are the same size as the window size
             for template_frame, template_boxe in zip(template_frames, template_boxes):
@@ -162,9 +144,10 @@ class BaseTemplateMatcher(ABC):
 
                     # downscale the template boxes
                     cv2.imwrite(
-                        f"/tmp/dim/template_frame_downscaled_{i}.png", template_frame
+                        f"/tmp/dim/template_frame_downscaled_{frame_idx}.png",
+                        template_frame,
                     )
-                    template_frames[i] = template_frame
+                    template_frames[frame_idx] = template_frame
 
                     template_boxe = (
                         template_boxe[0] // downscale_factor,
@@ -172,7 +155,7 @@ class BaseTemplateMatcher(ABC):
                         template_boxe[2] // downscale_factor,
                         template_boxe[3] // downscale_factor,
                     )
-                    template_boxes[i] = template_boxe
+                    template_boxes[frame_idx] = template_boxe
             # downscale the window size
             window_size = (
                 int(window_size[0] // downscale_factor),
@@ -196,8 +179,6 @@ class BaseTemplateMatcher(ABC):
             durations_in_seconds = dict()
             # currently only 1 batch supported
             num_batch = 1
-
-            # convert to PIL image
             image = Image.fromarray(frame)
 
             if self.slicing_enabled:
@@ -247,7 +228,6 @@ class BaseTemplateMatcher(ABC):
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
                 offset_x, offset_y = offset
-
                 predictions = self.predict(
                     patch,
                     template_frames,
@@ -261,7 +241,7 @@ class BaseTemplateMatcher(ABC):
                 )
 
                 for prediction in predictions:
-                    bbox = prediction["bbox"]
+                    bbox = prediction.bbox
                     shifted_bbox = [
                         bbox[0] + offset_x,
                         bbox[1] + offset_y,
@@ -273,8 +253,8 @@ class BaseTemplateMatcher(ABC):
                     ]
                     result_snippets.append(snippet)
                     result_bboxes.append(shifted_bbox)
-                    result_labels.append(prediction["label"])
-                    result_scores.append(prediction["score"])
+                    result_labels.append(prediction.label)
+                    result_scores.append(prediction.score)
 
             result_bboxes, result_labels, result_scores = self.filter_scores(
                 result_bboxes,
@@ -312,11 +292,10 @@ class BaseTemplateMatcher(ABC):
             if postprocess is not None:
                 object_prediction_list = postprocess(object_prediction_list)
 
-            print("object_prediction_list : ", object_prediction_list)
-            time_end = time.time() - time_start
-            durations_in_seconds["postprocess"] = time_end
-
-            object_result_map = self.to_object_result_map(object_prediction_list)
+            durations_in_seconds["postprocess"] = time.time() - time_start
+            object_result_map = self.to_object_result_map(
+                object_prediction_list, frame_idx
+            )
 
             # flatten the object_result_map
             result_bboxes = []
@@ -328,24 +307,29 @@ class BaseTemplateMatcher(ABC):
             for label, predictions in object_result_map.items():
                 for prediction in predictions:
                     snippet = frame[
-                        prediction["bbox"][1] : prediction["bbox"][1]
-                        + prediction["bbox"][3],
-                        prediction["bbox"][0] : prediction["bbox"][0]
-                        + prediction["bbox"][2],
+                        prediction.bbox[1] : prediction.bbox[1] + prediction.bbox[3],
+                        prediction.bbox[0] : prediction.bbox[0] + prediction.bbox[2],
                     ]
-                    result_bboxes.append(prediction["bbox"])
-                    result_labels.append(prediction["label"])
-                    result_scores.append(prediction["score"])
+                    result_bboxes.append(prediction.bbox)
+                    result_labels.append(prediction.label)
+                    result_scores.append(prediction.score)
                     result_snippets.append(snippet)
 
+                    results.append(
+                        TemplateMatchResult(
+                            bbox=prediction.bbox,
+                            label=prediction.label,
+                            score=prediction.score,
+                            similarity=prediction.similarity,
+                            frame_index=frame_idx,
+                        )
+                    )
                     cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
                     idx += 1
 
-            results[i] = {"frame": i, "predictions": object_result_map}
-
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             self.visualize_object_predictions(
-                result_bboxes, result_labels, result_scores, frame, i
+                result_bboxes, result_labels, result_scores, frame, frame_idx
             )
 
             time_end = time.time() - time_start
@@ -365,6 +349,24 @@ class BaseTemplateMatcher(ABC):
                 )
 
         return results
+
+    def setup_postprocess(self):
+        postprocess_type = "GREEDYNMM"
+        postprocess_match_metric = "IOS"
+        postprocess_match_threshold = 0.5
+        postprocess_class_agnostic = False
+        # init match postprocess instance
+        if postprocess_type not in POSTPROCESS_NAME_TO_CLASS.keys():
+            raise ValueError(
+                f"postprocess_type should be one of {list(POSTPROCESS_NAME_TO_CLASS.keys())} but given as {postprocess_type}"
+            )
+        postprocess_constructor = POSTPROCESS_NAME_TO_CLASS[postprocess_type]
+        postprocess = postprocess_constructor(
+            match_threshold=postprocess_match_threshold,
+            match_metric=postprocess_match_metric,
+            class_agnostic=postprocess_class_agnostic,
+        )
+        return postprocess
 
     def visualize_object_predictions(
         self, bboxes, labels, scores, frame, index
@@ -394,7 +396,7 @@ class BaseTemplateMatcher(ABC):
 
     def filter_scores(
         self, bboxes, labels, scores, snippets, score_threshold
-    ) -> tuple[list, list, list, list]:
+    ) -> tuple[list, list, list]:
         """
         Filter out scores below the threshold.
         :param bboxes: bounding boxes
@@ -443,9 +445,9 @@ class BaseTemplateMatcher(ABC):
 
         return object_prediction_list
 
-    def to_object_result_map(self, object_prediction_list: List[ObjectPrediction]):
-        import sahi.annotation as BoundingBox
-        import sahi.prediction as PredictionScore
+    def to_object_result_map(
+        self, object_prediction_list: List[ObjectPrediction], frame_idx: int
+    ):
 
         object_result_map = {}
         for object_prediction in object_prediction_list:
@@ -459,12 +461,15 @@ class BaseTemplateMatcher(ABC):
             score: PredictionScore = object_prediction.score
             score = score.value
 
-            prediction = {
-                "bbox": bbox,
-                "label": label,
-                "score": score,
-            }
-            object_result_map[label].append(prediction)
+            object_result_map[label].append(
+                TemplateMatchResult(
+                    bbox=bbox,
+                    label=label,
+                    score=score,
+                    similarity=score,
+                    frame_index=frame_idx,
+                )
+            )
         return object_result_map
 
     def viz_patches(self, patches, filename: str) -> None:
