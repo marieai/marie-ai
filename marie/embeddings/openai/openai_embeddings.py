@@ -85,15 +85,21 @@ class OpenAIEmbeddings(EmbeddingsBase):
             self.model_name_or_path, self.device
         )
 
-    def setup_model(self, model_name_or_path, device: str = "cuda"):
+    def setup_model(self, resolved_model_path: str, device: str = "cuda"):
         """prepare for the model"""
-
-        model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
+        config = ModelRegistry.config(resolved_model_path)
+        if "architecture" not in config:
+            raise ValueError(
+                f"Model config does not contain 'architecture' key: {config}, it should contain 'architecture' key with the model architecture name."
+            )
+        architecture = config["architecture"]
+        checkpoint = ModelRegistry.checkpoint(resolved_model_path)
+        model, preprocess = clip.load(architecture, device=device, jit=False)
         checkpoint = torch.load(
-            "/mnt/data/marie-ai/model_zoo/clip/snippet/clip-vit-base-patch32/clip_16_0.1068115234375_params_clip.pth",
+            checkpoint,
             map_location=device,
         )
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint["model_state_dict"])
 
         return model, preprocess
 

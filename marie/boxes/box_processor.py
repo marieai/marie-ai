@@ -195,7 +195,7 @@ class BoxProcessor(BaseHandler):
             cuda: Is CUDA processing enabled
             config: Configuration map
         """
-
+        super().__init__()
         self.cuda = cuda
         self.work_dir = work_dir
 

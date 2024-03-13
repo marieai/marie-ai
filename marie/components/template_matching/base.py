@@ -208,7 +208,6 @@ class BaseTemplateMatcher(ABC):
             )
 
             num_slices = len(slice_image_result)
-            print('num_slices : ', num_slices)
             time_end = time.time() - time_start
             durations_in_seconds["slice"] = time_end
 
@@ -368,9 +367,18 @@ class BaseTemplateMatcher(ABC):
         )
         return postprocess
 
-    def visualize_object_predictions(
-        self, bboxes, labels, scores, frame, index
-    ) -> None:
+    @staticmethod
+    def visualize_object_predictions(bboxes, labels, scores, frame, index) -> None:
+        """
+        Visualize the object predictions on the frame.
+        :param bboxes:  bounding boxes to visualize
+        :param labels:  labels to visualize
+        :param scores:  scores to visualize
+        :param frame:  frame to draw the predictions on
+        :param index:  index of the frame
+        :return:
+        """
+
         for bbox, label, score in zip(bboxes, labels, scores):
             print(" -- bbox : ", bbox, score)
 

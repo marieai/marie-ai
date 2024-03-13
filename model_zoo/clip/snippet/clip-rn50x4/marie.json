@@ -1,0 +1,5 @@
+{
+  "_name_or_path": "marie/clip-snippet-rn50x4",
+  "architectureX": "ViT-B/32",
+  "architecture": "RN50x4"
+}

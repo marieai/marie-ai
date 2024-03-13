@@ -249,7 +249,7 @@ class StorageManager:
 
             # Sort path handlers in reverse order so longer prefixes take priority,
             # eg: http://foo/bar before http://foo
-            StorageManager._PATH_HANDLERS = OrderedDict(
+            StorageManager._PATH_HANDLERS = OrderedDict[PathHandler](
                 sorted(
                     StorageManager._PATH_HANDLERS.items(),
                     key=lambda t: t[0],

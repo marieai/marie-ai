@@ -8,23 +8,37 @@ import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
+import torch
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
 from marie import __version__ as marie_version
+from marie.boxes.box_processor import PSMode
+from marie.components.template_matching.composite_template_maching import (
+    CompositeTemplateMatcher,
+)
+from marie.components.template_matching.meta_template_matching import (
+    MetaTemplateMatcher,
+)
+from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
+from marie.ocr.util import meta_to_text
 from marie.utils.resize_image import resize_image
 
 print("marie_version", marie_version)
 
+from marie.components.template_matching.vqnnf_template_matching import (
+    BaseTemplateMatcher,
+    VQNNFTemplateMatcher,
+)
+
 
 @st.cache_resource
-def get_template_matcher():
-    from marie.components.template_matching.vqnnf_template_matching import (
-        VQNNFTemplateMatcher,
-    )
-
+def get_template_matchers():
     matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
-    return matcher_vqnnft
+    matcher_meta = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher = CompositeTemplateMatcher(matchers=[matcher_vqnnft, matcher_meta])
+
+    return matcher, matcher_meta, matcher_vqnnft
 
 
 class ImageUtils:
@@ -72,12 +86,9 @@ class ImageUtils:
     def get_resized_boxes(self, canvas_result):
         """Get the resized boxes from the canvas result"""
         objects = canvas_result.json_data["objects"]
-        print("canvas_result.image_data", canvas_result.image_data.shape)
-
-        """Resize the image to the provided resolution."""
         resized_boxes = []
         for obj in objects:
-            print('object', obj)
+            print("object", obj)
             left, top = int(obj["left"]), int(obj["top"])  # upper left corner
             width, height = int(obj["width"]), int(
                 obj["height"]
@@ -104,14 +115,15 @@ class ImageUtils:
 
 
 @st.cache_resource
-def get_ocr_processor():
-    model = 'ABC Model'
-    return model
+def get_ocr_engine() -> OcrEngine:
+    """Get the OCR engine"""
+    use_cuda = torch.cuda.is_available()
+    ocr_engine = DefaultOcrEngine(cuda=use_cuda)
+
+    return ocr_engine
 
 
 def main():
-    # st.set_page_config(page_title="", layout="wide")
-
     st.set_page_config(
         page_title="Marie-AI Template Matching",
         page_icon="🧊",
@@ -193,6 +205,10 @@ def main():
         True if st.sidebar.checkbox("Reinforce mode(OCR) ", False) else False
     )
 
+    matching_mode = st.sidebar.radio(
+        "Matching mode:", ("Composite", "VQNNF", "Meta"), index=0
+    )
+
     uploaded_image = st.sidebar.file_uploader(
         "Upload template source: ",
         type=["jpg", "jpeg", "png", "webp"],
@@ -246,31 +262,46 @@ def main():
                         st.dataframe(objects)
 
     with st.container():
-
-        if reinforce_mode:
-            processor = get_ocr_processor()
-            st.write("OCR processor", processor)
-
         if submit:
-            print('raw_size', raw_size)
-            print('resized_size', resized_size)
+            ocr_results = None
+            raw_image = raw_image.convert("RGB")
+            frame = np.array(raw_image)
 
             resized_boxes = utils.get_resized_boxes(canvas_result)
             # left_upper point and right_lower point : [x1, y1, x2, y2]
             raw_boxes = utils.get_raw_boxes(resized_boxes, raw_size, resized_size)
-            # convert bbox to [x1, y1, w, h]
+
+            if len(raw_boxes) == 0:
+                st.warning("No selectors defined", icon="⚠️")
+                return  # stop the execution
+
             raw_boxes_xywh = [
                 [box[0], box[1], box[2] - box[0], box[3] - box[1]] for box in raw_boxes
             ]
-            matching_request = {
-                "image": raw_image,
-                "bboxes": raw_boxes,
-                "boxes_xywh": raw_boxes_xywh,
-            }
 
-            st.checkbox("Use container width", value=False, key="use_container_width")
+            st.write(f"Reinforce mode : {reinforce_mode}")
+            raw_text = ["" for _ in raw_boxes_xywh]
+
+            if reinforce_mode:
+                ocr_engine = get_ocr_engine()
+                ocr_results = ocr_engine.extract(
+                    [frame], PSMode.SPARSE, CoordinateFormat.XYWH
+                )
+
+                raw_text = []
+                for box in raw_boxes_xywh:
+                    x, y, w, h = box
+                    snippet = frame[y : y + h, x : x + w, :]
+                    snippet_result = ocr_engine.extract(
+                        [snippet], PSMode.SPARSE, CoordinateFormat.XYWH
+                    )
+
+                    snippet_txt = meta_to_text(snippet_result)
+                    snippet_txt = snippet_txt.replace("\n", " ")
+                    snippet_txt = " ".join(snippet_txt.split())
+                    raw_text.append(snippet_txt)
+
             st.write("Boxes - original/converted")
-
             max_width = max([box[2] - box[0] for box in raw_boxes])
             column_configuration = {
                 "snippet": st.column_config.ImageColumn(
@@ -289,8 +320,8 @@ def main():
             os.makedirs("/tmp/template", exist_ok=True)
             rows = []
 
-            for i, (s, result, z) in enumerate(
-                zip(resized_boxes, raw_boxes, raw_boxes_xywh)
+            for i, (s, result, z, text) in enumerate(
+                zip(resized_boxes, raw_boxes, raw_boxes_xywh, raw_text)
             ):
                 snippet = raw_image.crop(result)
                 snippet.save(f"/tmp/template/snippet_{i}.png")
@@ -298,6 +329,7 @@ def main():
                 rows.append(
                     {
                         "snippet": image_formatter(snippet),
+                        "reinforced-text": text,
                         "sx1": s[0],
                         "sy1": s[1],
                         "sx2": s[2],
@@ -316,13 +348,21 @@ def main():
             df = pd.DataFrame(rows)
             st.dataframe(
                 df,
-                use_container_width=st.session_state.use_container_width,
+                use_container_width=True,
                 column_config=column_configuration,
             )
 
             st.write("Received the following sample:")
-            st.success(matching_request)
-            matcher = get_template_matcher()
+            st.write("Matching mode: ", matching_mode)
+
+            matcher_composite, matcher_meta, matcher_vqnnft = get_template_matchers()
+            matcher = matcher_composite
+
+            if matching_mode == "VQNNF":
+                matcher = matcher_vqnnft
+            elif matching_mode == "Meta":
+                matcher = matcher_meta
+
             window_size = (512, 512)
 
             template_frames = []
@@ -330,13 +370,9 @@ def main():
             template_labels = []
             template_texts = []
 
-            for i, (s, result, z) in enumerate(
-                zip(resized_boxes, raw_boxes, raw_boxes_xywh)
+            for i, (s, result, z, text) in enumerate(
+                zip(resized_boxes, raw_boxes, raw_boxes_xywh, raw_text)
             ):
-                raw_image = raw_image.convert("RGB")
-                print(raw_image)
-                frame = np.array(raw_image)
-                print(frame.shape)
                 x, y, w, h = z
                 template = frame[y : y + h, x : x + w, :]
                 cv2.imwrite(f"/tmp/template/template_frame_{i}.png", template)
@@ -348,58 +384,69 @@ def main():
                     keep_max_size=True,
                 )
 
-                cv2.imwrite(f"/tmp/template/template_{i}.png", template)
+                cv2.imwrite(f"/tmp/dim/template/template_{i}.png", template)
 
                 template_frames.append(template)
                 template_bboxes.append(coord)
                 template_labels.append(f"label_{i}")
-                template_texts.append("")
-                ocr_results = None
+                template_texts.append(text)
 
-                results = matcher.run(
-                    frames=[frame],
-                    # TODO: convert to Pydantic model
-                    template_frames=template_frames,
-                    template_boxes=template_bboxes,
-                    template_labels=template_labels,
-                    template_texts=template_texts,
-                    metadata=ocr_results,
-                    score_threshold=0.80,
-                    max_overlap=0.5,
-                    max_objects=2,
-                    window_size=window_size,
-                    downscale_factor=1,
+            results = matcher.run(
+                frames=[frame],
+                # TODO: convert to Pydantic model
+                template_frames=template_frames,
+                template_boxes=template_bboxes,
+                template_labels=template_labels,
+                template_texts=template_texts,
+                metadata=ocr_results,
+                score_threshold=0.80,
+                max_overlap=0.5,
+                max_objects=2,
+                window_size=window_size,
+                downscale_factor=1,
+            )
+            print(results)
+            rows = []
+            bboxes = []
+            labels = []
+            scores = []
+
+            cv_raw_image = cv2.cvtColor(np.array(raw_image), cv2.COLOR_RGB2BGR)
+
+            for result in results:
+                snippet = frame[
+                    result.bbox[1] : result.bbox[1] + result.bbox[3],
+                    result.bbox[0] : result.bbox[0] + result.bbox[2],
+                ]
+                snippet = Image.fromarray(snippet)
+                snippet.save(f"/tmp/template/snippet_{i}.png")
+
+                rows.append(
+                    {
+                        "snippet": image_formatter(snippet),
+                        "label": result.label,
+                        "score": result.score,
+                        "x": result.bbox[0],
+                        "y": result.bbox[1],
+                        "w": result.bbox[2],
+                        "h": result.bbox[3],
+                    }
                 )
-                print(results)
-                rows = []
-                for result in results:
-                    snippet = frame[
-                        result.bbox[1] : result.bbox[1] + result.bbox[3],
-                        result.bbox[0] : result.bbox[0] + result.bbox[2],
-                    ]
-                    snippet = Image.fromarray(snippet)
-                    snippet.save(f"/tmp/template/snippet_{i}.png")
-
-                    rows.append(
-                        {
-                            "snippet": image_formatter(snippet),
-                            "label": result.label,
-                            "score": result.score,
-                            "x": result.bbox[0],
-                            "y": result.bbox[1],
-                            "w": result.bbox[2],
-                            "h": result.bbox[3],
-                        }
-                    )
+                bboxes.append(result.bbox)
+                labels.append(result.label)
+                scores.append(result.score)
 
             df = pd.DataFrame(rows)
             st.dataframe(
                 df,
-                use_container_width=st.session_state.use_container_width,
+                use_container_width=True,
                 column_config=column_configuration,
             )
 
-            st.image(resized_image_target)
+            BaseTemplateMatcher.visualize_object_predictions(
+                bboxes, labels, scores, cv_raw_image, 0
+            )
+            st.image(cv_raw_image)
 
 
 if __name__ == "__main__":
