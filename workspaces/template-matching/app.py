@@ -173,7 +173,7 @@ def main():
             "Match threshold",
             min_value=1,
             max_value=100,
-            value=40,
+            value=90,
             step=1,
             format="%d",
         )
@@ -183,18 +183,18 @@ def main():
         window_size_h = st.number_input(
             "Window size height(px)",
             min_value=128,
-            max_value=512,
-            value=256,
-            step=1,
+            max_value=1024,
+            value=512,
+            step=64,
             format="%d",
         )
     with scol2:
         window_size_w = st.number_input(
             "Window size width(px)",
             min_value=128,
-            max_value=512,
-            value=256,
-            step=1,
+            max_value=1024,
+            value=512,
+            step=64,
             format="%d",
         )
     st.sidebar.divider()
@@ -265,7 +265,10 @@ def main():
         if submit:
             ocr_results = None
             raw_image = raw_image.convert("RGB")
-            frame = np.array(raw_image)
+            frame_src = np.array(raw_image)
+
+            raw_image_target = raw_image_target.convert("RGB")
+            frame_dst = np.array(raw_image_target)
 
             resized_boxes = utils.get_resized_boxes(canvas_result)
             # left_upper point and right_lower point : [x1, y1, x2, y2]
@@ -285,13 +288,13 @@ def main():
             if reinforce_mode:
                 ocr_engine = get_ocr_engine()
                 ocr_results = ocr_engine.extract(
-                    [frame], PSMode.SPARSE, CoordinateFormat.XYWH
+                    [frame_dst], PSMode.SPARSE, CoordinateFormat.XYWH
                 )
 
                 raw_text = []
                 for box in raw_boxes_xywh:
                     x, y, w, h = box
-                    snippet = frame[y : y + h, x : x + w, :]
+                    snippet = frame_src[y : y + h, x : x + w, :]
                     snippet_result = ocr_engine.extract(
                         [snippet], PSMode.SPARSE, CoordinateFormat.XYWH
                     )
@@ -352,8 +355,11 @@ def main():
                 column_config=column_configuration,
             )
 
-            st.write("Received the following sample:")
-            st.write("Matching mode: ", matching_mode)
+            st.write("Matching parameters")
+            st.write("Mode: ", matching_mode)
+            st.write("Max matches: ", max_matches_number)
+            st.write("Score threshold: ", score_threshold_number)
+            st.write("Window size: ", (window_size_h, window_size_w))
 
             matcher_composite, matcher_meta, matcher_vqnnft = get_template_matchers()
             matcher = matcher_composite
@@ -363,7 +369,7 @@ def main():
             elif matching_mode == "Meta":
                 matcher = matcher_meta
 
-            window_size = (512, 512)
+            window_size = (window_size_h, window_size_w)
 
             template_frames = []
             template_bboxes = []
@@ -374,7 +380,7 @@ def main():
                 zip(resized_boxes, raw_boxes, raw_boxes_xywh, raw_text)
             ):
                 x, y, w, h = z
-                template = frame[y : y + h, x : x + w, :]
+                template = frame_src[y : y + h, x : x + w, :]
                 cv2.imwrite(f"/tmp/template/template_frame_{i}.png", template)
 
                 template, coord = resize_image(
@@ -392,14 +398,14 @@ def main():
                 template_texts.append(text)
 
             results = matcher.run(
-                frames=[frame],
+                frames=[frame_dst],
                 # TODO: convert to Pydantic model
                 template_frames=template_frames,
                 template_boxes=template_bboxes,
                 template_labels=template_labels,
                 template_texts=template_texts,
                 metadata=ocr_results,
-                score_threshold=0.80,
+                score_threshold=score_threshold_number / 100,
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,
@@ -411,10 +417,10 @@ def main():
             labels = []
             scores = []
 
-            cv_raw_image = cv2.cvtColor(np.array(raw_image), cv2.COLOR_RGB2BGR)
+            cv_raw_image = cv2.cvtColor(np.array(raw_image_target), cv2.COLOR_RGB2BGR)
 
             for result in results:
-                snippet = frame[
+                snippet = frame_dst[
                     result.bbox[1] : result.bbox[1] + result.bbox[3],
                     result.bbox[0] : result.bbox[0] + result.bbox[2],
                 ]
