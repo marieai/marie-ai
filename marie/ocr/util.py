@@ -15,26 +15,29 @@ from marie.utils.utils import ensure_exists
 
 
 def get_words_and_boxes(
-    ocr_results, page_index: int
-) -> tuple[list[str], list[list[int]]]:
+    ocr_results, page_index: int, include_lines: bool = False
+) -> tuple[list[str], list[list[int]]] | tuple[list[str], list[list[int]], list[int]]:
     """
     Get words and boxes from OCR results.
-    :param ocr_results:
-    :param page_index:
+    :param ocr_results: OCR results
+    :param page_index: Page index to get words and boxes from.
+    :param include_lines: Include lines in the result.
     :return:
     """
     words = []
     boxes = []
-
+    lines = []
     if not ocr_results:
         return words, boxes
-
     if page_index >= len(ocr_results):
         raise ValueError(f"Page index {page_index} is out of range.")
 
     for w in ocr_results[page_index]["words"]:
         boxes.append(w["box"])
         words.append(w["text"])
+        lines.append(w["line"])
+    if include_lines:
+        return words, boxes, lines
     return words, boxes
 
 
@@ -73,17 +76,10 @@ def meta_to_text(
         for result in results:
             lines = result["lines"]
             lines = sorted(lines, key=lambda k: k["line"])
-            for line in lines:
-                f.write(line["text"] + "\n")
-
-    if False:
-        renderer = TextRenderer(config={"preserve_interword_spaces": False})
-        renderer.render(
-            frames,
-            results,
-            output_file_or_dir=tmp_file.name,
-        )
-
+            for i, line in enumerate(lines):
+                f.write(line["text"])
+                if i < len(lines) - 1:
+                    f.write("\n")
     tmp_file.close()
 
     with open(tmp_file.name, "r") as f:

@@ -211,7 +211,7 @@ class OnnxModule(object):
         """A dummy function that act as torch.nn.Module.to() function"""
 
         class DummyModel:
-            def eval():
+            def eval(self):
                 pass
 
         return DummyModel

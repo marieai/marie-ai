@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 import cv2
 import numpy as np
@@ -12,7 +12,6 @@ from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
-from ...embeddings.transformers.transformers_embeddings import TransformersEmbeddings
 from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
@@ -25,8 +24,7 @@ def odd(f):
 
 
 embeddings_processor = OpenAIEmbeddings(
-    # model_name_or_path="hf://openai/clip-vit-large-patch14"
-    model_name_or_path="marie/clip-vit-base-patch32"
+    model_name_or_path="marie/clip-snippet-rn50x4"
     # model_name_or_path="hf://openai/clip-vit-base-patch32"
 )
 
@@ -149,7 +147,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
-            if False:
+            if True:
                 cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
                 cv2.imwrite("/tmp/dim/query_image.png", query_image)
                 cv2.imwrite("/tmp/dim/template_image.png", template_image)
@@ -220,7 +218,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             ]
             image_pd = (qxs, qys, qws, qhs)
             sim_val = self.score(template_snippet, query_pred_snippet)
-
             if sim_val < score_threshold:
                 continue
 
@@ -230,6 +227,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     label=template_label,
                     score=sim_val,
                     similarity=sim_val,
+                    frame_index=-1,
                 )
             )
 
@@ -281,16 +279,11 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     f"/tmp/dim/final/stacked_{idx}_{round(sim_val, 3)}.png",
                     stacked,
                 )
-
-            break
+            # break
 
         return predictions
 
     def score(self, template_snippet, query_pred_snippet) -> float:
-
-        print("template_snippet", template_snippet.shape)
-        print("query_pred_snippet", query_pred_snippet.shape)
-
         # resize the images to be the same size
         t = resize_image(template_snippet, (72, 224))[0]
         q = resize_image(query_pred_snippet, (72, 224))[0]
@@ -308,8 +301,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         )
 
         # TODO : add the embedding similarity for the text
-        words = ["word-a", "word-1"]
-        boxes = [[0, 0, 100, 100], [100, 100, 200, 200]]
+        words = []
+        boxes = []
 
         template_snippet_features = get_embedding_feature(t, words=[], boxes=[])
         query_pred_snippet_features = get_embedding_feature(q, words=[], boxes=[])
@@ -321,8 +314,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
         feature_sim = feature_sim.cpu().numpy()[0]
-        # mask_val = mask_iou(t, q)
-        print("sim query/template", feature_sim, embedding_sim)
         sim_val = (feature_sim + embedding_sim) / 2
 
         return sim_val

@@ -90,6 +90,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         assert len(template_frames) == len(template_boxes)
         assert len(template_texts) == len(template_labels)
         # extract type (EXACT, REGEX, FUZZY, EMBEDDINGS) from the template_labels
+
         page_words = words
         page_boxes = word_boxes
         k = 0
