@@ -31,7 +31,8 @@ embeddings_processor = OpenAIEmbeddings(
 
 def get_embedding_feature(image: np.ndarray, words: list, boxes: list) -> np.ndarray:
     # This is a pre-processing step to get the embeddings for the words and boxes in the image
-    # image1 = resize_image(image, (72, 224))[0]
+    # this is critical for the similarity calculation that we resize with PADDING and not just scaling
+    image = resize_image(image, (224, 224))[0]
     image1 = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     embedding = embeddings_processor.get_embeddings(
         texts=words, boxes=boxes, image=image1

@@ -31,3 +31,7 @@ The model was trained on private dataset of image and text snippets.
 clip_1_0.00013816356658935547_params_clip.pth
 ```
 
+
+Accuracy: 42/43 = 97.67%
+Average Similarity for same: 22.17, 0.96
+Average Similarity for diff: 5.56, 0.28
