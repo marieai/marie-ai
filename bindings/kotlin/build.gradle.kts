@@ -61,4 +61,19 @@ protobuf {
             }
         }
     }
+
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs(
+                "src/main/java",
+                "build/generated/source/proto/main/java", "build/generated/source/proto/main/grpc",
+
+                "src/main/kotlin",
+                "build/generated/source/proto/main/kotlin", "build/generated/source/proto/main/grpckt"
+            )
+        }
+    }
 }

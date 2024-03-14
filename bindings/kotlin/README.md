@@ -8,5 +8,5 @@ Edit Custom VM options, and restarting IDE `-Dhttps.protocols=TLSv1,TLSv1.1,TLSv
 
 
 ## Acknowledgment
-Based Kotlin Jina Client by Peter Willemsen 
+Based on Kotlin Jina Client by Peter Willemsen 
 https://github.com/peterwilli/JinaKotlin
