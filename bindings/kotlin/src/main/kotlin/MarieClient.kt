@@ -1,6 +1,7 @@
 import com.google.protobuf.Empty
-import docarray.documentArrayProto
-import docarray.documentProto
+import com.google.protobuf.Struct
+import docarray.*
+
 import io.grpc.ManagedChannel
 import jina.*
 import kotlinx.coroutines.flow.asFlow
@@ -31,11 +32,12 @@ class MarieClient(
                 this.docs = documentArrayProto {
                     this.docs.add(documentProto {
                         this.text = "hello"
+                        this.uri = "uri"
                     })
                 }
             }
             header = headerProto {
-                execEndpoint = "/"
+                execEndpoint = "/document/extract"
                 requestId = generateRequestId()
             }
         }

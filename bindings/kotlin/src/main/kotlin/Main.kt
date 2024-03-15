@@ -18,7 +18,7 @@ fun getClient(url: URI): MarieClient {
 }
 
 suspend fun main() {
-    val client = getClient(URI("grpc://127.0.0.1:50001"))
+    val client = getClient(URI("grpc://0.0.0.0:52000"))
 
     var maxWaitTime: Long = 10000
     var waitTime: Long = 1000
