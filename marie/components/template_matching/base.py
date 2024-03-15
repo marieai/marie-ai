@@ -45,6 +45,7 @@ class BaseTemplateMatcher(ABC):
         template_labels: list[str],
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
+        scoring_strategy: str = "weighted",  # "weighted" or "average"
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
@@ -64,7 +65,8 @@ class BaseTemplateMatcher(ABC):
         template_labels: list[str],
         template_texts: list[str] = None,
         metadata: Optional[Union[dict, list]] = None,
-        score_threshold: float = 0.45,
+        score_threshold: float = 0.80,
+        scoring_strategy: str = "weighted",  # "weighted" or "average"
         max_overlap: float = 0.5,
         max_objects: int = 1,
         window_size: tuple[int, int] = (384, 128),  # h, w
@@ -84,6 +86,7 @@ class BaseTemplateMatcher(ABC):
         :param template_texts: A list of text for each template. The length of this list should be the same as the length of the templates list.
         :param metadata: A list of metadata for each frame. The length of this list should be the same as the length of the frames list.
         :param score_threshold: The minimum score to consider a match.
+        :param scoring_strategy: The strategy to use for scoring the matches. It can be either "weighted" or "average".
         :param max_overlap: The maximum overlap to consider a match. This is the maximal value for the ratio of the Intersection Over Union (IoU) area between a pair of bounding boxes.
         :param max_objects: The maximum number of objects to return.
         :param window_size: The size of the window to use for the search in the format (width, height).
@@ -239,6 +242,7 @@ class BaseTemplateMatcher(ABC):
                     template_labels,
                     template_texts,
                     score_threshold,
+                    scoring_strategy,
                     max_objects,
                     words=page_words,
                     word_boxes=page_boxes,
@@ -374,7 +378,9 @@ class BaseTemplateMatcher(ABC):
         return postprocess
 
     @staticmethod
-    def visualize_object_predictions(bboxes, labels, scores, frame, index) -> None:
+    def visualize_object_predictions(
+        bboxes, labels, scores, frame, index, border_only=True
+    ) -> None:
         """
         Visualize the object predictions on the frame.
         :param bboxes:  bounding boxes to visualize
@@ -382,20 +388,30 @@ class BaseTemplateMatcher(ABC):
         :param scores:  scores to visualize
         :param frame:  frame to draw the predictions on
         :param index:  index of the frame
+        :param border_only:  whether to draw only the border of the bounding boxes
         :return:
         """
 
         for bbox, label, score in zip(bboxes, labels, scores):
-            print(" -- bbox : ", bbox, score)
-
-            cv2.rectangle(
-                frame,
-                (bbox[0], bbox[1]),
-                (bbox[0] + bbox[2], bbox[1] + bbox[3]),
-                (0, 255, 0),
-                2,
-            )
-
+            if border_only:
+                cv2.rectangle(
+                    frame,
+                    (bbox[0], bbox[1]),
+                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                    (0, 255, 0),
+                    2,
+                )
+            else:
+                overlay = frame.copy()
+                cv2.rectangle(
+                    overlay,
+                    (bbox[0], bbox[1]),
+                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                    (0, 255, 0),  # color of the overlay
+                    -1,
+                )
+                alpha = 0.5
+                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
             cv2.putText(
                 frame,
                 f"{score:.2f}",
