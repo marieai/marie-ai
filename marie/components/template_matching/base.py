@@ -48,6 +48,7 @@ class BaseTemplateMatcher(ABC):
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
     ) -> list[TemplateMatchResult]:
         """
         Find all possible templates locations above a score-threshold, provided a list of templates to search and an image.
@@ -115,8 +116,12 @@ class BaseTemplateMatcher(ABC):
 
             page_words = []
             page_boxes = []
+            page_lines = []
+
             if metadata is not None:
-                page_words, page_boxes = get_words_and_boxes(metadata, frame_idx)
+                page_words, page_boxes, page_lines = get_words_and_boxes(
+                    metadata, frame_idx, include_lines=True
+                )
 
             # validate the template frames are the same size as the window size
             for template_frame, template_boxe in zip(template_frames, template_boxes):
@@ -237,6 +242,7 @@ class BaseTemplateMatcher(ABC):
                     max_objects,
                     words=page_words,
                     word_boxes=page_boxes,
+                    word_lines=page_lines,
                 )
 
                 for prediction in predictions:

@@ -120,6 +120,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
     ) -> list[TemplateMatchResult]:
 
         feature_extractor = self.feature_extractor

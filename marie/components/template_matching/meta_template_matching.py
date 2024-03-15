@@ -79,6 +79,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
     ) -> list[TemplateMatchResult]:
 
         predictions = []
@@ -93,12 +94,12 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
 
         page_words = words
         page_boxes = word_boxes
+        word_lines = word_lines
         k = 0
+
         for idx, (template_text, template_label) in enumerate(
             zip(template_texts, template_labels)
         ):
-            print("template_label", template_label)
-            print("template_text", template_text)
             ngram = len(template_text.split(" "))
             ngrams = [ngram - 1, ngram, ngram + 1]
             ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
@@ -107,6 +108,14 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                 for i in range(len(page_words) - ngram + 1):
                     ngram_words = page_words[i : i + ngram]
                     ngram_boxes = page_boxes[i : i + ngram]
+                    if word_lines:
+                        ngram_lines = word_lines[i : i + ngram]
+                        if len(set(ngram_lines)) > 1:
+                            self.logger.debug(
+                                f"Skipping ngram {ngram_words} as it is not in the same line"
+                            )
+                            continue
+
                     key = "_".join(ngram_words)
                     box = merge_bboxes_as_block(ngram_boxes)
                     x, y, w, h = box
