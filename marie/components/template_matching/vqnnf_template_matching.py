@@ -104,10 +104,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
-
-        self.feature_extractor_sim = PixelFeatureExtractor(
-            model_name=self.model_name, num_features=512
-        )
+        self.feature_extractor_sim = self.feature_extractor
 
     def predict(
         self,
@@ -117,6 +114,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         template_labels: list[str],
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
+        scoring_strategy: str = "weighted",
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
@@ -219,7 +217,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
-            sim_val = self.score(template_snippet, query_pred_snippet)
+
+            sim_val = self.score(template_snippet, query_pred_snippet, scoring_strategy)
             if sim_val < score_threshold:
                 continue
 
@@ -285,13 +284,12 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
         return predictions
 
-    def score(self, template_snippet, query_pred_snippet) -> float:
+    def score(
+        self, template_snippet, query_pred_snippet, scoring_strategy: str
+    ) -> float:
         # resize the images to be the same size
-        t = resize_image(template_snippet, (72, 224))[0]
-        q = resize_image(query_pred_snippet, (72, 224))[0]
-
-        # t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-        # q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
+        t = resize_image(template_snippet, (224, 224))[0]
+        q = resize_image(query_pred_snippet, (224, 224))[0]
 
         template_snippet_features = self.feature_extractor_sim.get_features(t)
         query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
@@ -316,6 +314,18 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
         feature_sim = feature_sim.cpu().numpy()[0]
-        sim_val = (feature_sim + embedding_sim) / 2
 
+        # we already know that the feature similarity is very high for the same image so we can use it as a weight
+        if scoring_strategy == "weighted":
+            embedding_weight = 0.80
+            feature_weight = 0.20
+            sim_val = (feature_sim * feature_weight) + (
+                embedding_sim * embedding_weight
+            )
+        elif scoring_strategy == "max":
+            sim_val = max(feature_sim, embedding_sim)
+        else:
+            sim_val = (feature_sim + embedding_sim) / 2
+        # clip the similarity value to 1
+        sim_val = max(0, min(1, sim_val))
         return sim_val

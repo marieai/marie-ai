@@ -3,7 +3,6 @@ from typing import List, Optional, Union
 import numpy as np
 import sahi.annotation as BoundingBox
 from sahi.prediction import ObjectPrediction, PredictionScore
-from sahi.slicing import slice_image
 
 from marie.logging.logger import MarieLogger
 
@@ -37,9 +36,11 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         template_labels: list[str],
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
+        scoring_strategy: str = "weighted",  # "weighted", "average", "max"
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
     ) -> list[TemplateMatchResult]:
         raise NotImplementedError(
             "This method is not implemented in CompositeTemplateMatcher"
@@ -53,7 +54,8 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         template_labels: list[str],
         template_texts: list[str] = None,
         metadata: Optional[Union[dict, list]] = None,
-        score_threshold: float = 0.45,
+        score_threshold: float = 0.8,
+        scoring_strategy: str = "weighted",  # "weighted" or "average"
         max_overlap: float = 0.5,
         max_objects: int = 1,
         window_size: tuple[int, int] = (384, 128),  # h, w
@@ -65,7 +67,9 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         postprocess = self.setup_postprocess()
 
         for matcher in self.matchers:
-            with TimeContext(f"Evaluating matcher # {matcher}"):
+            with TimeContext(
+                f"Evaluating matcher : {matcher.__class__.__name__}", logger=self.logger
+            ):
                 result = matcher.run(
                     frames=frames,
                     template_frames=template_frames,
@@ -74,6 +78,7 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
                     template_texts=template_texts,
                     metadata=metadata,
                     score_threshold=score_threshold,
+                    scoring_strategy=scoring_strategy,
                     max_overlap=max_overlap,
                     max_objects=max_objects,
                     window_size=window_size,
@@ -105,7 +110,7 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
                 # convert back to TemplateMatchResult
                 for object_prediction in object_prediction_list:
                     bbox: BoundingBox = object_prediction.bbox
-                    bbox = bbox.to_xywh()  # convert to x, y, width, height
+                    bbox = bbox.to_xywh()
 
                     score: PredictionScore = object_prediction.score
                     score = score.value

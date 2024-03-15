@@ -200,13 +200,13 @@ def main():
     st.sidebar.divider()
 
     mode = "transform" if st.sidebar.checkbox("Move ROIs", False) else "rect"
-
-    reinforce_mode = (
-        True if st.sidebar.checkbox("Reinforce mode(OCR) ", False) else False
+    reinforce_mode = True if st.sidebar.checkbox("Reinforce mode ", False) else False
+    matching_mode = st.sidebar.radio(
+        "Matching strategy:", ("Composite", "VQNNF", "Meta"), index=0
     )
 
-    matching_mode = st.sidebar.radio(
-        "Matching mode:", ("Composite", "VQNNF", "Meta"), index=0
+    scoring_strategy = st.sidebar.radio(
+        "Scoring strategy:", ("Weighted", "Average", "Max"), index=0
     )
 
     uploaded_image = st.sidebar.file_uploader(
@@ -263,13 +263,6 @@ def main():
 
     with st.container():
         if submit:
-            ocr_results = None
-            raw_image = raw_image.convert("RGB")
-            frame_src = np.array(raw_image)
-
-            raw_image_target = raw_image_target.convert("RGB")
-            frame_dst = np.array(raw_image_target)
-
             resized_boxes = utils.get_resized_boxes(canvas_result)
             # left_upper point and right_lower point : [x1, y1, x2, y2]
             raw_boxes = utils.get_raw_boxes(resized_boxes, raw_size, resized_size)
@@ -277,6 +270,10 @@ def main():
             if len(raw_boxes) == 0:
                 st.warning("No selectors defined", icon="⚠️")
                 return  # stop the execution
+
+            ocr_results = None
+            frame_src = cv2.cvtColor(np.array(raw_image), cv2.COLOR_RGB2BGR)
+            frame_dst = cv2.cvtColor(np.array(raw_image_target), cv2.COLOR_RGB2BGR)
 
             raw_boxes_xywh = [
                 [box[0], box[1], box[2] - box[0], box[3] - box[1]] for box in raw_boxes
@@ -357,6 +354,7 @@ def main():
 
             st.write("Matching parameters")
             st.write("Mode: ", matching_mode)
+            st.write("Scoring strategy: ", scoring_strategy)
             st.write("Max matches: ", max_matches_number)
             st.write("Score threshold: ", score_threshold_number)
             st.write("Window size: ", (window_size_h, window_size_w))
@@ -406,6 +404,7 @@ def main():
                 template_texts=template_texts,
                 metadata=ocr_results,
                 score_threshold=score_threshold_number / 100,
+                scoring_strategy=scoring_strategy.lower(),
                 max_overlap=0.5,
                 max_objects=2,
                 window_size=window_size,
@@ -416,8 +415,6 @@ def main():
             bboxes = []
             labels = []
             scores = []
-
-            cv_raw_image = cv2.cvtColor(np.array(raw_image_target), cv2.COLOR_RGB2BGR)
 
             for result in results:
                 snippet = frame_dst[
@@ -449,10 +446,17 @@ def main():
                 column_config=column_configuration,
             )
 
+            # Conversion to PIL RGBA format is not working
             BaseTemplateMatcher.visualize_object_predictions(
-                bboxes, labels, scores, cv_raw_image, 0
+                bboxes, labels, scores, frame_dst, 0, border_only=True
             )
-            st.image(cv_raw_image)
+
+            pil_image = Image.fromarray(
+                # cv2.cvtColor(frame_dst, cv2.COLOR_BGRA2RGBA), "RGB"
+                cv2.cvtColor(frame_dst, cv2.COLOR_BGR2RGB),
+                "RGB",
+            )
+            st.image(pil_image)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         template_labels: list[str],
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
+        scoring_strategy: str = "EXACT",
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
