@@ -217,6 +217,11 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :,
             ]
             image_pd = (qxs, qys, qws, qhs)
+            if template_snippet.shape != query_pred_snippet.shape:
+                query_pred_snippet = cv2.resize(
+                    query_pred_snippet,
+                    (template_snippet.shape[1], template_snippet.shape[0]),
+                )
 
             sim_val = self.score(template_snippet, query_pred_snippet, scoring_strategy)
             if sim_val < score_threshold:
@@ -272,16 +277,11 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 )
 
             if True:
-                print("template_snippet", template_snippet.shape)
-                print("query_pred_snippet", query_pred_snippet.shape)
-
                 stacked = np.hstack((template_snippet, query_pred_snippet))
                 cv2.imwrite(
                     f"/tmp/dim/final/stacked_{idx}_{round(sim_val, 3)}.png",
                     stacked,
                 )
-            # break
-
         return predictions
 
     def score(
