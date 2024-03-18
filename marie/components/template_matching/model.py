@@ -8,4 +8,4 @@ class TemplateMatchResult(BaseModel):
     label: str
     score: float
     similarity: float
-    frame_index: Optional[int] = 1
+    frame_index: Optional[int] = 0

@@ -1,4 +1,11 @@
+package co.marieai
+
+import co.marieai.client.MarieClient
+import co.marieai.client.TemplateMatcherClient
+import co.marieai.model.TemplateMatchRequest
 import io.grpc.ManagedChannelBuilder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URI
 import kotlin.random.Random
 
@@ -18,14 +25,17 @@ fun getClient(url: URI): MarieClient {
 }
 
 suspend fun main() {
-    val client = getClient(URI("grpc://0.0.0.0:52000"))
+    val client = TemplateMatcherClient(getClient(URI("grpc://0.0.0.0:52000")))
 
-    var maxWaitTime: Long = 10000
-    var waitTime: Long = 1000
-    var ready = false
+    var maxWaitTime: Long = 10_000
+    val waitTime: Long = 1000
+    var ready: Boolean
+
     while (!(client.isReady().also { ready = it }) && (maxWaitTime > 0)) {
         println("Waiting for the server to start... " + maxWaitTime + "ms left.")
-        Thread.sleep(waitTime)
+        withContext(Dispatchers.IO) {
+            Thread.sleep(waitTime)
+        }
         maxWaitTime -= waitTime
     }
 
@@ -33,5 +43,10 @@ suspend fun main() {
         println("Server is not up!")
         return
     }
-    client.testReq1()
+
+    val request = TemplateMatchRequest("asset_key", "id", 0)
+    val results = client.match(request)
+
+    println("***********")
+    println(results)
 }
