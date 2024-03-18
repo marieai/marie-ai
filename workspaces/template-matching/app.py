@@ -1,5 +1,4 @@
 import base64
-import json
 import logging
 import os
 from io import BytesIO
@@ -12,24 +11,16 @@ import torch
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
-from marie import __version__ as marie_version
 from marie.boxes.box_processor import PSMode
-from marie.components.template_matching.composite_template_maching import (
+from marie.components.template_matching import (
+    BaseTemplateMatcher,
     CompositeTemplateMatcher,
-)
-from marie.components.template_matching.meta_template_matching import (
     MetaTemplateMatcher,
+    VQNNFTemplateMatcher,
 )
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
 from marie.ocr.util import meta_to_text
 from marie.utils.resize_image import resize_image
-
-print("marie_version", marie_version)
-
-from marie.components.template_matching.vqnnf_template_matching import (
-    BaseTemplateMatcher,
-    VQNNFTemplateMatcher,
-)
 
 
 @st.cache_resource
@@ -183,7 +174,7 @@ def main():
         window_size_h = st.number_input(
             "Window size height(px)",
             min_value=128,
-            max_value=1024,
+            max_value=2048,
             value=512,
             step=64,
             format="%d",
@@ -192,7 +183,7 @@ def main():
         window_size_w = st.number_input(
             "Window size width(px)",
             min_value=128,
-            max_value=1024,
+            max_value=2048,
             value=512,
             step=64,
             format="%d",
@@ -374,24 +365,34 @@ def main():
             template_labels = []
             template_texts = []
 
+            template_frames, template_bboxes = BaseTemplateMatcher.extract_windows(
+                frame_src, raw_boxes_xywh, window_size
+            )
+
+            for template_frame in template_frames:
+                cv2.imwrite(
+                    f"/tmp/dim/template/template_frame_XXX_{i}.png", template_frame
+                )
+
             for i, (s, result, z, text) in enumerate(
                 zip(resized_boxes, raw_boxes, raw_boxes_xywh, raw_text)
             ):
                 x, y, w, h = z
-                template = frame_src[y : y + h, x : x + w, :]
-                cv2.imwrite(f"/tmp/template/template_frame_{i}.png", template)
+                if False:
+                    template = frame_src[y : y + h, x : x + w, :]
+                    cv2.imwrite(f"/tmp/dim/template/template_frame_{i}.png", template)
 
-                template, coord = resize_image(
-                    template,
-                    desired_size=window_size,
-                    color=(255, 255, 255),
-                    keep_max_size=True,
-                )
+                    template, coord = resize_image(
+                        template,
+                        desired_size=window_size,
+                        color=(255, 255, 255),
+                        keep_max_size=True,
+                    )
 
-                cv2.imwrite(f"/tmp/dim/template/template_{i}.png", template)
+                    cv2.imwrite(f"/tmp/dim/template/template_{i}.png", template)
+                    template_frames.append(template)
+                    template_bboxes.append(coord)
 
-                template_frames.append(template)
-                template_bboxes.append(coord)
                 template_labels.append(f"label_{i}")
                 template_texts.append(text)
 
