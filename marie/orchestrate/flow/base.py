@@ -212,6 +212,7 @@ class Flow(
         prefetch: Optional[int] = 1000,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
         provider: Optional[str] = ['NONE'],
+        provider_endpoint: Optional[str] = None,
         proxy: Optional[bool] = False,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -283,6 +284,7 @@ class Flow(
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -474,6 +476,7 @@ class Flow(
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -670,9 +673,11 @@ class Flow(
                 deployment_role=DeploymentRoleType.GATEWAY,
                 expose_endpoints=json.dumps(self._endpoints_mapping),
                 env=self.env,
-                log_config=kwargs.get('log_config')
-                if 'log_config' in kwargs
-                else self.args.log_config,
+                log_config=(
+                    kwargs.get('log_config')
+                    if 'log_config' in kwargs
+                    else self.args.log_config
+                ),
             )
         )
 
@@ -879,6 +884,7 @@ class Flow(
         prefer_platform: Optional[str] = None,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
         provider: Optional[str] = ['NONE'],
+        provider_endpoint: Optional[str] = None,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
         quiet_error: Optional[bool] = False,
@@ -979,6 +985,7 @@ class Flow(
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
@@ -1142,6 +1149,7 @@ class Flow(
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param py_modules: The customized python modules need to be imported before loading the executor
 
           Note that the recommended way is to only import a single module - a simple python file, if your
@@ -1255,9 +1263,11 @@ class Flow(
                 dict(
                     name=deployment_name,
                     deployment_role=deployment_role,
-                    log_config=kwargs.get('log_config')
-                    if 'log_config' in kwargs
-                    else self.args.log_config,
+                    log_config=(
+                        kwargs.get('log_config')
+                        if 'log_config' in kwargs
+                        else self.args.log_config
+                    ),
                 )
             )
             parser = set_deployment_parser()
@@ -1335,6 +1345,7 @@ class Flow(
         prefetch: Optional[int] = 1000,
         protocol: Optional[Union[str, List[str]]] = ['GRPC'],
         provider: Optional[str] = ['NONE'],
+        provider_endpoint: Optional[str] = None,
         proxy: Optional[bool] = False,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -1406,6 +1417,7 @@ class Flow(
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -1506,6 +1518,7 @@ class Flow(
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
         :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
 
@@ -1750,9 +1763,11 @@ class Flow(
             # but not those inspect related node
             if op_flow.args.inspect.is_keep:
                 deployment.needs = set(
-                    ep
-                    if deployment.role.is_inspect
-                    else op_flow._inspect_deployments.get(ep, ep)
+                    (
+                        ep
+                        if deployment.role.is_inspect
+                        else op_flow._inspect_deployments.get(ep, ep)
+                    )
                     for ep in deployment.needs
                 )
             else:

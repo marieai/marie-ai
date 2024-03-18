@@ -1,17 +1,42 @@
 import os
-from typing import Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from docarray import DocList
+from docarray.base_doc.doc import BaseDocWithoutId
 
 from marie import Executor, requests, safely_encoded
-from marie.api.docs import AssetKeyDoc
+from marie.api.docs import AssetKeyDoc, BaseDoc
+from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.network import get_ip_address
+
+
+class TemplateMatchResultDoc(BaseDocWithoutId, frozen=True):
+    bbox: Tuple[int, int, int, int]
+    label: str
+    score: float
+    similarity: float
+    frame_index: Optional[int] = 0
+
+
+class TemplateMatchingResultDoc(BaseDoc, frozen=True):
+    asset_key: str
+    results: List[TemplateMatchResultDoc]
+
+
+def convert_to_protobuf_doc(match: TemplateMatchResult) -> TemplateMatchResultDoc:
+    return TemplateMatchResultDoc(
+        bbox=match.bbox,
+        label=match.label,
+        score=match.score,
+        similarity=match.similarity,
+        frame_index=match.frame_index,
+    )
 
 
 class TemplateMatchingExecutor(Executor):
@@ -71,6 +96,32 @@ class TemplateMatchingExecutor(Executor):
 
         logger.info(kwargs)
         logger.info(parameters)
+
+        print("Dumping docs:")
+        for doc in docs:
+            print(doc)
+
+        tmr = TemplateMatchResult(
+            bbox=(10, 20, 40, 100),
+            label="LABELA ABC",
+            score=0.9,
+            similarity=0.6,
+            frame_index=0,
+        )
+
+        reply = DocList[TemplateMatchingResultDoc]()
+
+        reply.append(
+            TemplateMatchingResultDoc(
+                asset_key="RETURN_ASSET_KEY",
+                results=[
+                    convert_to_protobuf_doc(tmr),
+                    convert_to_protobuf_doc(tmr),
+                ],
+            )
+        )
+
+        return reply
 
         if len(docs) == 0:
             return {"error": "empty payload"}

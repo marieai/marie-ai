@@ -383,15 +383,16 @@ class WorkerRequestHandler:
                 uses_requests=self.args.uses_requests,
                 uses_dynamic_batching=self.args.uses_dynamic_batching,
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
-                    "workspace": self.args.workspace,
-                    "shard_id": self.args.shard_id,
-                    "shards": self.args.shards,
-                    "replicas": self.args.replicas,
-                    "name": self.args.name,
-                    "provider": self.args.provider,
-                    "metrics_registry": metrics_registry,
-                    "tracer_provider": tracer_provider,
-                    "meter_provider": meter_provider,
+                    'workspace': self.args.workspace,
+                    'shard_id': self.args.shard_id,
+                    'shards': self.args.shards,
+                    'replicas': self.args.replicas,
+                    'name': self.args.name,
+                    'provider': self.args.provider,
+                    'provider_endpoint': self.args.provider_endpoint,
+                    'metrics_registry': metrics_registry,
+                    'tracer_provider': tracer_provider,
+                    'meter_provider': meter_provider,
                 },
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
@@ -945,9 +946,12 @@ class WorkerRequestHandler:
         if not is_generator:
             ex = ValueError("endpoint must be generator")
             self.logger.error(
-                f"{ex!r}" + f'\n add "--quiet-error" to suppress the exception details'
-                if not self.args.quiet_error
-                else "",
+                (
+                    f'{ex!r}'
+                    + f'\n add "--quiet-error" to suppress the exception details'
+                    if not self.args.quiet_error
+                    else ''
+                ),
                 exc_info=not self.args.quiet_error,
             )
             request.add_exception(ex)
@@ -979,10 +983,12 @@ class WorkerRequestHandler:
                         f"output document type {doc.__class__.__name__} does not match the endpoint output type {request_endpoint.response_schema.__name__}"
                     )
                     self.logger.error(
-                        f"{ex!r}"
-                        + f'\n add "--quiet-error" to suppress the exception details'
-                        if not self.args.quiet_error
-                        else "",
+                        (
+                            f'{ex!r}'
+                            + f'\n add "--quiet-error" to suppress the exception details'
+                            if not self.args.quiet_error
+                            else ''
+                        ),
                         exc_info=not self.args.quiet_error,
                     )
                     req = SingleDocumentRequest()
@@ -1105,10 +1111,12 @@ class WorkerRequestHandler:
                 return result
             except (RuntimeError, Exception) as ex:
                 self.logger.error(
-                    f"{ex!r}"
-                    + f'\n add "--quiet-error" to suppress the exception details'
-                    if not self.args.quiet_error
-                    else "",
+                    (
+                        f'{ex!r}'
+                        + f'\n add "--quiet-error" to suppress the exception details'
+                        if not self.args.quiet_error
+                        else ''
+                    ),
                     exc_info=not self.args.quiet_error,
                 )
 
