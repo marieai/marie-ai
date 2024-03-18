@@ -146,12 +146,6 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
-
-            if True:
-                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
-                cv2.imwrite("/tmp/dim/query_image.png", query_image)
-                cv2.imwrite("/tmp/dim/template_image.png", template_image)
-
             template_image_features = feature_extractor.get_features(template_image)
 
             temp_x, temp_y, temp_w, temp_h = template_bbox
@@ -160,6 +154,16 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_features = template_image_features[
                 :, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
+
+            if True:
+                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
+                cv2.imwrite("/tmp/dim/query_image.png", query_image)
+                cv2.imwrite("/tmp/dim/template_image.png", template_image)
+                # clip the template image to the bounding box
+                fragment = template_image[
+                    temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
+                ]
+                cv2.imwrite("/tmp/dim/template_bbox_fragment.png", fragment)
 
             template_matcher = VQNNFMatcher(
                 template=template_features,
@@ -287,6 +291,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
     def score(
         self, template_snippet, query_pred_snippet, scoring_strategy: str
     ) -> float:
+
         # resize the images to be the same size
         t = resize_image(template_snippet, (224, 224))[0]
         q = resize_image(query_pred_snippet, (224, 224))[0]

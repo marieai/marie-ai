@@ -22,6 +22,7 @@ class PixelFeatureExtractor:
         self.device = torch.device(
             f"cuda:{device}" if torch.cuda.is_available() else "cpu"
         )
+
         self.num_features = num_features
         if self.num_features != 27:
             if "resnet" in model_name:
@@ -32,6 +33,19 @@ class PixelFeatureExtractor:
                 self.model = EfficientNetHyperColumn(
                     model_name, 3, num_features, weights_path=weights_path
                 ).to(self.device)
+                # self.model.eval()
+                # self.model.to("cpu")
+                # self.model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
+                # torch.quantization.prepare(self.model, inplace=True)
+                # torch.quantization.convert(self.model, inplace=True)
+                if False:
+                    try:
+                        import torch._dynamo as dynamo
+                        import torchvision.models as models
+
+                        self.model = torch.compile(self.model, mode="default")
+                    except Exception as err:
+                        print(f"Model compile not supported: {err}")
             else:
                 raise ValueError("Model name must be either resnet or efficientnet")
         else:
