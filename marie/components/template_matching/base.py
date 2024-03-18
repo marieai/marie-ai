@@ -1,6 +1,6 @@
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from sahi.slicing import slice_image
 from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.ocr.util import get_words_and_boxes
+from marie.utils.resize_image import resize_image
 
 POSTPROCESS_NAME_TO_CLASS = {
     "GREEDYNMM": GreedyNMMPostprocess,
@@ -28,6 +29,13 @@ POSTPROCESS_NAME_TO_CLASS = {
 
 
 class BaseTemplateMatcher(ABC):
+    """
+    BaseTemplateMatcher is used to match a template in an image.
+    """
+
+    DEFAULT_OVERLAP_HEIGHT_RATIO = 0.2
+    DEFAULT_OVERLAP_WIDTH_RATIO = 0.2
+
     def __init__(
         self,
         slicing_enabled: bool = True,
@@ -65,7 +73,7 @@ class BaseTemplateMatcher(ABC):
         template_labels: list[str],
         template_texts: list[str] = None,
         metadata: Optional[Union[dict, list]] = None,
-        score_threshold: float = 0.80,
+        score_threshold: float = 0.90,
         scoring_strategy: str = "weighted",  # "weighted" or "average"
         max_overlap: float = 0.5,
         max_objects: int = 1,
@@ -97,24 +105,30 @@ class BaseTemplateMatcher(ABC):
         """
 
         # assertions can be disabled via the the -O flag  (python -O)
-        # assert len(templates) == len(labels)
-        assert 0 <= score_threshold <= 1
-        assert 0 <= max_overlap <= 1
-        assert max_objects > 0
-        assert downscale_factor > 0
-        assert batch_size is None or batch_size > 0
+        if not (0 <= score_threshold <= 1):
+            raise ValueError("Score threshold should be between 0 and 1")
+        if not (0 <= max_overlap <= 1):
+            raise ValueError("Max overlap should be between 0 and 1")
+        if not max_objects > 0:
+            raise ValueError("Max object should be greater than 0")
+        if not downscale_factor > 0:
+            raise ValueError("Downscale factor should be greater than 0")
+        if batch_size is not None and not batch_size > 0:
+            raise ValueError("Batch size should be either None or greater than 0")
 
         if regions is None:
             regions = [(0, 0, image.shape[1], image.shape[0]) for image in frames]
 
-        assert len(frames) == len(regions)
+        if len(frames) != len(regions):
+            raise ValueError(
+                "The length of the regions list should be the same as the length of the frames list."
+            )
 
         results = []
         postprocess = self.setup_postprocess()
 
         for frame_idx, (frame, region) in enumerate(zip(frames, regions)):
             self.logger.info(f"matching frame {frame_idx} region: {region}")
-            # check depth and number of channels
             assert frame.ndim == 3
 
             page_words = []
@@ -135,7 +149,7 @@ class BaseTemplateMatcher(ABC):
                     template_frame.shape[0] != window_size[0]
                     or template_frame.shape[1] != window_size[1]
                 ):
-                    raise Exception(
+                    raise ValueError(
                         "Template frame size does not match window size, please resize the template frames to match the window size"
                     )
 
@@ -192,8 +206,8 @@ class BaseTemplateMatcher(ABC):
             if self.slicing_enabled:
                 slice_height = window_size[0]
                 slice_width = window_size[1]
-                overlap_height_ratio = 0.2
-                overlap_width_ratio = 0.2
+                overlap_height_ratio = self.DEFAULT_OVERLAP_HEIGHT_RATIO
+                overlap_width_ratio = self.DEFAULT_OVERLAP_WIDTH_RATIO
                 output_file_name = "frame_"
             else:
                 slice_height = frame.shape[0]
@@ -216,6 +230,9 @@ class BaseTemplateMatcher(ABC):
             )
 
             num_slices = len(slice_image_result)
+
+            print("Number of slices: ", num_slices)
+
             time_end = time.time() - time_start
             durations_in_seconds["slice"] = time_end
 
@@ -523,3 +540,54 @@ class BaseTemplateMatcher(ABC):
         # plt.show()
         plt.savefig(filename)
         plt.close()
+
+    @staticmethod
+    def extract_windows(
+        image: np.ndarray,
+        template_bboxes: list[tuple[int, int, int, int]],
+        window_size: tuple[int, int],
+    ) -> tuple[list[np.ndarray], list[tuple[int]]]:
+        """
+        Extract windows snippet from the input image centered around the template bbox and resize it to the desired size.
+
+        :param image: input image in the format (h, w, c) to extract the windows from
+        :param template_bboxes: list of bboxes in the format (x, y, w, h)
+        :param window_size: (h, w)
+        :return: list of windows and list of bboxes
+        """
+
+        windows = []
+        bboxes = []
+
+        img_h, img_w = image.shape[:2]
+        desired_h, desired_w = window_size
+
+        for box in template_bboxes:
+            x_, y_, w_, h_ = box  # x, y, w, h
+
+            center_x = x_ + w_ // 2
+            center_y = y_ + h_ // 2
+
+            x = max(0, center_x - desired_w // 2)
+            y = max(0, center_y - desired_h // 2)
+            w = desired_w
+            h = desired_h
+
+            if x + w > img_w:
+                x = img_w - w
+            if y + h > img_h:
+                y = img_h - h
+
+            window = image[y : y + h, x : x + w, :]
+            if True:
+                cv2.imwrite(f"/tmp/dim/template/window_{x}_{y}_{w}_{h}.png", window)
+
+            # calculate the new bbox relative to the window
+            coord = center_x - x - w_ // 2, center_y - y - h_ // 2, w_, h_
+            if window.shape[0] != window_size[0] or window.shape[1] != window_size[1]:
+                raise Exception(
+                    "Template frame size does not match window size, please resize the template frames to match the window size"
+                )
+            windows.append(window)
+            bboxes.append(coord)
+        return windows, bboxes
