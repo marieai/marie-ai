@@ -26,7 +26,7 @@ class VQNNFMatcher:
     ) -> None:
         self.device = template.device
         self.eps = 1e-6
-        self.n_chunks = 8000 * 3  # can be increased if GPU memory allows
+        self.n_chunks = 8000  # can be increased if GPU memory allows
 
         c, self.t_w, self.t_h = template.shape
         template_flatten = template.reshape(c, self.t_w * self.t_h).transpose(1, 0)
