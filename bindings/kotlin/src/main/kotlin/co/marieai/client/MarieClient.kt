@@ -13,7 +13,6 @@ import io.grpc.Metadata
 class MarieClient(
     private val channel: ManagedChannel
 ) : Closeable {
-    //    private val stub: JinaRPCGrpcKt.JinaRPCCoroutineStub = JinaRPCGrpcKt.JinaRPCCoroutineStub(channel)
     private val stub: JinaSingleDataRequestRPCGrpcKt.JinaSingleDataRequestRPCCoroutineStub =
         JinaSingleDataRequestRPCGrpcKt.JinaSingleDataRequestRPCCoroutineStub(channel)
 
