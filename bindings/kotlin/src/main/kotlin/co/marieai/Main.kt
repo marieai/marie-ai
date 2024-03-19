@@ -5,6 +5,7 @@ import co.marieai.client.TemplateMatcherClient
 import co.marieai.model.BBox
 import co.marieai.model.TemplateSelector
 import co.marieai.model.TemplateMatchingRequest
+import io.grpc.ManagedChannel
 import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,15 +20,7 @@ fun generateRequestId() = (1..16)
     .map { Random.nextInt(0, charPool.size).let { charPool[it] } }
     .joinToString("")
 
-fun getClient(url: URI): MarieClient {
-    val channelBuilder = ManagedChannelBuilder.forAddress(url.host, url.port)
-        // In case you are sending large data like images
-        .maxInboundMessageSize(1024 * 1024 * 1024)
-    if (url.scheme == "grpc") {
-        channelBuilder.usePlaintext()
-    }
-    return MarieClient(channelBuilder.build())
-}
+
 
 private fun createRequest(): TemplateMatchingRequest {
     val filePath = "../../assets/template_matching/sample-005.png"
@@ -60,7 +53,7 @@ private fun createRequest(): TemplateMatchingRequest {
 }
 
 suspend fun main() {
-    val client = TemplateMatcherClient(getClient(URI("grpc://127.0.0.1:52000")))
+    val client = TemplateMatcherClient( URI("grpc://127.0.0.1:52000") )
 
     var maxWaitTime: Long = 10_000
     val waitTime: Long = 1000

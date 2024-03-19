@@ -116,8 +116,6 @@ class DataRequest(Request):
         self._document_array_cls = DocumentArray
         self._data = None
 
-        print("DataRequest.__init__")
-        print(request)
         try:
             if isinstance(request, jina_pb2.DataRequestProto):
                 self._pb_body = request
