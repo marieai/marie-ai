@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from docarray import DocList
 from docarray.base_doc.doc import BaseDocWithoutId
+from pydantic import BaseModel
 
 from marie import Executor, requests, safely_encoded
 from marie.api.docs import AssetKeyDoc, BaseDoc
@@ -29,7 +30,35 @@ class TemplateMatchingResultDoc(BaseDoc, frozen=True):
     results: List[TemplateMatchResultDoc]
 
 
+class TemplateSelector(BaseDocWithoutId, frozen=True):
+    region: List[int]
+    frame: str
+    bbox: List[int]
+    label: str
+    text: str
+    create_window: bool
+    top_k: int
+
+
+class TemplateMatchingRequestDoc(BaseDoc):
+    asset_key: str
+    id: str
+    pages: List[int]
+    score_threshold: float
+    scoring_strategy: str
+    max_overlap: float
+    window_size: List[int]
+    matcher: str
+    downscale_factor: int
+    selectors: List[TemplateSelector]
+
+
 def convert_to_protobuf_doc(match: TemplateMatchResult) -> TemplateMatchResultDoc:
+    """
+    Convert a TemplateMatchResult to a TemplateMatchResultDoc
+    :param match:
+    :return: protobuf serializable TemplateMatchResultDoc
+    """
     return TemplateMatchResultDoc(
         bbox=match.bbox,
         label=match.label,
@@ -89,7 +118,13 @@ class TemplateMatchingExecutor(Executor):
         logger.info(f"Pipeline : {pipeline}")
 
     @requests(on="/document/matcher")
-    def match(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+    def match(
+        self,
+        docs: DocList[TemplateMatchingRequestDoc],
+        parameters: dict,
+        *args,
+        **kwargs,
+    ):
         print("TEMPLATE MATCHING EXECUTOR")
         print(parameters)
         print(docs)

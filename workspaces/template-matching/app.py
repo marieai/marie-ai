@@ -353,9 +353,9 @@ def main():
             matcher_composite, matcher_meta, matcher_vqnnft = get_template_matchers()
             matcher = matcher_composite
 
-            if matching_mode == "VQNNF":
+            if matching_mode.upper() == "VQNNF":
                 matcher = matcher_vqnnft
-            elif matching_mode == "Meta":
+            elif matching_mode.upper() == "META":
                 matcher = matcher_meta
 
             window_size = (window_size_h, window_size_w)
