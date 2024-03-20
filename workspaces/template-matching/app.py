@@ -460,6 +460,11 @@ def main():
             st.image(pil_image)
 
 
+#
+# import cProfiler
+# if __name__ == "__main__":
+#     cProfiler.run("main()")
+
 if __name__ == "__main__":
     main()
 
