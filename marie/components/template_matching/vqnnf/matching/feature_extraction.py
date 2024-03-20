@@ -33,11 +33,6 @@ class PixelFeatureExtractor:
                 self.model = EfficientNetHyperColumn(
                     model_name, 3, num_features, weights_path=weights_path
                 ).to(self.device)
-                # self.model.eval()
-                # self.model.to("cpu")
-                # self.model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
-                # torch.quantization.prepare(self.model, inplace=True)
-                # torch.quantization.convert(self.model, inplace=True)
                 if False:
                     try:
                         import torch._dynamo as dynamo
@@ -52,9 +47,11 @@ class PixelFeatureExtractor:
             self.model = None
 
         self.transform = ToTensor(self.device)
+        # self.augment = aug.Compose([aug.Normalize(p=1, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)) ])
         self.augment = aug.Compose([aug.Normalize(p=1)])
 
     def get_color_features(self, image):
+        print(f"Image shape: {image.shape} GET COLOR FEATURES ")
         # get color features in 3x3 neighborhood as vector of each pixel in image
         with torch.no_grad():
             image_torch = self.transform(image) / 255
@@ -75,14 +72,27 @@ class PixelFeatureExtractor:
         return image_feature
 
     def get_features(self, image):
-        with torch.no_grad():
-            if self.num_features == 27:
-                image_feature = self.get_color_features(image)
-            else:
-                self.model.eval()
-                augmented = self.augment(image=image)
-                image_norm = augmented["image"]
-                image_norm_torch = self.transform(image_norm)
-                image_feature = self.model(image_norm_torch.unsqueeze(0)).squeeze(0)
+        print(f"Image shape: {image.shape} GET FEATURES ")
+        from marie.logging.profile import TimeContext, TimeContextCuda
+
+        def log_cuda_time(cuda_time):
+            print(f"FEATURE CUDA : {cuda_time}")
+            # logger.warning(f"CUDA : {cuda_time}")
+            # write to the text file
+            # with open("/tmp/cuda_time_autocast_compiled.txt", "a") as f:
+            #     f.write(f"{cuda_time}, {len(src_images)}, {amp_enabled}\n")
+
+        with TimeContextCuda(
+            "Feature inference", logger=None, enabled=True, callback=log_cuda_time
+        ):
+            with torch.no_grad():
+                if self.num_features == 27:
+                    image_feature = self.get_color_features(image)
+                else:
+                    self.model.eval()
+                    augmented = self.augment(image=image)
+                    image_norm = augmented["image"]
+                    image_norm_torch = self.transform(image_norm)
+                    image_feature = self.model(image_norm_torch.unsqueeze(0)).squeeze(0)
 
         return image_feature

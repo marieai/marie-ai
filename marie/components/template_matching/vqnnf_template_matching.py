@@ -41,6 +41,9 @@ def get_embedding_feature(image: np.ndarray, words: list, boxes: list) -> np.nda
     return embedding.embeddings
 
 
+cached_embeddings = {}
+
+
 class VQNNFTemplateMatcher(BaseTemplateMatcher):
     """
     Efficient High-Resolution Template Matching with Vector Quantized Nearest Neighbour Fields
@@ -104,7 +107,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
-        self.feature_extractor_sim = self.feature_extractor
+        # self.feature_extractor_sim = self.feature_extractor
 
     def predict(
         self,
@@ -133,9 +136,15 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         for idx, (template_raw, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
         ):
-            # print("template_label", template_label)
-            # print("template_bbox", template_bbox)
+            print("template_label", template_label)
+            print("template_bbox", template_bbox)
+
+            print("template_raw", template_raw.shape)
+            print("frame", frame.shape)
+
             x, y, w, h = [int(t) for t in template_bbox]
+            cache_key = f"key_{x}_{y}_{w}_{h}"
+            print("cache_key", cache_key)
 
             template_plot = cv2.rectangle(
                 template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
@@ -146,7 +155,13 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
-            template_image_features = feature_extractor.get_features(template_image)
+
+            if cache_key not in cached_embeddings:
+                cached_embeddings[cache_key] = feature_extractor.get_features(
+                    template_image
+                )
+
+            template_image_features = cached_embeddings[cache_key]
 
             temp_x, temp_y, temp_w, temp_h = template_bbox
             temp_x = int(max(temp_x, 0))
@@ -180,17 +195,12 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             )
 
             query_image_features = feature_extractor.get_features(query_image)
-
-            torch.cuda.synchronize()
-            t1 = time.time()
             (
                 heatmap,
                 filt_heatmaps,
                 template_nnf,
                 query_nnf,
             ) = template_matcher.get_heatmap(query_image_features)
-            torch.cuda.synchronize()
-            t2 = time.time()
 
             query_w, query_h = template_bbox[3], template_bbox[2]
 
@@ -241,7 +251,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 )
             )
 
-            if False:  # verbose:
+            if True:  # verbose:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_template_nnf.png",
                     cv2.applyColorMap(
@@ -270,7 +280,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     ),
                 )
 
-            if False:
+            if True:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
                     query_pred_snippet,
@@ -293,24 +303,32 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
     ) -> float:
 
         # resize the images to be the same size
-        t = resize_image(template_snippet, (224, 224))[0]
-        q = resize_image(query_pred_snippet, (224, 224))[0]
+        # 224x224 is the default size for the efficientnet model
+        # 384x384 is the default size for the efficientnet_v2_s model
 
-        template_snippet_features = self.feature_extractor_sim.get_features(t)
-        query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
-
+        # we use the 224x224 for the feature extraction and the 384x384 for the embedding extraction
+        t_clip = resize_image(template_snippet, (224, 224))[0]
+        q_clip = resize_image(query_pred_snippet, (224, 224))[0]
         cosine = nn.CosineSimilarity(dim=1)
-        feature_sim = cosine(
-            template_snippet_features.reshape(1, -1),
-            query_pred_snippet_features.reshape(1, -1),
-        )
 
+        if False:
+            t = resize_image(template_snippet, (480, 480))[0]
+            q = resize_image(query_pred_snippet, (480, 480))[0]
+
+            template_snippet_features = self.feature_extractor_sim.get_features(t)
+            query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
+
+            feature_sim = cosine(
+                template_snippet_features.reshape(1, -1),
+                query_pred_snippet_features.reshape(1, -1),
+            )
+        feature_sim = 1.0
         # TODO : add the embedding similarity for the text
         words = []
         boxes = []
 
-        template_snippet_features = get_embedding_feature(t, words=[], boxes=[])
-        query_pred_snippet_features = get_embedding_feature(q, words=[], boxes=[])
+        template_snippet_features = get_embedding_feature(t_clip, words=[], boxes=[])
+        query_pred_snippet_features = get_embedding_feature(q_clip, words=[], boxes=[])
 
         embedding_sim = cosine(
             torch.from_numpy(template_snippet_features.reshape(1, -1)),
@@ -318,7 +336,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         )
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
-        feature_sim = feature_sim.cpu().numpy()[0]
+        # feature_sim = feature_sim.cpu().numpy()[0]
 
         # we already know that the feature similarity is very high for the same image so we can use it as a weight
         if scoring_strategy == "weighted":

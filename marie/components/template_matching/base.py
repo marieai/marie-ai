@@ -195,8 +195,6 @@ class BaseTemplateMatcher(ABC):
                 interpolation=cv2.INTER_AREA,
             )
 
-            # cv2.imwrite(f"/tmp/dim/frame_downscaled_{i}.png", frame)
-
             # for profiling
             durations_in_seconds = dict()
             # currently only 1 batch supported
@@ -221,7 +219,7 @@ class BaseTemplateMatcher(ABC):
             slice_image_result = slice_image(
                 image=image,
                 output_file_name=output_file_name,  # ADDED OUTPUT FILE NAME TO (OPTIONALLY) SAVE SLICES
-                output_dir="/tmp/dim/slices",  # ADDED INTERIM DIRECTORY TO (OPTIONALLY) SAVE SLICES
+                output_dir=None,  # "/tmp/dim/slices",  # ADDED INTERIM DIRECTORY TO (OPTIONALLY) SAVE SLICES
                 slice_height=slice_height,
                 slice_width=slice_width,
                 overlap_height_ratio=overlap_height_ratio,
@@ -230,9 +228,6 @@ class BaseTemplateMatcher(ABC):
             )
 
             num_slices = len(slice_image_result)
-
-            print("Number of slices: ", num_slices)
-
             time_end = time.time() - time_start
             durations_in_seconds["slice"] = time_end
 
