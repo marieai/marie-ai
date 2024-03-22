@@ -6,24 +6,24 @@ import torch.nn.functional as F
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
-DEVICE = 'cuda'
+DEVICE = "cuda"
 
 
 def model_eff_b0():
     model = timm.create_model(
-        'efficientnet_b0',
+        "efficientnet_b0",
         pretrained=True,
         features_only=True,
         out_indices=[0, 1, 2, 3, 4],
     )
     checkpoint = torch.load(
         os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/efficientnet_b0/ef_model_pretrained_49_True.pth'
+            "~/dev/grapnel-tooling/outputs/efficientnet_b0/ef_model_pretrained_49_True.pth"
         ),
         map_location=DEVICE,
     )
-    print('Loading trained model weights...')
-    model_state_dict = checkpoint['model_state_dict']
+    print("Loading trained model weights...")
+    model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
     keys_to_remove = [
         "conv_head.weight",
@@ -45,19 +45,19 @@ def model_eff_b0():
 
 def model_effv2_s():
     model = timm.create_model(
-        'tf_efficientnetv2_s',
+        "tf_efficientnetv2_s",
         pretrained=True,
         features_only=True,
         out_indices=[0, 1, 2, 3, 4],
     )
     checkpoint = torch.load(
         os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_19_True.pth'
+            "~/dev/grapnel-tooling/outputs/ef_model_pretrained_19_True.pth"
         ),
         map_location=DEVICE,
     )
-    print('Loading trained model weights...')
-    model_state_dict = checkpoint['model_state_dict']
+    print("Loading trained model weights...")
+    model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
     keys_to_remove = [
         "conv_head.weight",
@@ -95,9 +95,7 @@ class EfficientNetHyperColumn(nn.Module):
         super().__init__()
         self.stride = stride
         self.num_features = num_features  # 40, 80, 192, 512
-        self.model_type = (
-            "efficientnetv2_s"  # or efficientnetv2_s efficientnet_b0_eff efficientne_b0
-        )
+        self.model_type = "efficientnet_b0_eff"  # or efficientnetv2_s efficientnet_b0_eff efficientne_b0
 
         print(f"testing with {self.model_type}")
 
@@ -113,7 +111,7 @@ class EfficientNetHyperColumn(nn.Module):
         self.model.eval()
 
     def extract_endpoints(self, model, x):
-        if self.model_type == "efficientnet_b0":
+        if self.model_type == "efficientnet_b0_eff":
             return model.extract_endpoints(x)
         elif (
             self.model_type == "efficientnetv2_s" or self.model_type == "efficientne_b0"

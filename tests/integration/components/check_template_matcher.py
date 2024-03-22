@@ -16,7 +16,7 @@ from marie.components.template_matching import (
 from marie.logging.profile import TimeContext
 from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.json import load_json_file
-from marie.utils.resize_image import resize_image
+from marie.utils.resize_image import resize_image, resize_image_progressive
 
 
 def setup_seed(seed: int = 42):
@@ -140,7 +140,7 @@ def check_template_matcher():
 
         for c in template_coords:
             x, y, w, h = c
-            template = frames_t[0][y: y + h, x: x + w, :]
+            template = frames_t[0][y : y + h, x : x + w, :]
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
@@ -175,4 +175,9 @@ def check_template_matcher():
 
 
 if __name__ == "__main__":
-    check_template_matcher()
+    # check_template_matcher()
+    resize_image_progressive(
+        cv2.imread("/home/greg/tmp/demo/PID_114_6529_0_177104346_page_0002.png"),
+        0.25,
+        2,
+    )
