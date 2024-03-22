@@ -7,11 +7,12 @@ import numpy as np
 import seaborn as sns
 import torch
 import torch.nn.functional as F
-from fast_pytorch_kmeans import KMeans
 from scipy import ndimage
 from skimage.color import label2rgb
 from torch import nn
 
+# from fast_pytorch_kmeans import KMeans
+from .kmeans import KMeans
 from .utils import convert_box_to_integral, get_center_crop_coords
 
 HAAR_CONF_DICT = {

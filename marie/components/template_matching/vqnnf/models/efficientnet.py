@@ -14,11 +14,11 @@ def model_eff_b0():
         'efficientnet_b0',
         pretrained=True,
         features_only=True,
-        out_indices=[0, 1, 2, 3, 4, 5],
+        out_indices=[0, 1, 2, 3, 4],
     )
     checkpoint = torch.load(
         os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_18_True.pth'
+            '~/dev/grapnel-tooling/outputs/efficientnet_b0/ef_model_pretrained_49_True.pth'
         ),
         map_location=DEVICE,
     )
@@ -45,14 +45,14 @@ def model_eff_b0():
 
 def model_effv2_s():
     model = timm.create_model(
-        'efficientnetv2_s',
+        'tf_efficientnetv2_s',
         pretrained=True,
         features_only=True,
-        out_indices=[0, 1, 2, 3, 4, 5],
+        out_indices=[0, 1, 2, 3, 4],
     )
     checkpoint = torch.load(
         os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/efficientnetv2_s/ef_model_pretrained_49_False.pth'
+            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_19_True.pth'
         ),
         map_location=DEVICE,
     )
@@ -74,40 +74,7 @@ def model_effv2_s():
             model_state_dict.pop(key)
     model.load_state_dict(model_state_dict)
 
-    return model
-
-
-def model_effv2_m():
-    model = timm.create_model(
-        'efficientnetv2_m',
-        pretrained=False,
-        features_only=True,
-        out_indices=[0, 1, 2, 3, 4, 5],
-    )
-    checkpoint = torch.load(
-        os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_8_False.pth'
-        ),
-        map_location=DEVICE,
-    )
-    print('Loading trained model weights...')
-    model_state_dict = checkpoint['model_state_dict']
-    # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
-    keys_to_remove = [
-        "conv_head.weight",
-        "bn2.weight",
-        "bn2.bias",
-        "bn2.running_mean",
-        "bn2.running_var",
-        "bn2.num_batches_tracked",
-        "classifier.weight",
-        "classifier.bias",
-    ]
-    for key in keys_to_remove:
-        if key in model_state_dict:
-            model_state_dict.pop(key)
-    model.load_state_dict(model_state_dict)
-
+    print(model)
     return model
 
 
@@ -128,21 +95,29 @@ class EfficientNetHyperColumn(nn.Module):
         super().__init__()
         self.stride = stride
         self.num_features = num_features  # 40, 80, 192, 512
-        self.model_type = "efficientnet_b0"  # or efficientnetv2_s
+        self.model_type = (
+            "efficientnetv2_s"  # or efficientnetv2_s efficientnet_b0_eff efficientne_b0
+        )
 
         print(f"testing with {self.model_type}")
 
-        if self.model_type == "efficientnet_b0":
+        if self.model_type == "efficientnet_b0_eff":
             self.model = EfficientNet.from_pretrained(
                 model_name, weights_path=weights_path, advprop=False
             )
         elif self.model_type == "efficientnetv2_s":
-            self.model = model_eff_b0()  # model_effv2_s()
+            self.model = model_effv2_s()
+        elif self.model_type == "efficientne_b0":
+            self.model = model_eff_b0()
+
+        self.model.eval()
 
     def extract_endpoints(self, model, x):
         if self.model_type == "efficientnet_b0":
             return model.extract_endpoints(x)
-        elif self.model_type == "efficientnetv2_s":
+        elif (
+            self.model_type == "efficientnetv2_s" or self.model_type == "efficientne_b0"
+        ):
             return model_eff_v2_s_endpoints(model, x)
 
     def forward(self, x):

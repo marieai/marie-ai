@@ -1,6 +1,8 @@
 import albumentations as aug
 import torch
 
+from marie.logging.profile import TimeContext, TimeContextCuda
+
 from ..models.efficientnet import EfficientNetHyperColumn
 from ..models.resnet import ResNetHyperColumn
 
@@ -33,14 +35,7 @@ class PixelFeatureExtractor:
                 self.model = EfficientNetHyperColumn(
                     model_name, 3, num_features, weights_path=weights_path
                 ).to(self.device)
-                if False:
-                    try:
-                        import torch._dynamo as dynamo
-                        import torchvision.models as models
-
-                        self.model = torch.compile(self.model, mode="default")
-                    except Exception as err:
-                        print(f"Model compile not supported: {err}")
+                self.model.eval()
             else:
                 raise ValueError("Model name must be either resnet or efficientnet")
         else:
@@ -51,7 +46,7 @@ class PixelFeatureExtractor:
         self.augment = aug.Compose([aug.Normalize(p=1)])
 
     def get_color_features(self, image):
-        print(f"Image shape: {image.shape} GET COLOR FEATURES ")
+        # print(f"Image shape: {image.shape} GET COLOR FEATURES ")
         # get color features in 3x3 neighborhood as vector of each pixel in image
         with torch.no_grad():
             image_torch = self.transform(image) / 255
@@ -72,9 +67,6 @@ class PixelFeatureExtractor:
         return image_feature
 
     def get_features(self, image):
-        print(f"Image shape: {image.shape} GET FEATURES ")
-        from marie.logging.profile import TimeContext, TimeContextCuda
-
         def log_cuda_time(cuda_time):
             print(f"FEATURE CUDA : {cuda_time}")
             # logger.warning(f"CUDA : {cuda_time}")
@@ -83,7 +75,7 @@ class PixelFeatureExtractor:
             #     f.write(f"{cuda_time}, {len(src_images)}, {amp_enabled}\n")
 
         with TimeContextCuda(
-            "Feature inference", logger=None, enabled=True, callback=log_cuda_time
+            "Feature inference", logger=None, enabled=False, callback=log_cuda_time
         ):
             with torch.no_grad():
                 if self.num_features == 27:

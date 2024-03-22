@@ -17,6 +17,7 @@ from sahi.slicing import slice_image
 
 from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
+from marie.models.utils import torch_gc
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.resize_image import resize_image
 
@@ -246,6 +247,7 @@ class BaseTemplateMatcher(ABC):
             result_snippets = []
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
+                prediction_time_start = time.time()
                 offset_x, offset_y = offset
                 predictions = self.predict(
                     patch,
@@ -259,6 +261,14 @@ class BaseTemplateMatcher(ABC):
                     words=page_words,
                     word_boxes=page_boxes,
                     word_lines=page_lines,
+                )
+
+                prediction_time_end = time.time() - prediction_time_start
+                durations_in_seconds["prediction"] = prediction_time_end
+                print(
+                    "Slice-prediction performed in",
+                    durations_in_seconds["prediction"],
+                    "seconds.",
                 )
 
                 for prediction in predictions:
@@ -368,6 +378,8 @@ class BaseTemplateMatcher(ABC):
                     durations_in_seconds["prediction"],
                     "seconds.",
                 )
+
+        torch_gc()
 
         return results
 
@@ -541,7 +553,7 @@ class BaseTemplateMatcher(ABC):
         image: np.ndarray,
         template_bboxes: list[tuple[int, int, int, int]],
         window_size: tuple[int, int],
-    ) -> tuple[list[np.ndarray], list[tuple[int]]]:
+    ) -> tuple[list[np.ndarray], list[tuple[int, int, int, int]]]:
         """
         Extract windows snippet from the input image centered around the template bbox and resize it to the desired size.
 
