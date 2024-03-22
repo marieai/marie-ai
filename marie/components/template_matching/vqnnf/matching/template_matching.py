@@ -5,12 +5,14 @@ import cv2
 import numpy as np
 import seaborn as sns
 import torch
-from fast_pytorch_kmeans import KMeans
 from skimage.color import label2rgb
 from skimage.exposure import rescale_intensity
 from torch import nn
 
 from .gauss_haar_filters import GaussHaarFilters
+
+# from fast_pytorch_kmeans import KMeans
+from .kmeans import KMeans
 
 
 class VQNNFMatcher:
@@ -18,7 +20,7 @@ class VQNNFMatcher:
         self,
         template: torch.Tensor,
         pca_dims: int = None,
-        n_code: int = 64,
+        n_code: int = 128,
         filters_cat: str = "haar",
         filter_params: dict = None,
         verbose: bool = False,
@@ -30,8 +32,6 @@ class VQNNFMatcher:
 
         c, self.t_w, self.t_h = template.shape
         template_flatten = template.reshape(c, self.t_w * self.t_h).transpose(1, 0)
-
-        torch.cuda.synchronize()
         t1 = time.time()
 
         if pca_dims is not None:
@@ -45,11 +45,13 @@ class VQNNFMatcher:
         self.n_code = (
             n_code if template_flatten.shape[0] > n_code else template_flatten.shape[0]
         )
-        clusterer = KMeans(n_clusters=self.n_code)
+
+        clusterer = KMeans(
+            n_clusters=self.n_code, max_iter=25, device=torch.device(self.device)
+        )
         template_nnf = clusterer.fit_predict(template_flatten)
         self.codebook = clusterer.centroids
 
-        torch.cuda.synchronize()
         self.kmeans_time = time.time() - t1
 
         self.pool1d = nn.MaxPool1d(kernel_size=self.n_code, return_indices=True)
@@ -89,7 +91,8 @@ class VQNNFMatcher:
 
     def get_nnf(self, x: torch.Tensor):
         d, w, h = x.shape
-        chunks = torch.split(x.reshape(d, w * h).transpose(1, 0), self.n_chunks, dim=0)
+        x = x.reshape(d, w * h).transpose(1, 0)
+        chunks = torch.split(x, self.n_chunks, dim=0)
 
         nnf_idxs = []
         sim_vals = []
@@ -108,10 +111,10 @@ class VQNNFMatcher:
         sim_vals = -torch.cat(sim_vals).transpose(0, 1).reshape(1, w, h)
         sim_one_hots = -torch.cat(sim_one_hots).transpose(0, 1).reshape(-1, w, h)
         one_hots = torch.cat(one_hots).transpose(0, 1).reshape(-1, w, h)
-        nnf = one_hots.argmax(dim=0).cpu().numpy()
+
         if self.verbose:
-            nnf = label2rgb(nnf, colors=self.colors)
-            # cv2.imwrite("/tmp/dim/nnf.png", nnf * 255)
+            nnf = one_hots.argmax(dim=0)
+            nnf = label2rgb(nnf.cpu().numpy(), colors=self.colors)
 
         return one_hots, nnf_idxs, sim_vals
 
@@ -126,9 +129,12 @@ class VQNNFMatcher:
                 integral_onehot.unsqueeze(0)
             )
 
-        t = query_nnf
-        query_nnf = query_nnf.cpu().numpy()
+        query_XXXX = None
+        self.verbose = False
         if self.verbose:
+            t = query_nnf
+            query_nnf = query_nnf.cpu().numpy()
+
             all_filt_sim = [
                 rescale_intensity(filt_sim, out_range=(0, 1))
                 for filt_sim in all_filt_sim

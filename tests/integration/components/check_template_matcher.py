@@ -28,7 +28,7 @@ def setup_seed(seed: int = 42):
     torch.backends.cudnn.deterministic = True
 
 
-def test_template_matcher():
+def check_template_matcher():
     # kwargs = {"__model_path__": __model_path__}
     setup_seed(42)
 
@@ -140,7 +140,7 @@ def test_template_matcher():
 
         for c in template_coords:
             x, y, w, h = c
-            template = frames_t[0][y : y + h, x : x + w, :]
+            template = frames_t[0][y: y + h, x: x + w, :]
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
@@ -155,20 +155,24 @@ def test_template_matcher():
             template_texts.append(samples[key].get("text", ""))
 
             # cv2.imwrite(f"/tmp/dim/template.png", template)
+        for k in range(3):
+            with TimeContext(f"Eval # {i}"):
+                results = matcher.run(
+                    frames=frames,
+                    # TODO: convert to Pydantic model
+                    template_frames=template_frames,
+                    template_boxes=template_bboxes,
+                    template_labels=template_labels,
+                    template_texts=template_texts,
+                    metadata=ocr_results,
+                    score_threshold=0.80,
+                    max_overlap=0.5,
+                    max_objects=2,
+                    window_size=window_size,
+                    downscale_factor=1,
+                )
+                print(results)
 
-        with TimeContext(f"Eval # {i}"):
-            results = matcher.run(
-                frames=frames,
-                # TODO: convert to Pydantic model
-                template_frames=template_frames,
-                template_boxes=template_bboxes,
-                template_labels=template_labels,
-                template_texts=template_texts,
-                metadata=ocr_results,
-                score_threshold=0.80,
-                max_overlap=0.5,
-                max_objects=2,
-                window_size=window_size,
-                downscale_factor=1,
-            )
-            print(results)
+
+if __name__ == "__main__":
+    check_template_matcher()

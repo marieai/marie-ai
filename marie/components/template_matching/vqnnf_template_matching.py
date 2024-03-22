@@ -28,20 +28,28 @@ embeddings_processor = OpenAIEmbeddings(
     # model_name_or_path="hf://openai/clip-vit-base-patch32"
 )
 
+cached_embeddings = {}
+cached_embeddings_clips = {}
+
 
 def get_embedding_feature(image: np.ndarray, words: list, boxes: list) -> np.ndarray:
+    key = image.tobytes()
+    if key in cached_embeddings_clips:
+        return cached_embeddings_clips[key]
+
     # This is a pre-processing step to get the embeddings for the words and boxes in the image
     # this is critical for the similarity calculation that we resize with PADDING and not just scaling
-    image = resize_image(image, (224, 224))[0]
+    # image = resize_image(image, (224, 224))[0]
+    if image.shape[0] != 224 or image.shape[1] != 224:
+        raise ValueError("Image must be 224x224")
+
     image1 = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     embedding = embeddings_processor.get_embeddings(
         texts=words, boxes=boxes, image=image1
     )
 
+    cached_embeddings_clips[key] = embedding.embeddings
     return embedding.embeddings
-
-
-cached_embeddings = {}
 
 
 class VQNNFTemplateMatcher(BaseTemplateMatcher):
@@ -104,10 +112,11 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         self.rect_haar_filter = 1
         self.scale = 3
         self.pca_dim = 128
+
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
-        # self.feature_extractor_sim = self.feature_extractor
+        self.feature_extractor_sim = self.feature_extractor
 
     def predict(
         self,
@@ -132,35 +141,20 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         hs = []
 
         predictions = []
+        query_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        query_image_features = feature_extractor.get_features(query_image)
 
-        for idx, (template_raw, template_bbox, template_label) in enumerate(
+        for idx, (template_image, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
         ):
-            print("template_label", template_label)
-            print("template_bbox", template_bbox)
-
-            print("template_raw", template_raw.shape)
-            print("frame", frame.shape)
-
             x, y, w, h = [int(t) for t in template_bbox]
             cache_key = f"key_{x}_{y}_{w}_{h}"
-            print("cache_key", cache_key)
-
-            template_plot = cv2.rectangle(
-                template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
-            )
-
-            template_image = template_raw.copy()
-            query_image = frame.copy()
-
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
-            query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
             if cache_key not in cached_embeddings:
                 cached_embeddings[cache_key] = feature_extractor.get_features(
                     template_image
                 )
-
             template_image_features = cached_embeddings[cache_key]
 
             temp_x, temp_y, temp_w, temp_h = template_bbox
@@ -170,14 +164,17 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
 
-            if True:
-                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
-                cv2.imwrite("/tmp/dim/query_image.png", query_image)
-                cv2.imwrite("/tmp/dim/template_image.png", template_image)
-                # clip the template image to the bounding box
+            if False:
+                template_plot = cv2.rectangle(
+                    template_image.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
+                )
                 fragment = template_image[
                     temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
                 ]
+
+                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
+                cv2.imwrite("/tmp/dim/query_image.png", query_image)
+                cv2.imwrite("/tmp/dim/template_image.png", template_image)
                 cv2.imwrite("/tmp/dim/template_bbox_fragment.png", fragment)
 
             template_matcher = VQNNFMatcher(
@@ -191,10 +188,9 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     "n_scales": self.scale,
                     "filters": self.rect_haar_filter,
                 },
-                verbose=True,
+                verbose=False,
             )
 
-            query_image_features = feature_extractor.get_features(query_image)
             (
                 heatmap,
                 filt_heatmaps,
@@ -251,7 +247,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 )
             )
 
-            if True:  # verbose:
+            if False:  # verbose:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_template_nnf.png",
                     cv2.applyColorMap(
@@ -280,7 +276,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     ),
                 )
 
-            if True:
+            if False:
                 cv2.imwrite(
                     f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
                     query_pred_snippet,
@@ -301,20 +297,17 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
     def score(
         self, template_snippet, query_pred_snippet, scoring_strategy: str
     ) -> float:
-
         # resize the images to be the same size
         # 224x224 is the default size for the efficientnet model
-        # 384x384 is the default size for the efficientnet_v2_s model
-
         # we use the 224x224 for the feature extraction and the 384x384 for the embedding extraction
         t_clip = resize_image(template_snippet, (224, 224))[0]
         q_clip = resize_image(query_pred_snippet, (224, 224))[0]
         cosine = nn.CosineSimilarity(dim=1)
 
-        if False:
-            t = resize_image(template_snippet, (480, 480))[0]
-            q = resize_image(query_pred_snippet, (480, 480))[0]
+        t = t_clip
+        q = q_clip
 
+        if True:
             template_snippet_features = self.feature_extractor_sim.get_features(t)
             query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
 
@@ -322,10 +315,10 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 template_snippet_features.reshape(1, -1),
                 query_pred_snippet_features.reshape(1, -1),
             )
-        feature_sim = 1.0
-        # TODO : add the embedding similarity for the text
-        words = []
-        boxes = []
+
+            # TODO : add the embedding similarity for the text
+            words = []
+            boxes = []
 
         template_snippet_features = get_embedding_feature(t_clip, words=[], boxes=[])
         query_pred_snippet_features = get_embedding_feature(q_clip, words=[], boxes=[])
@@ -336,12 +329,13 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         )
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
-        # feature_sim = feature_sim.cpu().numpy()[0]
+        feature_sim = feature_sim.cpu().numpy()[0]
+        # feature_sim = 1
 
         # we already know that the feature similarity is very high for the same image so we can use it as a weight
         if scoring_strategy == "weighted":
-            embedding_weight = 0.80
-            feature_weight = 0.20
+            embedding_weight = 0.95
+            feature_weight = 0.05
             sim_val = (feature_sim * feature_weight) + (
                 embedding_sim * embedding_weight
             )
@@ -349,6 +343,5 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             sim_val = max(feature_sim, embedding_sim)
         else:
             sim_val = (feature_sim + embedding_sim) / 2
-        # clip the similarity value to 1
         sim_val = max(0, min(1, sim_val))
         return sim_val
