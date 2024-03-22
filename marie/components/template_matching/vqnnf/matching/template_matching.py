@@ -29,6 +29,7 @@ class VQNNFMatcher:
         self.device = template.device
         self.eps = 1e-6
         self.n_chunks = 8000  # can be increased if GPU memory allows
+        self.verbose = verbose
 
         c, self.t_w, self.t_h = template.shape
         template_flatten = template.reshape(c, self.t_w * self.t_h).transpose(1, 0)
@@ -66,7 +67,6 @@ class VQNNFMatcher:
         ).float()
         cumsum_onehot = one_hot_nnf.cumsum(dim=2).cumsum(dim=3)
 
-        self.verbose = verbose
         if self.verbose:
             self.colors = sns.color_palette(cc.glasbey, self.n_code)
             self.template_nnf = label2rgb(
@@ -130,7 +130,6 @@ class VQNNFMatcher:
             )
 
         query_XXXX = None
-        self.verbose = False
         if self.verbose:
             t = query_nnf
             query_nnf = query_nnf.cpu().numpy()

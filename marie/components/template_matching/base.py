@@ -19,7 +19,6 @@ from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.ocr.util import get_words_and_boxes
-from marie.utils.resize_image import resize_image
 
 POSTPROCESS_NAME_TO_CLASS = {
     "GREEDYNMM": GreedyNMMPostprocess,
@@ -416,13 +415,16 @@ class BaseTemplateMatcher(ABC):
         :return:
         """
 
+        colors = {label: np.random.randint(0, 255, 3).tolist() for label in set(labels)}
         for bbox, label, score in zip(bboxes, labels, scores):
             if border_only:
+                print('color', colors[label])
                 cv2.rectangle(
                     frame,
                     (bbox[0], bbox[1]),
                     (bbox[0] + bbox[2], bbox[1] + bbox[3]),
-                    (0, 255, 0),
+                    # (0, 255, 0),
+                    colors[label],
                     2,
                 )
             else:
@@ -431,7 +433,7 @@ class BaseTemplateMatcher(ABC):
                     overlay,
                     (bbox[0], bbox[1]),
                     (bbox[0] + bbox[2], bbox[1] + bbox[3]),
-                    (0, 255, 0),  # color of the overlay
+                    colors[label],  # color of the overlay
                     -1,
                 )
                 alpha = 0.5
@@ -551,15 +553,17 @@ class BaseTemplateMatcher(ABC):
     @staticmethod
     def extract_windows(
         image: np.ndarray,
-        template_bboxes: list[tuple[int, int, int, int]],
+        template_bboxes: list[Union[tuple[int, int, int, int], list[int]]],
         window_size: tuple[int, int],
+        allow_padding: bool = False,
     ) -> tuple[list[np.ndarray], list[tuple[int, int, int, int]]]:
         """
         Extract windows snippet from the input image centered around the template bbox and resize it to the desired size.
 
         :param image: input image in the format (h, w, c) to extract the windows from
         :param template_bboxes: list of bboxes in the format (x, y, w, h)
-        :param window_size: (h, w)
+        :param window_size: (h, w) size of the window to extract
+        :param allow_padding:  whether to allow padding the image to the desired size if it is smaller than the window size
         :return: list of windows and list of bboxes
         """
 
@@ -568,6 +572,23 @@ class BaseTemplateMatcher(ABC):
 
         img_h, img_w = image.shape[:2]
         desired_h, desired_w = window_size
+
+        if img_h < window_size[0] or img_w < window_size[1]:
+            if not allow_padding:
+                raise ValueError(
+                    f"Image size should be greater than the window size, expected {window_size} but got {image.shape[:2]}"
+                )
+
+            image = cv2.copyMakeBorder(
+                image,
+                0,
+                max(0, window_size[0] - img_h),
+                0,
+                max(0, window_size[1] - img_w),
+                cv2.BORDER_CONSTANT,
+                value=(255, 255, 255),
+            )
+            img_h, img_w = image.shape[:2]
 
         for box in template_bboxes:
             x_, y_, w_, h_ = box  # x, y, w, h
@@ -586,10 +607,6 @@ class BaseTemplateMatcher(ABC):
                 y = img_h - h
 
             window = image[y : y + h, x : x + w, :]
-            if True:
-                cv2.imwrite(f"/tmp/dim/template/window_{x}_{y}_{w}_{h}.png", window)
-
-            # calculate the new bbox relative to the window
             coord = center_x - x - w_ // 2, center_y - y - h_ // 2, w_, h_
             if window.shape[0] != window_size[0] or window.shape[1] != window_size[1]:
                 raise Exception(

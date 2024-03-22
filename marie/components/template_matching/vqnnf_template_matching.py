@@ -107,7 +107,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
         self.device = resolved_devices[0]
         self.model_name = "efficientnet-b0"
-        self.n_feature = 512
+        self.n_feature = 192
         self.n_code = 128
         self.rect_haar_filter = 1
         self.scale = 3
@@ -143,6 +143,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         predictions = []
         query_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         query_image_features = feature_extractor.get_features(query_image)
+        topK = 3
 
         for idx, (template_image, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
@@ -164,7 +165,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
 
-            if False:
+            if True:
                 template_plot = cv2.rectangle(
                     template_image.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
                 )
@@ -188,7 +189,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     "n_scales": self.scale,
                     "filters": self.rect_haar_filter,
                 },
-                verbose=False,
+                verbose=True,
             )
 
             (
@@ -200,98 +201,127 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
             query_w, query_h = template_bbox[3], template_bbox[2]
 
-            query_x, query_y = np.unravel_index(np.argmax(heatmap), heatmap.shape)
-            query_x = int(query_x + 1 - (odd(query_w) - 1) / 2)
-            query_y = int(query_y + 1 - (odd(query_h) - 1) / 2)
+            for k in range(topK):
+                query_x, query_y = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+                query_x = int(query_x + 1 - (odd(query_w) - 1) / 2)
+                query_y = int(query_y + 1 - (odd(query_h) - 1) / 2)
 
-            xs.append(query_y)
-            ys.append(query_x)
-            ws.append(
-                query_h
-            )  # This looks like a bug, but it's not. we have to swap h and w here
-            hs.append(query_w)
+                xs.append(query_y)
+                ys.append(query_x)
+                ws.append(
+                    query_h
+                )  # This looks like a bug, but it's not. we have to swap h and w here
+                hs.append(query_w)
 
-            # This looks like a bug, but it's not. we have to swap h and w here
-            qxs = query_y
-            qys = query_x
-            qws = query_h
-            qhs = query_w
+                # This looks like a bug, but it's not. we have to swap h and w here
+                qxs = query_y
+                qys = query_x
+                qws = query_h
+                qhs = query_w
 
-            query_pred_snippet = query_image[
-                qys : qys + qhs, qxs : qxs + qws, :
-            ]  # three channels
+                query_pred_snippet = query_image[
+                    qys : qys + qhs, qxs : qxs + qws, :
+                ]  # three channels
 
-            template_snippet = template_image[
-                max(temp_y, 0) : min(temp_y + temp_h, template_image.shape[0]),
-                max(temp_x, 0) : min(temp_x + temp_w, template_image.shape[1]),
-                :,
-            ]
-            image_pd = (qxs, qys, qws, qhs)
-            if template_snippet.shape != query_pred_snippet.shape:
-                query_pred_snippet = cv2.resize(
-                    query_pred_snippet,
-                    (template_snippet.shape[1], template_snippet.shape[0]),
+                template_snippet = template_image[
+                    max(temp_y, 0) : min(temp_y + temp_h, template_image.shape[0]),
+                    max(temp_x, 0) : min(temp_x + temp_w, template_image.shape[1]),
+                    :,
+                ]
+                image_pd = (qxs, qys, qws, qhs)
+                if template_snippet.shape != query_pred_snippet.shape:
+                    if template_snippet.shape[0] == 0 or template_snippet.shape[1] == 0:
+                        self.logger.warning("Template snippet is empty")
+                        continue
+                    if (
+                        query_pred_snippet.shape[0] == 0
+                        or query_pred_snippet.shape[1] == 0
+                    ):
+                        self.logger.warning("Query snippet is empty")
+                        continue
+                    query_pred_snippet = cv2.resize(
+                        query_pred_snippet,
+                        (template_snippet.shape[1], template_snippet.shape[0]),
+                    )
+
+                sim_val = self.score(
+                    template_snippet, query_pred_snippet, scoring_strategy
+                )
+                if sim_val < score_threshold:
+                    break
+
+                predictions.append(
+                    TemplateMatchResult(
+                        bbox=image_pd,
+                        label=template_label,
+                        score=sim_val,
+                        similarity=sim_val,
+                        frame_index=-1,
+                    )
                 )
 
-            sim_val = self.score(template_snippet, query_pred_snippet, scoring_strategy)
-            if sim_val < score_threshold:
-                continue
-
-            predictions.append(
-                TemplateMatchResult(
-                    bbox=image_pd,
-                    label=template_label,
-                    score=sim_val,
-                    similarity=sim_val,
-                    frame_index=-1,
-                )
-            )
-
-            if False:  # verbose:
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_template_nnf.png",
-                    cv2.applyColorMap(
-                        (
+                if False:  # verbose:
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_template_nnf.png",
+                        cv2.applyColorMap(
                             (
-                                (template_nnf - template_nnf.min())
-                                / (template_nnf.max() - template_nnf.min())
-                            )
-                            * 255
-                        ).astype(np.uint8),
-                        cv2.COLORMAP_JET,
-                    ),
-                )
+                                (
+                                    (template_nnf - template_nnf.min())
+                                    / (template_nnf.max() - template_nnf.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_query_nnf.png",
-                    cv2.applyColorMap(
-                        (
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_query_nnf.png",
+                        cv2.applyColorMap(
                             (
-                                (query_nnf - query_nnf.min())
-                                / (query_nnf.max() - query_nnf.min())
-                            )
-                            * 255
-                        ).astype(np.uint8),
-                        cv2.COLORMAP_JET,
-                    ),
-                )
+                                (
+                                    (query_nnf - query_nnf.min())
+                                    / (query_nnf.max() - query_nnf.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-            if False:
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_query_pd_snippet_{round(sim_val, 3)}.png",
-                    query_pred_snippet,
-                )
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_template_snippet_{round(sim_val, 3)}.png",
-                    template_snippet,
-                )
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_heatmap.png",
+                        cv2.applyColorMap(
+                            (
+                                (
+                                    (heatmap - heatmap.min())
+                                    / (heatmap.max() - heatmap.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-            if True:
-                stacked = np.hstack((template_snippet, query_pred_snippet))
-                cv2.imwrite(
-                    f"/tmp/dim/final/stacked_{idx}_{round(sim_val, 3)}.png",
-                    stacked,
-                )
+                if False:
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_query_pd_snippet_{round(sim_val, 3)}.png",
+                        query_pred_snippet,
+                    )
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_template_snippet_{round(sim_val, 3)}.png",
+                        template_snippet,
+                    )
+
+                if True:
+                    stacked = np.hstack((template_snippet, query_pred_snippet))
+                    cv2.imwrite(
+                        f"/tmp/dim/final/stacked_{idx}_{k}__{round(sim_val, 3)}.png",
+                        stacked,
+                    )
+
+                # set all the values to a low valu on heatmap to avoid duplicates in the next iteration
+                heatmap[qys : qys + qhs, qxs : qxs + qws] = -0.82
         return predictions
 
     def score(
@@ -312,8 +342,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
 
             feature_sim = cosine(
-                template_snippet_features.reshape(1, -1),
-                query_pred_snippet_features.reshape(1, -1),
+                template_snippet_features.view(1, -1),
+                query_pred_snippet_features.view(1, -1),
             )
 
             # TODO : add the embedding similarity for the text
@@ -324,13 +354,12 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         query_pred_snippet_features = get_embedding_feature(q_clip, words=[], boxes=[])
 
         embedding_sim = cosine(
-            torch.from_numpy(template_snippet_features.reshape(1, -1)),
-            torch.from_numpy(query_pred_snippet_features.reshape(1, -1)),
+            torch.from_numpy(template_snippet_features).view(1, -1),
+            torch.from_numpy(query_pred_snippet_features).view(1, -1),
         )
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
         feature_sim = feature_sim.cpu().numpy()[0]
-        # feature_sim = 1
 
         # we already know that the feature similarity is very high for the same image so we can use it as a weight
         if scoring_strategy == "weighted":

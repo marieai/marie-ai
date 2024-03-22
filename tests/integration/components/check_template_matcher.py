@@ -16,7 +16,7 @@ from marie.components.template_matching import (
 from marie.logging.profile import TimeContext
 from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.json import load_json_file
-from marie.utils.resize_image import resize_image
+from marie.utils.resize_image import resize_image, resize_image_progressive
 
 
 def setup_seed(seed: int = 42):
@@ -60,7 +60,8 @@ def check_template_matcher():
         frames = frames_from_docs(
             # docs_from_file("./assets/template_matching/sample-001-exact.png")
             # docs_from_file("./assets/template_matching/sample-005.png")
-            docs_from_file("./assets/template_matching/sample-001.png")
+            # docs_from_file("./assets/template_matching/sample-001.png")
+            docs_from_file("./assets/template_matching/sample-006.png")
             # docs_from_file("./assets/template_matching/sample-001-95_percent.png")
             # docs_from_file("./assets/template_matching/sample-002.png")
             # docs_from_file("/home/gbugaj/tmp/medrx/pid/173358514/PID_749_7449_0_157676683.png")
@@ -116,9 +117,16 @@ def check_template_matcher():
                 "image": "./assets/template_matching/sample-005.png",
                 "target": "./assets/template_matching/sample-005.png",
             },
+
+            "007-B": {
+                "label": "CLAIM",
+                "coords": [[176, 90, 90, 33]],
+                "image": "./assets/template_matching/template-005.png",
+                "target": "./assets/template_matching/sample-006.png",
+            },
         }
 
-        key = "006-B"
+        key = "007-B"
 
         template_coords = samples[key]["coords"]
         frames_t = frames_from_docs(docs_from_file(samples[key]["image"]))
@@ -128,11 +136,12 @@ def check_template_matcher():
         template_labels = []
         template_texts = []
 
+        # H, W
         window_size = (512, 512)
-        # window_size = (384, 384)
+        window_size = (384, 768)
 
         template_frames, template_bboxes = BaseTemplateMatcher.extract_windows(
-            frames_t[0], template_coords, window_size
+            frames_t[0], template_coords, window_size, allow_padding=True
         )
 
         for template_frame in template_frames:
@@ -155,7 +164,7 @@ def check_template_matcher():
             template_texts.append(samples[key].get("text", ""))
 
             # cv2.imwrite(f"/tmp/dim/template.png", template)
-        for k in range(3):
+        for k in range(1):
             with TimeContext(f"Eval # {i}"):
                 results = matcher.run(
                     frames=frames,
