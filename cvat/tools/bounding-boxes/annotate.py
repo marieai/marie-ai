@@ -159,14 +159,45 @@ def annotate_task_frame(
         )
 
 
-def main(task_id: int, frame_id: int, host: str, port: int, user: str, password: str):
+def main(
+    task_id: int,
+    frame_ids: int,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    interactive: bool,
+):
     with make_client(host=host, port=port, credentials=(user, password)) as client:
-        annotate_task_frame(
-            client,
-            task_id,
-            frame_id,
-            TorchvisionDetectionFunction(box_score_thresh=0.5),
-        )
+        detector = TorchvisionDetectionFunction(box_score_thresh=0.5)
+        while True:
+            if interactive:
+                task_id = int(input("Task ID: "))
+                frame_input = input("Frame ID(s): ")
+                frame_ids = [int(v) for v in frame_input.split(" ")]
+                print("Task/Frame ID(s):", task_id, frame_ids)
+
+            for frame_id in frame_ids:
+                print("Annotating frame", frame_id, "of task", task_id)
+                try:
+                    annotate_task_frame(
+                        client,
+                        task_id,
+                        frame_id,
+                        detector,
+                    )
+                except Exception as e:
+                    print("Error:", e)
+                    continue
+
+            if interactive:
+                if input("Continue? [y/n]: ") == "y":
+                    continue
+                else:
+                    print("Exiting...")
+                    return
+            else:
+                break
 
 
 def parse_args():
@@ -174,17 +205,35 @@ def parse_args():
         description="Annotate a frame of a task using a detection function"
     )
     parser.add_argument("--task", type=int, help="ID of the task to annotate")
-    parser.add_argument("--frame", type=int, help="ID of the frame to annotate")
+    parser.add_argument(
+        "--frames", nargs='+', type=int, help="ID of the frame(s) to annotate"
+    )
+    parser.add_argument(
+        "--interactive",
+        action='store_true',
+        help="Enter interactive mode(will ask for task and frame)",
+    )
+
     # CVAT
     parser.add_argument("--host", type=str, help="CVAT host", required=True)
     parser.add_argument("--port", type=str, help="CVAT port")
-    parser.add_argument("--user", type=str, help="CVAT user")
-    parser.add_argument("--password", type=str, help="CVAT password")
+    parser.add_argument("--user", type=str, help="CVAT user", required=True)
+    parser.add_argument("--password", type=str, help="CVAT password", required=True)
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    print(args)
-    main(args.task, args.frame, args.host, args.port, args.user, args.password)
+    main(
+        args.task,
+        args.frames,
+        args.host,
+        args.port,
+        args.user,
+        args.password,
+        args.interactive,
+    )
+
+# Sample usage:
+# python ./annotate.py --host cvat-003 --port 8080 --user CVAT_USER --password CVAT_PASSWORD  --interactive

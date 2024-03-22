@@ -28,10 +28,9 @@ The model was trained on private dataset of image and text snippets.
 # Checkpoints
 
 ```shell
-clip_1_0.00013816356658935547_params_clip.pth
+clip_18_0.0_params_clip.pth
 ```
 
-
-Accuracy: 42/43 = 97.67%
-Average Similarity for same: 22.17, 0.96
-Average Similarity for diff: 5.56, 0.28
+Accuracy: 94/97 = 96.91%
+Average Similarity for same: 51.70, 0.96
+Average Similarity for diff: 16.77, 0.39

@@ -20,7 +20,7 @@ from marie.components.template_matching import (
 )
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
 from marie.ocr.util import meta_to_text
-from marie.utils.resize_image import resize_image
+from marie.utils.resize_image import resize_image, resize_image_progressive
 
 
 @st.cache_resource
@@ -36,13 +36,22 @@ class ImageUtils:
     def __init__(self):
         pass
 
-    def read_image(self, uploaded_image):
+    def read_image(self, uploaded_image, progressive_rescale=False, scale=75):
         """Read the uploaded image"""
         raw_image = Image.open(uploaded_image).convert("RGB")
+        print("progressive_rescale", progressive_rescale, scale)
+        if progressive_rescale:
+            raw_image = resize_image_progressive(
+                raw_image,
+                reduction_percent=scale / 100,
+                reductions=2,
+                return_intermediate_states=False,
+            )
+
         width, height = raw_image.size
         return raw_image, (width, height)
 
-    def resize_image(self, raw_image, square=960):
+    def resize_image_for_canvas(self, raw_image, square=960):
         """Resize the mask so it fits inside a 544x544 square"""
         width, height = raw_image.size
         # return raw_image.resize((width, height)), (width, height)
@@ -152,7 +161,7 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    st.sidebar.write("Matching parameters X")
+    st.sidebar.write("Matching parameters")
     scol1, scol2 = st.sidebar.columns([5, 5])
 
     with scol1:
@@ -188,7 +197,22 @@ def main():
             step=64,
             format="%d",
         )
+
     st.sidebar.divider()
+    scol1, scol2 = st.sidebar.columns([5, 5])
+
+    with scol1:
+        progressive_rescale = True if st.checkbox("Re-scale", False) else False
+    with scol2:
+        progressive_rescale_value = st.number_input(
+            "Scale",
+            min_value=5,
+            max_value=50,
+            value=25,
+            step=5,
+            format="%d",
+            label_visibility="collapsed",
+        )
 
     mode = "transform" if st.sidebar.checkbox("Move ROIs", False) else "rect"
     reinforce_mode = True if st.sidebar.checkbox("Reinforce mode ", False) else False
@@ -202,12 +226,12 @@ def main():
 
     uploaded_image = st.sidebar.file_uploader(
         "Upload template source: ",
-        type=["jpg", "jpeg", "png", "webp"],
+        type=["jpg", "jpeg", "png", "webp", "tiff", "tif"],
         key="source",
     )
     uploaded_target = st.sidebar.file_uploader(
         "Upload document to match: ",
-        type=["jpg", "jpeg", "png", "webp"],
+        type=["jpg", "jpeg", "png", "webp", "tiff", "tif"],
         key="target",
     )
 
@@ -221,8 +245,10 @@ def main():
         with col1:
             # st.header("Source image")
             if uploaded_image is not None:
-                raw_image, raw_size = utils.read_image(uploaded_image)
-                resized_image, resized_size = utils.resize_image(raw_image)
+                raw_image, raw_size = utils.read_image(
+                    uploaded_image, progressive_rescale, progressive_rescale_value
+                )
+                resized_image, resized_size = utils.resize_image_for_canvas(raw_image)
                 # read bbox input
                 canvas_result = utils.get_canvas(
                     resized_image, key="canvas-source", update_streamlit=True, mode=mode
@@ -230,10 +256,13 @@ def main():
         with col2:
             # st.header("Matching target")
             if uploaded_target is not None:
-                raw_image_target, raw_size_target = utils.read_image(uploaded_target)
-                resized_image_target, resized_size_target = utils.resize_image(
-                    raw_image_target
+                raw_image_target, raw_size_target = utils.read_image(
+                    uploaded_target, progressive_rescale, progressive_rescale_value
                 )
+                (
+                    resized_image_target,
+                    resized_size_target,
+                ) = utils.resize_image_for_canvas(raw_image_target)
                 canvas_output = utils.get_canvas(
                     resized_image_target,
                     key="canvas-target",
