@@ -52,7 +52,7 @@ def model_effv2_s():
     )
     checkpoint = torch.load(
         os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_19_True.pth'
+            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_28_True.pth'
         ),
         map_location=DEVICE,
     )
