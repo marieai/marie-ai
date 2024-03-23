@@ -10,45 +10,45 @@ import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.*
-import kotlin.random.Random
 
-val charPool: List<Char> = ('a'..'z') + ('A'..'Z') + ('0'..'9')
-fun generateRequestId() = (1..16)
-    .map { Random.nextInt(0, charPool.size).let { charPool[it] } }
-    .joinToString("")
-
-
-private fun createRequest(): TemplateMatchingRequest {
-//    val filePath = "../../assets/template_matching/template-005_w.png"
-    val filePath = "/tmp/grapnel/anchors/611572016.png"
+private fun templateSelector(label: String, region: BBox, filePath: String): TemplateSelector {
     val bytes = Files.readAllBytes(Paths.get(filePath))
     val encoded = Base64.getEncoder().encodeToString(bytes)
 
-    val template = TemplateSelector(
-        region = BBox(0, 0, 0, 0),
+    return TemplateSelector(
+        region = region,
         frame = encoded,
-        bbox = BBox(174, 91, 91, 31),
-        label = "Test",
+        bbox = BBox(0, 0, 0, 0), // we are creating BBOX from create
+        label = label,
         text = "",
-        createWindow = true
+        createWindow = true,
+        topK = 2
     )
+}
+
+
+private fun createRequest(): TemplateMatchingRequest {
+    val template0 = templateSelector("see_note", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/215219944.png")
+    val template1 = templateSelector("codes", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/76432244.png")
+    val template2 = templateSelector("totals", BBox(0, 0, 0, 0), "/tmp/grapnel/anchors/1099855928.png")
 
     val request = TemplateMatchingRequest(
-//        assetKey = "/home/gbugaj/dev/marieai/marie-ai/assets/template_matching/sample-005.png",
-        assetKey = "/opt/grapnel-local/burst/175160793_3.tiff",
+//        assetKey = "/opt/grapnel-local/burst/175160793_3.tiff",
+        assetKey = "/home/gbugaj/dev/workflow/mbx-grapnel/mbx-grapnel-engine/src/test/resources/test-deck/Integration_Marie001/PID_1658_8634_0_175160793.tif",// multipage
         id = generateRequestId(),
-        pages = listOf(-1),
+        pages = listOf(2, 3),
         scoreThreshold = 0.90,
+        scoringStrategy = "weighted",
         maxOverlap = 0.2,
         windowSize = Pair(512, 512),
         downscaleFactor = 0.0,
-        scoringStrategy = "default",
         matcher = "composite",
-        selectors = listOf(template)
+        selectors = listOf(template0, template1, template2)
     )
 
     return request
 }
+
 
 suspend fun main() {
     val client = TemplateMatcherClient(URI("grpc://127.0.0.1:52000"))

@@ -30,7 +30,7 @@ data class TemplateMatchResult(
 /**
  * Represents a request to perform template matching.
  *
- * @property region The region of interest for template matching.
+ * @property region The region of interest for template matching. If the region is not specified or is set to (0, 0, 0, 0), the entire image will be used.
  * @property frame The image to use as a template for matching.(Base64 encoded)
  * @property bbox The bounding box coordinates of the template image.
  * @property label The label for the fragment
@@ -55,7 +55,7 @@ data class TemplateMatchingRequest(
     val scoringStrategy: String = "weighted",
     val maxOverlap: Double = 0.5,
     val windowSize: Pair<Int, Int>,
-    val downscaleFactor: Int,
+    val downscaleFactor: Double = 0.0,
     val matcher: String = "composite", // COMPOSITE, META, VQNNF
     val selectors: List<TemplateSelector>
 )
@@ -86,4 +86,22 @@ object TemplateSelectorKeys {
     const val TEXT = "text"
     const val CREATE_WINDOW = "create_window"
     const val TOP_K = "top_k"
+}
+
+
+/**
+ * Represents a span with its page, y-coordinate, and height.
+ *
+ * @property page The page number of the span. The first page is 0.
+ * @property y The y-coordinate of the span.
+ * @property h The height of the span in pixels.
+ */
+data class Span(var page: Int = 0, var y: Int = 0, var h: Int = 0) {
+    init {
+        if (h < 0) throw IllegalArgumentException("Height can't be negative")
+    }
+
+    override fun toString(): String {
+        return " page = $page,  y = $y ,  h = $h"
+    }
 }

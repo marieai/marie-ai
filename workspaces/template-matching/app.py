@@ -389,8 +389,6 @@ def main():
 
             window_size = (window_size_h, window_size_w)
 
-            template_frames = []
-            template_bboxes = []
             template_labels = []
             template_texts = []
 

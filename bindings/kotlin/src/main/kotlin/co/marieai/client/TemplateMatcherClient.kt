@@ -67,7 +67,7 @@ class TemplateMatcherClient(uri: URI) : MarieClient(uri) {
             }, Builder::setList
         )
         putData(builder, TemplateMatchingKeys.MATCHER, request.matcher, Builder::setText)
-        putData(builder, TemplateMatchingKeys.DOWNSCALE_FACTOR, request.downscaleFactor, Builder::setInteger)
+        putData(builder, TemplateMatchingKeys.DOWNSCALE_FACTOR, request.downscaleFactor, Builder::setFloat)
         putData(builder, TemplateMatchingKeys.SELECTORS, convertSelectorsToProto(request.selectors), Builder::setList)
     }
 
