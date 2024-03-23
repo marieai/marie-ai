@@ -1,13 +1,16 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import com.google.protobuf.gradle.*
 
+// https://github.com/gradle/kotlin-dsl-samples/tree/master/samples
+
 plugins {
     kotlin("jvm") version "1.7.10"
+    `maven-publish`
     id("com.google.protobuf") version "0.8.19"
     application
 }
 
-group = "co.marieai.client"
+group = "co.marieai"
 version = "1.0-SNAPSHOT"
 
 repositories {
@@ -61,7 +64,6 @@ protobuf {
             }
         }
     }
-
 }
 
 sourceSets {
@@ -74,6 +76,30 @@ sourceSets {
                 "src/main/kotlin",
                 "build/generated/source/proto/main/kotlin", "build/generated/source/proto/main/grpckt"
             )
+        }
+    }
+}
+
+tasks.withType<JavaCompile> {
+    sourceCompatibility = "1.8"
+    targetCompatibility = "1.8"
+}
+
+
+val sourcesJar by tasks.creating(Jar::class) {
+    archiveClassifier.set("sources")
+    dependsOn("generateProto")
+    from(sourceSets["main"].java.srcDirs)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            groupId = "co.marieai"
+            artifactId = "marie-ai-client"
+            version = "1.0-SNAPSHOT"
+            artifact(sourcesJar)
+            from(components["java"])
         }
     }
 }

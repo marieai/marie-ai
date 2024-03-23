@@ -1,20 +1,25 @@
+import base64
+import io
 import os
 from typing import List, Optional, Tuple, Union
 
+import cv2
 import numpy as np
 import torch
 from docarray import DocList
 from docarray.base_doc.doc import BaseDocWithoutId
-from pydantic import BaseModel
+from PIL import Image
 
 from marie import Executor, requests, safely_encoded
-from marie.api.docs import AssetKeyDoc, BaseDoc
+from marie.api.docs import BaseDoc
+from marie.components.template_matching import BaseTemplateMatcher, VQNNFTemplateMatcher
 from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
-from marie.utils.docs import docs_from_asset, frames_from_docs
+from marie.utils.docs import docs_from_asset, docs_from_file, frames_from_docs
 from marie.utils.network import get_ip_address
+from marie.utils.resize_image import resize_image
 
 
 class TemplateMatchResultDoc(BaseDocWithoutId, frozen=True):
@@ -49,7 +54,7 @@ class TemplateMatchingRequestDoc(BaseDoc):
     max_overlap: float
     window_size: List[int]
     matcher: str
-    downscale_factor: int
+    downscale_factor: float
     selectors: List[TemplateSelector]
 
 
@@ -117,6 +122,71 @@ class TemplateMatchingExecutor(Executor):
         logger.info(f"Runtime info: {self.runtime_info}")
         logger.info(f"Pipeline : {pipeline}")
 
+    def convert_template_selectors(
+        self,
+        selectors: List[TemplateSelector],
+        window_size: Union[List[int], tuple[int, int]],
+    ):
+        """
+        Convert TemplateSelector to Template Matching Selectors
+        :param selectors:
+        :param window_size:
+        :return:
+        """
+
+        print(f"Converting {len(selectors)} selector(s)")
+        template_frames = []
+        template_bboxes = []
+        template_labels = []
+        template_texts = []
+
+        for i, selector in enumerate(selectors):
+            buf = io.BytesIO(base64.b64decode(selector.frame))
+            image = Image.open(buf)
+            image = image.convert("RGB")
+            frame = np.array(image)
+            frame = frame[:, :, ::-1].copy()
+
+            boxes_xywh = [
+                selector.bbox
+            ]  # currently only one bbox is supported per selector
+            region = selector.region
+            label = selector.label
+            text = selector.text
+
+            if selector.create_window:
+                frame, coord = resize_image(
+                    frame,
+                    window_size,
+                    keep_max_size=True,
+                )
+                boxes_xywh = [coord]
+
+            (
+                sel_template_frames,
+                sel_template_bboxes,
+            ) = BaseTemplateMatcher.extract_windows(
+                frame, boxes_xywh, window_size, allow_padding=True
+            )
+
+            template_frames.extend(sel_template_frames)
+            template_bboxes.extend(sel_template_bboxes)
+            template_labels.append(label)
+            template_texts.append(text)
+            assert (
+                len(template_frames)
+                == len(template_bboxes)
+                == len(template_labels)
+                == len(template_texts)
+            )
+
+            for template_frame in template_frames:
+                cv2.imwrite(
+                    f"/tmp/dim/template/template_frame_SELECTOR_{i}.png", template_frame
+                )
+
+        return template_frames, template_bboxes, template_labels, template_texts
+
     @requests(on="/document/matcher")
     def match(
         self,
@@ -126,15 +196,87 @@ class TemplateMatchingExecutor(Executor):
         **kwargs,
     ):
         print("TEMPLATE MATCHING EXECUTOR")
-        print(parameters)
-        print(docs)
-
-        logger.info(kwargs)
-        logger.info(parameters)
+        if docs is None or len(docs) == 0:
+            return {"error": "empty payload"}
 
         print("Dumping docs:")
-        for doc in docs:
-            print(doc)
+        if False:
+            for doc in docs:
+                print(doc)
+
+        if len(docs) > 1:
+            return {"error": "expected single document"}
+        pages = docs[0].pages
+        if docs[0].pages is None or len(docs[0].pages) == 0 or docs[0].pages[0] == -1:
+            pages = None
+        has_pages = pages is not None and len(pages) > 0
+        dff = docs_from_file(docs[0].asset_key, pages=pages)
+        frames_from_file = frames_from_docs(dff)
+
+        assert len(frames_from_file) > 0
+
+        matcher = VQNNFTemplateMatcher(model_name_or_path="NONE")
+        doc = docs[0]
+
+        logger.info("Matching parameters ************")
+        logger.info(f"Asset Key: {doc.asset_key}")
+        logger.info(f"Selectors : {len(doc.selectors)}")
+        logger.info(f"Mode: {doc.matcher}")
+        logger.info(f"Scoring strategy: {doc.scoring_strategy}")
+        logger.info(f"Score threshold: {doc.score_threshold}")
+        logger.info(f"Window size: {doc.window_size}")
+        logger.info(f"Max overlap: {doc.max_overlap}")
+        logger.info(f"Downscale factor (rescale) : {doc.downscale_factor}")
+        logger.info(f"Pages: {pages}")
+        logger.info(f"Has pages: {has_pages}")
+
+        if len(doc.selectors) == 0:
+            return {"error": "selectors not present"}
+
+        (
+            template_frames,
+            template_bboxes,
+            template_labels,
+            template_texts,
+        ) = self.convert_template_selectors(doc.selectors, doc.window_size)
+
+        results = matcher.run(
+            frames=frames_from_file,
+            # TODO: convert to Pydantic model
+            template_frames=template_frames,
+            template_boxes=template_bboxes,
+            template_labels=template_labels,
+            template_texts=template_texts,
+            metadata=None,
+            score_threshold=doc.score_threshold,
+            scoring_strategy=doc.scoring_strategy,
+            max_overlap=0.5,
+            max_objects=2,
+            window_size=(doc.window_size[0], doc.window_size[1]),
+            downscale_factor=1,
+        )
+
+        print("Results:")
+        print(results)
+
+        for result in results:
+            result.frame_index = (
+                pages[result.frame_index] if has_pages else result.frame_index
+            )
+
+        print("Results after page conversion:")
+        print(results)
+
+        # we only return one doc with the results
+        reply = DocList[TemplateMatchingResultDoc]()
+        reply.append(
+            TemplateMatchingResultDoc(
+                asset_key=doc.asset_key,
+                results=[convert_to_protobuf_doc(result) for result in results],
+            )
+        )
+
+        return reply
 
         tmr = TemplateMatchResult(
             bbox=(10, 20, 40, 100),
