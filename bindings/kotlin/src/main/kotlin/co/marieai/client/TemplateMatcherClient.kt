@@ -125,12 +125,13 @@ class TemplateMatcherClient(uri: URI) : MarieClient(uri) {
                 val score = rdm["score"]?.float?.toFloat() ?: 0f
                 val similarity = rdm["similarity"]?.float?.toFloat() ?: 0f
                 val bbox = rdm["bbox"]?.tuple?.dataList?.map { it.integer } ?: emptyList1()
-
-                println("frame_index: $frameIndex")
-                println("label: $label")
-                println("score: $score")
-                println("similarity: $similarity")
-                println("bbox: $bbox")
+                if (debug) {
+                    println("frame_index: $frameIndex")
+                    println("label: $label")
+                    println("score: $score")
+                    println("similarity: $similarity")
+                    println("bbox: $bbox")
+                }
 
                 val templateMatchResult =
                     TemplateMatchResult(BBox(bbox[0], bbox[1], bbox[2], bbox[3]), label, score, similarity, frameIndex)
