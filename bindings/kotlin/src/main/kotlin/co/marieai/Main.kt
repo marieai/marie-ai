@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.*
 import kotlin.random.Random
@@ -17,10 +18,13 @@ fun generateRequestId() = (1..16)
     .map { Random.nextInt(0, charPool.size).let { charPool[it] } }
     .joinToString("")
 
+fun toAbsolutePath(filename: String): Path {
+    val relativePath: Path = Paths.get(filename)
+    return  relativePath.toAbsolutePath().normalize()
+}
 
 private fun createRequest(): TemplateMatchingRequest {
-//    val filePath = "../../assets/template_matching/template-005_w.png"
-    val filePath = "/tmp/grapnel/anchors/611572016.png"
+    val filePath = "../../assets/template_matching/template-005_w.png"
     val bytes = Files.readAllBytes(Paths.get(filePath))
     val encoded = Base64.getEncoder().encodeToString(bytes)
 
@@ -34,8 +38,7 @@ private fun createRequest(): TemplateMatchingRequest {
     )
 
     val request = TemplateMatchingRequest(
-//        assetKey = "/home/gbugaj/dev/marieai/marie-ai/assets/template_matching/sample-005.png",
-        assetKey = "/opt/grapnel-local/burst/175160793_3.tiff",
+        assetKey = toAbsolutePath("../../assets/template_matching/sample-005.png").toString(),
         id = generateRequestId(),
         pages = listOf(-1),
         scoreThreshold = 0.90,
