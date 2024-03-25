@@ -60,7 +60,7 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         max_objects: int = 1,
         window_size: tuple[int, int] = (384, 128),  # h, w
         regions: list[tuple[int, int, int, int]] = None,
-        downscale_factor: int = 1,
+        downscale_factor: float = 1.0,
         batch_size: Optional[int] = None,
     ) -> list[TemplateMatchResult]:
         results = []

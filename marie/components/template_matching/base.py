@@ -19,6 +19,7 @@ from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.ocr.util import get_words_and_boxes
+from marie.utils.resize_image import resize_image_progressive
 
 POSTPROCESS_NAME_TO_CLASS = {
     "GREEDYNMM": GreedyNMMPostprocess,
@@ -79,7 +80,7 @@ class BaseTemplateMatcher(ABC):
         max_objects: int = 1,
         window_size: tuple[int, int] = (384, 128),  # h, w
         regions: list[tuple[int, int, int, int]] = None,
-        downscale_factor: int = 1,
+        downscale_factor: float = 1.0,
         batch_size: Optional[int] = None,
     ) -> list[TemplateMatchResult]:
         """
@@ -111,11 +112,10 @@ class BaseTemplateMatcher(ABC):
             raise ValueError("Max overlap should be between 0 and 1")
         if not max_objects > 0:
             raise ValueError("Max object should be greater than 0")
-        if not downscale_factor > 0:
-            raise ValueError("Downscale factor should be greater than 0")
+        if downscale_factor > 1 or downscale_factor < 0:
+            raise ValueError("Downscale factor should be between 0 and 1")
         if batch_size is not None and not batch_size > 0:
             raise ValueError("Batch size should be either None or greater than 0")
-
         if regions is None:
             regions = [(0, 0, image.shape[1], image.shape[0]) for image in frames]
 
@@ -126,10 +126,59 @@ class BaseTemplateMatcher(ABC):
 
         results = []
         postprocess = self.setup_postprocess()
+        # validate the template frames are the same size as the window size
+        for k, (template_frame, template_box) in enumerate(
+            zip(template_frames, template_boxes)
+        ):
+            assert template_frame.shape[0] == window_size[0]
+            assert template_frame.shape[1] == window_size[1]
+
+            if (
+                template_frame.shape[0] != window_size[0]
+                or template_frame.shape[1] != window_size[1]
+            ):
+                raise ValueError(
+                    "Template frame size does not match window size, please resize the template frames to match the window size"
+                )
+
+            if downscale_factor != 1:
+                template_frame = resize_image_progressive(
+                    template_frame,
+                    reduction_percent=1.0 - downscale_factor,
+                    reductions=2,
+                    return_intermediate_states=False,
+                )
+                if False:
+                    cv2.imwrite(
+                        f"/tmp/dim/template_downscaled_{k}.png",
+                        template_frame,
+                    )
+
+                template_frames[k] = template_frame
+                template_box = [
+                    template_box[0] * downscale_factor,
+                    template_box[1] * downscale_factor,
+                    template_box[2] * downscale_factor,
+                    template_box[3] * downscale_factor,
+                ]
+                template_box = [int(x) for x in template_box]
+                template_boxes[k] = template_box
 
         for frame_idx, (frame, region) in enumerate(zip(frames, regions)):
             self.logger.info(f"matching frame {frame_idx} region: {region}")
             assert frame.ndim == 3
+            if downscale_factor != 1:
+                frame = resize_image_progressive(
+                    frame,
+                    reduction_percent=1.0 - downscale_factor,
+                    reductions=2,
+                    return_intermediate_states=False,
+                )
+                # downscale the template boxes
+                cv2.imwrite(
+                    f"/tmp/dim/template_image_downscaled_{frame_idx}.png",
+                    frame,
+                )
 
             page_words = []
             page_boxes = []
@@ -139,61 +188,6 @@ class BaseTemplateMatcher(ABC):
                 page_words, page_boxes, page_lines = get_words_and_boxes(
                     metadata, frame_idx, include_lines=True
                 )
-
-            # validate the template frames are the same size as the window size
-            for template_frame, template_boxe in zip(template_frames, template_boxes):
-                assert template_frame.shape[0] == window_size[0]
-                assert template_frame.shape[1] == window_size[1]
-
-                if (
-                    template_frame.shape[0] != window_size[0]
-                    or template_frame.shape[1] != window_size[1]
-                ):
-                    raise ValueError(
-                        "Template frame size does not match window size, please resize the template frames to match the window size"
-                    )
-
-                if downscale_factor > 1:
-                    # downscale the template frames
-                    template_frame = cv2.resize(
-                        template_frame,
-                        (
-                            template_frame.shape[1] // downscale_factor,
-                            template_frame.shape[0] // downscale_factor,
-                        ),
-                        interpolation=cv2.INTER_AREA,
-                    )
-
-                    # downscale the template boxes
-                    cv2.imwrite(
-                        f"/tmp/dim/template_frame_downscaled_{frame_idx}.png",
-                        template_frame,
-                    )
-                    template_frames[frame_idx] = template_frame
-
-                    template_boxe = (
-                        template_boxe[0] // downscale_factor,
-                        template_boxe[1] // downscale_factor,
-                        template_boxe[2] // downscale_factor,
-                        template_boxe[3] // downscale_factor,
-                    )
-                    template_boxes[frame_idx] = template_boxe
-            # downscale the window size
-            window_size = (
-                int(window_size[0] // downscale_factor),
-                int(window_size[1] // downscale_factor),
-            )
-
-            # downscale the frame
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame = cv2.resize(
-                frame,
-                (
-                    frame.shape[1] // downscale_factor,
-                    frame.shape[0] // downscale_factor,
-                ),
-                interpolation=cv2.INTER_AREA,
-            )
 
             # for profiling
             durations_in_seconds = dict()
@@ -345,6 +339,12 @@ class BaseTemplateMatcher(ABC):
                     result_scores.append(prediction.score)
                     result_snippets.append(snippet)
 
+                    # if we have downscale_factor we need to resize the prediction bbox
+                    if downscale_factor != 1:
+                        prediction.bbox = [
+                            int(x / downscale_factor) for x in prediction.bbox
+                        ]
+
                     results.append(
                         TemplateMatchResult(
                             bbox=prediction.bbox,
@@ -357,7 +357,9 @@ class BaseTemplateMatcher(ABC):
                     cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
                     idx += 1
 
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
             self.visualize_object_predictions(
                 result_bboxes, result_labels, result_scores, frame, frame_idx
             )
@@ -377,9 +379,7 @@ class BaseTemplateMatcher(ABC):
                     durations_in_seconds["prediction"],
                     "seconds.",
                 )
-
         torch_gc()
-
         return results
 
     def setup_postprocess(self):
@@ -418,7 +418,6 @@ class BaseTemplateMatcher(ABC):
         colors = {label: np.random.randint(0, 255, 3).tolist() for label in set(labels)}
         for bbox, label, score in zip(bboxes, labels, scores):
             if border_only:
-                print('color', colors[label])
                 cv2.rectangle(
                     frame,
                     (bbox[0], bbox[1]),
@@ -448,7 +447,10 @@ class BaseTemplateMatcher(ABC):
                 (0, 0, 255),
                 1,
             )
-        cv2.imwrite(f"/tmp/dim/results_frame_{index}.png", frame)
+
+        # create random id for the frame
+        rid = np.random.randint(0, 1000)
+        cv2.imwrite(f"/tmp/dim/results_frame_{index}-rid_{rid}.png", frame)
 
     def filter_scores(
         self, bboxes, labels, scores, snippets, score_threshold
