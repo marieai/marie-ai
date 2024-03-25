@@ -360,7 +360,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
 
         embedding_sim = embedding_sim.cpu().numpy()[0]
         feature_sim = feature_sim.cpu().numpy()[0]
-
+        # feature_sim = 1
         # we already know that the feature similarity is very high for the same image so we can use it as a weight
         if scoring_strategy == "weighted":
             embedding_weight = 0.95

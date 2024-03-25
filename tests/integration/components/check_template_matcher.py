@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import psutil
 import torch
+from PIL import Image
 
 from marie.components.template_matching import (
     BaseTemplateMatcher,
@@ -138,7 +139,7 @@ def check_template_matcher():
 
         # H, W
         window_size = (512, 512)
-        window_size = (384, 768)
+        window_size = [384, 384]
 
         template_frames, template_bboxes = BaseTemplateMatcher.extract_windows(
             frames_t[0], template_coords, window_size, allow_padding=True
@@ -162,13 +163,11 @@ def check_template_matcher():
             # template_bboxes.append(coord)
             template_labels.append("test")
             template_texts.append(samples[key].get("text", ""))
-
             # cv2.imwrite(f"/tmp/dim/template.png", template)
         for k in range(1):
             with TimeContext(f"Eval # {i}"):
                 results = matcher.run(
                     frames=frames,
-                    # TODO: convert to Pydantic model
                     template_frames=template_frames,
                     template_boxes=template_bboxes,
                     template_labels=template_labels,
@@ -178,7 +177,7 @@ def check_template_matcher():
                     max_overlap=0.5,
                     max_objects=2,
                     window_size=window_size,
-                    downscale_factor=1,
+                    downscale_factor=.75,
                 )
                 print(results)
 

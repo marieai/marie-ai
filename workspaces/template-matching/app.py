@@ -47,7 +47,6 @@ class ImageUtils:
                 reductions=2,
                 return_intermediate_states=False,
             )
-
         width, height = raw_image.size
         return raw_image, (width, height)
 
@@ -99,6 +98,9 @@ class ImageUtils:
 
     def get_raw_boxes(self, resized_boxes, raw_size, resized_size):
         """Convert the resized boxes to raw boxes"""
+        print("raw_size", raw_size)
+        print("resized_size", resized_size)
+        print("resized_boxes", resized_boxes)
 
         raw_width, raw_height = raw_size
         resized_width, resized_height = resized_size
@@ -110,7 +112,8 @@ class ImageUtils:
             raw_top = int(top * raw_height / resized_height)
             raw_right = int(right * raw_width / resized_width)
             raw_bottom = int(bottom * raw_height / resized_height)
-            raw_boxes.append([raw_left, raw_top, raw_right, raw_bottom])
+            box2 = [raw_left, raw_top, raw_right, raw_bottom]
+            raw_boxes.append(box2)
         return raw_boxes
 
 

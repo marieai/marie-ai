@@ -117,7 +117,7 @@ def resize_image_progressive(
         )
         intermediate_states.append(reduced_image)
     if return_format == "PIL":
-        reduced_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        reduced_image = cv2.cvtColor(reduced_image, cv2.COLOR_BGR2RGB)
         reduced_image = Image.fromarray(reduced_image)
 
     if return_intermediate_states:

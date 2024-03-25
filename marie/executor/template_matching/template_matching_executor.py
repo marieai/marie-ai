@@ -253,7 +253,7 @@ class TemplateMatchingExecutor(Executor):
             max_overlap=0.5,
             max_objects=2,
             window_size=(doc.window_size[0], doc.window_size[1]),
-            downscale_factor=1,
+            downscale_factor=doc.downscale_factor,
         )
 
         print("Results:")
