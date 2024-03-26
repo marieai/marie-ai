@@ -115,6 +115,15 @@ class OpenAIEmbeddings(EmbeddingsBase):
 
         with torch.inference_mode():
             try:
+                if image is None:
+                    embeddings = self.get_single_text_embedding(
+                        self.model, " ".join(texts)
+                    )
+                    result = EmbeddingsObject()
+                    result.embeddings = embeddings
+                    result.total_tokens = -1
+                    return result
+
                 embeddings = self.get_single_image_embedding(
                     self.model, self.processor, image, words=texts, boxes=boxes
                 )
@@ -143,9 +152,9 @@ class OpenAIEmbeddings(EmbeddingsBase):
             embedding_as_np = embedding.cpu().detach().numpy()
             return embedding_as_np
 
-
-def get_single_text_embedding(model, tokenizer, text):
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    text_embeddings = model.get_text_features(**inputs)
-    embedding_as_np = text_embeddings.cpu().detach().numpy()
-    return embedding_as_np
+    def get_single_text_embedding(self, model, text):
+        with torch.inference_mode():
+            inputs = clip.tokenize([text]).to(self.device)
+            text_embeddings = model.encode_text(inputs)
+            embedding_as_np = text_embeddings.cpu().detach().numpy()
+            return embedding_as_np
