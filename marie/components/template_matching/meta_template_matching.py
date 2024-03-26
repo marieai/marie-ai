@@ -8,10 +8,26 @@ import torch
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...embeddings.jina.jina_embeddings import JinaEmbeddings
+from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
+from ...embeddings.sentence_transformers.sentence_transformers_embeddings import (
+    SentenceTransformerEmbeddings,
+)
 from ...utils.overlap import merge_bboxes_as_block
 from ...utils.utils import ensure_exists
 from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
+
+embeddings_processorXX = OpenAIEmbeddings(
+    model_name_or_path="marie/clip-snippet-rn50x4"
+    # model_name_or_path="hf://openai/clip-vit-base-patch32"
+)
+
+# embeddings_processor = SentenceTransformerEmbeddings(devices=["cpu"], use_gpu=False, batch_size=1, show_error=True)
+
+embeddings_processor = JinaEmbeddings(
+    model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
+)
 
 
 class MetaTemplateMatcher(BaseTemplateMatcher):
@@ -136,6 +152,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                         )
 
                         ensure_exists(f"/tmp/fragments/converted/{key}")
+                        ensure_exists(f"/tmp/fragments/meta/{key}")
                         cv2.imwrite(
                             f"/tmp/fragments/meta/{k}_{round(sim_val, 3)}.png", snippet
                         )
@@ -145,13 +162,20 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
 
     def score(self, ngram_words: str, template_text: str, query_pred_snippet) -> float:
         from Levenshtein import distance
-
-        # resize the images to be the same size
-        # q = resize_image(query_pred_snippet, (72, 224))[0]
+        from numpy.linalg import norm
 
         d = distance(ngram_words, template_text)
         sim_val = 1 - d / max(len(ngram_words), len(template_text))
+        if sim_val < 0.5:
+            return sim_val
 
-        # TODO : Implement embeddings similarity
-
-        return sim_val
+        embedding = embeddings_processor.get_embeddings([ngram_words, template_text])
+        query_embedding = embedding.embeddings[0]
+        template_embedding = embedding.embeddings[1]
+        cosine = lambda a, b: (a @ b.T) / (norm(a) * norm(b))
+        cos_sim_val = cosine(query_embedding, template_embedding)
+        total_sim = (sim_val + cos_sim_val) / 2
+        sout = (
+            f"similarity : {sim_val} - {cos_sim_val} ---- {total_sim} --- {ngram_words}"
+        )
+        return total_sim

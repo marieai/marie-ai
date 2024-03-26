@@ -13,7 +13,8 @@ async def test_jina_embeddings():
         model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
     )
     results = jina_embeddings.get_embeddings(
-        ["How is the weather today?", "What is the current weather like today?"],
+        # ["How is the weather today?", "What is the current weather like today?"],
+        ["PATIENT LIABILLITY", "PATIENT LIABILITY"],
         truncation=True,
         max_length=2048,
     )
