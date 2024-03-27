@@ -101,13 +101,15 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: float = None,
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
+        scoring_strategy: int = "weighted",
         max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
-        batch_size: Optional[int] = None,
+        batch_size: tuple[int, int] = 1,
+        words: tuple[int, int, int, int] = None,
+        word_boxes: int = None,
+        word_lines: Optional[int] = None,
+        top_k=1,
     ) -> list[tuple[int, int, int, int]]:
 
         featex = self.featex

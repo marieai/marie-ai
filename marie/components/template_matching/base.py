@@ -55,6 +55,7 @@ class BaseTemplateMatcher(ABC):
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
         scoring_strategy: str = "weighted",  # "weighted" or "average"
+        max_objects: int = 1,
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
