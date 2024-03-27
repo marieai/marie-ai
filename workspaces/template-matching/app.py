@@ -269,9 +269,8 @@ def main():
                 canvas_output = utils.get_canvas(
                     resized_image_target,
                     key="canvas-target",
-                    update_streamlit=True,
+                    update_streamlit=False,
                 )
-
             if False:
                 if canvas_result is not None:
                     # if canvas_result.image_data is not None:
@@ -488,6 +487,7 @@ def main():
                 "RGB",
             )
             st.image(pil_image)
+            canvas_output.image_data = frame_dst
 
 
 #

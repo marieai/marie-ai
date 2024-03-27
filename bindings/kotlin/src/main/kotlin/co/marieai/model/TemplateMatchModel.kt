@@ -1,5 +1,7 @@
 package co.marieai.model
 
+import sun.jvm.hotspot.debugger.cdbg.TemplateType
+
 /**
  * Represents a bounding box with its coordinates and dimensions.
  *
@@ -36,6 +38,9 @@ data class TemplateMatchResult(
  * @property label The label for the fragment
  * @property createWindow Whether to create a window for extract or use provider template image
  * @property topK Top K results per region
+ * @property selectorType Type of selector to use for template matching (image, embedding). Default is image, which uses the image as a template.
+ * If set to embedding, the selector will use the embedding of the text. The text should be provided in the text field.
+ * If both image and text are provided, the image will be used unless the reinforce mode is used.
  */
 data class TemplateSelector(
     val region: BBox,
@@ -45,6 +50,7 @@ data class TemplateSelector(
     val text: String,
     val createWindow: Boolean,
     val topK: Int = 2,
+    val selectorType: String = "image" // image, embedding
 )
 
 data class TemplateMatchingRequest(

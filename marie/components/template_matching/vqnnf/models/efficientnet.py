@@ -99,8 +99,6 @@ class EfficientNetHyperColumn(nn.Module):
             "efficientnetv2_s"  # or efficientnetv2_s efficientnet_b0_eff efficientne_b0
         )
 
-        print(f"testing with {self.model_type}")
-
         if self.model_type == "efficientnet_b0_eff":
             self.model = EfficientNet.from_pretrained(
                 model_name, weights_path=weights_path, advprop=False

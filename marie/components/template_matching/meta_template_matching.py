@@ -9,25 +9,10 @@ from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...embeddings.jina.jina_embeddings import JinaEmbeddings
-from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
-from ...embeddings.sentence_transformers.sentence_transformers_embeddings import (
-    SentenceTransformerEmbeddings,
-)
 from ...utils.overlap import merge_bboxes_as_block
 from ...utils.utils import ensure_exists
 from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
-
-embeddings_processorXX = OpenAIEmbeddings(
-    model_name_or_path="marie/clip-snippet-rn50x4"
-    # model_name_or_path="hf://openai/clip-vit-base-patch32"
-)
-
-# embeddings_processor = SentenceTransformerEmbeddings(devices=["cpu"], use_gpu=False, batch_size=1, show_error=True)
-
-embeddings_processor = JinaEmbeddings(
-    model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
-)
 
 
 class MetaTemplateMatcher(BaseTemplateMatcher):
@@ -83,6 +68,10 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
             )
 
         self.device = resolved_devices[0]
+        self.embedding_cache = {}
+        self.embeddings_processor = JinaEmbeddings(
+            model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
+        )
 
     def predict(
         self,
@@ -92,7 +81,8 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         template_labels: list[str],
         template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        scoring_strategy: str = "EXACT",
+        scoring_strategy: str = "weighted",
+        max_objects: int = 1,
         batch_size: int = 1,
         words: list[str] = None,
         word_boxes: list[tuple[int, int, int, int]] = None,
@@ -160,6 +150,16 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
 
         return predictions
 
+    def get_embedding(self, text):
+        if text not in self.embedding_cache:
+            max_length = 1024
+            if len(text) > max_length:
+                text = text[:max_length]
+            self.embedding_cache[text] = self.embeddings_processor.get_embeddings(
+                [text], truncation=True, max_length=max_length
+            ).embeddings[0]
+        return self.embedding_cache[text]
+
     def score(self, ngram_words: str, template_text: str, query_pred_snippet) -> float:
         from Levenshtein import distance
         from numpy.linalg import norm
@@ -169,13 +169,14 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         if sim_val < 0.5:
             return sim_val
 
-        embedding = embeddings_processor.get_embeddings([ngram_words, template_text])
-        query_embedding = embedding.embeddings[0]
-        template_embedding = embedding.embeddings[1]
+        query_embedding = self.get_embedding(ngram_words)
+        template_embedding = self.get_embedding(template_text)
         cosine = lambda a, b: (a @ b.T) / (norm(a) * norm(b))
         cos_sim_val = cosine(query_embedding, template_embedding)
         total_sim = (sim_val + cos_sim_val) / 2
         sout = (
             f"similarity : {sim_val} - {cos_sim_val} ---- {total_sim} --- {ngram_words}"
         )
+        print(sout)
+        self.logger.debug(sout)
         return total_sim

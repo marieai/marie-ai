@@ -1,5 +1,6 @@
 import albumentations as aug
 import torch
+from torch import nn
 
 from marie.logging.profile import TimeContext, TimeContextCuda
 
@@ -35,7 +36,6 @@ class PixelFeatureExtractor:
                 self.model = EfficientNetHyperColumn(
                     model_name, 3, num_features, weights_path=weights_path
                 ).to(self.device)
-                self.model.eval()
             else:
                 raise ValueError("Model name must be either resnet or efficientnet")
         else:
@@ -81,10 +81,22 @@ class PixelFeatureExtractor:
                 if self.num_features == 27:
                     image_feature = self.get_color_features(image)
                 else:
-                    self.model.eval()
                     augmented = self.augment(image=image)
                     image_norm = augmented["image"]
                     image_norm_torch = self.transform(image_norm)
                     image_feature = self.model(image_norm_torch.unsqueeze(0)).squeeze(0)
 
         return image_feature
+
+    def optimize_model(self, model: nn.Module) -> nn.Module:
+        """Optimizes the model for inference. This method is called by the __init__ method."""
+        try:
+            with TimeContext("Compiling model", logger=None):
+                import torch._dynamo as dynamo
+
+                torch._dynamo.config.verbose = True
+                torch._dynamo.config.suppress_errors = True
+                model = torch.compile(model, mode="reduce-overhead", dynamic=False)
+                return model
+        except Exception as err:
+            raise err

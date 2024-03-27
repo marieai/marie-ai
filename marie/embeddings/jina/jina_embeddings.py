@@ -1,13 +1,15 @@
 import os
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import torch
+from torch import nn
 from transformers import AutoModel
 
 from marie.constants import __model_path__
 from marie.embeddings.base import EmbeddingsBase
 from marie.embeddings.embeddings_object import EmbeddingsObject
 from marie.logging.logger import MarieLogger
+from marie.logging.profile import TimeContext
 from marie.models.utils import initialize_device_settings
 from marie.registry.model_registry import ModelRegistry
 
@@ -85,6 +87,7 @@ class JinaEmbeddings(EmbeddingsBase):
         self.model = AutoModel.from_pretrained(
             model_name_or_path, trust_remote_code=True
         )  # trust_remote_code is needed to use the encode method
+        self.model = self.optimize_model(self.model)
 
     def get_embeddings(
         self, texts: List[str], truncation: bool = None, max_length: int = None
@@ -105,3 +108,20 @@ class JinaEmbeddings(EmbeddingsBase):
                     f"Error during inference: {e}", exc_info=self.show_error
                 )
                 return EmbeddingsObject()
+
+    def optimize_model(self, model: nn.Module) -> nn.Module:
+        """Optimizes the model for inference. This method is called by the __init__ method."""
+        try:
+            with TimeContext("Compiling model", logger=self.logger):
+                import torch._dynamo as dynamo
+
+                torch._dynamo.config.verbose = True
+                torch._dynamo.config.suppress_errors = True
+
+                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
+                model = torch.compile(
+                    model, mode="max-autotune", dynamic=True, backend="cudagraphs"
+                )
+                return model
+        except Exception as err:
+            raise err

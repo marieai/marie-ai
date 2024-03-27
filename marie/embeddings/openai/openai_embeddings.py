@@ -5,10 +5,12 @@ import clip
 import numpy as np
 import torch
 from PIL import Image
+from torch import nn
 
 from marie.constants import __model_path__
 from marie.embeddings.base import EmbeddingsBase
 from marie.embeddings.embeddings_object import EmbeddingsObject
+from marie.logging.profile import TimeContext
 from marie.models.utils import initialize_device_settings
 from marie.registry.model_registry import ModelRegistry
 
@@ -85,6 +87,8 @@ class OpenAIEmbeddings(EmbeddingsBase):
             self.model_name_or_path, self.device
         )
 
+        self.model = self.optimize_model(self.model)
+
     def setup_model(self, resolved_model_path: str, device: str = "cuda"):
         """prepare for the model"""
         config = ModelRegistry.config(resolved_model_path)
@@ -158,3 +162,20 @@ class OpenAIEmbeddings(EmbeddingsBase):
             text_embeddings = model.encode_text(inputs)
             embedding_as_np = text_embeddings.cpu().detach().numpy()
             return embedding_as_np
+
+    def optimize_model(self, model: nn.Module) -> nn.Module:
+        """Optimizes the model for inference. This method is called by the __init__ method."""
+        try:
+            with TimeContext("Compiling model", logger=self.logger):
+                import torch._dynamo as dynamo
+
+                torch._dynamo.config.verbose = True
+                torch._dynamo.config.suppress_errors = True
+
+                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
+                model = torch.compile(
+                    model, mode="max-autotune", dynamic=True, backend="cudagraphs"
+                )
+                return model
+        except Exception as err:
+            raise err
