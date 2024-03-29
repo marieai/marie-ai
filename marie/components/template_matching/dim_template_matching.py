@@ -120,9 +120,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         for template_raw, template_bbox, template_label in zip(
             template_frames, template_boxes, template_labels
         ):
-            print("template_label", template_label)
-            print("template_bbox", template_bbox)
-
             x, y, w, h = [int(round(t)) for t in template_bbox]
             template_plot = cv2.rectangle(
                 template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
