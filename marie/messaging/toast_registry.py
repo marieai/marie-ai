@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, Iterable, MutableMapping, Optional, OrderedDict
 
 from marie.excepts import BadConfigSource
+from marie.helper import add_sync_version, get_or_reuse_loop
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 
@@ -54,6 +55,18 @@ class Toast:
         ]
 
         # await asyncio.gather(*tasks)
+
+    @staticmethod
+    def notify_sync(event: str, notification: EventMessage, **kwargs: Any):
+        """
+        Push notification event to the client
+        :param event:
+        :param notification:
+        :param kwargs:
+        """
+        get_or_reuse_loop().run_until_complete(
+            Toast.notify(event, notification, **kwargs)
+        )
 
     @staticmethod
     def register(handler: ToastHandler, native: Optional[bool] = False) -> None:
