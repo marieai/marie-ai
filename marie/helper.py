@@ -1726,3 +1726,20 @@ def get_ip_whitelist_from_path(path: Optional[str] = None):
         pass
 
     return ip_whitelist
+
+
+def add_sync_version(func: Any) -> Any:
+    """Decorator for adding sync version of an async function. The sync version
+    is added as a function attribute to the original function, func.
+
+    Args:
+        func(Any): the async function for which a sync variant will be built.
+    """
+    assert asyncio.iscoroutinefunction(func)
+
+    @functools.wraps(func)
+    def _wrapper(*args: Any, **kwds: Any) -> Any:
+        return get_or_reuse_loop().run_until_complete(func(*args, **kwds))
+
+    func.sync = _wrapper
+    return func
