@@ -27,6 +27,8 @@ from marie.messaging import (
     RabbitMQToastHandler,
     Toast,
 )
+from marie.messaging.events import EngineEventData, MarieEvent
+from marie.messaging.publisher import event_builder
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
 from marie.utils.types import strtobool
@@ -44,7 +46,9 @@ def setup_toast_events(toast_config: Dict[str, Any]):
     psql_config = toast_config["psql"]
     rabbitmq_config = toast_config["rabbitmq"]
 
-    Toast.register(NativeToastHandler("/tmp/events.json"), native=True)
+    Toast.register(
+        NativeToastHandler(os.path.join(__cache_path__, "events.json")), native=True
+    )
 
     if psql_config is not None:
         Toast.register(PsqlToastHandler(psql_config), native=False)
@@ -295,6 +299,31 @@ def __main__(
 
     filter_endpoint()
     setup_server(config)
+    if False:
+        api_key = "main"
+        job_id = "main"
+        event = "server_start"
+        job_tag = "main"
+        status = "start"
+        timestamp = None
+        payload = {}
+
+        Toast.notify_sync(
+            "server_start",
+            event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
+        )
+
+        MarieEvent.engine_event(
+            f"Starting server with config {yml_config} and env {env}",
+            EngineEventData(
+                metadata={
+                    "config": yml_config,
+                    "env": env,
+                    "context": context,
+                    "prefetch": prefetch,
+                }
+            ),
+        )
 
     with f:
         f.block()
