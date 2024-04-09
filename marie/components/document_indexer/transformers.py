@@ -1,7 +1,5 @@
 import os
-from abc import abstractmethod
 from dataclasses import dataclass
-from pprint import pprint
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -9,7 +7,6 @@ import torch
 import torch.nn as nn
 from docarray import DocList
 from PIL import Image, ImageDraw
-from pydantic import BaseModel
 from torch.nn import Module
 from transformers import (
     AutoModelForTokenClassification,
