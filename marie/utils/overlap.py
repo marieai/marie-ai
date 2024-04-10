@@ -189,8 +189,12 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
     return overlaps, indexes, scores
 
 
-def merge_bboxes_as_block(bboxes):
-    """Merge bounding boxes into one block"""
+def merge_bboxes_as_block(bboxes) -> list[int]:
+    """
+    Merge bounding boxes into one block
+    :param bboxes: bounding boxes in [x, y, w, h]
+    :return: block in [x, y, w, h]
+    """
     bboxes = np.array(bboxes)
 
     min_x = bboxes[:, 0].min()

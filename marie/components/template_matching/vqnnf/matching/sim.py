@@ -187,13 +187,16 @@ def similarity_score(template, query, metric) -> float:
     max_h = int(max(image1_gray.shape[0], image2_gray.shape[0])) + 0
     max_w = int(max(image1_gray.shape[1], image2_gray.shape[1])) + 0
 
+    max_w = 224
+    max_h = 224
+
     image1_gray = cv2.resize(image1_gray, (max_w, max_h), interpolation=cv2.INTER_CUBIC)
     image2_gray = cv2.resize(image2_gray, (max_w, max_h), interpolation=cv2.INTER_CUBIC)
 
     original_image1_gray = image1_gray.copy()
     original_image2_gray = image2_gray.copy()
 
-    if False:
+    if True:
         image1_gray, coord = resize_image(
             image1_gray,
             desired_size=(max_h, max_w),
@@ -217,14 +220,15 @@ def similarity_score(template, query, metric) -> float:
     global idx
     idx += 1
 
-    fd_1, hog_image_1 = extract_hog_features(image1_gray, 1, "cpu")
-    fd_2, hog_image_2 = extract_hog_features(image2_gray, 1, "cpu")
+    if False:
+        fd_1, hog_image_1 = extract_hog_features(image1_gray, 1, "cpu")
+        fd_2, hog_image_2 = extract_hog_features(image2_gray, 1, "cpu")
 
-    image1_gray = hog_image_1
-    image2_gray = hog_image_2
+        image1_gray = hog_image_1
+        image2_gray = hog_image_2
 
-    cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", hog_image_1)
-    cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", hog_image_2)
+        cv2.imwrite(f"/tmp/dim/{idx}_hog_1.png", image1_gray)
+        cv2.imwrite(f"/tmp/dim/{idx}_hog_2.png", image2_gray)
 
     # # 0 = Background, 1 = Object
     # bin_image1 = np.where(hog_image_1 > 0, 0, 1)
@@ -232,7 +236,6 @@ def similarity_score(template, query, metric) -> float:
     # hd95_score = hd95(bin_image1, bin_image2, connectivity=1, voxelspacing=1)
 
     # save for debugging
-
     patch_size_h = image1_gray.shape[0] // 2
     patch_size_w = image1_gray.shape[1] // 2
 
@@ -258,6 +261,8 @@ def similarity_score(template, query, metric) -> float:
     s2_total = 0
 
     slices_len = len(patches_t)
+    print("slices_len", slices_len)
+
     for p1, p2 in zip(patches_t, patches_m):
         # s0 = rmse(p1, p2)  # value between 0 and 255
         # s0, _ = rmse_sw(p1, p2, ws=16)  # value between 0 and 255
@@ -288,6 +293,7 @@ def similarity_score(template, query, metric) -> float:
         print(f"score {idx} : ", score)
         print(f"s0_total {idx} :", s0_total)
         print(f"s1_total {idx} :", s1_total)
+        print(f"s2_total {idx} :", s2_total)
         print(f"s0_total_norm {idx} ", s0_total_norm)
         print(f"s1_total_norm {idx} ", s1_total_norm)
         print(f"s2_total_norm {idx} ", s2_total_norm)

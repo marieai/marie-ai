@@ -1,4 +1,9 @@
+from typing import Union
+
 import cv2
+import numpy as np
+import PIL
+from PIL import Image
 
 
 def resize_image(
@@ -69,3 +74,53 @@ def resize_image(
 
     # cv2.imwrite("/tmp/dim/box_framed.png", image)
     return image, (x, y, w, h)
+
+
+def resize_image_progressive(
+    image: Union[np.ndarray, PIL.Image.Image],
+    reduction_percent: float,
+    reductions: int = 2,
+    return_intermediate_states=False,
+) -> Union[np.ndarray, PIL.Image.Image]:
+    """Resize an image progressively by reducing the size of the image"""
+    if image is None:
+        raise Exception("Input image can't be empty")
+
+    return_format = "np"
+    if isinstance(image, PIL.Image.Image):
+        return_format = "PIL"
+        image = np.array(image)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    original_size = image.shape[:2]
+    desired_size = [dim - int(dim * reduction_percent) for dim in original_size]
+
+    reduction_w, reduction_h = [
+        (max_dim - min_dim) // reductions
+        for max_dim, min_dim in zip(original_size, desired_size)
+    ]
+
+    reduced_image = image.copy()
+    intermediate_states = []
+
+    for _ in range(reductions):
+        reduced_size = [
+            curr_dim - reduction
+            for curr_dim, reduction in zip(
+                reduced_image.shape[:2], (reduction_w, reduction_h)
+            )
+        ]
+        reduced_image = cv2.resize(
+            reduced_image,
+            (reduced_size[1], reduced_size[0]),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        intermediate_states.append(reduced_image)
+    if return_format == "PIL":
+        reduced_image = cv2.cvtColor(reduced_image, cv2.COLOR_BGR2RGB)
+        reduced_image = Image.fromarray(reduced_image)
+
+    if return_intermediate_states:
+        return reduced_image, intermediate_states
+
+    return reduced_image

@@ -7,7 +7,11 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
-from torch._utils import _accumulate
+try:
+    from torch._utils import _accumulate
+except ImportError:
+    from itertools import accumulate as _accumulate
+
 from torch.utils.data import ConcatDataset, Dataset, Subset
 
 import lmdb

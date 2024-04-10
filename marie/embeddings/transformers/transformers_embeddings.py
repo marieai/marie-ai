@@ -1,9 +1,16 @@
 import os
 from typing import List, Optional, Union
 
+import numpy as np
 import torch
+from PIL import Image
+from transformers import AutoFeatureExtractor, AutoModel, AutoProcessor, AutoTokenizer
 
+from marie.constants import __model_path__
 from marie.embeddings.base import EmbeddingsBase
+from marie.embeddings.embeddings_object import EmbeddingsObject
+from marie.models.utils import initialize_device_settings
+from marie.registry.model_registry import ModelRegistry
 
 
 class TransformersEmbeddings(EmbeddingsBase):
@@ -44,11 +51,110 @@ class TransformersEmbeddings(EmbeddingsBase):
         :param show_error: Whether to show errors during inference. If set to False, errors will be logged as debug messages.
         :param kwargs: Additional keyword arguments passed to the model.
         """
+        super().__init__(**kwargs)
 
-    def get_embeddings(self, data: str, **kwargs) -> List[float]:
-        """
-        Generate embedding
-        :param data:
-        :param kwargs:
-        """
-        raise NotImplementedError
+        self.show_error = show_error  # show prediction errors
+        self.batch_size = batch_size
+        self.model_name_or_path = model_name_or_path
+
+        resolved_devices, _ = initialize_device_settings(
+            devices=devices, use_cuda=use_gpu, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+
+        registry_kwargs = {
+            "__model_path__": __model_path__,
+            "use_auth_token": use_auth_token,
+        }
+
+        model_name_or_path = ModelRegistry.get(
+            model_name_or_path,
+            version=None,
+            raise_exceptions_for_missing_entries=True,
+            **registry_kwargs,
+        )
+
+        self.model, self.processor, self.tokenizer = self.setup_model(
+            model_name_or_path, self.device
+        )
+
+    def setup_model(
+        self, model_name_or_path="microsoft/layoutlmv3-base", device: str = "cuda"
+    ):
+        """prepare for the model"""
+        model = AutoModel.from_pretrained(model_name_or_path).to(device)
+        feature_extractor = AutoFeatureExtractor.from_pretrained(
+            model_name_or_path,
+            apply_ocr=False,
+            do_resize=True,
+            resample=Image.BILINEAR,
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        processor = AutoProcessor.from_pretrained(
+            model_name_or_path,
+            feature_extractor=feature_extractor,
+            tokenizer=tokenizer,
+            apply_ocr=False,
+        )
+
+        return model, processor, tokenizer
+
+    def get_embeddings(
+        self,
+        texts: List[str],
+        truncation: bool = None,
+        max_length: int = None,
+        image: Image.Image = None,
+        boxes: List[List[int]] = None,
+        **kwargs,
+    ) -> EmbeddingsObject:
+
+        # ensure images is 224x224
+        image = image.resize((224, 224))
+
+        with torch.no_grad():
+            try:
+                embeddings = self.get_single_image_embedding(
+                    self.model, self.processor, image, words=texts, boxes=boxes
+                )
+
+                result = EmbeddingsObject()
+                result.embeddings = embeddings
+                result.total_tokens = -1  # len(embeddings[0])
+
+                return result
+            except Exception as e:
+                self.logger.error(
+                    f"Error during inference: {e}", exc_info=self.show_error
+                )
+                return EmbeddingsObject()
+
+    def get_single_image_embedding(
+        self, model, processor, image, words, boxes
+    ) -> np.ndarray:
+        encoding = processor(
+            # fmt: off
+            image,
+            words,
+            boxes=boxes,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=512,
+            # fmt: on
+        ).to(model.device)
+
+        with torch.inference_mode():
+            model_output = model(**encoding)
+            image_features = model_output.last_hidden_state
+            image_features = image_features.mean(dim=1)
+            image_features_as_np = image_features.cpu().detach().numpy()
+
+            return image_features_as_np

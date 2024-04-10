@@ -118,8 +118,13 @@ def get_jina_loader_with_runtime(runtime_args: Optional[Dict[str, Any]] = None):
 
 
 # remove on|On|ON resolver
-JinaResolver.yaml_implicit_resolvers.pop('o')
-JinaResolver.yaml_implicit_resolvers.pop('O')
+if 'o' in JinaResolver.yaml_implicit_resolvers:
+    JinaResolver.yaml_implicit_resolvers.pop('o')
+if 'O' in JinaResolver.yaml_implicit_resolvers:
+    JinaResolver.yaml_implicit_resolvers.pop('O')
+
+# JinaResolver.yaml_implicit_resolvers.pop('o')
+# JinaResolver.yaml_implicit_resolvers.pop('O')
 
 
 def parse_config_source(

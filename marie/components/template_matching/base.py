@@ -1,21 +1,25 @@
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
+import sahi.annotation as BoundingBox
 from PIL import Image
 from sahi.postprocess.combine import (
     GreedyNMMPostprocess,
     LSNMSPostprocess,
     NMMPostprocess,
     NMSPostprocess,
-    PostprocessPredictions,
 )
-from sahi.prediction import ObjectPrediction, PredictionResult
+from sahi.prediction import ObjectPrediction, PredictionScore
 from sahi.slicing import slice_image
 
+from marie.components.template_matching.model import TemplateMatchResult
 from marie.logging.logger import MarieLogger
+from marie.models.utils import torch_gc
+from marie.ocr.util import get_words_and_boxes
+from marie.utils.resize_image import resize_image_progressive
 
 POSTPROCESS_NAME_TO_CLASS = {
     "GREEDYNMM": GreedyNMMPostprocess,
@@ -26,12 +30,20 @@ POSTPROCESS_NAME_TO_CLASS = {
 
 
 class BaseTemplateMatcher(ABC):
+    """
+    BaseTemplateMatcher is used to match a template in an image.
+    """
+
+    DEFAULT_OVERLAP_HEIGHT_RATIO = 0.2
+    DEFAULT_OVERLAP_WIDTH_RATIO = 0.2
+
     def __init__(
         self,
+        slicing_enabled: bool = True,
         **kwargs,
     ) -> None:
-        super().__init__()
         self.logger = MarieLogger(self.__class__.__name__).logger
+        self.slicing_enabled = slicing_enabled
 
     @abstractmethod
     def predict(
@@ -40,14 +52,15 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
+        scoring_strategy: str = "weighted",  # "weighted" or "average"
         max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
-        batch_size: Optional[int] = None,
-    ) -> list[tuple[int, int, int, int]]:
+        batch_size: int = 1,
+        words: list[str] = None,
+        word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
+    ) -> list[TemplateMatchResult]:
         """
         Find all possible templates locations above a score-threshold, provided a list of templates to search and an image.
         Resulting detections are not filtered by NMS and thus might overlap.Use :meth:`~:run` to perform the search with NMS.
@@ -60,143 +73,148 @@ class BaseTemplateMatcher(ABC):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
-        score_threshold: float = 0.45,
+        template_texts: list[str] = None,
+        metadata: Optional[Union[dict, list]] = None,
+        score_threshold: float = 0.90,
+        scoring_strategy: str = "weighted",  # "weighted" or "average"
         max_overlap: float = 0.5,
         max_objects: int = 1,
         window_size: tuple[int, int] = (384, 128),  # h, w
         regions: list[tuple[int, int, int, int]] = None,
-        downscale_factor: int = 1,
+        downscale_factor: float = 1.0,
         batch_size: Optional[int] = None,
-    ) -> dict[str, list[tuple[int, int, int, int]]]:
+    ) -> list[TemplateMatchResult]:
         """
         Search each template in the images, and return the best `max_objects` locations which offer the best score and which do not overlap.
 
+        :param metadata:
         :param frames: A list of images in which to perform the search, it should be the same depth and number of channels that of the templates.
-        :param templates: A list of templates as numpy array to search in each image.
-        :param labels: A list of labels for each template. The length of this list should be the same as the length of the templates list.
+
+        :param template_frames: A list of templates as numpy array to search in each image.
+        :param template_boxes: A list of bounding boxes for each template. The length of this list should be the same as the length of the templates list.
+        :param template_labels: A list of labels for each template. The length of this list should be the same as the length of the templates list.
+        :param template_texts: A list of text for each template. The length of this list should be the same as the length of the templates list.
+        :param metadata: A list of metadata for each frame. The length of this list should be the same as the length of the frames list.
         :param score_threshold: The minimum score to consider a match.
+        :param scoring_strategy: The strategy to use for scoring the matches. It can be either "weighted" or "average".
         :param max_overlap: The maximum overlap to consider a match. This is the maximal value for the ratio of the Intersection Over Union (IoU) area between a pair of bounding boxes.
         :param max_objects: The maximum number of objects to return.
+        :param window_size: The size of the window to use for the search in the format (width, height).
         :param regions: A list of regions of interest in the images in the format (x, y, width, height). If None, the whole image is considered.
         :param downscale_factor: The factor by which to downscale the images before performing the search. This is useful to speed up the search.
         :param batch_size: The batch size to use for the prediction.
-        :return: A dictionary of lists of bounding boxes in the format (x, y, width, height) for each label per frame.
+        :return: A list of TemplateMatchResults
         """
 
         # assertions can be disabled via the the -O flag  (python -O)
-        # assert len(templates) == len(labels)
-        assert 0 <= score_threshold <= 1
-        assert 0 <= max_overlap <= 1
-        assert max_objects > 0
-        assert downscale_factor > 0
-        assert batch_size is None or batch_size > 0
-
+        if not (0 <= score_threshold <= 1):
+            raise ValueError("Score threshold should be between 0 and 1")
+        if not (0 <= max_overlap <= 1):
+            raise ValueError("Max overlap should be between 0 and 1")
+        if not max_objects > 0:
+            raise ValueError("Max object should be greater than 0")
+        if downscale_factor > 1 or downscale_factor < 0:
+            raise ValueError("Downscale factor should be between 0 and 1")
+        if batch_size is not None and not batch_size > 0:
+            raise ValueError("Batch size should be either None or greater than 0")
         if regions is None:
             regions = [(0, 0, image.shape[1], image.shape[0]) for image in frames]
 
-        assert len(frames) == len(regions)
-
-        results = {}
-
-        postprocess_type = "GREEDYNMM"
-        postprocess_match_metric = "IOS"
-        postprocess_match_threshold = 0.5
-        postprocess_class_agnostic = False
-
-        # init match postprocess instance
-        if postprocess_type not in POSTPROCESS_NAME_TO_CLASS.keys():
+        if len(frames) != len(regions):
             raise ValueError(
-                f"postprocess_type should be one of {list(POSTPROCESS_NAME_TO_CLASS.keys())} but given as {postprocess_type}"
+                "The length of the regions list should be the same as the length of the frames list."
             )
 
-        postprocess_constructor = POSTPROCESS_NAME_TO_CLASS[postprocess_type]
-        postprocess = postprocess_constructor(
-            match_threshold=postprocess_match_threshold,
-            match_metric=postprocess_match_metric,
-            class_agnostic=postprocess_class_agnostic,
-        )
+        results = []
+        postprocess = self.setup_postprocess()
+        # validate the template frames are the same size as the window size
+        for k, (template_frame, template_box) in enumerate(
+            zip(template_frames, template_boxes)
+        ):
+            assert template_frame.shape[0] == window_size[0]
+            assert template_frame.shape[1] == window_size[1]
 
-        print(postprocess)
-        for i, (frame, region) in enumerate(zip(frames, regions)):
-            self.logger.info(f"matching frame {i} region: {region}")
-            # check depth and number of channels
-            assert frame.ndim == 3
+            if (
+                template_frame.shape[0] != window_size[0]
+                or template_frame.shape[1] != window_size[1]
+            ):
+                raise ValueError(
+                    "Template frame size does not match window size, please resize the template frames to match the window size"
+                )
 
-            # validate the template frames are the same size as the window size
-            for template_frame, template_boxe in zip(template_frames, template_boxes):
-                assert template_frame.shape[0] == window_size[0]
-                assert template_frame.shape[1] == window_size[1]
-
-                if (
-                    template_frame.shape[0] != window_size[0]
-                    or template_frame.shape[1] != window_size[1]
-                ):
-                    raise Exception(
-                        "Template frame size does not match window size, please resize the template frames to match the window size"
-                    )
-
-                if downscale_factor > 1:
-                    # downscale the template frames
-                    template_frame = cv2.resize(
-                        template_frame,
-                        (
-                            template_frame.shape[1] // downscale_factor,
-                            template_frame.shape[0] // downscale_factor,
-                        ),
-                        interpolation=cv2.INTER_AREA,
-                    )
-
-                    # downscale the template boxes
+            if downscale_factor != 1:
+                template_frame = resize_image_progressive(
+                    template_frame,
+                    reduction_percent=1.0 - downscale_factor,
+                    reductions=2,
+                    return_intermediate_states=False,
+                )
+                if False:
                     cv2.imwrite(
-                        f"/tmp/dim/template_frame_downscaled_{i}.png", template_frame
+                        f"/tmp/dim/template_downscaled_{k}.png",
+                        template_frame,
                     )
-                    template_frames[i] = template_frame
 
-                    template_boxe = (
-                        template_boxe[0] // downscale_factor,
-                        template_boxe[1] // downscale_factor,
-                        template_boxe[2] // downscale_factor,
-                        template_boxe[3] // downscale_factor,
-                    )
-                    template_boxes[i] = template_boxe
-            # downscale the window size
-            window_size = (
-                int(window_size[0] // downscale_factor),
-                int(window_size[1] // downscale_factor),
-            )
+                template_frames[k] = template_frame
+                template_box = [
+                    template_box[0] * downscale_factor,
+                    template_box[1] * downscale_factor,
+                    template_box[2] * downscale_factor,
+                    template_box[3] * downscale_factor,
+                ]
+                template_box = [int(x) for x in template_box]
+                template_boxes[k] = template_box
 
-            # downscale the frame
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame = cv2.resize(
-                frame,
-                (
-                    frame.shape[1] // downscale_factor,
-                    frame.shape[0] // downscale_factor,
-                ),
-                interpolation=cv2.INTER_AREA,
-            )
+        for frame_idx, (frame, region) in enumerate(zip(frames, regions)):
+            self.logger.info(f"matching frame {frame_idx} region: {region}")
+            assert frame.ndim == 3
+            if downscale_factor != 1:
+                frame = resize_image_progressive(
+                    frame,
+                    reduction_percent=1.0 - downscale_factor,
+                    reductions=2,
+                    return_intermediate_states=False,
+                )
+                # downscale the template boxes
+                cv2.imwrite(
+                    f"/tmp/dim/template_image_downscaled_{frame_idx}.png",
+                    frame,
+                )
 
-            # cv2.imwrite(f"/tmp/dim/frame_downscaled_{i}.png", frame)
+            page_words = []
+            page_boxes = []
+            page_lines = []
+
+            if metadata is not None:
+                page_words, page_boxes, page_lines = get_words_and_boxes(
+                    metadata, frame_idx, include_lines=True
+                )
 
             # for profiling
             durations_in_seconds = dict()
-
             # currently only 1 batch supported
             num_batch = 1
-            # convert to PIL image
             image = Image.fromarray(frame)
-            slice_height = window_size[0]
-            slice_width = window_size[1]
-            overlap_height_ratio = 0.2
-            overlap_width_ratio = 0.2
-            output_file_name = "frame_"
+
+            if self.slicing_enabled:
+                slice_height = window_size[0]
+                slice_width = window_size[1]
+                overlap_height_ratio = self.DEFAULT_OVERLAP_HEIGHT_RATIO
+                overlap_width_ratio = self.DEFAULT_OVERLAP_WIDTH_RATIO
+                output_file_name = "frame_"
+            else:
+                slice_height = frame.shape[0]
+                slice_width = frame.shape[1]
+                overlap_height_ratio = 0
+                overlap_width_ratio = 0
+                output_file_name = None
 
             # create slices from full image
             time_start = time.time()
             slice_image_result = slice_image(
                 image=image,
                 output_file_name=output_file_name,  # ADDED OUTPUT FILE NAME TO (OPTIONALLY) SAVE SLICES
-                output_dir="/tmp/dim/slices",  # ADDED INTERIM DIRECTORY TO (OPTIONALLY) SAVE SLICES
+                output_dir=None,  # "/tmp/dim/slices",  # ADDED INTERIM DIRECTORY TO (OPTIONALLY) SAVE SLICES
                 slice_height=slice_height,
                 slice_width=slice_width,
                 overlap_height_ratio=overlap_height_ratio,
@@ -219,52 +237,62 @@ class BaseTemplateMatcher(ABC):
 
             result_bboxes = []
             result_labels = []
-            results_scores = []
-
-            score_threshold = 0.001
-            score_threshold = 0.30
+            result_scores = []
+            result_snippets = []
 
             for idx, (patch, offset) in enumerate(zip(image_list, shift_amount_list)):
+                prediction_time_start = time.time()
                 offset_x, offset_y = offset
-
                 predictions = self.predict(
                     patch,
                     template_frames,
                     template_boxes,
                     template_labels,
+                    template_texts,
                     score_threshold,
-                    max_overlap,
+                    scoring_strategy,
                     max_objects,
-                    window_size,
-                    region,
-                    downscale_factor,
-                    batch_size,
+                    words=page_words,
+                    word_boxes=page_boxes,
+                    word_lines=page_lines,
                 )
-                self.logger.info(f"predictions: {predictions}")
+
+                prediction_time_end = time.time() - prediction_time_start
+                durations_in_seconds["prediction"] = prediction_time_end
+                print(
+                    "Slice-prediction performed in",
+                    durations_in_seconds["prediction"],
+                    "seconds.",
+                )
 
                 for prediction in predictions:
-                    bbox = prediction["bbox"]
+                    bbox = prediction.bbox
                     shifted_bbox = [
                         bbox[0] + offset_x,
                         bbox[1] + offset_y,
                         bbox[2],
                         bbox[3],
                     ]
-
+                    snippet = patch[
+                        bbox[1] : bbox[1] + bbox[3], bbox[0] : bbox[0] + bbox[2]
+                    ]
+                    result_snippets.append(snippet)
                     result_bboxes.append(shifted_bbox)
-                    result_labels.append(prediction["label"])
-                    results_scores.append(prediction["score"])
+                    result_labels.append(prediction.label)
+                    result_scores.append(prediction.score)
 
-            result_bboxes, result_labels, results_scores = self.filter_scores(
-                result_bboxes, result_labels, results_scores, score_threshold
+            result_bboxes, result_labels, result_scores = self.filter_scores(
+                result_bboxes,
+                result_labels,
+                result_scores,
+                result_snippets,
+                score_threshold,
             )
-
-            print("bboxes before : ", result_bboxes)
 
             result_bboxes = [
                 bbox
                 for _, bbox in sorted(
-                    zip(results_scores, result_bboxes),
+                    zip(result_scores, result_bboxes),
                     key=lambda pair: pair[0],
                     reverse=True,
                 )
@@ -272,47 +300,69 @@ class BaseTemplateMatcher(ABC):
             result_labels = [
                 label
                 for _, label in sorted(
-                    zip(results_scores, result_labels),
+                    zip(result_scores, result_labels),
                     key=lambda pair: pair[0],
                     reverse=True,
                 )
             ]
 
-            results_scores = sorted(results_scores, reverse=True)
+            result_scores = sorted(result_scores, reverse=True)
 
             object_prediction_list: List[
                 ObjectPrediction
             ] = self.to_object_prediction_list(
-                result_bboxes, result_labels, results_scores
+                result_bboxes, result_labels, result_scores
             )
 
-            # postprocess predictions
-            # postprocess matching predictions
             if postprocess is not None:
                 object_prediction_list = postprocess(object_prediction_list)
 
-            print("object_prediction_list : ", object_prediction_list)
-            time_end = time.time() - time_start
-            durations_in_seconds["postprocess"] = time_end
-
-            object_result_map = self.to_object_result_map(object_prediction_list)
+            durations_in_seconds["postprocess"] = time.time() - time_start
+            object_result_map = self.to_object_result_map(
+                object_prediction_list, frame_idx
+            )
 
             # flatten the object_result_map
             result_bboxes = []
             result_labels = []
-            results_scores = []
+            result_scores = []
+            result_snippets = []
+            idx = 0
 
             for label, predictions in object_result_map.items():
                 for prediction in predictions:
-                    result_bboxes.append(prediction["bbox"])
-                    result_labels.append(prediction["label"])
-                    results_scores.append(prediction["score"])
+                    snippet = frame[
+                        prediction.bbox[1] : prediction.bbox[1] + prediction.bbox[3],
+                        prediction.bbox[0] : prediction.bbox[0] + prediction.bbox[2],
+                    ]
+                    result_bboxes.append(prediction.bbox)
+                    result_labels.append(prediction.label)
+                    result_scores.append(prediction.score)
+                    result_snippets.append(snippet)
 
-            results[i] = {"frame": i, "predictions": object_result_map}
+                    # if we have downscale_factor we need to resize the prediction bbox
+                    if downscale_factor != 1:
+                        prediction.bbox = [
+                            int(x / downscale_factor) for x in prediction.bbox
+                        ]
 
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    results.append(
+                        TemplateMatchResult(
+                            bbox=prediction.bbox,
+                            label=prediction.label,
+                            score=prediction.score,
+                            similarity=prediction.similarity,
+                            frame_index=frame_idx,
+                        )
+                    )
+                    cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
+                    idx += 1
+
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
             self.visualize_object_predictions(
-                result_bboxes, result_labels, results_scores, frame, i
+                result_bboxes, result_labels, result_scores, frame, frame_idx
             )
 
             time_end = time.time() - time_start
@@ -330,23 +380,64 @@ class BaseTemplateMatcher(ABC):
                     durations_in_seconds["prediction"],
                     "seconds.",
                 )
-
+        torch_gc()
         return results
 
-    def visualize_object_predictions(
-        self, bboxes, labels, scores, frame, index
-    ) -> None:
-        for bbox, label, score in zip(bboxes, labels, scores):
-            print(" -- bbox : ", bbox, score)
-
-            cv2.rectangle(
-                frame,
-                (bbox[0], bbox[1]),
-                (bbox[0] + bbox[2], bbox[1] + bbox[3]),
-                (0, 255, 0),
-                2,
+    def setup_postprocess(self):
+        postprocess_type = "GREEDYNMM"
+        postprocess_match_metric = "IOS"
+        postprocess_match_threshold = 0.5
+        postprocess_class_agnostic = False
+        # init match postprocess instance
+        if postprocess_type not in POSTPROCESS_NAME_TO_CLASS.keys():
+            raise ValueError(
+                f"postprocess_type should be one of {list(POSTPROCESS_NAME_TO_CLASS.keys())} but given as {postprocess_type}"
             )
+        postprocess_constructor = POSTPROCESS_NAME_TO_CLASS[postprocess_type]
+        postprocess = postprocess_constructor(
+            match_threshold=postprocess_match_threshold,
+            match_metric=postprocess_match_metric,
+            class_agnostic=postprocess_class_agnostic,
+        )
+        return postprocess
 
+    @staticmethod
+    def visualize_object_predictions(
+        bboxes, labels, scores, frame, index, border_only=True
+    ) -> None:
+        """
+        Visualize the object predictions on the frame.
+        :param bboxes:  bounding boxes to visualize
+        :param labels:  labels to visualize
+        :param scores:  scores to visualize
+        :param frame:  frame to draw the predictions on
+        :param index:  index of the frame
+        :param border_only:  whether to draw only the border of the bounding boxes
+        :return:
+        """
+
+        colors = {label: np.random.randint(0, 255, 3).tolist() for label in set(labels)}
+        for bbox, label, score in zip(bboxes, labels, scores):
+            if border_only:
+                cv2.rectangle(
+                    frame,
+                    (bbox[0], bbox[1]),
+                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                    # (0, 255, 0),
+                    colors[label],
+                    2,
+                )
+            else:
+                overlay = frame.copy()
+                cv2.rectangle(
+                    overlay,
+                    (bbox[0], bbox[1]),
+                    (bbox[0] + bbox[2], bbox[1] + bbox[3]),
+                    colors[label],  # color of the overlay
+                    -1,
+                )
+                alpha = 0.5
+                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
             cv2.putText(
                 frame,
                 f"{score:.2f}",
@@ -357,20 +448,24 @@ class BaseTemplateMatcher(ABC):
                 (0, 0, 255),
                 1,
             )
-        cv2.imwrite(f"/tmp/dim/results_frame_{index}.png", frame)
+
+        # create random id for the frame
+        rid = np.random.randint(0, 1000)
+        cv2.imwrite(f"/tmp/dim/results_frame_{index}-rid_{rid}.png", frame)
 
     def filter_scores(
-        self, bboxes, labels, scores, score_threshold
+        self, bboxes, labels, scores, snippets, score_threshold
     ) -> tuple[list, list, list]:
         """
         Filter out scores below the threshold.
         :param bboxes: bounding boxes
         :param labels: labels to filter
         :param scores:  scores to filter
+        :param snippets: snippets to filter
         :param score_threshold:
         :return:
         """
-
+        assert len(bboxes) == len(labels) == len(scores) == len(snippets)
         bboxes = [
             bbox for bbox, score in zip(bboxes, scores) if score > score_threshold
         ]
@@ -409,9 +504,9 @@ class BaseTemplateMatcher(ABC):
 
         return object_prediction_list
 
-    def to_object_result_map(self, object_prediction_list: List[ObjectPrediction]):
-        import sahi.annotation as BoundingBox
-        import sahi.prediction as PredictionScore
+    def to_object_result_map(
+        self, object_prediction_list: List[ObjectPrediction], frame_idx: int
+    ):
 
         object_result_map = {}
         for object_prediction in object_prediction_list:
@@ -425,12 +520,15 @@ class BaseTemplateMatcher(ABC):
             score: PredictionScore = object_prediction.score
             score = score.value
 
-            prediction = {
-                "bbox": bbox,
-                "label": label,
-                "score": score,
-            }
-            object_result_map[label].append(prediction)
+            object_result_map[label].append(
+                TemplateMatchResult(
+                    bbox=bbox,
+                    label=label,
+                    score=score,
+                    similarity=score,
+                    frame_index=frame_idx,
+                )
+            )
         return object_result_map
 
     def viz_patches(self, patches, filename: str) -> None:
@@ -454,3 +552,69 @@ class BaseTemplateMatcher(ABC):
         # plt.show()
         plt.savefig(filename)
         plt.close()
+
+    @staticmethod
+    def extract_windows(
+        image: np.ndarray,
+        template_bboxes: list[Union[tuple[int, int, int, int], list[int]]],
+        window_size: tuple[int, int],
+        allow_padding: bool = False,
+    ) -> tuple[list[np.ndarray], list[tuple[int, int, int, int]]]:
+        """
+        Extract windows snippet from the input image centered around the template bbox and resize it to the desired size.
+
+        :param image: input image in the format (h, w, c) to extract the windows from
+        :param template_bboxes: list of bboxes in the format (x, y, w, h)
+        :param window_size: (h, w) size of the window to extract
+        :param allow_padding:  whether to allow padding the image to the desired size if it is smaller than the window size
+        :return: list of windows and list of bboxes
+        """
+
+        windows = []
+        bboxes = []
+
+        img_h, img_w = image.shape[:2]
+        desired_h, desired_w = window_size
+
+        if img_h < window_size[0] or img_w < window_size[1]:
+            if not allow_padding:
+                raise ValueError(
+                    f"Image size should be greater than the window size, expected {window_size} but got {image.shape[:2]}"
+                )
+
+            image = cv2.copyMakeBorder(
+                image,
+                0,
+                max(0, window_size[0] - img_h),
+                0,
+                max(0, window_size[1] - img_w),
+                cv2.BORDER_CONSTANT,
+                value=(255, 255, 255),
+            )
+            img_h, img_w = image.shape[:2]
+
+        for box in template_bboxes:
+            x_, y_, w_, h_ = box  # x, y, w, h
+
+            center_x = x_ + w_ // 2
+            center_y = y_ + h_ // 2
+
+            x = max(0, center_x - desired_w // 2)
+            y = max(0, center_y - desired_h // 2)
+            w = desired_w
+            h = desired_h
+
+            if x + w > img_w:
+                x = img_w - w
+            if y + h > img_h:
+                y = img_h - h
+
+            window = image[y : y + h, x : x + w, :]
+            coord = center_x - x - w_ // 2, center_y - y - h_ // 2, w_, h_
+            if window.shape[0] != window_size[0] or window.shape[1] != window_size[1]:
+                raise Exception(
+                    "Template frame size does not match window size, please resize the template frames to match the window size"
+                )
+            windows.append(window)
+            bboxes.append(coord)
+        return windows, bboxes

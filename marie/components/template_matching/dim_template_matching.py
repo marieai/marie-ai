@@ -101,13 +101,15 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: float = None,
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
+        scoring_strategy: int = "weighted",
         max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
-        batch_size: Optional[int] = None,
+        batch_size: tuple[int, int] = 1,
+        words: tuple[int, int, int, int] = None,
+        word_boxes: int = None,
+        word_lines: Optional[int] = None,
+        top_k=1,
     ) -> list[tuple[int, int, int, int]]:
 
         featex = self.featex
@@ -118,9 +120,6 @@ class DeepDimTemplateMatcher(BaseTemplateMatcher):
         for template_raw, template_bbox, template_label in zip(
             template_frames, template_boxes, template_labels
         ):
-            print("template_label", template_label)
-            print("template_bbox", template_bbox)
-
             x, y, w, h = [int(round(t)) for t in template_bbox]
             template_plot = cv2.rectangle(
                 template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2

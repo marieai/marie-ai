@@ -108,7 +108,8 @@ if docarray_v2:
             try:
                 if issubclass(field, DocList):
                     t: Any = field.doc_type
-                    fields[field_name] = (List[t], field_info)
+                    t_aux = _create_aux_model_doc_list_to_list(t)
+                    fields[field_name] = (List[t_aux], field_info)
                 else:
                     fields[field_name] = (field, field_info)
             except TypeError:
@@ -174,7 +175,9 @@ if docarray_v2:
             for rec in range(num_recursions):
                 ret = List[ret]
         elif field_type == 'number':
-            if num_recursions <= 1:
+            if num_recursions == 0:
+                ret = float
+            elif num_recursions == 1:
                 # This is a hack because AnyTensor is more generic than a simple List and it comes as simple List
                 if is_tensor:
                     ret = AnyTensor

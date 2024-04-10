@@ -350,7 +350,7 @@ def _evaluate_predictions_on_lvis(lvis_gt, lvis_results, iou_type, class_names=N
 
     lvis_results = LVISResults(lvis_gt, lvis_results)
     lvis_eval = LVISEval(lvis_gt, lvis_results, iou_type)
-    lvis_eval.run()
+    lvis_eval.run(,
     lvis_eval.print_results()
 
     # Pull the standard metrics from the LVIS results

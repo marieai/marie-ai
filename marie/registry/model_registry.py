@@ -317,8 +317,8 @@ class ModelRegistry:
         If URI points to a remote resource, this function may download and cache
         the resource to local disk. Depending on the protocol, this cache may be shared with other providers.
 
-        :param version: Optional version of the resource
         :param name_or_path: URI path to resource
+        :param version: Optional version of the resource
         :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
 
         :return: Local folder path (string) of repo if found, else None
@@ -329,6 +329,75 @@ class ModelRegistry:
         return handler.get_local_path(
             name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
         )  # type: ignore
+
+    @staticmethod
+    def config(
+        name_or_path: str,
+        version: Optional[str] = None,
+        raise_exceptions_for_missing_entries: Optional[bool] = True,
+        **kwargs: Any,
+    ) -> Union[str, None]:
+        """
+        Get a configuration for the model.
+
+        :param name_or_path: URI path to resource
+        :param version: Optional version of the resource
+        :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
+        """
+
+        resolved_path = ModelRegistry.get(
+            name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
+        )
+
+        if resolved_path is not None:
+            full_filename = "marie.json"
+            if os.path.isdir(resolved_path):
+                config = os.path.join(resolved_path, full_filename)
+            elif os.path.isfile(resolved_path):
+                config = resolved_path
+            else:
+                raise EnvironmentError(
+                    f"{resolved_path} does not appear to have a file named {full_filename}"
+                )
+            with open(config, "r", encoding="utf-8") as json_file:
+                data = json.load(json_file)
+                return data
+
+    @staticmethod
+    def checkpoint(
+        name_or_path: str,
+        version: Optional[str] = None,
+        raise_exceptions_for_missing_entries: Optional[bool] = True,
+        checkpoint: str = "pytorch_model.bin",
+        **kwargs: Any,
+    ) -> Union[str, None]:
+        """
+        Load a checkpoint for the model. This is a file that contains the model weights. Defaults to `pytorch_model.bin`.
+
+        :param name_or_path: URI path to resource
+        :param version: Optional version of the resource
+        :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
+        :param checkpoint: Name of the checkpoint file to load (default: `pytorch_model.bin`)
+        """
+        resolved_path = ModelRegistry.get(
+            name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
+        )
+
+        if resolved_path is not None:
+            if checkpoint is not None:
+                full_filename = checkpoint
+            else:
+                full_filename = "pytorch_model.bin"
+
+            if os.path.isdir(resolved_path):
+                checkpoint = os.path.join(resolved_path, full_filename)
+            elif os.path.isfile(resolved_path):
+                checkpoint = resolved_path
+            else:
+                raise EnvironmentError(
+                    f"{resolved_path} does not appear to have a file named {full_filename}"
+                )
+            return checkpoint
 
     @staticmethod
     def register_handler(handler: ModelRegistryHandler) -> None:

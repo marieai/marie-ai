@@ -5,45 +5,18 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
+from ...utils.resize_image import resize_image
 from .base import BaseTemplateMatcher
+from .model import TemplateMatchResult
 from .vqnnf.matching.feature_extraction import PixelFeatureExtractor
-from .vqnnf.matching.sim import similarity_score
 from .vqnnf.matching.template_matching import VQNNFMatcher
-
-
-def augment_document(glow_radius, glow_strength, src_image):
-    if True:
-        img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
-        return img_blurred
-
-    # dilate and erode to get the glow
-    # img_blurred = cv2.erode(src_image, np.ones((3, 3), np.uint8), iterations=1)
-    img_dilated = cv2.dilate(src_image, np.ones((3, 3), np.uint8), iterations=2)
-
-    # change the color of dilated image
-    img_dilated[:, :, 0] = 255
-    overlay = cv2.addWeighted(img_dilated, 0.4, src_image, 1, 1).astype(np.uint8)
-    return overlay
-
-    # img_dilated = cv2.GaussianBlur(img_dilated, (glow_radius, glow_radius), 1)
-    # img_dilated = img_dilated.astype(np.uint8)
-    # img_dilated = cv2.addWeighted(src_image, 1, img_dilated, 1, 0)
-
-    max_val = np.max(img_blurred, axis=2)
-    # max_val[max_val < 160] = 160
-    # max_val[max_val > 200] = 255
-    max_val = max_val.astype(np.uint8)
-    max_val = np.stack(
-        [max_val, np.zeros_like(max_val), np.zeros_like(max_val)], axis=2
-    )
-
-    max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
-    return max_val
 
 
 def odd(f):
@@ -85,7 +58,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
         """
-        super().__init__(**kwargs)
+        super().__init__(True, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document matcher : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
@@ -110,10 +83,19 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         self.rect_haar_filter = 1
         self.scale = 3
         self.pca_dim = 128
+
         self.feature_extractor = PixelFeatureExtractor(
             model_name=self.model_name, num_features=self.n_feature
         )
         self.feature_extractor_sim = self.feature_extractor
+
+        self.embeddings_processor = OpenAIEmbeddings(
+            model_name_or_path="marie/clip-snippet-rn50x4"
+            # model_name_or_path="hf://openai/clip-vit-base-patch32"
+        )
+
+        self.cached_features = {}
+        self.cached_embeddings_clips = {}
 
     def predict(
         self,
@@ -121,72 +103,41 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         template_frames: list[np.ndarray],
         template_boxes: list[tuple[int, int, int, int]],
         template_labels: list[str],
+        template_texts: list[str] = None,
         score_threshold: float = 0.9,
-        max_overlap: float = 0.5,
+        scoring_strategy: str = "weighted",
         max_objects: int = 1,
-        window_size: tuple[int, int] = (384, 128),  # h, w
-        region: tuple[int, int, int, int] = None,
-        downscale_factor: int = 1,
-        batch_size: Optional[int] = None,
-    ) -> list[tuple[int, int, int, int]]:
+        batch_size: int = 1,
+        words: list[str] = None,
+        word_boxes: list[tuple[int, int, int, int]] = None,
+        word_lines: list[tuple[int, int, int, int]] = None,
+    ) -> list[TemplateMatchResult]:
 
         feature_extractor = self.feature_extractor
 
-        similarities = []
-        temp_ws = []
-        temp_hs = []
-        image_sizes = []
-        temp_match_time = []
-        kmeans_time = []
         xs = []
         ys = []
         ws = []
         hs = []
-        predictions = []
 
-        for idx, (template_raw, template_bbox, template_label) in enumerate(
+        predictions = []
+        query_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        query_image_features = feature_extractor.get_features(query_image)
+
+        for idx, (template_image, template_bbox, template_label) in enumerate(
             zip(template_frames, template_boxes, template_labels)
         ):
-            print("template_label", template_label)
-            print("template_bbox", template_bbox)
-
             x, y, w, h = [int(t) for t in template_bbox]
-
-            template_plot = cv2.rectangle(
-                template_raw.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
-            )
-
-            template_image = template_raw.copy()
-            query_image = frame.copy()
-
+            cache_key = f"key_{x}_{y}_{w}_{h}"
+            # template_snippet = template_image[:, y: y + h, x: x + w]
+            # cache_key = template_snippet.tobytes()
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
-            query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
-            glow_strength = 1  # 0: no glow, no maximum
-            glow_radius = 25  # blur radius
-
-            # Only modify the RED channel
-            if glow_strength > 0:
-                template_image = cv2.cvtColor(template_image, cv2.COLOR_RGB2BGR)
-                query_image = cv2.cvtColor(query_image, cv2.COLOR_RGB2BGR)
-
-                template_image = augment_document(
-                    glow_radius, glow_strength, template_image
+            if cache_key not in self.cached_features:
+                self.cached_features[cache_key] = feature_extractor.get_features(
+                    template_image
                 )
-                query_image = augment_document(glow_radius, glow_strength, query_image)
-
-                # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_template_GLOW.png", template_image)
-                # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_query_GLOW.png", query_image)
-
-                # expect RGB images
-                template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
-                query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
-
-            cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
-            cv2.imwrite("/tmp/dim/query_image.png", query_image)
-            cv2.imwrite("/tmp/dim/template_image.png", template_image)
-
-            template_image_features = feature_extractor.get_features(template_image)
+            template_image_features = self.cached_features[cache_key]
 
             temp_x, temp_y, temp_w, temp_h = template_bbox
             temp_x = int(max(temp_x, 0))
@@ -194,6 +145,19 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
             template_features = template_image_features[
                 :, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
+
+            if True:
+                template_plot = cv2.rectangle(
+                    template_image.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
+                )
+                fragment = template_image[
+                    temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
+                ]
+
+                cv2.imwrite("/tmp/dim/template_plot.png", template_plot)
+                cv2.imwrite("/tmp/dim/query_image.png", query_image)
+                cv2.imwrite("/tmp/dim/template_image.png", template_image)
+                cv2.imwrite("/tmp/dim/template_bbox_fragment.png", fragment)
 
             template_matcher = VQNNFMatcher(
                 template=template_features,
@@ -209,109 +173,209 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 verbose=True,
             )
 
-            query_image_features = feature_extractor.get_features(query_image)
-
-            torch.cuda.synchronize()
-            t1 = time.time()
             (
                 heatmap,
                 filt_heatmaps,
                 template_nnf,
                 query_nnf,
             ) = template_matcher.get_heatmap(query_image_features)
-            torch.cuda.synchronize()
-            t2 = time.time()
 
             query_w, query_h = template_bbox[3], template_bbox[2]
 
-            query_x, query_y = np.unravel_index(np.argmax(heatmap), heatmap.shape)
-            query_x = int(query_x + 1 - (odd(query_w) - 1) / 2)
-            query_y = int(query_y + 1 - (odd(query_h) - 1) / 2)
+            for k in range(max_objects):
+                query_x, query_y = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+                query_x = int(query_x + 1 - (odd(query_w) - 1) / 2)
+                query_y = int(query_y + 1 - (odd(query_h) - 1) / 2)
 
-            xs.append(query_y)
-            ys.append(query_x)
-            ws.append(
-                query_h
-            )  # This looks like a bug, but it's not. we have to swap h and w here
-            hs.append(query_w)
+                xs.append(query_y)
+                ys.append(query_x)
+                ws.append(
+                    query_h
+                )  # This looks like a bug, but it's not. we have to swap h and w here
+                hs.append(query_w)
 
-            # This looks like a bug, but it's not. we have to swap h and w here
-            qxs = query_y
-            qys = query_x
-            qws = query_h
-            qhs = query_w
+                # This looks like a bug, but it's not. we have to swap h and w here
+                qxs = query_y
+                qys = query_x
+                qws = query_h
+                qhs = query_w
 
-            query_pred_snippet = query_image[
-                qys : qys + qhs, qxs : qxs + qws, :
-            ]  # three channels
+                query_pred_snippet = query_image[
+                    qys : qys + qhs, qxs : qxs + qws, :
+                ]  # three channels
 
-            template_snippet = template_image[
-                max(temp_y, 0) : min(temp_y + temp_h, template_image.shape[0]),
-                max(temp_x, 0) : min(temp_x + temp_w, template_image.shape[1]),
-                :,
-            ]
-            image_pd = (qxs, qys, qws, qhs)
+                template_snippet = template_image[
+                    max(temp_y, 0) : min(temp_y + temp_h, template_image.shape[0]),
+                    max(temp_x, 0) : min(temp_x + temp_w, template_image.shape[1]),
+                    :,
+                ]
+                image_pd = (qxs, qys, qws, qhs)
+                if template_snippet.shape != query_pred_snippet.shape:
+                    if template_snippet.shape[0] == 0 or template_snippet.shape[1] == 0:
+                        self.logger.warning("Template snippet is empty")
+                        continue
+                    if (
+                        query_pred_snippet.shape[0] == 0
+                        or query_pred_snippet.shape[1] == 0
+                    ):
+                        self.logger.warning("Query snippet is empty")
+                        continue
+                    query_pred_snippet = cv2.resize(
+                        query_pred_snippet,
+                        (template_snippet.shape[1], template_snippet.shape[0]),
+                    )
 
-            sim_val = similarity_score(template_snippet, query_pred_snippet, "ssim")
-            similarities.append(sim_val)
+                sim_val = self.score(
+                    template_snippet, query_pred_snippet, scoring_strategy
+                )
+                if sim_val < score_threshold:
+                    break
 
-            t = cv2.resize(template_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-            q = cv2.resize(query_pred_snippet, (224, 224), interpolation=cv2.INTER_AREA)
-
-            template_snippet_features = self.feature_extractor_sim.get_features(t)
-            query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
-
-            cosine = nn.CosineSimilarity(dim=1)
-            sim = cosine(
-                template_snippet_features.reshape(1, -1),
-                query_pred_snippet_features.reshape(1, -1),
-            )
-            sim = sim.cpu().numpy()[0]
-            print("sim", sim)
-            # sim_val = sim_val
-            sim_val = (sim_val + sim) / 2
-
-            if True:  # verbose:
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_template_nnf.png",
-                    cv2.applyColorMap(
-                        (
-                            (
-                                (template_nnf - template_nnf.min())
-                                / (template_nnf.max() - template_nnf.min())
-                            )
-                            * 255
-                        ).astype(np.uint8),
-                        cv2.COLORMAP_JET,
-                    ),
+                predictions.append(
+                    TemplateMatchResult(
+                        bbox=image_pd,
+                        label=template_label,
+                        score=sim_val,
+                        similarity=sim_val,
+                        frame_index=-1,
+                    )
                 )
 
-                cv2.imwrite(
-                    f"/tmp/dim/{idx}_query_nnf.png",
-                    cv2.applyColorMap(
-                        (
+                if False:  # verbose:
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_template_nnf.png",
+                        cv2.applyColorMap(
                             (
-                                (query_nnf - query_nnf.min())
-                                / (query_nnf.max() - query_nnf.min())
-                            )
-                            * 255
-                        ).astype(np.uint8),
-                        cv2.COLORMAP_JET,
-                    ),
-                )
+                                (
+                                    (template_nnf - template_nnf.min())
+                                    / (template_nnf.max() - template_nnf.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-            predictions.append(
-                {
-                    "bbox": image_pd,
-                    "label": template_label,
-                    "score": round(sim_val, 3),
-                    "similarity": round(sim_val, 3),
-                }
-            )
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_query_nnf.png",
+                        cv2.applyColorMap(
+                            (
+                                (
+                                    (query_nnf - query_nnf.min())
+                                    / (query_nnf.max() - query_nnf.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-            cv2.imwrite(f"/tmp/dim/{idx}_query_pd_snippet.png", query_pred_snippet)
-            cv2.imwrite(f"/tmp/dim/{idx}_template_snippet.png", template_snippet)
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_heatmap.png",
+                        cv2.applyColorMap(
+                            (
+                                (
+                                    (heatmap - heatmap.min())
+                                    / (heatmap.max() - heatmap.min())
+                                )
+                                * 255
+                            ).astype(np.uint8),
+                            cv2.COLORMAP_JET,
+                        ),
+                    )
 
-            break
+                if False:
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_query_pd_snippet_{round(sim_val, 3)}.png",
+                        query_pred_snippet,
+                    )
+                    cv2.imwrite(
+                        f"/tmp/dim/{idx}_{k}_template_snippet_{round(sim_val, 3)}.png",
+                        template_snippet,
+                    )
 
+                if True:
+                    stacked = np.hstack((template_snippet, query_pred_snippet))
+                    cv2.imwrite(
+                        f"/tmp/dim/final/stacked_{idx}_{k}__{round(sim_val, 3)}.png",
+                        stacked,
+                    )
+
+                # set all the values to a low valu on heatmap to avoid duplicates in the next iteration
+                heatmap[qys : qys + qhs, qxs : qxs + qws] = -0.82
         return predictions
+
+    def score(
+        self, template_snippet, query_pred_snippet, scoring_strategy: str
+    ) -> float:
+        # resize the images to be the same size
+        # 224x224 is the default size for the efficientnet model
+        # we use the 224x224 for the feature extraction and the 384x384 for the embedding extraction
+        t_clip = resize_image(template_snippet, (224, 224))[0]
+        q_clip = resize_image(query_pred_snippet, (224, 224))[0]
+        cosine = nn.CosineSimilarity(dim=1)
+
+        t = t_clip
+        q = q_clip
+
+        template_snippet_features = self.feature_extractor_sim.get_features(t)
+        query_pred_snippet_features = self.feature_extractor_sim.get_features(q)
+
+        feature_sim = cosine(
+            template_snippet_features.view(1, -1),
+            query_pred_snippet_features.view(1, -1),
+        )
+
+        # TODO : add the embedding similarity for the text
+        words = []
+        boxes = []
+
+        template_snippet_features = self.get_embedding_feature(
+            t_clip, words=[], boxes=[]
+        )
+        query_pred_snippet_features = self.get_embedding_feature(
+            q_clip, words=[], boxes=[]
+        )
+
+        embedding_sim = cosine(
+            torch.from_numpy(template_snippet_features).view(1, -1),
+            torch.from_numpy(query_pred_snippet_features).view(1, -1),
+        )
+
+        embedding_sim = embedding_sim.cpu().numpy()[0]
+        feature_sim = feature_sim.cpu().numpy()[0]
+        # feature_sim = 1
+        # we already know that the feature similarity is very high for the same image so we can use it as a weight
+        if scoring_strategy == "weighted":
+            embedding_weight = 0.95
+            feature_weight = 0.05
+            sim_val = (feature_sim * feature_weight) + (
+                embedding_sim * embedding_weight
+            )
+        elif scoring_strategy == "max":
+            sim_val = max(feature_sim, embedding_sim)
+        else:
+            sim_val = (feature_sim + embedding_sim) / 2
+        sim_val = max(0, min(1, sim_val))
+        return sim_val
+
+    def get_embedding_feature(
+        self, image: np.ndarray, words: list, boxes: list
+    ) -> np.ndarray:
+        key = image.tobytes()
+        if key in self.cached_embeddings_clips:
+            return self.cached_embeddings_clips[key]
+
+        # This is a pre-processing step to get the embeddings for the words and boxes in the image
+        # this is critical for the similarity calculation that we resize with PADDING and not just scaling
+        # image = resize_image(image, (224, 224))[0]
+        if image.shape[0] != 224 or image.shape[1] != 224:
+            raise ValueError("Image must be 224x224")
+
+        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        embedding = self.embeddings_processor.get_embeddings(
+            texts=words, boxes=boxes, image=image
+        )
+
+        self.cached_embeddings_clips[key] = embedding.embeddings
+        return embedding.embeddings

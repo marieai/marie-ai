@@ -2,37 +2,25 @@ import argparse
 import copy
 import os
 import time
-from typing import Any, Tuple, Union, Optional, Callable
+from typing import Any, Tuple, Union, Optional
 
 import PIL
 import cv2
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
-from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
-from detectron2.data import MetadataCatalog
-from detectron2.engine import DefaultPredictor
-from detectron2.modeling import build_model
-from torch import nn
-from torch._C._profiler import ProfilerActivity
-from torch.nn import Module
-from torch.profiler import profile
 
 from ditod import add_vit_config
 from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
 from marie.boxes.line_processor import find_line_number, line_merge
 from marie.constants import __model_path__, __config_dir__
+from marie.detectron.detector import OptimizedDetectronPredictor
 from marie.logging.logger import MarieLogger
-from marie.logging.profile import TimeContext
-from marie.models.utils import torch_gc, log_oom
+from marie.models.utils import torch_gc
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.overlap import merge_boxes
 from marie.utils.resize_image import resize_image
-
-import detectron2.data.transforms as T
-
-from marie.utils.types import strtobool
 
 
 def setup_cfg(args, device):
@@ -85,7 +73,7 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
 ) -> PIL.Image:
     """Visualize bounding boxes on the image
     Args:
@@ -95,11 +83,11 @@ def visualize_bboxes(
     """
 
     if image is None:
-        raise Exception(
+        raise ValueError(
             "Input image can't be empty : Ensure  overlay_bboxes is set to TRUE"
         )
-    # convert pil to OpenCV
-    if type(image) == PIL.Image.Image:
+
+    if isinstance(image, PIL.Image.Image):
         image = np.array(image)
 
     viz_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -230,7 +218,7 @@ def lines_from_bboxes(image, bboxes):
 
 
 def crop_to_content_box(
-        frame: np.ndarray, content_aware=False
+    frame: np.ndarray, content_aware=False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
@@ -287,161 +275,11 @@ def crop_to_content_box(
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
+    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
     return offset, cropped
-
-
-class OptimizedDetectronPredictor:
-    """
-    Optimized version of the detectron2 predictor.
-    """
-
-    def __init__(self, cfg, half_precision=True):
-        """
-        Initialize the model with the given config.
-        :param cfg: the detectron2 config
-        :param half_precision:   whether to use half precision or not (default: True) will only work on CUDA
-        """
-        self.logger = MarieLogger(self.__class__.__name__)
-        self.profiler_enabled = strtobool(os.environ.get("MARIE_PROFILER_ENABLED", False))
-        self.half_precision = (
-            True if half_precision and cfg.MODEL.DEVICE == "cuda" else False
-        )
-
-        self.cfg = cfg.clone()  # cfg can be modified by model
-        self.model = build_model(self.cfg)
-        # self.model = self.optimize_model(self.model)
-
-        if self.half_precision:
-            self.logger.info("Detectron half precision enabled")
-            self.model = self.model.half()
-            self.model.to(self.cfg.MODEL.DEVICE)
-
-        for param in self.model.parameters():
-            param.grad = None
-
-        self.model.eval()
-
-        if len(cfg.DATASETS.TEST):
-            self.metadata = MetadataCatalog.get(cfg.DATASETS.TEST[0])
-
-        checkpointer = DetectionCheckpointer(self.model)
-        checkpointer.load(cfg.MODEL.WEIGHTS)
-
-        self.aug = T.ResizeShortestEdge(
-            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
-        )
-
-        self.input_format = cfg.INPUT.FORMAT
-        assert self.input_format in ["RGB", "BGR"], self.input_format
-
-    def __call__(self, original_image):
-        """
-        Args:
-            original_image (np.ndarray): an image of shape (H, W, C) (in BGR order).
-
-        Returns:
-            predictions (dict):
-                the output of the model for one image only.
-                See :doc:`/tutorials/models` for details about the format.
-        """
-        return self.invoke_model(original_image, raise_oom=False)
-
-    def invoke_model(self, original_image, raise_oom=False):
-        """
-        Invoke the model with the given image.
-        :param original_image:  an image of shape (H, W, C) (in BGR order).
-        :param raise_oom:  whether to raise OOM exception or not
-        :return:  the output of the model for one image only.
-        """
-        if raise_oom:
-            self.logger.warning("OOM detected, clearing cache and retrying")
-
-        with torch.inference_mode():
-            with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
-                try:
-                    # clear cache
-                    # Apply pre-processing to image.
-                    if self.input_format == "RGB":
-                        # whether the model expects BGR inputs or RGB
-                        original_image = original_image[:, :, ::-1]
-                    height, width = original_image.shape[:2]
-                    image = self.aug.get_transform(original_image).apply_image(
-                        original_image
-                    )
-                    image = torch.as_tensor(
-                        image.astype("float32").transpose(2, 0, 1),
-                        device=self.cfg.MODEL.DEVICE,
-                    )
-                    if self.half_precision:
-                        image = image.half()
-                    # image.to(self.cfg.MODEL.DEVICE)
-
-                    inputs = {"image": image, "height": height, "width": width}
-                    if self.profiler_enabled:
-                        # ensure that output directory exists
-                        os.makedirs(os.path.expanduser("~/tmp/cuda-profiler"), exist_ok=True)
-
-                        with profile(
-                                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                                with_stack=True,
-                                profile_memory=True,
-                        ) as prof:
-                            predictions = self.model([inputs])[0]
-
-                        # Print aggregated stats
-                        print(
-                            prof.key_averages(group_by_stack_n=5).table(
-                                sort_by="self_cuda_time_total", row_limit=2
-                            )
-                        )
-                        prof.export_stacks(
-                            os.path.expanduser("~/tmp/cuda-profiler/profiler_stacks.txt"),
-                            "self_cuda_time_total",
-                        )
-                        prof.export_chrome_trace(
-                            os.path.expanduser("~/tmp/cuda-profiler/trace.json")
-                        )
-                    else:
-                        predictions = self.model([inputs])[0]
-
-                    del inputs
-                    return predictions
-                except RuntimeError as e:
-                    if "out of memory" in str(e) and not raise_oom:
-                        print("| WARNING: ran out of memory")
-                        for p in self.model.parameters():
-                            if p.grad is not None:
-                                del p.grad
-                        if hasattr(torch.cuda, "empty_cache"):
-                            torch.cuda.empty_cache()
-                        return self.invoke_model(original_image, raise_oom=True)
-                    else:
-                        raise e
-                finally:
-                    torch_gc()
-
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
-        """Optimizes the model for inference. This method is called by the __init__ method."""
-        try:
-            with TimeContext("Compiling model", logger=self.logger):
-                import torch._dynamo as dynamo
-                import torchvision.models as models
-
-                torch._dynamo.config.verbose = True
-                torch._dynamo.config.suppress_errors = True
-                # torch.backends.cudnn.benchmark = True
-                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
-                # model = torch.compile(model )
-                model = torch.compile(model, mode="reduce-overhead", dynamic=True)
-                return model
-        except Exception as err:
-            raise err
-            self.logger.warning(f"Model compile not supported: {err}")
-            return model
 
 
 class BoxProcessorUlimDit(BoxProcessor):
@@ -473,10 +311,10 @@ class BoxProcessorUlimDit(BoxProcessor):
     """
 
     def __init__(
-            self,
-            work_dir: str = "/tmp/boxes",
-            models_dir: str = __model_path__,
-            cuda: bool = False,
+        self,
+        work_dir: str = "/tmp/boxes",
+        models_dir: str = __model_path__,
+        cuda: bool = False,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
@@ -500,7 +338,9 @@ class BoxProcessorUlimDit(BoxProcessor):
         cfg = setup_cfg(args, device)
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
         # self.predictor = DefaultPredictor(cfg)
-        self.predictor = OptimizedDetectronPredictor(cfg, half_precision=True)
+        self.predictor = OptimizedDetectronPredictor(
+            cfg, half_precision=True
+        )  # TODO: half_precision=True should be from config
         self.cpu_device = torch.device("cpu")
 
     def psm_word(self, image):
@@ -509,11 +349,11 @@ class BoxProcessorUlimDit(BoxProcessor):
         return self.psm_sparse(image)
 
     def psm_sparse(
-            self,
-            image: np.ndarray,
-            bbox_optimization: Optional[bool] = False,
-            bbox_context_aware: Optional[bool] = True,
-            enable_visualization: Optional[bool] = False,
+        self,
+        image: np.ndarray,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
+        enable_visualization: Optional[bool] = False,
     ):
         try:
             self.logger.debug(f"Starting box predictions : {image.shape}")
@@ -527,8 +367,8 @@ class BoxProcessorUlimDit(BoxProcessor):
 
             # Both height and width are smaller than the minimum size then frame the image
             if (
-                    image.shape[0] < self.min_size_test[0]
-                    or image.shape[1] < self.min_size_test[1]
+                image.shape[0] < self.min_size_test[0]
+                or image.shape[1] < self.min_size_test[1]
             ):
                 self.logger.debug(
                     f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
@@ -620,7 +460,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     x0, y0, x1, y1 = box
                     w = x1 - x0
                     h = y1 - y0
-                    snippet = image[y0: y0 + h, x0: x0 + w:]
+                    snippet = image[y0 : y0 + h, x0 : x0 + w :]
                     offset, cropped = crop_to_content_box(
                         snippet, content_aware=bbox_context_aware
                     )
@@ -685,26 +525,26 @@ class BoxProcessorUlimDit(BoxProcessor):
 
     @torch.no_grad()
     def extract_bounding_boxes(
-            self,
-            _id,
-            key,
-            img: Union[np.ndarray, PIL.Image.Image],
-            psm=PSMode.SPARSE,
-            bbox_optimization: Optional[bool] = False,
-            bbox_context_aware: Optional[bool] = True,
+        self,
+        _id,
+        key,
+        img: Union[np.ndarray, PIL.Image.Image],
+        psm=PSMode.SPARSE,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
 
         if isinstance(img, PIL.Image.Image):  # convert pil to OpenCV
             # convert PIL.TiffImagePlugin.TiffImageFile to numpy array
-            self.logger.warning("PIL image received converting to ndarray")
+            self.logger.debug("PIL image received converting to ndarray")
             img = img.convert("RGB")
             converted = np.array(img, dtype=np.uint8)
             img = cv2.cvtColor(converted, cv2.COLOR_RGB2BGR)
 
         if not isinstance(img, np.ndarray):
-            raise Exception("Expected image in numpy format")
+            raise ValueError("Expected image in numpy format")
         # bbox_optimization = True
         try:
             crops_dir, debug_dir, lines_dir, mask_dir = create_dirs(
@@ -775,7 +615,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0: y0 + h, x0: x0 + w:]
+                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)

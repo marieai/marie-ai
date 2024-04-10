@@ -293,7 +293,7 @@ def docs_from_asset(
         # with open("/tmp/sample.tiff", "w") as temp_file_out:
         # print(f"Reading file from {uri} to {temp_file_out.name}")
         if not StorageManager.exists(uri):
-            raise Exception(f"Remote file does not exist : {uri}")
+            raise ValueError(f"Remote file does not exist : {uri}")
 
         StorageManager.read_to_file(uri, temp_file_out, overwrite=True)
         # Read the file to a byte array
@@ -305,7 +305,9 @@ def docs_from_asset(
             file_type = imghdr.what(memfile)
 
         if file_type not in ALLOWED_TYPES:
-            raise Exception(f"Unsupported file type, expected one of : {ALLOWED_TYPES}")
+            raise ValueError(
+                f"Unsupported file type, expected one of : {ALLOWED_TYPES}"
+            )
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found : {path}")
