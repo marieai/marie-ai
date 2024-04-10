@@ -1,25 +1,26 @@
+import argparse
 import os
 from typing import Any, Callable, List, Optional, Union
 
+import detectron2.data.transforms as T
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from detectron2.config import get_cfg
+from detectron2.engine import DefaultPredictor
+from detectron2.modeling import build_model
+from ditod import add_vit_config
 from PIL import Image
 from torch.nn import Module
 from tqdm import tqdm
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    LayoutLMv3ImageProcessor,
-    LayoutLMv3Processor,
-)
 
 from marie import DocumentArray
-from marie.constants import __model_path__
+from marie.constants import __config_dir__, __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from marie.utils.types import strtobool
 
+from ...detectron.detector import OptimizedDetectronPredictor
 from ...helper import batch_iterator
 from ...logging.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
@@ -27,10 +28,69 @@ from ..util import scale_bounding_box
 from .base import BaseDocumentBoundaryRegistration
 
 
+def setup_cfg(args, device):
+    """
+    Create configs and perform basic setups.
+    """
+    cfg = get_cfg()
+    add_vit_config(cfg)
+    cfg.merge_from_file(args.config_file)
+    cfg.merge_from_list(args.opts)
+
+    # set device
+    cfg.MODEL.DEVICE = device
+    cfg.MODEL.WEIGHTS = os.path.join(__model_path__, cfg.MODEL.WEIGHTS)
+    cfg.freeze()
+    # default_setup(cfg, args)
+    return cfg
+
+
+def get_parser():
+    parser = argparse.ArgumentParser(
+        description="DIT Object detection inference script"
+    )
+    parser.add_argument(
+        "--config-file",
+        default="./config/zoo/unilm/dit/object_detection/document_boundary/mask_rcnn_dit_base.yaml",
+        metavar="FILE",
+        help="path to config file",
+    )
+    parser.add_argument(
+        "--opts",
+        help="Modify config options using the command-line 'KEY VALUE' pairs",
+        default=[],
+        nargs=argparse.REMAINDER,
+    )
+
+    return parser
+
+
 class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
     """
-    Document boundary registration using the Large-scale Self-supervised Pre-training Across Tasks, Languages, and Modalities (UNILM)
-     model from Microsoft Research. https://github.com/microsoft/unilm/tree/master/dit/object_detection
+    Document boundary registration using the Large-scale Self-supervised Pre-training Across Tasks, Languages, and Modalities (Unilm)
+    models from Microsoft Research. https://github.com/microsoft/unilm/tree/master/dit/object_detection
+
+    EXAMPLE USAGE
+
+    .. code-block:: python
+
+        from marie.boxes import BoxProcessorUlimDit
+        from marie.boxes.box_processor import PSMode
+
+        box = BoxProcessorUlimDit(
+            models_dir="../../model_zoo/unilm/dit/text_detection",
+            cuda=True,
+        )
+        (
+            boxes,
+            fragments,
+            lines,
+            _,
+            lines_bboxes,
+        ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
+
+        bboxes_img = visualize_bboxes(image, boxes, format="xywh")
+        lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
     """
 
     def __init__(
@@ -44,7 +104,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         **kwargs,
     ):
         """
-        Load a document splitting model from ModelRepository or HuggingFace model hub.
+        Load a Unilm model for document boundary registration.
 
         TODO: ADD EXAMPLE AND CODE SNIPPET
 
@@ -59,8 +119,9 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                         parameter is not used and a single cpu device is used for inference.
         """
         super().__init__(**kwargs)
+
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document splitter : {model_name_or_path}")
+        self.logger.info(f"Document registration : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.progress_bar = False
@@ -75,20 +136,27 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        use_auth_token = kwargs.get("use_auth_token", None)
-        registry_kwargs = {
-            "__model_path__": __model_path__,
-            "use_auth_token": use_auth_token,
-        }
+        self.logger.info(f"Loading model from config dir {__config_dir__}")
 
-        model_name_or_path = ModelRegistry.get(
-            model_name_or_path,
-            version=None,
-            raise_exceptions_for_missing_entries=True,
-            **registry_kwargs,
+        args = get_parser().parse_args(
+            [
+                "--config-file",
+                os.path.join(
+                    __config_dir__,
+                    "zoo/unilm/dit/object_detection/document_boundary/prod.yaml",
+                ),
+            ]
         )
-        assert os.path.exists(model_name_or_path)
-        self.logger.info(f"Resolved model : {model_name_or_path}")
+
+        self.logger.info(f"Loading model from {args.config_file}")
+
+        cfg = setup_cfg(args, self.device)
+        self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
+        # self.predictor = DefaultPredictor(cfg)
+        self.predictor = OptimizedDetectronPredictor(
+            cfg, half_precision=True
+        )  # TODO: half_precision=True should be from config
+        self.cpu_device = torch.device("cpu")
 
     def predict(
         self,
@@ -104,19 +172,16 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         if len(documents) == 0:
             return documents
 
-        assert (
-            words is not None and boxes is not None
-        ), "words and boxes must be provided for sequence classification"
-        assert (
-            len(documents) == len(words) == len(boxes)
-        ), "documents, words and boxes must have the same length"
+        if words is None or boxes is None:
+            words = [None] * len(documents)
+            boxes = [None] * len(documents)
 
         batches = batch_iterator(documents, batch_size)
         predictions = []
         pb = tqdm(
             total=len(documents),
             disable=not self.progress_bar,
-            desc="Classifying documents",
+            desc="Segmenting documents",
         )
 
         for batch in batches:
@@ -128,9 +193,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                         f"Document content_type {doc.content_type} is not supported"
                     )
                 batch_results.append(
-                    self.predict_document_image(
-                        doc.tensor, words=w, boxes=b, top_k=self.top_k
-                    )
+                    self.predict_document_image(doc.tensor, words=w, boxes=b, top_k=1)
                 )
 
             predictions.extend(batch_results)
@@ -156,7 +219,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         """
         Predicts the label of a document image.
 
-        :param image: image to predict
+        :param image: image to predict on
         :param words: words in the image
         :param boxes: bounding boxes of the words
         :param top_k: number of predictions to return
@@ -164,56 +227,17 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         """
         id2label = self.model.config.id2label
         width, height = image.shape[1], image.shape[0]
-        width_scale = 1000 / width
-        height_scale = 1000 / height
-        boxes_normalized = [
-            scale_bounding_box(box, width_scale, height_scale) for box in boxes
-        ]
 
-        encoding = self.processor(
-            image,
-            words,
-            boxes=boxes_normalized,
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        with torch.inference_mode():
-            output = self.model(
-                input_ids=encoding["input_ids"].to(self.device),
-                attention_mask=encoding["attention_mask"].to(self.device),
-                bbox=encoding["bbox"].to(self.device),
-                pixel_values=encoding["pixel_values"].to(self.device),
-            )
-        # TODO: add top_k support
-
-        logits = output.logits
-        predicted_class = logits.argmax(-1)
-        probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
+        with torch.no_grad():
+            image = Image.fromarray(image)
+            print(f"Inference on image: {image.size}")
+            output = self.predictor(image)["instances"]
+            print(f"Output: {output}")
+            md = None
 
         return [
             {
-                "label": id2label[predicted_class.item()],
-                "score": probabilities[predicted_class.item()],
+                "label": "XX",
+                "score": 0.0,
             }
         ]
-
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
-        """Optimizes the model for inference. This method is called by the __init__ method."""
-        try:
-            with TimeContext("Compiling model", logger=self.logger):
-                import torch._dynamo as dynamo
-                import torchvision.models as models
-
-                torch._dynamo.config.verbose = False
-                torch._dynamo.config.suppress_errors = True
-                # torch.backends.cudnn.benchmark = True
-                # model = torch.compile(model, backend="inductor", mode="max-autotune")
-                # model = torch.compile(model, backend="onnxrt", fullgraph=False)
-                model = torch.compile(model)
-                return model
-        except Exception as err:
-            self.logger.warning(f"Model compile not supported: {err}")
-            return model

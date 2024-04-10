@@ -44,10 +44,10 @@ class BaseDocumentBoundaryRegistration(BaseHandler):
         Run the document boundary registration on the given documents.
 
         :param documents: the documents to find the registration for
-        :param words:
-        :param boxes:
-        :param batch_size:
-        :return:
+        :param words: Optional list of words for each document, some models might require this
+        :param boxes: Optional list of boxes for each document, some models might require this
+        :param batch_size: Optional batch size to use for prediction
+        :return: the registered documents
         """
         if documents:
             results = self.predict(
