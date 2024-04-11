@@ -21,7 +21,6 @@ def process_image(image):
     results = processor.run(documents)
 
     print("Results: ", results)
-
     # bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     # lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
     # return bboxes_img, lines_img
@@ -56,7 +55,7 @@ def interface():
 if __name__ == "__main__":
     import torch
 
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
     # torch._dynamo.config.suppress_errors = False
 

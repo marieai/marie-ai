@@ -190,7 +190,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             batch_results = []
 
             for doc, w, b in zip(batch, words, boxes):
-                print(f"Document content_type: {doc}")
                 batch_results.append(
                     self.predict_document_image(doc.tensor, words=w, boxes=b, top_k=1)
                 )
@@ -276,44 +275,110 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             scores = scores.numpy()
             classes = classes.numpy()
 
+            if len(boxes) == 0:
+                self.logger.warning(f"No segmentation boxes predicted.")
+                return []
+
             if len(boxes) > 1:
                 self.logger.warning(f"Multiple boxes detected, skipping segmentation.")
                 return []
 
-            box = [int(x) for x in boxes[0]]
+            box = [int(x) for x in boxes[0]]  # xyxy format
+            print("box(xyxy): ", box)
+
+            # adjust box by a padding of 10 on left and right and by 30 on top and bottom
+            # TODO : add this as a parameter
+            # TODO : Add more advanced logic to adjust the box
+
+            x0, y0, x1, y1 = box
+            w = x1 - x0
+            h = y1 - y0
+            x = x0
+            y = y0
+
+            margin_width = 5
+            margin_height = 5
+
+            p1 = [5, 5]
+            p1_x, p1_y = p1
+
+            box = [
+                max(0, x - margin_width),
+                max(0, y - margin_height),
+                min(width, w + margin_width * 2),
+                min(height, h + margin_height * 2),
+            ]
+
+            print("adjusted box(xywh): ", box)
+
             score = scores[0]
             label = classes[0]  # there is only one class in this model
 
-            registration_mode = "absolute"
-            p1 = [25, 25]
+            # registration_mode = "absolute"
+            registration_mode = "fit_to_page"
 
-            p1_x = p1[0]
-            p1_y = p1[1]
             new_image = np.ones((height, width, 3), dtype=np.uint8) * 255
-            print("new image created: ", new_image.shape)
-
+            boundary = image[box[1] : box[1] + box[3], box[0] : box[0] + box[2]]
+            cv2.imwrite("/tmp/dit/boundary_image.png", boundary)
             # absolute registration
-            # simply place the boundary at the offset point (p1_x, p1_y)
             if registration_mode == "absolute":
                 if p1_x + box[2] > width:
                     self.logger.warning(f"Offset x1 + box width is out of bounds.")
                     return []
-
                 if p1_y + box[3] > height:
                     self.logger.warning(f"Offset y1 + box height is out of bounds.")
                     return []
 
-                boundary = image[box[1] : box[1] + box[3], box[0] : box[0] + box[2]]
                 new_image[
                     p1_y : p1_y + boundary.shape[0], p1_x : p1_x + boundary.shape[1]
                 ] = boundary
-                # draw circle at the offset point
-                cv2.circle(new_image, (p1_x, p1_y), 5, (0, 0, 255), -1)
-                stacked = np.hstack([image, new_image])
+                cv2.circle(new_image, (p1_x, p1_y), 8, (0, 0, 255), -1)
 
-                cv2.imwrite("/tmp/dit/boundary_image.png", boundary)
-                cv2.imwrite("/tmp/dit/registration.png", new_image)
-                cv2.imwrite("/tmp/dit/stacked.png", stacked)
+            elif registration_mode == "fit_to_page":
+                new_width = width - p1_x * 2
+                scale_factor = 1
+                resized_boundary = boundary
+                if box[3] > box[2]:
+                    original_height, original_width = image.shape[:2]
+                    scale_factor = new_width / box[2]
+                    new_height = int(original_height * scale_factor)
+                    resized_boundary = cv2.resize(
+                        boundary, (new_width, new_height), interpolation=cv2.INTER_CUBIC
+                    )
+
+                cv2.imwrite("/tmp/dit/resized_boundary.png", resized_boundary)
+                bottom = height - p1_y - h * scale_factor
+                bottom = max(0, int(bottom))
+
+                new_image = cv2.copyMakeBorder(
+                    resized_boundary,
+                    p1_y,
+                    bottom,
+                    p1_x,
+                    p1_x,
+                    cv2.BORDER_CONSTANT,
+                    value=(0, 255, 255),
+                )
+
+                cv2.circle(new_image, (p1_x, p1_y), 8, (0, 0, 255), -1)
+                cv2.circle(new_image, (p1_x + new_width, p1_y), 8, (0, 0, 255), -1)
+
+            # ensure image and new image have the same width and height before stacking, debugging purposes only
+            if (
+                new_image.shape[0] != image.shape[0]
+                or new_image.shape[1] != image.shape[1]
+            ):
+                new_image = cv2.resize(
+                    new_image,
+                    (image.shape[1], image.shape[0]),
+                    interpolation=cv2.INTER_CUBIC,
+                )
+
+            divider = np.ones((new_image.shape[0], 5, 3), dtype=np.uint8) * 150
+            stacked = np.hstack([image, divider, new_image])
+            cv2.imwrite("/tmp/dit/registration.png", new_image)
+            cv2.imwrite("/tmp/dit/stacked.png", stacked)
+
         return [
             {
                 "label": "document",
