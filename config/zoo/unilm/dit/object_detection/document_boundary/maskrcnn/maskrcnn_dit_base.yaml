@@ -1,8 +1,10 @@
-_BASE_: "../Base-RCNN-FPN.yaml"
+_BASE_: "Base-RCNN-FPN.yaml"
 MODEL:
   PIXEL_MEAN: [ 127.5, 127.5, 127.5 ]
   PIXEL_STD: [ 127.5, 127.5, 127.5 ]
-  WEIGHTS: "https://layoutlm.blob.core.windows.net/dit/dit-pts/dit-base-224-p16-500k-62d53a.pth"
+  # WEIGHTS: "https://layoutlm.blob.core.windows.net/dit/dit-pts/dit-base-224-p16-500k-62d53a.pth"
+  WEIGHTS: "unilm/dit/object_detection/document_boundary/model_0055999.pth" # 040102024
+
   VIT:
     NAME: "dit_base_patch16"
 SOLVER:
