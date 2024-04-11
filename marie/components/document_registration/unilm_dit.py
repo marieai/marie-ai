@@ -2,6 +2,7 @@ import argparse
 import os
 from typing import Any, Callable, List, Optional, Union
 
+import cv2
 import detectron2.data.transforms as T
 import numpy as np
 import torch
@@ -9,6 +10,7 @@ import torch.nn as nn
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultPredictor
 from detectron2.modeling import build_model
+from detectron2.utils.visualizer import ColorMode, Visualizer
 from ditod import add_vit_config
 from PIL import Image
 from torch.nn import Module
@@ -51,7 +53,7 @@ def get_parser():
     )
     parser.add_argument(
         "--config-file",
-        default="./config/zoo/unilm/dit/object_detection/document_boundary/mask_rcnn_dit_base.yaml",
+        default="zoo/unilm/dit/object_detection/document_boundary/prod.yaml",
         metavar="FILE",
         help="path to config file",
     )
@@ -150,7 +152,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
 
         self.logger.info(f"Loading model from {args.config_file}")
 
-        cfg = setup_cfg(args, self.device)
+        cfg = setup_cfg(args, self.device.type)
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
         # self.predictor = DefaultPredictor(cfg)
         self.predictor = OptimizedDetectronPredictor(
@@ -188,10 +190,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             batch_results = []
 
             for doc, w, b in zip(batch, words, boxes):
-                if doc.content_type != "tensor":
-                    raise ValueError(
-                        f"Document content_type {doc.content_type} is not supported"
-                    )
+                print(f"Document content_type: {doc}")
                 batch_results.append(
                     self.predict_document_image(doc.tensor, words=w, boxes=b, top_k=1)
                 )
@@ -201,12 +200,15 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         pb.close()
 
         for document, prediction in zip(documents, predictions):
+            if len(prediction) == 0:
+                self.logger.warning(f"No segmentation boxes predicted.")
+                continue
             formatted_prediction = {
                 "label": prediction[0]["label"],
                 "score": prediction[0]["score"],
                 "details": {el["label"]: el["score"] for el in prediction},
             }
-            document.tags["split"] = formatted_prediction
+            document.tags["boundary"] = formatted_prediction
         return documents
 
     def predict_document_image(
@@ -225,19 +227,97 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         :param top_k: number of predictions to return
         :return: prediction dictionary with label and score
         """
-        id2label = self.model.config.id2label
         width, height = image.shape[1], image.shape[0]
 
         with torch.no_grad():
-            image = Image.fromarray(image)
-            print(f"Inference on image: {image.size}")
-            output = self.predictor(image)["instances"]
-            print(f"Output: {output}")
-            md = None
+            self.logger.info(f"Inference on image: {image.shape}")
+            rp = self.predictor(image)
+            # detach the predictions from GPU to avoid memory leak
+            predictions = rp["instances"]
+            # Following will hang if we move the predictions from GPU to CPU all at once
+            # This is a workaround to avoid the hanging
+            # predictions = predictions.to(self.cpu_device)
+            boxes = (
+                predictions.pred_boxes.to(self.cpu_device)
+                if predictions.has("pred_boxes")
+                else None
+            )
+            scores = (
+                predictions.scores.to(self.cpu_device)
+                if predictions.has("scores")
+                else None
+            )
+            classes = (
+                predictions.pred_classes.to(self.cpu_device)
+                if predictions.has("pred_classes")
+                else None
+            )
 
+            md = None
+            v = Visualizer(
+                image[:, :, ::-1], md, scale=1.0, instance_mode=ColorMode.SEGMENTATION
+            )
+            result = v.draw_instance_predictions(predictions.to("cpu"))
+            result_image = result.get_image()[:, :, ::-1]
+
+            output_filename = f"/tmp/dit/result_visualizer.png"
+            cv2.imwrite(output_filename, result_image)
+
+            # delete the predictor to free up memory
+            del predictions
+            del rp
+
+            # check if boxes are empty, which means no boxes were detected(blank image)
+            if boxes is None or scores is None or classes is None:
+                self.logger.warning(f"No segmentation boxes predicted.")
+                return []
+
+            boxes = boxes.tensor.numpy()
+            scores = scores.numpy()
+            classes = classes.numpy()
+
+            if len(boxes) > 1:
+                self.logger.warning(f"Multiple boxes detected, skipping segmentation.")
+                return []
+
+            box = [int(x) for x in boxes[0]]
+            score = scores[0]
+            label = classes[0]  # there is only one class in this model
+
+            registration_mode = "absolute"
+            p1 = [25, 25]
+
+            p1_x = p1[0]
+            p1_y = p1[1]
+            new_image = np.ones((height, width, 3), dtype=np.uint8) * 255
+            print("new image created: ", new_image.shape)
+
+            # absolute registration
+            # simply place the boundary at the offset point (p1_x, p1_y)
+            if registration_mode == "absolute":
+                if p1_x + box[2] > width:
+                    self.logger.warning(f"Offset x1 + box width is out of bounds.")
+                    return []
+
+                if p1_y + box[3] > height:
+                    self.logger.warning(f"Offset y1 + box height is out of bounds.")
+                    return []
+
+                boundary = image[box[1] : box[1] + box[3], box[0] : box[0] + box[2]]
+                new_image[
+                    p1_y : p1_y + boundary.shape[0], p1_x : p1_x + boundary.shape[1]
+                ] = boundary
+                # draw circle at the offset point
+                cv2.circle(new_image, (p1_x, p1_y), 5, (0, 0, 255), -1)
+                stacked = np.hstack([image, new_image])
+
+                cv2.imwrite("/tmp/dit/boundary_image.png", boundary)
+                cv2.imwrite("/tmp/dit/registration.png", new_image)
+                cv2.imwrite("/tmp/dit/stacked.png", stacked)
         return [
             {
-                "label": "XX",
-                "score": 0.0,
+                "label": "document",
+                "box": box,
+                "score": score,
             }
         ]
