@@ -108,12 +108,14 @@ class OcrProcessor(BaseHandler):
         if img is None:
             raise Exception("Input image can't be empty")
 
-        if type(img) == PIL.Image.Image:  # convert pil to OpenCV
+        if isinstance(img, PIL.Image.Image):  # convert pil to OpenCV
             img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
             logger.warning("PIL image received converting to ndarray")
 
         if not isinstance(img, np.ndarray):
-            raise Exception("Expected image in numpy format")
+            raise Exception(
+                "Expected image in numpy format but got {}".format(type(img))
+            )
 
         assert len(boxes) == len(
             fragments
@@ -187,18 +189,20 @@ class OcrProcessor(BaseHandler):
                 words.append(payload)
 
                 if return_overlay:
+                    # too small texts are useless, therefore clamp to 9
                     font_size = determine_font_size(box[3])
+
                     draw_overlay.text(
                         (box[0], box[1] + box[3] // 4),
                         str(txt_label),
-                        font=get_default_font(int(font_size * 1.25)),
+                        font=get_default_font(int(font_size)),
                         fill=(139, 0, 0),
                     )
 
                     draw_overlay.text(
                         (box[0], box[1] + box[3]),
                         str(conf_label),
-                        font=get_default_font(int(font_size)),
+                        font=get_default_font(int(font_size * 0.8)),
                         fill=(0, 0, 255),
                     )
 
