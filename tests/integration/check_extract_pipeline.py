@@ -40,6 +40,7 @@ if __name__ == "__main__":
     MDC.put("request_id", "test")
     img_path = "~/tmp/address-001.png"
     img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
+    img_path = "~/tmp/grapnel/aligned/PID_2_11058_0_201458362.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -54,6 +55,13 @@ if __name__ == "__main__":
     pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
     # pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
     pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
+
+
+    with TimeContext(f"### ExtractPipeline "):
+        results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
+        print(results)
+
+    os.exit(1)
 
     regions = [
         {
