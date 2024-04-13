@@ -1,8 +1,10 @@
 import tempfile
 
+import cv2
 import gradio as gr
 import numpy as np
 import torch as torch
+from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
@@ -10,6 +12,7 @@ from marie.document import TrOcrProcessor
 from marie.document.layoutreader import TextLayout
 from marie.executor.ner.utils import normalize_bbox
 from marie.renderer import TextRenderer
+from marie.utils.docs import frames_from_file
 from marie.utils.json import to_json
 
 use_cuda = torch.cuda.is_available()
@@ -63,7 +66,10 @@ def to_text(result):
         return f.read()
 
 
-def process_image(image):
+def process_image(filename):
+    print("Processing image : ", filename)
+    image = Image.open(filename).convert("RGB")
+    # image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     (
         boxes,
         fragments,
@@ -96,29 +102,72 @@ def process_image(image):
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
 
-    return bboxes_img, lines_img, to_json(result), to_text(result)
+    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
+
+
+def image_to_gallery(image_src):
+    # image_file will be of tempfile._TemporaryFileWrapper type
+    filename = image_src.name
+    frames = frames_from_file(filename)
+    return frames
 
 
 def interface():
     article = """
          # Bounding Boxes and Intelligent Character Recognition(OCR)         
         """
+
     # [Dit: For textbox detection and  TROCR: Transformer-based OCR and ICR]
+
+    def gallery_click_handler(src_gallery, evt: gr.SelectData):
+        selection = src_gallery[evt.index]
+        filename = selection["name"]
+        return process_image(filename)
 
     with gr.Blocks() as iface:
         gr.Markdown(article)
-        with gr.Row():
-            src = gr.Image(type="pil", source="upload")
+
+        with gr.Row(variant="compact"):
+            srcXXX = gr.components.Image(
+                type="pil", source="upload", image_mode="L", label="Single page image"
+            )
+            src = gr.components.File(
+                type="file", source="upload", label="Multi-page TIFF/PDF file"
+            )
 
         with gr.Row():
             btn_reset = gr.Button("Clear")
-            btn_submit = gr.Button("Submit", variant="primary")
+            btn_submit = gr.Button("Process", variant="primary")
+            btn_grid = gr.Button("Image-Grid", variant="primary")
+
+        with gr.Row(live=True):
+            gallery = gr.Gallery(
+                label="Image frames",
+                show_label=False,
+                elem_id="gallery",
+                interactive=True,
+            ).style(columns=4, object_fit="contain", height="auto")
+
+        btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
+        # btn_submit.click(process_image, inputs=[src], outputs=[fake, blended])
+        btn_reset.click(lambda: src.clear())
+
+        #
+        # with gr.Row():
+        #     src = gr.Image(type="pil", source="upload")
+        #
+        # with gr.Row():
+        #     btn_reset = gr.Button("Clear")
+        #     btn_submit = gr.Button("Submit", variant="primary")
 
         with gr.Row():
             with gr.Column():
                 boxes = gr.components.Image(type="pil", label="boxes")
             with gr.Column():
-                lines = gr.components.Image(type="pil", label="icr")
+                lines = gr.components.Image(type="pil", label="lines")
+        with gr.Row():
+            with gr.Column():
+                icr = gr.components.Image(type="pil", label="icr")
 
         with gr.Row():
             with gr.Column():
@@ -128,8 +177,14 @@ def interface():
             with gr.Column():
                 results = gr.components.JSON()
 
-        btn_submit.click(
-            process_image, inputs=[src], outputs=[boxes, lines, results, txt]
+        # btn_submit.click(
+        #     process_image, inputs=[src], outputs=[boxes, lines, results, txt]
+        # )
+
+        gallery.select(
+            gallery_click_handler,
+            inputs=[gallery],
+            outputs=[boxes, icr, lines, results, txt],
         )
 
     iface.launch(debug=True, share=False, server_name="0.0.0.0")
