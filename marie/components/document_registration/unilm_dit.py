@@ -11,11 +11,11 @@ from ditod import add_vit_config
 from docarray import DocList
 from tqdm import tqdm
 
-from marie import DocumentArray
 from marie.constants import __config_dir__, __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
+from ...api.docs import MarieDoc
 from ...detectron.detector import OptimizedDetectronPredictor
 from ...helper import batch_iterator
 from ...utils.image_utils import hash_frames_fast
@@ -60,6 +60,40 @@ def get_parser():
     return parser
 
 
+class NoopDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
+    """
+    A no-op document boundary registration processor that does not perform any registration.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.logger = MarieLogger(self.__class__.__name__).logger
+
+    def predict(
+        self,
+        documents: DocList[MarieDoc],
+        registration_method: Optional[str],  # absolute, fit_to_page
+        registration_point: tuple[int, int],
+        margin_width: int,
+        margin_height: int,
+        words: Optional[List[List[str]]] = None,
+        boxes: Optional[List[List[List[int]]]] = None,
+        batch_size: Optional[int] = None,
+    ) -> DocList:
+        self.logger.info("No-op document boundary registration processor.")
+        for document in documents:
+            document.tags["document_boundary"] = DocumentBoundaryPrediction(
+                label="document",
+                detected=False,
+                mode=registration_method,
+                aligned_image=None,
+                visualization_image=None,
+                boundary_bbox=[0, 0, 0, 0],
+                score=0,
+            )
+        return documents
+
+
 class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
     """
     Document boundary registration using the Large-scale Self-supervised Pre-training Across Tasks, Languages, and Modalities (Unilm)
@@ -68,24 +102,43 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
     EXAMPLE USAGE
 
     .. code-block:: python
-
-        from marie.boxes import BoxProcessorUlimDit
-        from marie.boxes.box_processor import PSMode
-
-        box = BoxProcessorUlimDit(
-            models_dir="../../model_zoo/unilm/dit/text_detection",
-            cuda=True,
+        from marie.components.document_registration.unilm_dit import (
+            DocumentBoundaryPrediction,
+            UnilmDocumentBoundaryRegistration,
         )
-        (
-            boxes,
-            fragments,
-            lines,
-            _,
-            lines_bboxes,
-        ) = box.extract_bounding_boxes("gradio", "field", image, PSMode.SPARSE)
 
-        bboxes_img = visualize_bboxes(image, boxes, format="xywh")
-        lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
+        processor = UnilmDocumentBoundaryRegistration(
+            model_name_or_path="../../model_zoo/unilm/dit/object_detection/document_boundary",
+            use_gpu=True,
+        )
+
+        filepath = "~/document.tif"
+
+        basename = filepath.split("/")[-1].split(".")[0]
+        documents = docs_from_file(filepath)
+        results = processor.run(documents, registration_method="fit_to_page")
+
+        frames = frames_from_docs(documents)
+        converted_frames = []
+
+        output_dir = os.path.expanduser(f"/tmp/aligned/workdir/{basename}")
+        ensure_exists(output_dir)
+
+        for i, (frame, result) in enumerate(zip(frames, results)):
+            boundary: DocumentBoundaryPrediction = result.tags["document_boundary"]
+            if boundary.detected:
+                frame = boundary.aligned_image
+            converted_frames.append(frame)
+            save_path = os.path.join(output_dir, f"{i}.tif")
+            save_frame_as_tiff_g4(frame, save_path)
+
+        print("Converted frames: ", len(converted_frames))
+        basedir = os.path.expanduser("/tmp/aligned")
+        merge_tiff(
+            output_dir,
+            os.path.join(basedir, f"{basename}_{registration_method}.tif"),
+            sort_key=lambda name: int(name.split("/")[-1].split(".")[0]),
+        )
     """
 
     def __init__(
@@ -147,7 +200,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
 
         cfg = setup_cfg(args, self.device.type)
         self.min_size_test = [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST]
-        # self.predictor = DefaultPredictor(cfg)
         self.predictor = OptimizedDetectronPredictor(
             cfg, half_precision=True
         )  # TODO: half_precision=True should be from config
@@ -155,8 +207,11 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
 
     def predict(
         self,
-        documents: DocumentArray,
-        registration_method: str,  # absolute or fit_to_page
+        documents: DocList[MarieDoc],
+        registration_method: Optional[str],  # absolute, fit_to_page
+        registration_point: tuple[int, int],
+        margin_width: int,
+        margin_height: int,
         words: Optional[List[List[str]]] = None,
         boxes: Optional[List[List[List[int]]]] = None,
         batch_size: Optional[int] = None,
@@ -185,15 +240,17 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             batch_results = []
 
             for doc, w, b in zip(batch, words, boxes):
-                print(f"Processing document : {idx}")
                 batch_results.append(
                     self.predict_document_image(
                         doc.tensor,
                         registration_method,
+                        registration_point,
+                        margin_width,
+                        margin_height,
                         words=w,
                         boxes=b,
                         top_k=1,
-                        doc_id=idx,
+                        doc_id=f"{idx}",
                     )
                 )
                 idx += 1
@@ -213,6 +270,9 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         self,
         image: np.ndarray,
         registration_mode: str,  # absolute or fit_to_page
+        registration_point: tuple[int, int],
+        margin_width: int,
+        margin_height: int,
         words: List[List[str]],
         boxes: List[List[int]],
         top_k: int = 1,
@@ -225,13 +285,23 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         :param words: words in the image
         :param boxes: bounding boxes of the words
         :param registration_mode: absolute or fit_to_page
+        :param registration_point: registration point for the document
+        :param margin_height: margin height to add to the boundary box
+        :param margin_width: margin width to add to the boundary box
         :param top_k: number of predictions to return
+        :param doc_id: document id
         :return: prediction dictionary with label and score
         """
         if doc_id is None:
             doc_id = hash_frames_fast([image])
 
         width, height = image.shape[1], image.shape[0]
+
+        print(f"Image shape: {image.shape}")
+        print("Registration mode: ", registration_mode)
+        print("Registration point: ", registration_point)
+        print("Margin width: ", margin_width)
+        print("Margin height: ", margin_height)
 
         with torch.no_grad():
             self.logger.info(f"Inference on image: {image.shape}")
@@ -261,11 +331,11 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             v = Visualizer(
                 image[:, :, ::-1], md, scale=1.0, instance_mode=ColorMode.SEGMENTATION
             )
-            result = v.draw_instance_predictions(predictions.to("cpu"))
-            result_image = result.get_image()[:, :, ::-1]
+            result = v.draw_instance_predictions(predictions.to(self.cpu_device))
+            visualization_image = result.get_image()[:, :, ::-1]
 
             output_filename = f"/tmp/dit/result_visualizer.png"
-            cv2.imwrite(output_filename, result_image)
+            cv2.imwrite(output_filename, visualization_image)
 
             # delete the predictor to free up memory
             del predictions
@@ -285,6 +355,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 detected=False,
                 mode=registration_mode,
                 aligned_image=None,
+                visualization_image=visualization_image,
                 boundary_bbox=[0, 0, 0, 0],
                 score=0,
             )
@@ -306,11 +377,11 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             x = x0
             y = y0
 
-            margin_width = 5
-            margin_height = 5
-
-            p1 = [5, 5]
-            p1_x, p1_y = p1
+            # margin_width = 5
+            # margin_height = 5
+            # p1 = [5, 5]
+            #
+            p1_x, p1_y = registration_point
 
             boundary_bbox = [
                 max(0, x - margin_width),
@@ -318,8 +389,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 min(width, w + margin_width * 2),
                 min(height, h + margin_height * 2),
             ]
-
-            print(f"Boundary bbox: {boundary_bbox}")
 
             score = scores[0]
             label = classes[0]  # there is only one class in this model
@@ -403,6 +472,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 detected=True,
                 mode=registration_mode,
                 aligned_image=aligned_image,
+                visualization_image=visualization_image,
                 boundary_bbox=boundary_bbox,
                 score=score,
             )

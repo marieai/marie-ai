@@ -12,6 +12,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
+from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
 from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
@@ -27,6 +28,7 @@ from marie.pipe.components import (
     restore_assets,
     s3_asset_path,
     setup_classifiers,
+    setup_document_boundary,
     setup_indexers,
     setup_overlay,
     split_filename,
@@ -91,7 +93,9 @@ class ExtractPipeline:
 
         self.logger = MarieLogger(context=self.__class__.__name__)
         self.overlay_processor = setup_overlay(pipeline_config)
+        self.boundary_processor = setup_document_boundary(pipeline_config)
         self.ocr_engines = get_known_ocr_engines(device=device)
+
         self.document_classifiers = setup_classifiers(pipeline_config)
         self.document_indexers = setup_indexers(pipeline_config)
 
@@ -174,6 +178,47 @@ class ExtractPipeline:
 
         return clean_frames
 
+    def boundary(
+        self,
+        ref_id: str,
+        frames: Union[list[np.ndarray], list[Image.Image]],
+        root_asset_dir: str,
+        enabled: bool = True,
+    ) -> list[np.ndarray]:
+        """
+        Run boundary registration on the frames and return the registered frames
+
+        :param ref_id: reference id of the document
+        :param frames: frames to find the boundary for
+        :param root_asset_dir: root directory to store the boundary frames
+        :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
+        :return: registered frames
+        """
+        self.logger.info(f"Boundary detection:{enabled}, {ref_id}")
+        documents = docs_from_image(frames)
+        registered_frames = []
+
+        if enabled:
+            try:
+                results = self.boundary_processor.run(
+                    documents, registration_method="fit_to_page"
+                )
+                for i, (frame, result) in enumerate(zip(frames, results)):
+                    boundary: DocumentBoundaryPrediction = result.tags[
+                        "document_boundary"
+                    ]
+                    self.logger.info(f"Boundary detected {i} : {boundary.detected}")
+                    if boundary.detected:
+                        frame = boundary.aligned_image
+                    registered_frames.append(frame)
+            except Exception as e:
+                self.logger.warning(
+                    f"Unable to perform document boundary (using original frame) : {e}"
+                )
+                registered_frames = frames
+
+        return registered_frames
+
     def execute_frames_pipeline(
         self,
         ref_id: str,
@@ -207,12 +252,16 @@ class ExtractPipeline:
 
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
         page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get("enabled", True)
+        page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
+            "enabled", True
+        )
 
         self.logger.info(
             f"Feature : page classifier enabled : {page_classifier_enabled}"
         )
         self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
         self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
+        self.logger.info(f"Feature : page boundary enabled : {page_boundary_enabled}")
 
         post_processing_pipeline = []
 
@@ -247,6 +296,9 @@ class ExtractPipeline:
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
 
+        frames = self.boundary(
+            ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
+        )
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )

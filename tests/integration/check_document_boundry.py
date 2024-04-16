@@ -8,13 +8,8 @@ from marie.components.document_registration.unilm_dit import (
     DocumentBoundaryPrediction,
     UnilmDocumentBoundaryRegistration,
 )
-from marie.utils.docs import docs_from_file, frames_from_docs, frames_from_file
-from marie.utils.tiff_ops import (
-    convert_group4,
-    merge_tiff,
-    merge_tiff_frames,
-    save_frame_as_tiff_g4,
-)
+from marie.utils.docs import docs_from_file, frames_from_docs
+from marie.utils.tiff_ops import merge_tiff, save_frame_as_tiff_g4
 from marie.utils.utils import ensure_exists
 
 
@@ -62,12 +57,8 @@ def check_boundry_registration():
     for i, (frame, result) in enumerate(zip(frames, results)):
         boundary: DocumentBoundaryPrediction = result.tags["document_boundary"]
         if boundary.detected:
-            aligned = boundary.aligned_image
-            frame = aligned
-            converted_frames.append(aligned)
-        else:
-            converted_frames.append(frame)
-
+            frame = boundary.aligned_image
+        converted_frames.append(frame)
         save_path = os.path.join(output_dir, f"{i}.tif")
         save_frame_as_tiff_g4(frame, save_path)
 

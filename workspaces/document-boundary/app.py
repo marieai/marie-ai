@@ -1,8 +1,6 @@
 import gradio as gr
-from PIL import Image
 
-from marie.boxes import BoxProcessorUlimDit, PSMode
-from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
+from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
 from marie.components.document_registration.unilm_dit import (
     UnilmDocumentBoundaryRegistration,
 )
@@ -13,17 +11,35 @@ processor = UnilmDocumentBoundaryRegistration(
     use_gpu=True,
 )
 
+registration_method = "absolute"
 
-def process_image(image):
-    print("Processing image")
+
+def update_registration_method(value):
+    global registration_method
+    registration_method = value
+
+
+def process_image(
+    image, margin_width, margin_height, registration_point_x, registration_point_y
+):
+    print(f"Registration Method: {registration_method}")
+    print(f"Registration Point X: {registration_point_x}")
+    print(f"Registration Point Y: {registration_point_y}")
+    print(f"Margin Width: {margin_width}")
+    print(f"Margin Height: {margin_height}")
+
     documents = docs_from_image(image)
-    print("Documents: ", len(documents))
-    results = processor.run(documents)
+    results = processor.run(
+        documents,
+        registration_method,
+        (registration_point_x, registration_point_y),
+        margin_width,
+        margin_height,
+    )
+    result = results[0]
+    boundary: DocumentBoundaryPrediction = result.tags["document_boundary"]
 
-    print("Results: ", results)
-    # bboxes_img = visualize_bboxes(image, boxes, format="xywh")
-    # lines_img = visualize_bboxes(image, lines_bboxes, format="xywh")
-    # return bboxes_img, lines_img
+    return boundary.aligned_image, boundary.visualization_image
 
 
 def interface():
@@ -36,19 +52,72 @@ def interface():
         gr.Markdown(article)
 
         with gr.Row():
-            src = gr.Image(type="pil", source="upload")
+            with gr.Column():
+                src = gr.Image(type="pil", source="upload")
+
+            with gr.Column():
+                chk_registration_method = gr.Radio(
+                    ["absolute", "fit_to_page"],
+                    label="Registration Method",
+                )
+
+                chk_registration_method.change(
+                    lambda x: update_registration_method(x),
+                    inputs=[chk_registration_method],
+                    outputs=[],
+                )
+
+                slider_mw = gr.Slider(
+                    label="Margin Width",
+                    min=0,
+                    max=100,
+                    step=1,
+                    value=5,
+                    interactive=True,
+                )
+                slider_mh = gr.Slider(
+                    label="Margin Height",
+                    min=0,
+                    max=100,
+                    step=1,
+                    value=5,
+                    interactive=True,
+                )
+
+                slider_rpx = gr.Slider(
+                    label="Registration Point X",
+                    min=0,
+                    max=100,
+                    step=1,
+                    value=10,
+                    interactive=True,
+                )
+                slider_rpy = gr.Slider(
+                    label="Registration Point Y",
+                    min=0,
+                    max=100,
+                    step=1,
+                    value=10,
+                    interactive=True,
+                )
+
         with gr.Row():
             btn_reset = gr.Button("Clear")
             btn_submit = gr.Button("Submit", variant="primary")
 
         with gr.Row():
             with gr.Column():
-                boxes = gr.components.Image(type="pil", label="boxes")
+                aligned_img = gr.components.Image(type="pil", label="Aligned Image")
             with gr.Column():
-                lines = gr.components.Image(type="pil", label="lines")
+                visualization_img = gr.components.Image(
+                    type="pil", label="Visualization Image"
+                )
 
-        btn_submit.click(process_image, inputs=[src], outputs=[boxes, lines])
-
+        btn_submit.click(
+            process_image,
+            inputs=[src, slider_mw, slider_mh, slider_rpx, slider_rpy],
+            outputs=[aligned_img, visualization_img],
+        )
     iface.launch(debug=True, share=True, server_name="0.0.0.0")
 
 
