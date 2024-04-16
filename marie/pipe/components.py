@@ -9,6 +9,10 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier, TransformersDocumentIndexer
+from marie.components.document_registration.unilm_dit import (
+    NoopDocumentBoundaryRegistration,
+    UnilmDocumentBoundaryRegistration,
+)
 from marie.excepts import BadConfigSource
 from marie.logging.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, OcrEngine
@@ -286,6 +290,108 @@ def setup_indexers(
     return document_indexers
 
 
+def setup_indexers(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_indexer",
+    device: str = "cuda",
+    ocr_engine: Optional[OcrEngine] = None,
+) -> dict[str, any]:
+    """
+    Setup the document indexers(Named Entity Recognition) for the pipeline
+    :param pipeline_config: pipeline configuration
+    :param key: key to use in the pipeline config
+    :param device: device to use for classification (cpu or cuda)
+    :param ocr_engine: OCR engine to use for the pipeline (default: None)
+    :return: document classifiers grouped by their group names and indexed by their names
+    """
+
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    document_indexers = dict()
+    configs = pipeline_config[key] if key in pipeline_config else []
+
+    for config in configs:
+        if "model_name_or_path" not in config:
+            raise BadConfigSource(
+                f"Missing model_name_or_path in indexer config : {config}"
+            )
+
+        if not config.get("enabled", True):
+            logger.warning(f"Skipping indexer : {config['model_name_or_path']}")
+            continue
+
+        model_name_or_path = config["model_name_or_path"]
+        device = config["device"] if "device" in config else "cpu"
+        name = config["name"] if "name" in config else config["model_name_or_path"]
+        model_type = config["type"] if "type" in config else "transformers"
+        logger.info(f"Using model : {model_name_or_path} on device : {device}")
+
+        if name in document_indexers:
+            raise BadConfigSource(f"Duplicate indexer name : {name}")
+
+        if "group" not in config:
+            raise BadConfigSource(f"Missing group in indexer config : {config}")
+
+        group = config["group"] if "group" in config else "default"
+
+        if group not in document_indexers:
+            document_indexers[group] = dict()
+
+        model_filter = config["filter"] if "filter" in config else {}
+        # TODO: Add support for other indexer types
+        if model_type == "transformers":
+            document_indexers[group][name] = {
+                "indexer": TransformersDocumentIndexer(
+                    model_name_or_path=model_name_or_path,
+                    devices=[device],
+                    ocr_engine=ocr_engine,
+                ),
+                "filter": model_filter,
+                "group": group,
+            }
+
+        else:
+            raise ValueError(f"Invalid indexer type : {model_type}")
+
+    return document_indexers
+
+
+def setup_document_boundary(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_boundary",
+    device: str = "cuda",
+) -> Union[UnilmDocumentBoundaryRegistration, NoopDocumentBoundaryRegistration]:
+    use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
+
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    if key not in pipeline_config:
+        logger.warning(f"Missing {key} in pipeline config, using default config")
+        return NoopDocumentBoundaryRegistration()
+
+    config = pipeline_config[key] if key in pipeline_config else {}
+
+    if "model_name_or_path" not in config:
+        raise BadConfigSource(
+            f"Missing model_name_or_path in document boundary config : {config}"
+        )
+
+    if not config.get("enabled", True):
+        logger.warning(
+            f"Page boundary disabled (using NOOP): {config['model_name_or_path']}"
+        )
+        return NoopDocumentBoundaryRegistration()
+
+    return UnilmDocumentBoundaryRegistration(
+        model_name_or_path=config['model_name_or_path'],
+        use_gpu=use_cuda,
+    )
+
+
 def restore_assets(
     ref_id: str,
     ref_type: str,
@@ -295,7 +401,7 @@ def restore_assets(
 ) -> str or None:
     """
     Restore assets from primary storage (S3) into root asset directory. This restores
-    the assets from the last run of the extrac pipeline.
+    the assets from the last run of the extract pipeline.
 
     :param ref_id: document reference id (e.g. filename)
     :param ref_type: document reference type(e.g. document, page, process)
@@ -492,8 +598,3 @@ def ocr_frames(
         results = load_json_file(json_path)
 
     return results
-
-
-# force False
-# json_path /tmp/generators/f918a115f8474f63da92b4676483caf3/results/157154493_4.json
-# json_path 157154493_4.json

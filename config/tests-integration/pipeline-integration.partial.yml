@@ -20,6 +20,15 @@ pipeline:
       filter:
         type: 'regex'
         pattern: '.*'
+
+  page_boundary:
+    model_name_or_path: 'rms/page-boundary-detection'
+    device: 'cuda'
+    name: 'page_boundary_default'
+    filter:
+      type: 'regex'
+      pattern: '.*'
+
   page_splitter:
     model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
     enabled: True

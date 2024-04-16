@@ -11,6 +11,7 @@ class DocumentBoundaryPrediction(BaseModel):
     aligned_image: Union[np.ndarray, None]
     boundary_bbox: List[int]
     score: float
+    visualization_image: Union[np.ndarray, None]  # Added for visualization purposes
 
     class Config:
         arbitrary_types_allowed = True
@@ -22,6 +23,11 @@ class DocumentBoundaryPrediction(BaseModel):
             "mode": self.mode,
             "aligned_image": (
                 self.aligned_image.tolist() if self.aligned_image is not None else None
+            ),
+            "visualization_image": (
+                self.visualization_image.tolist()
+                if self.visualization_image is not None
+                else None
             ),
             "boundary_bbox": self.boundary_bbox,
             "score": self.score,

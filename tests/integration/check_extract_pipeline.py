@@ -31,16 +31,36 @@ def setup_storage():
     StorageManager.ensure_connection()
 
 
-if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    # os.environ["MARIE_DISABLE_CUDA"] = "True"
-    torch.set_float32_matmul_precision('high')
-
+def run_extract_pipeline():
     # setup_storage()
     MDC.put("request_id", "test")
     img_path = "~/tmp/address-001.png"
-    img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
     img_path = "~/tmp/grapnel/aligned/PID_2_11058_0_201458362.tif"
+    img_path = "/tmp/generators/87d95063109ffb8d4bad5698e433700b/burst/PID_3558_10887_0_201774185_00001.tif"
+    img_path = os.path.expanduser(img_path)
+    # StorageManager.mkdir("s3://marie")
+
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"File not found : {img_path}")
+
+    filename, prefix, suffix = split_filename(img_path)
+    print("Filename: ", filename)
+    print("Prefix: ", prefix)
+    print("Suffix: ", suffix)
+
+    # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
+    # StorageManager.write(img_path, s3_path, overwrite=True)
+
+    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
+    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
+
+    with TimeContext(f"### ExtractPipeline info"):
+        results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
+        print(results)
+
+
+def regions():
+    img_path = "~/tmp/address-001.png"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -49,20 +69,9 @@ if __name__ == "__main__":
 
     filename, prefix, suffix = split_filename(img_path)
 
-    # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
-    # StorageManager.write(img_path, s3_path, overwrite=True)
-
     pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
     # pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
     pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
-
-
-    with TimeContext(f"### ExtractPipeline "):
-        results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
-        print(results)
-
-    os.exit(1)
-
     regions = [
         {
             "mode": "sparse",
@@ -77,6 +86,14 @@ if __name__ == "__main__":
 
     for i in range(5):
         with TimeContext(f"### ExtractPipeline info [{i}]"):
-            # results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), regions=regions)
-            results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
+            results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path),
+                                       regions=regions)
             print(results)
+
+
+if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # os.environ["MARIE_DISABLE_CUDA"] = "True"
+    torch.set_float32_matmul_precision('high')
+
+    run_extract_pipeline()
