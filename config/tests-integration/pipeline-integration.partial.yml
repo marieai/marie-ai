@@ -3,9 +3,12 @@ pipeline:
   page_classifier:
     - model_name_or_path: 'marie/lmv3-medical-document-classification'
       type: 'transformers'
+      task: 'text-classification-multimodal'
       device: 'cuda'
-      enabled: False
-      name: 'medical_page_classifier'
+      enabled: True
+      name: 'medical-page-classifier'
+      group: 'medical_page_classifier'
+
     - model_name_or_path: 'marie/lmv3-medical-document-payer'
       type: 'transformers'
       enabled: False

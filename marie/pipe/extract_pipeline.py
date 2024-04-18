@@ -7,29 +7,21 @@ from typing import List, Optional, Union
 
 import numpy as np
 import torch
-from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
-from marie.logging.logger import MarieLogger
 from marie.ocr import CoordinateFormat
-from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
-from marie.pipe import (
-    ClassifierPipelineComponent,
-    NamedEntityPipelineComponent,
-    PipelineComponent,
-    PipelineContext,
-)
+from marie.ocr.util import get_known_ocr_engines
+from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    load_pipeline,
     ocr_frames,
     restore_assets,
     s3_asset_path,
-    setup_classifiers,
     setup_document_boundary,
-    setup_indexers,
     setup_overlay,
     split_filename,
     store_assets,
@@ -45,7 +37,7 @@ from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
 
 
-class ExtractPipeline:
+class ExtractPipeline(BasePipeline):
     """
     Extract pipeline for documents.
 
@@ -78,9 +70,11 @@ class ExtractPipeline:
         self,
         pipeline_config: dict[str, any] = None,
         cuda: bool = True,
+        silence_exceptions: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(silence_exceptions, **kwargs)
+        self.default_pipeline_config = pipeline_config
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
@@ -91,21 +85,15 @@ class ExtractPipeline:
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
-        self.logger = MarieLogger(context=self.__class__.__name__)
         self.overlay_processor = setup_overlay(pipeline_config)
         self.boundary_processor = setup_document_boundary(pipeline_config)
-        self.ocr_engines = get_known_ocr_engines(device=device)
 
-        self.document_classifiers = setup_classifiers(pipeline_config)
-        self.document_indexers = setup_indexers(pipeline_config)
-
-        self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
-        )
-
-        self.logger.info(
-            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
-        )
+        self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
+        (
+            self.pipeline_name,
+            self.classifier_groups,
+            self.indexer_groups,
+        ) = load_pipeline(pipeline_config, self.ocr_engines["default"])
 
     def segment(
         self,
@@ -256,35 +244,19 @@ class ExtractPipeline:
             "enabled", True
         )
 
-        self.logger.info(
-            f"Feature : page classifier enabled : {page_classifier_enabled}"
-        )
-        self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
-        self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
-        self.logger.info(f"Feature : page boundary enabled : {page_boundary_enabled}")
+        self.logger.info(f"Feature : classifier enabled : {page_classifier_enabled}")
+        self.logger.info(f"Feature : indexer enabled : {page_indexer_enabled}")
+        self.logger.info(f"Feature : cleaner enabled : {page_cleaner_enabled}")
+        self.logger.info(f"Feature : boundary enabled : {page_boundary_enabled}")
 
-        post_processing_pipeline = []
-
-        if page_classifier_enabled:
-            post_processing_pipeline.append(
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline_component",
-                    document_classifiers=self.document_classifiers,
-                )
-            )
-
-        if page_indexer_enabled:
-            post_processing_pipeline.append(
-                NamedEntityPipelineComponent(
-                    name="ner_pipeline_component",
-                    document_indexers=self.document_indexers,
-                )
-            )
+        for group, classifiers in self.classifier_groups.items():
+            self.logger.info(f"Loaded classifiers : {group}, {len(classifiers)}")
 
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
 
@@ -292,6 +264,14 @@ class ExtractPipeline:
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
         )
+
+        # remove old metadata results if any (for now)
+        # Better option is to have client remove the old metadata
+        if page_boundary_enabled:
+            filename, prefix, suffix = split_filename(ref_id)
+            metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
 
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
@@ -305,7 +285,15 @@ class ExtractPipeline:
         ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
         metadata["ocr"] = ocr_results
 
-        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+        self.execute_classifier_and_indexer_pipeline(
+            frames,
+            metadata,
+            metadata["ocr"],
+            self.pipeline_name,
+            self.classifier_groups,
+            self.indexer_groups,
+            page_indexer_enabled,
+        )
 
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
@@ -534,6 +522,8 @@ class ExtractPipeline:
             sort_key=lambda name: int(name.split("/")[-1].split(".")[0]),
         )
 
+        # make copy of clea.tiff as .tif
+        shutil.copy(clean_filename, os.path.join(assets_dir, f"{prefix}.tif"))
         # rename .clean.tif to .tif.clean
         shutil.move(clean_filename, clean_filename_corrected)
 
@@ -557,42 +547,3 @@ class ExtractPipeline:
         metadata["assets"] = resolved_paths
 
         return metadata
-
-    def execute_pipeline(
-        self,
-        processing_pipeline: List[PipelineComponent],
-        frames: List,
-        ocr_results: dict,
-        metadata: dict,
-    ):
-        """Execute the post processing pipeline
-        TODO : This is temporary, we need to make this configurable
-        """
-        words = []
-        boxes = []
-        documents = docs_from_image(frames)
-
-        assert len(documents) == len(frames)
-
-        for page_idx in range(len(frames)):
-            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
-            words.append(page_words)
-            boxes.append(page_boxes)
-
-        assert len(words) == len(boxes)
-
-        context = PipelineContext(pipeline_id="post_processing_pipeline")
-        context["metadata"] = metadata
-
-        for pipe in processing_pipeline:
-            try:
-                # create a PipelineContext and pass it to the component
-                pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
-                if pipe_results.state is not None:
-                    if not isinstance(pipe_results.state, DocList):
-                        raise ValueError(
-                            f"Invalid state type : {type(pipe_results.state)}"
-                        )
-                    documents = pipe_results.state
-            except Exception as e:
-                self.logger.error(f"Error executing pipe : {e}")
