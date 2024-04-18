@@ -9,6 +9,7 @@ from marie.utils.docs import docs_from_image
 processor = UnilmDocumentBoundaryRegistration(
     model_name_or_path="../../model_zoo/unilm/dit/object_detection/document_boundary",
     use_gpu=True,
+    debug_visualization=True,
 )
 
 registration_method = "absolute"

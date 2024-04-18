@@ -172,7 +172,7 @@ class ExtractPipeline(BasePipeline):
         frames: Union[list[np.ndarray], list[Image.Image]],
         root_asset_dir: str,
         enabled: bool = True,
-    ) -> list[np.ndarray]:
+    ) -> tuple[list[np.ndarray], list[dict[str, any]]]:
         """
         Run boundary registration on the frames and return the registered frames
 
@@ -185,6 +185,7 @@ class ExtractPipeline(BasePipeline):
         self.logger.info(f"Boundary detection:{enabled}, {ref_id}")
         documents = docs_from_image(frames)
         registered_frames = []
+        metadata = []
 
         if enabled:
             try:
@@ -195,6 +196,9 @@ class ExtractPipeline(BasePipeline):
                     boundary: DocumentBoundaryPrediction = result.tags[
                         "document_boundary"
                     ]
+                    meta = boundary.to_dict(include_images=False)
+                    meta["page"] = i
+                    metadata.append(meta)
                     self.logger.info(f"Boundary detected {i} : {boundary.detected}")
                     if boundary.detected:
                         frame = boundary.aligned_image
@@ -205,7 +209,7 @@ class ExtractPipeline(BasePipeline):
                 )
                 registered_frames = frames
 
-        return registered_frames
+        return registered_frames, metadata
 
     def execute_frames_pipeline(
         self,
@@ -276,7 +280,7 @@ class ExtractPipeline(BasePipeline):
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
 
-        frames = self.boundary(
+        frames, boundary_meta = self.boundary(
             ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
         )
         clean_frames = self.segment(
@@ -284,6 +288,7 @@ class ExtractPipeline(BasePipeline):
         )
         ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
         metadata["ocr"] = ocr_results
+        metadata["boundary"] = boundary_meta
 
         self.execute_classifier_and_indexer_pipeline(
             frames,
