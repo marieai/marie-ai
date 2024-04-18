@@ -15,6 +15,7 @@ from marie.components.document_registration.unilm_dit import (
 )
 from marie.excepts import BadConfigSource
 from marie.logging.predefined import default_logger as logger
+from marie.logging.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
@@ -598,3 +599,64 @@ def ocr_frames(
         results = load_json_file(json_path)
 
     return results
+
+
+def load_pipeline(
+    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, any], dict[str, any]]:
+    # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
+    # sometimes we have CUDA/GPU support but want to only use CPU
+    use_cuda = torch.cuda.is_available()
+    if os.environ.get("MARIE_DISABLE_CUDA"):
+        use_cuda = False
+    device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+    if device == "cuda" and not use_cuda:
+        device = "cpu"
+
+    if "name" not in pipeline_config:
+        raise BadConfigSource("Invalid pipeline config, missing name field")
+
+    pipeline_name = pipeline_config["name"]
+    document_classifiers = setup_classifiers(
+        pipeline_config, key="page_classifier", device=device, ocr_engine=ocr_engine
+    )
+
+    document_sub_classifiers = setup_classifiers(
+        pipeline_config, key="sub_classifier", device=device, ocr_engine=ocr_engine
+    )
+
+    classifier_groups = dict()
+    for classifier_group, classifiers in document_classifiers.items():
+        sub_classifiers = document_sub_classifiers.get(classifier_group, {})
+        classifier_groups[classifier_group] = {
+            "group": classifier_group,
+            "classifiers": classifiers,
+            "sub_classifiers": sub_classifiers,
+        }
+
+    document_indexers = setup_indexers(
+        pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
+    )
+
+    indexer_groups = dict()
+    for group, indexer in document_indexers.items():
+        indexer_groups[group] = {
+            "group": group,
+            "indexer": indexer,
+        }
+
+    # dump information about the loaded classifiers that are grouped by the classifier group
+    for classifier_group, classifiers in document_classifiers.items():
+        logger.info(
+            f"Loaded classifiers :{classifier_group},  {len(classifiers)},  {classifiers.keys()}"
+        )
+    for classifier_group, classifiers in document_sub_classifiers.items():
+        logger.info(
+            f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
+        )
+
+    logger.info(
+        f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
+    )
+
+    return pipeline_name, classifier_groups, indexer_groups

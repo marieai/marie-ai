@@ -14,6 +14,7 @@ from tqdm import tqdm
 from marie.constants import __config_dir__, __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
+from tools import ensure_exists
 
 from ...api.docs import MarieDoc
 from ...detectron.detector import OptimizedDetectronPredictor
@@ -149,6 +150,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         batch_size: int = 16,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
+        debug_visualization: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -165,14 +167,16 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                         A list containing torch device objects and/or strings is supported (For example
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
+        :param show_error: Whether to show prediction errors.
+        :param debug_visualization: Whether to create debug visualizations.
         """
         super().__init__(**kwargs)
-
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document registration : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.progress_bar = False
+        self.debug_visualization = debug_visualization
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -327,15 +331,17 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 else None
             )
 
-            md = None
-            v = Visualizer(
-                image[:, :, ::-1], md, scale=1.0, instance_mode=ColorMode.SEGMENTATION
-            )
-            result = v.draw_instance_predictions(predictions.to(self.cpu_device))
-            visualization_image = result.get_image()[:, :, ::-1]
-
-            output_filename = f"/tmp/dit/result_visualizer.png"
-            cv2.imwrite(output_filename, visualization_image)
+            if self.debug_visualization:
+                ensure_exists("/tmp/dit")
+                v = Visualizer(
+                    image[:, :, ::-1],
+                    None,
+                    scale=1.0,
+                    instance_mode=ColorMode.SEGMENTATION,
+                )
+                result = v.draw_instance_predictions(predictions.to(self.cpu_device))
+                visualization_image = result.get_image()[:, :, ::-1]
+                cv2.imwrite(f"/tmp/dit/{doc_id}_visualizer.png", visualization_image)
 
             # delete the predictor to free up memory
             del predictions
@@ -398,7 +404,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 boundary_bbox[1] : boundary_bbox[1] + boundary_bbox[3],
                 boundary_bbox[0] : boundary_bbox[0] + boundary_bbox[2],
             ]
-            cv2.imwrite(f"/tmp/dit/{doc_id}_boundary_image.png", boundary)
 
             # absolute registration
             if registration_mode == "absolute":
@@ -448,8 +453,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 cv2.circle(aligned_image, (p1_x, p1_y), 8, (0, 0, 255), -1)
                 cv2.circle(aligned_image, (p1_x + new_width, p1_y), 8, (0, 0, 255), -1)
 
-            debug_visualization = True
-            if debug_visualization:
+            if self.debug_visualization:
                 # ensure image and new image have the same width and height before stacking, debugging purposes only
                 if (
                     aligned_image.shape[0] != image.shape[0]
@@ -463,8 +467,10 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
 
                 divider = np.ones((aligned_image.shape[0], 5, 3), dtype=np.uint8) * 150
                 stacked = np.hstack([image, divider, aligned_image])
+
+                cv2.imwrite(f"/tmp/dit/{doc_id}_boundary_image.png", boundary)
                 cv2.imwrite(f"/tmp/dit/{doc_id}_registration.png", aligned_image)
-                cv2.imwrite(f"/tmp/dit/stacked_{doc_id}.png", stacked)
+                cv2.imwrite(f"/tmp/dit/{doc_id}_stacked.png", stacked)
 
         return [
             DocumentBoundaryPrediction(
