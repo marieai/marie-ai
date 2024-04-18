@@ -331,6 +331,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 else None
             )
 
+            visualization_image = None
             if self.debug_visualization:
                 ensure_exists("/tmp/dit")
                 v = Visualizer(

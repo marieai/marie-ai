@@ -14,6 +14,8 @@ from marie.executor.ner.utils import normalize_bbox
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.json import to_json
+from marie.utils.ocr_debug import dump_bboxes
+from marie.utils.utils import ensure_exists
 
 use_cuda = torch.cuda.is_available()
 
@@ -101,6 +103,7 @@ def process_image(filename):
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
+    dump_bboxes(image, result)
 
     return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
 
@@ -128,17 +131,42 @@ def interface():
         gr.Markdown(article)
 
         with gr.Row(variant="compact"):
-            srcXXX = gr.components.Image(
-                type="pil", source="upload", image_mode="L", label="Single page image"
-            )
-            src = gr.components.File(
-                type="file", source="upload", label="Multi-page TIFF/PDF file"
-            )
+            with gr.Column():
+                src = gr.components.File(
+                    type="file", source="upload", label="Multi-page TIFF/PDF file"
+                )
+                with gr.Row():
+                    btn_reset = gr.Button("Clear")
+                    btn_grid = gr.Button("Image-Grid", variant="primary")
 
-        with gr.Row():
-            btn_reset = gr.Button("Clear")
-            btn_submit = gr.Button("Process", variant="primary")
-            btn_grid = gr.Button("Image-Grid", variant="primary")
+            with gr.Column():
+                chk_store_info = gr.Checkbox(
+                    label="Store filtered data in temp directory",
+                    default=True,
+                    interactive=True,
+                )
+
+                chk_filter_results = gr.Checkbox(
+                    label="Filter results",
+                    default=False,
+                    interactive=True,
+                )
+
+                gr.Number(
+                    label="Threshold",
+                    min=0,
+                    max=1,
+                    step=0.1,
+                    default=0.95,
+                    interactive=True,
+                    precision=2,
+                )
+
+                # chk_apply_overlay.change(
+                #     lambda x: update_overlay(x),
+                #     inputs=[chk_apply_overlay],
+                #     outputs=[],
+                # )
 
         with gr.Row(live=True):
             gallery = gr.Gallery(

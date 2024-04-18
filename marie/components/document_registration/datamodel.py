@@ -16,19 +16,30 @@ class DocumentBoundaryPrediction(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def to_dict(self):
+    def to_dict(self, include_images=False):
+        if include_images:
+            return {
+                "label": self.label,
+                "detected": self.detected,
+                "mode": self.mode,
+                "aligned_image": (
+                    self.aligned_image.tolist()
+                    if self.aligned_image is not None
+                    else None
+                ),
+                "visualization_image": (
+                    self.visualization_image.tolist()
+                    if self.visualization_image is not None
+                    else None
+                ),
+                "boundary_bbox": self.boundary_bbox,
+                "score": self.score,
+            }
+
         return {
             "label": self.label,
             "detected": self.detected,
             "mode": self.mode,
-            "aligned_image": (
-                self.aligned_image.tolist() if self.aligned_image is not None else None
-            ),
-            "visualization_image": (
-                self.visualization_image.tolist()
-                if self.visualization_image is not None
-                else None
-            ),
             "boundary_bbox": self.boundary_bbox,
             "score": self.score,
         }
