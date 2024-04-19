@@ -21,9 +21,10 @@ use_cuda = torch.cuda.is_available()
 
 
 def build_ocr_engine():
-    text_layout = TextLayout(
-        "../../model_zoo/unilm/layoutreader/layoutreader-base-readingbank"
-    )
+    # text_layout = TextLayout(
+    #     "../../model_zoo/unilm/layoutreader/layoutreader-base-readingbank"
+    # )
+    text_layout = None
 
     box_processor = BoxProcessorUlimDit(
         models_dir="../../model_zoo/unilm/dit/text_detection",
@@ -54,7 +55,7 @@ def to_text(result):
     frames.append(np.zeros((height, width, 3), dtype=np.uint8))
 
     # write to temp file and read it back
-    tmp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix='.txt')
+    tmp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt")
 
     renderer = TextRenderer(config={"preserve_interword_spaces": False})
     renderer.render(
@@ -98,12 +99,12 @@ def process_image(filename):
 
     print("len words", len(words))
     print("len boxes", len(boxes_norm))
-    layout_boxes = text_layout(words, boxes_norm)
-    print(layout_boxes)
+    # layout_boxes = text_layout(words, boxes_norm)
+    # print(layout_boxes)
 
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
-    dump_bboxes(image, result)
+    # dump_bboxes(image, result)
 
     return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
 

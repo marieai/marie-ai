@@ -87,13 +87,14 @@ class ExtractPipeline(BasePipeline):
 
         self.overlay_processor = setup_overlay(pipeline_config)
         self.boundary_processor = setup_document_boundary(pipeline_config)
+        self.engine_name = "best"
 
-        self.ocr_engines = get_known_ocr_engines(device=device, engine="default")
+        self.ocr_engines = get_known_ocr_engines(device=device, engine=self.engine_name)
         (
             self.pipeline_name,
             self.classifier_groups,
             self.indexer_groups,
-        ) = load_pipeline(pipeline_config, self.ocr_engines["default"])
+        ) = load_pipeline(pipeline_config, self.ocr_engines[self.engine_name])
 
     def segment(
         self,
@@ -286,7 +287,13 @@ class ExtractPipeline(BasePipeline):
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )
-        ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
+        ocr_results = ocr_frames(
+            self.ocr_engines,
+            ref_id,
+            clean_frames,
+            root_asset_dir,
+            engine_name=self.engine_name,
+        )
         metadata["ocr"] = ocr_results
         metadata["boundary"] = boundary_meta
 
