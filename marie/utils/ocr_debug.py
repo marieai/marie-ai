@@ -28,6 +28,9 @@ REPLACEMENTS = {
     "”": "_QUOTE_SLANTED_L",
     "–": "_DASH_SHORT_",
     "—": "_DASH_",
+    "[": "_OPEN_SQUARE_BRACKET_",
+    "]": "_CLOSE_SQUARE_BRACKET_",
+    "@": "_SIGN_AT_",  # @
     " ": "_",
 }
 
@@ -43,28 +46,31 @@ def unnormalize_label(label: str):
     return label.strip()
 
 
-def dump_bboxes(image, result):
+def dump_bboxes(image, result, prefix: str, threshold=0.90):
     # dump all the words to a directory for debugging if the confidence is below a certain threshold
-    threshold = 0.90
-    chk_store_info = True
-    if chk_store_info:
-        for i, word in enumerate(result["words"]):
-            conf = word["confidence"]
-            text = word["text"]
+    for i, word in enumerate(result["words"]):
+        conf = word["confidence"]
+        text = word["text"]
 
-            if conf < threshold:
-                # convert form xywh to xyxy
-                converted = [
-                    word["box"][0],
-                    word["box"][1],
-                    word["box"][0] + word["box"][2],
-                    word["box"][1] + word["box"][3],
-                ]
-                word_img = image.crop(converted)
-                label = normalize_label(text)
-                ensure_exists(f"/tmp/boxes/{label}")
+        if conf < threshold and threshold > 0.8:
+            # convert form xywh to xyxy
+            converted = [
+                word["box"][0],
+                word["box"][1],
+                word["box"][0] + word["box"][2],
+                word["box"][1] + word["box"][3],
+            ]
+            word_img = image.crop(converted)
+            label = normalize_label(text)
 
-                with open(f"/tmp/boxes/{label}/label.txt", "w") as f:
-                    f.write(text)
-                    f.write(f"\n")
-                word_img.save(f"/tmp/boxes/{label}/{i}_{conf}.png")
+            # check if text is only numbers
+            root_label = f"alpha"
+            if text.isdigit():
+                root_label = f"number"
+
+            ensure_exists(f"/tmp/boxes/{root_label}/{label}")
+
+            with open(f"/tmp/boxes/{root_label}/{label}/label.txt", "w") as f:
+                f.write(text)
+                f.write(f"\n")
+            word_img.save(f"/tmp/boxes/{root_label}/{label}/{prefix}_{i}_{conf}.png")

@@ -388,7 +388,7 @@ def setup_document_boundary(
         return NoopDocumentBoundaryRegistration()
 
     return UnilmDocumentBoundaryRegistration(
-        model_name_or_path=config['model_name_or_path'],
+        model_name_or_path=config["model_name_or_path"],
         use_gpu=use_cuda,
     )
 
@@ -523,6 +523,7 @@ def ocr_frames(
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
     runtime_conf: Optional[dict[str, any]] = None,
+    engine_name: str = "default",
 ) -> dict:
     """
     Perform OCR on the frames and return the results
@@ -535,6 +536,7 @@ def ocr_frames(
     :param coord_format: coordinate format(default: XYWH)
     :param regions: regions to perform OCR on (default: None)
     :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+    :param engine_name: OCR engine to use (default: default)
     :return: OCR results
 
     Example runtime_conf payload:
@@ -561,7 +563,7 @@ def ocr_frames(
     output_dir = ensure_exists(os.path.join(root_asset_dir, "results"))
     filename, prefix, suffix = split_filename(ref_id)
 
-    engine = ocr_engines["default"]
+    engine = ocr_engines[engine_name]
     if regions and len(regions) > 0:
         engine = ocr_engines["best"]
 
