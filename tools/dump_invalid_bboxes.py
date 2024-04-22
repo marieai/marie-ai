@@ -55,4 +55,6 @@ def process_dir(image_dir: str):
 
 
 if __name__ == "__main__":
-    process_dir("/home/greg/datasets/funsd_dit/IMAGES/LbxIDImages_boundingBox_6292023")
+    process_dir(
+        "/home/gbugaj/tmp/analysis/BAD-OCR-IN-GRAPNEL/PID_4730_11946_0_201758379"
+    )
