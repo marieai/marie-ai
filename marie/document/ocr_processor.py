@@ -16,6 +16,7 @@ from marie.logging.predefined import default_logger
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 from marie.utils.draw_truetype import determine_font_size, get_default_font
+from marie.utils.overlap import merge_bboxes_as_block
 from marie.utils.utils import ensure_exists
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
@@ -235,12 +236,7 @@ class OcrProcessor(BaseHandler):
 
                 text = " ".join(_w)
                 box_picks = np.array(box_picks)
-
-                min_x = box_picks[:, 0].min()
-                min_y = box_picks[:, 1].min()
-                max_w = box_picks[:, 2].max()
-                max_h = box_picks[:, 3].max()
-                bbox = [min_x, min_y, max_w, max_h]
+                bbox = merge_bboxes_as_block(box_picks)
 
                 line_results[i] = {
                     "line": i + 1,  # Line index (1.. N), relative to the image
