@@ -1,3 +1,5 @@
+import uuid
+
 from marie.utils.utils import ensure_exists
 
 REPLACEMENTS = {
@@ -52,7 +54,7 @@ def dump_bboxes(image, result, prefix: str, threshold=0.90):
         conf = word["confidence"]
         text = word["text"]
 
-        if conf < threshold and threshold > 0.8:
+        if conf < threshold and threshold > 0.5:
             # convert form xywh to xyxy
             converted = [
                 word["box"][0],
@@ -73,4 +75,9 @@ def dump_bboxes(image, result, prefix: str, threshold=0.90):
             with open(f"/tmp/boxes/{root_label}/{label}/label.txt", "w") as f:
                 f.write(text)
                 f.write(f"\n")
-            word_img.save(f"/tmp/boxes/{root_label}/{label}/{prefix}_{i}_{conf}.png")
+
+            # create a unique filename to prevent overwriting using uuid
+            fname = uuid.uuid4().hex
+            word_img.save(
+                f"/tmp/boxes/{root_label}/{label}/{prefix}_{i}_{conf}_{fname}.png"
+            )
