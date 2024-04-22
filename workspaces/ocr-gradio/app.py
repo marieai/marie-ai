@@ -13,11 +13,13 @@ from marie.document.layoutreader import TextLayout
 from marie.executor.ner.utils import normalize_bbox
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
-from marie.utils.json import to_json
+from marie.utils.json import store_json_object, to_json
 from marie.utils.ocr_debug import dump_bboxes
-from marie.utils.utils import ensure_exists
+from marie.utils.utils import current_milli_time, ensure_exists
 
 use_cuda = torch.cuda.is_available()
+
+prefix_text = "0"
 
 
 def build_ocr_engine():
@@ -105,8 +107,51 @@ def process_image(filename):
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
     # dump_bboxes(image, result)
+    text = to_text(result)
 
-    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
+    if True:
+        request_id = f"{prefix_text}_{current_milli_time()}"
+        ensure_exists(f"/tmp/icr/{request_id}")
+        ensure_exists(f"/tmp/icr/{request_id}/lines")
+
+        with open(f"/tmp/icr/{request_id}/text.txt", "w") as f:
+            f.write(text)
+
+        bboxes_img.save(f"/tmp/icr/{request_id}/bboxes.png")
+        lines_img.save(f"/tmp/icr/{request_id}/lines.png")
+        # cv2 to pil
+        overlay_image_pil = Image.fromarray(
+            cv2.cvtColor(overlay_image, cv2.COLOR_BGR2RGB)
+        )
+        overlay_image_pil.save(f"/tmp/icr/{request_id}/overlay.png")
+        store_json_object(result, f"/tmp/icr/{request_id}/result.json")
+        # for each line in the results extract the text and the line bounding box and clip the image to the bounding box
+        for x in lines_bboxes:
+            print("line bbox", x)
+
+        for idx, line in enumerate(result["lines"]):
+            line_text = line["text"]
+            confidence = line["confidence"]
+            # convert form xywh to xyxy
+            converted = [
+                line["bbox"][0],
+                line["bbox"][1],
+                line["bbox"][0] + line["bbox"][2],
+                line["bbox"][1] + line["bbox"][3],
+            ]
+            print("line bbox", line["bbox"], converted, line_text)
+            line_image = image.crop(converted)
+
+            with open(
+                f"/tmp/icr/{request_id}/lines/{prefix_text}_{idx}_{confidence}.txt", "w"
+            ) as f:
+                f.write(line_text)
+
+            line_image.save(
+                f"/tmp/icr/{request_id}/lines/{prefix_text}_{idx}_{confidence}.png"
+            )
+
+    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result), text
 
 
 def image_to_gallery(image_src):
@@ -114,6 +159,12 @@ def image_to_gallery(image_src):
     filename = image_src.name
     frames = frames_from_file(filename)
     return frames
+
+
+def print_textbox(x):
+    print(x)
+    global prefix_text
+    prefix_text = x
 
 
 def interface():
@@ -163,6 +214,11 @@ def interface():
                     precision=2,
                 )
 
+                txt_prefix = gr.Textbox(
+                    "Prefix", label="Prefix", default="filtered", interactive=True
+                )
+                txt_prefix.change(fn=print_textbox, inputs=[txt_prefix])
+
                 # chk_apply_overlay.change(
                 #     lambda x: update_overlay(x),
                 #     inputs=[chk_apply_overlay],
@@ -178,16 +234,7 @@ def interface():
             ).style(columns=4, object_fit="contain", height="auto")
 
         btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
-        # btn_submit.click(process_image, inputs=[src], outputs=[fake, blended])
         btn_reset.click(lambda: src.clear())
-
-        #
-        # with gr.Row():
-        #     src = gr.Image(type="pil", source="upload")
-        #
-        # with gr.Row():
-        #     btn_reset = gr.Button("Clear")
-        #     btn_submit = gr.Button("Submit", variant="primary")
 
         with gr.Row():
             with gr.Column():

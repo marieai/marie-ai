@@ -63,7 +63,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
             "data": "",
             "fp16": fp16,
             "bp16": bp16,
-            "dict_path_or_url": decoder_pretrained  # We are loading models from a local-path
+            "dict_path_or_url": decoder_pretrained,  # We are loading models from a local-path
             # "decoder_pretrained": None,
         },
     )
@@ -196,6 +196,9 @@ class TrOcrProcessor(OcrProcessor):
     ) -> None:
         super().__init__(work_dir, cuda, **kwargs)
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
+        # model_path = "/home/greg/models/unilm/trocr/ft_SROIE/checkpoint_best.pt"
+        # model_path = "/data/models/unilm/trocr/ft_SROIE_LINES/checkpoint_best.pt"
+        model_path = "/data/models/unilm/trocr/ft_SROIE_LINES_SET12/checkpoint_best.pt"
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
         if not os.path.exists(model_path):
             raise Exception(f"File not found : {model_path}")
@@ -209,7 +212,7 @@ class TrOcrProcessor(OcrProcessor):
 
         start = time.time()
         # TODO : make this configurable
-        beam = 1  # default beam size is 5
+        beam = 5  # default beam size is 5
         (
             model,
             cfg,
