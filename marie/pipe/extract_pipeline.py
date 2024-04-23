@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -87,7 +88,7 @@ class ExtractPipeline(BasePipeline):
 
         self.overlay_processor = setup_overlay(pipeline_config)
         self.boundary_processor = setup_document_boundary(pipeline_config)
-        self.engine_name = "best"
+        self.engine_name = "default"
 
         self.ocr_engines = get_known_ocr_engines(device=device, engine=self.engine_name)
         (
@@ -114,7 +115,10 @@ class ExtractPipeline(BasePipeline):
         :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
         :return:
         """
-        self.logger.info(f"Segmenting frames for {ref_id}")
+        self.logger.info(f"Segmenting [{len(frames)}] frames for {ref_id}")
+        if len(frames) == 0:
+            self.logger.warning(f"No frames to segment for {ref_id}")
+            raise ValueError("No frames to segment")
 
         output_dir = ensure_exists(os.path.join(root_asset_dir, "clean"))
         filename, prefix, suffix = split_filename(ref_id)
@@ -190,6 +194,7 @@ class ExtractPipeline(BasePipeline):
 
         if enabled:
             try:
+                output_dir = ensure_exists(os.path.join(root_asset_dir, "boundary"))
                 results = self.boundary_processor.run(
                     documents, registration_method="fit_to_page"
                 )
@@ -203,13 +208,19 @@ class ExtractPipeline(BasePipeline):
                     self.logger.info(f"Boundary detected {i} : {boundary.detected}")
                     if boundary.detected:
                         frame = boundary.aligned_image
+                        cv2.imwrite(
+                            os.path.join(output_dir, f"boundary_{i}.png"),
+                            boundary.aligned_image,
+                        )
                     registered_frames.append(frame)
             except Exception as e:
                 self.logger.warning(
                     f"Unable to perform document boundary (using original frame) : {e}"
                 )
-                registered_frames = frames
+        else:
+            registered_frames = frames
 
+        assert len(registered_frames) == len(frames)
         return registered_frames, metadata
 
     def execute_frames_pipeline(
@@ -244,7 +255,9 @@ class ExtractPipeline(BasePipeline):
         )
 
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
-        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get("enabled", True)
+        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
+            "enabled", False
+        )  # default to False, client should enable
         page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
             "enabled", True
         )
@@ -281,9 +294,13 @@ class ExtractPipeline(BasePipeline):
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
 
+        print(f"before boundary : {len(frames)}")
         frames, boundary_meta = self.boundary(
             ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
         )
+
+        print(f"after boundary : {len(frames)}")
+
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )

@@ -176,7 +176,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.progress_bar = False
-        self.debug_visualization = debug_visualization
+        self.debug_visualization = False  # debug_visualization
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -300,12 +300,15 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             doc_id = hash_frames_fast([image])
 
         width, height = image.shape[1], image.shape[0]
+        self.logger.info(f"Processing document: {doc_id}")
 
         print(f"Image shape: {image.shape}")
         print("Registration mode: ", registration_mode)
         print("Registration point: ", registration_point)
         print("Margin width: ", margin_width)
         print("Margin height: ", margin_height)
+        print("Image width: ", width)
+        print("Image height: ", height)
 
         with torch.no_grad():
             self.logger.info(f"Inference on image: {image.shape}")
@@ -406,6 +409,23 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 boundary_bbox[0] : boundary_bbox[0] + boundary_bbox[2],
             ]
 
+            def resize_with_aspect_ratio(
+                image, width=None, height=None, inter=cv2.INTER_AREA
+            ):
+                dim = None
+                (h, w) = image.shape[:2]
+                r = 1
+                if width is None and height is None:
+                    return r, image
+                if width is None:
+                    r = height / float(h)
+                    dim = (int(w * r), height)
+                else:
+                    r = width / float(w)
+                    dim = (width, int(h * r))
+
+                return r, cv2.resize(image, dim, interpolation=inter)
+
             # absolute registration
             if registration_mode == "absolute":
                 if p1_x + boundary_bbox[2] > width:
@@ -430,15 +450,20 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 resized_boundary = boundary
 
                 if boundary_bbox[3] > boundary_bbox[2]:
-                    original_height, original_width = image.shape[:2]
-                    scale_factor = boundary_bbox[3] / boundary_bbox[2]
-                    new_height = int(original_height * scale_factor)
-                    resized_boundary = cv2.resize(
-                        boundary, (new_width, new_height), interpolation=cv2.INTER_CUBIC
+                    # boundary_height, boundary_width = boundary.shape[:2]
+                    # scale_factor = boundary_bbox[3] / boundary_bbox[2]
+                    # new_height = int(boundary_height * scale_factor)
+                    scale_factor, resized_boundary = resize_with_aspect_ratio(
+                        boundary, width=new_width
+                    )
+                    print("Resized boundary shape: ", resized_boundary.shape)
+                    cv2.imwrite(
+                        f"/tmp/dit/{doc_id}_resized_boundary.png", resized_boundary
                     )
 
-                # cv2.imwrite(f"/tmp/dit/{doc_id}_resized_boundary.png", resized_boundary)
-                bottom = height - p1_y - h * scale_factor
+                boundary_height, boundary_width = resized_boundary.shape[:2]
+
+                bottom = height - boundary_height - p1_y
                 bottom = max(0, int(bottom))
 
                 aligned_image = cv2.copyMakeBorder(
@@ -472,6 +497,8 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 cv2.imwrite(f"/tmp/dit/{doc_id}_boundary_image.png", boundary)
                 cv2.imwrite(f"/tmp/dit/{doc_id}_registration.png", aligned_image)
                 cv2.imwrite(f"/tmp/dit/{doc_id}_stacked.png", stacked)
+
+        print("aligned_image shape: ", aligned_image.shape)
 
         return [
             DocumentBoundaryPrediction(
