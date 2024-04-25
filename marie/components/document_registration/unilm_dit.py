@@ -176,7 +176,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.progress_bar = False
-        self.debug_visualization = False  # debug_visualization
+        self.debug_visualization = True  # debug_visualization
 
         resolved_devices, _ = initialize_device_settings(
             devices=devices, use_cuda=use_gpu, multi_gpu=False
@@ -386,11 +386,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
             h = y1 - y0
             x = x0
             y = y0
-
-            # margin_width = 5
-            # margin_height = 5
-            # p1 = [5, 5]
-            #
             p1_x, p1_y = registration_point
 
             boundary_bbox = [
@@ -450,9 +445,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 resized_boundary = boundary
 
                 if boundary_bbox[3] > boundary_bbox[2]:
-                    # boundary_height, boundary_width = boundary.shape[:2]
-                    # scale_factor = boundary_bbox[3] / boundary_bbox[2]
-                    # new_height = int(boundary_height * scale_factor)
                     scale_factor, resized_boundary = resize_with_aspect_ratio(
                         boundary, width=new_width
                     )
@@ -462,7 +454,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                     )
 
                 boundary_height, boundary_width = resized_boundary.shape[:2]
-
                 bottom = height - boundary_height - p1_y
                 bottom = max(0, int(bottom))
 
