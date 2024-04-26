@@ -32,6 +32,15 @@ pipeline:
       type: 'regex'
       pattern: '.*'
 
+  template_matcher:
+    device: 'cuda'
+    name: 'template_matcher_default'
+    definitions_path: 'template_matching/definitions' # Path to the definitions relative to model_zoo
+    enabled: True
+    break_on_match: True
+
+
+
   page_splitter:
     model_name_or_path: 'marie/layoutlmv3-medical-document-splitter'
     enabled: True

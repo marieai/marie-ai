@@ -152,7 +152,9 @@ class RequestStreamer:
                     f'Error while getting responses from deployments: {err.details()}'
                 )
                 raise
-        except Exception as err:  # HTTP and WS need different treatment further up the stack
+        except (
+            Exception
+        ) as err:  # HTTP and WS need different treatment further up the stack
             self.logger.error(f'Error while getting responses from deployments: {err}')
             raise err
 
@@ -215,7 +217,9 @@ class RequestStreamer:
                     f'Error while getting responses from deployments: {err.details()}'
                 )
                 raise
-        except Exception as err:  # HTTP and WS need different treatment further up the stack
+        except (
+            Exception
+        ) as err:  # HTTP and WS need different treatment further up the stack
             self.logger.error(f'Error while getting responses from deployments: {err}')
             raise err
 
@@ -346,6 +350,7 @@ class RequestStreamer:
 
         iterate_requests_task.add_done_callback(iterating_task_done)
 
+        #
         async def receive_responses():
             while not all_requests_handled.is_set():
                 if not results_in_order:
