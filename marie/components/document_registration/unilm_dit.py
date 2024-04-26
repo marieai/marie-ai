@@ -486,6 +486,7 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 stacked = np.hstack([image, divider, aligned_image])
 
                 cv2.imwrite(f"/tmp/dit/{doc_id}_boundary_image.png", boundary)
+
                 cv2.imwrite(f"/tmp/dit/{doc_id}_registration.png", aligned_image)
                 cv2.imwrite(f"/tmp/dit/{doc_id}_stacked.png", stacked)
 

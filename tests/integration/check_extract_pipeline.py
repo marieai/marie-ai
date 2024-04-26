@@ -37,6 +37,9 @@ def run_extract_pipeline():
     img_path = "~/tmp/address-001.png"
     img_path = "~/tmp/demo/159000487_1.png"
     img_path = "~/tmp/4007/176075018.tif"
+    img_path = "~/tmp/analysis/BAD-LIFT/PID_3569_10895_0_201760141.tif"
+    img_path = "~/tmp/analysis/document-boundary/samples/PID_5871_13169_0_202225936.tif"
+    img_path = "/home/gbugaj/tmp/analysis/document-boundary/samples/PID_808_7548_0_202343052.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 

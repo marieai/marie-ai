@@ -72,6 +72,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         self.embeddings_processor = JinaEmbeddings(
             model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
         )
+        self.enable_visualization = False
 
     def predict(
         self,
@@ -103,10 +104,16 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         page_boxes = word_boxes
         word_lines = word_lines
         k = 0
+        min_word_length = 3
 
         for idx, (template_text, template_label) in enumerate(
             zip(template_texts, template_labels)
         ):
+            if template_text is None or len(template_text) < min_word_length:
+                self.logger.debug(
+                    f"Skipping template_text {template_text} as it is too short : {min_word_length}"
+                )
+                continue
             ngram = len(template_text.split(" "))
             ngrams = [ngram - 1, ngram, ngram + 1]
             ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
@@ -129,7 +136,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                     snippet = frame[y : y + h, x : x + w :]
                     ngram_words = " ".join(ngram_words).strip().upper()
                     template_text = template_text.strip().upper()
-                    sim_val = self.score(ngram_words, template_text, snippet)
+                    sim_val = round(self.score(ngram_words, template_text, snippet), 3)
 
                     if ngram_words == template_text or sim_val > score_threshold:
                         predictions.append(
@@ -140,12 +147,12 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                                 similarity=sim_val,
                             )
                         )
-
-                        ensure_exists(f"/tmp/fragments/converted/{key}")
-                        ensure_exists(f"/tmp/fragments/meta/{key}")
-                        cv2.imwrite(
-                            f"/tmp/fragments/meta/{k}_{round(sim_val, 3)}.png", snippet
-                        )
+                        if self.enable_visualization:
+                            ensure_exists(f"/tmp/fragments/meta/{key}")
+                            cv2.imwrite(
+                                f"/tmp/fragments/meta/{k}_{round(sim_val, 3)}.png",
+                                snippet,
+                            )
                         k += 1
 
         return predictions

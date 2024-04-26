@@ -13,6 +13,12 @@ from marie.components.document_registration.unilm_dit import (
     NoopDocumentBoundaryRegistration,
     UnilmDocumentBoundaryRegistration,
 )
+from marie.components.template_matching import (
+    CompositeTemplateMatcher,
+    MetaTemplateMatcher,
+    VQNNFTemplateMatcher,
+)
+from marie.constants import __config_dir__, __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging.predefined import default_logger as logger
 from marie.logging.profile import TimeContext
@@ -391,6 +397,54 @@ def setup_document_boundary(
         model_name_or_path=config["model_name_or_path"],
         use_gpu=use_cuda,
     )
+
+
+def setup_template_matching(
+    pipeline_config: Optional[dict] = None,
+    key: str = "template_matcher",
+    device: str = "cuda",
+):
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    if key not in pipeline_config:
+        logger.warning(f"Missing {key} in pipeline config, using default config")
+        return NoopDocumentBoundaryRegistration()
+
+    config = pipeline_config[key] if key in pipeline_config else {}
+
+    # if "model_name_or_path" not in config:
+    #     raise BadConfigSource(
+    #         f"Missing model_name_or_path in document template matching config : {config}"
+    #     )
+
+    if "definitions_path" not in config:
+        raise BadConfigSource(
+            f"Missing definitions_path in document template matching config : {config}"
+        )
+    resolved_definitions_path = os.path.join(__model_path__, config["definitions_path"])
+    if not os.path.exists(resolved_definitions_path):
+        raise BadConfigSource(
+            f"Invalid definitions_path in document template matching config : {config}"
+        )
+
+    if not config.get("enabled", True):
+        logger.warning(
+            f"Template matching disabled (using NOOP): {config['model_name_or_path']}"
+        )
+        return None
+
+    matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
+    matcher_meta = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher = CompositeTemplateMatcher(
+        matchers=[matcher_meta, matcher_vqnnft], break_on_match=True
+    )
+
+    logger.info(
+        f"Loaded template matching definitions from {resolved_definitions_path}"
+    )
+    return matcher, resolved_definitions_path
 
 
 def restore_assets(
