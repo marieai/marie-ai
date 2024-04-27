@@ -198,7 +198,7 @@ class TrOcrProcessor(OcrProcessor):
         model_path = os.path.join(models_dir, "trocr-large-printed.pt")
         # model_path = "/home/greg/models/unilm/trocr/ft_SROIE/checkpoint_best.pt"
         # model_path = "/data/models/unilm/trocr/ft_SROIE_LINES/checkpoint_best.pt"
-        model_path = "/data/models/unilm/trocr/ft_SROIE_LINES_SET12/checkpoint_best.pt"
+        model_path = "/data/models/unilm/trocr/ft_SROIE_LINES_SET16/checkpoint_best.pt"
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
         if not os.path.exists(model_path):
             raise Exception(f"File not found : {model_path}")
