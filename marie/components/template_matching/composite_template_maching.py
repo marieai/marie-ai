@@ -19,6 +19,7 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
     def __init__(
         self,
         matchers: List[BaseTemplateMatcher],
+        break_on_match: bool = False,
         show_error: Optional[Union[str, bool]] = True,
         **kwargs,
     ):
@@ -27,6 +28,7 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         self.show_error = show_error  # show prediction errors
         self.progress_bar = False
         self.matchers = matchers
+        self.break_on_match = break_on_match
 
     def predict(
         self,
@@ -88,6 +90,8 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
                     batch_size=batch_size,
                 )
                 results.extend(result)
+                if self.break_on_match and result:
+                    break
 
         converted_results = []
         results_by_page = {}
@@ -100,10 +104,10 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
             result_bboxes = [result.bbox for result in results]
             result_labels = [result.label for result in results]
             result_scores = [result.score for result in results]
-            object_prediction_list: List[
-                ObjectPrediction
-            ] = self.to_object_prediction_list(
-                result_bboxes, result_labels, result_scores
+            object_prediction_list: List[ObjectPrediction] = (
+                self.to_object_prediction_list(
+                    result_bboxes, result_labels, result_scores
+                )
             )
 
             if postprocess is not None:
