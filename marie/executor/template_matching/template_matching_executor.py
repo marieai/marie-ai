@@ -1,61 +1,26 @@
-import base64
-import io
 import os
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Union
 
-import cv2
 import numpy as np
 import torch
 from docarray import DocList
-from docarray.base_doc.doc import BaseDocWithoutId
-from PIL import Image
 
 from marie import Executor, requests, safely_encoded
-from marie.api.docs import BaseDoc
-from marie.components.template_matching import BaseTemplateMatcher, VQNNFTemplateMatcher
-from marie.components.template_matching.model import TemplateMatchResult
+from marie.components.template_matching import VQNNFTemplateMatcher
+from marie.components.template_matching.document_matched import (
+    convert_template_selectors,
+)
+from marie.components.template_matching.model import (
+    TemplateMatchingRequestDoc,
+    TemplateMatchingResultDoc,
+    TemplateMatchResult,
+    TemplateMatchResultDoc,
+)
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
 from marie.utils.docs import docs_from_asset, docs_from_file, frames_from_docs
 from marie.utils.network import get_ip_address
-from marie.utils.resize_image import resize_image
-
-
-class TemplateMatchResultDoc(BaseDocWithoutId, frozen=True):
-    bbox: Tuple[int, int, int, int]
-    label: str
-    score: float
-    similarity: float
-    frame_index: Optional[int] = 0
-
-
-class TemplateMatchingResultDoc(BaseDoc, frozen=True):
-    asset_key: str
-    results: List[TemplateMatchResultDoc]
-
-
-class TemplateSelector(BaseDocWithoutId, frozen=True):
-    region: List[int]
-    frame: str
-    bbox: List[int]
-    label: str
-    text: str
-    create_window: bool
-    top_k: int
-
-
-class TemplateMatchingRequestDoc(BaseDoc):
-    asset_key: str
-    id: str
-    pages: List[int]
-    score_threshold: float
-    scoring_strategy: str
-    max_overlap: float
-    window_size: List[int]
-    matcher: str
-    downscale_factor: float
-    selectors: List[TemplateSelector]
 
 
 def convert_to_protobuf_doc(match: TemplateMatchResult) -> TemplateMatchResultDoc:
@@ -122,71 +87,6 @@ class TemplateMatchingExecutor(Executor):
         logger.info(f"Runtime info: {self.runtime_info}")
         logger.info(f"Pipeline : {pipeline}")
 
-    def convert_template_selectors(
-        self,
-        selectors: List[TemplateSelector],
-        window_size: Union[List[int], tuple[int, int]],
-    ):
-        """
-        Convert TemplateSelector to Template Matching Selectors
-        :param selectors:
-        :param window_size:
-        :return:
-        """
-
-        print(f"Converting {len(selectors)} selector(s)")
-        template_frames = []
-        template_bboxes = []
-        template_labels = []
-        template_texts = []
-
-        for i, selector in enumerate(selectors):
-            buf = io.BytesIO(base64.b64decode(selector.frame))
-            image = Image.open(buf)
-            image = image.convert("RGB")
-            frame = np.array(image)
-            frame = frame[:, :, ::-1].copy()
-
-            boxes_xywh = [
-                selector.bbox
-            ]  # currently only one bbox is supported per selector
-            region = selector.region
-            label = selector.label
-            text = selector.text
-
-            if selector.create_window:
-                frame, coord = resize_image(
-                    frame,
-                    window_size,
-                    keep_max_size=True,
-                )
-                boxes_xywh = [coord]
-
-            (
-                sel_template_frames,
-                sel_template_bboxes,
-            ) = BaseTemplateMatcher.extract_windows(
-                frame, boxes_xywh, window_size, allow_padding=True
-            )
-
-            template_frames.extend(sel_template_frames)
-            template_bboxes.extend(sel_template_bboxes)
-            template_labels.append(label)
-            template_texts.append(text)
-            assert (
-                len(template_frames)
-                == len(template_bboxes)
-                == len(template_labels)
-                == len(template_texts)
-            )
-
-            for template_frame in template_frames:
-                cv2.imwrite(
-                    f"/tmp/dim/template/template_frame_SELECTOR_{i}.png", template_frame
-                )
-
-        return template_frames, template_bboxes, template_labels, template_texts
-
     @requests(on="/document/matcher")
     def match(
         self,
@@ -238,7 +138,7 @@ class TemplateMatchingExecutor(Executor):
             template_bboxes,
             template_labels,
             template_texts,
-        ) = self.convert_template_selectors(doc.selectors, doc.window_size)
+        ) = convert_template_selectors(doc.selectors, doc.window_size)
 
         results = matcher.run(
             frames=frames_from_file,

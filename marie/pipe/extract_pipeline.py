@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -12,6 +13,10 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
+from marie.components.template_matching.document_matched import (
+    load_template_matching_definitions,
+    match_templates,
+)
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
@@ -23,6 +28,7 @@ from marie.pipe.components import (
     s3_asset_path,
     setup_document_boundary,
     setup_overlay,
+    setup_template_matching,
     split_filename,
     store_assets,
 )
@@ -87,7 +93,7 @@ class ExtractPipeline(BasePipeline):
 
         self.overlay_processor = setup_overlay(pipeline_config)
         self.boundary_processor = setup_document_boundary(pipeline_config)
-        self.engine_name = "best"
+        self.engine_name = "default"
 
         self.ocr_engines = get_known_ocr_engines(device=device, engine=self.engine_name)
         (
@@ -95,6 +101,11 @@ class ExtractPipeline(BasePipeline):
             self.classifier_groups,
             self.indexer_groups,
         ) = load_pipeline(pipeline_config, self.ocr_engines[self.engine_name])
+
+        # TODO : Refactor this to use the pipeline_config instead of the some of the hardcoded values
+        self.matcher, self.template_matching_definitions = setup_template_matching(
+            device=device, pipeline_config=pipeline_config
+        )
 
     def segment(
         self,
@@ -114,7 +125,10 @@ class ExtractPipeline(BasePipeline):
         :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
         :return:
         """
-        self.logger.info(f"Segmenting frames for {ref_id}")
+        self.logger.info(f"Segmenting [{len(frames)}] frames for {ref_id}")
+        if len(frames) == 0:
+            self.logger.warning(f"No frames to segment for {ref_id}")
+            raise ValueError("No frames to segment")
 
         output_dir = ensure_exists(os.path.join(root_asset_dir, "clean"))
         filename, prefix, suffix = split_filename(ref_id)
@@ -190,6 +204,7 @@ class ExtractPipeline(BasePipeline):
 
         if enabled:
             try:
+                output_dir = ensure_exists(os.path.join(root_asset_dir, "boundary"))
                 results = self.boundary_processor.run(
                     documents, registration_method="fit_to_page"
                 )
@@ -203,14 +218,48 @@ class ExtractPipeline(BasePipeline):
                     self.logger.info(f"Boundary detected {i} : {boundary.detected}")
                     if boundary.detected:
                         frame = boundary.aligned_image
+                        cv2.imwrite(
+                            os.path.join(output_dir, f"boundary_{i}.png"),
+                            boundary.aligned_image,
+                        )
                     registered_frames.append(frame)
             except Exception as e:
                 self.logger.warning(
                     f"Unable to perform document boundary (using original frame) : {e}"
                 )
-                registered_frames = frames
+        else:
+            registered_frames = frames
 
+        assert len(registered_frames) == len(frames)
         return registered_frames, metadata
+
+    def template_matching(
+        self,
+        definition_id: str,
+        frames: Union[list[np.ndarray], list[Image.Image]],
+        root_asset_dir: str,
+        ocr_results: dict,
+        enabled: bool = True,
+    ) -> list[dict[str, any]]:
+        """ """
+
+        self.logger.info(f"Template matching")
+        if self.matcher is None:
+            self.logger.warning("Template matcher is not configured")
+            return []
+
+        # definition_file = "/home/gbugaj/dev/grapnel-tooling/dataset-selectors/ready/120791.definition.json"
+        definition_file = os.path.join(
+            self.template_matching_definitions, f"{definition_id}.definition.json"
+        )
+        if not os.path.exists(definition_file):
+            self.logger.warning(
+                f"Template definition file not found : {definition_file}"
+            )
+            return []
+
+        definition = load_template_matching_definitions(definition_file)
+        return match_templates(frames, definition, self.matcher, ocr_results)
 
     def execute_frames_pipeline(
         self,
@@ -244,8 +293,13 @@ class ExtractPipeline(BasePipeline):
         )
 
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
-        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get("enabled", True)
+        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
+            "enabled", False
+        )  # default to False, client should enable
         page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
+            "enabled", True
+        )
+        template_matching_enabled = runtime_conf.get("template_matching", {}).get(
             "enabled", True
         )
 
@@ -253,6 +307,9 @@ class ExtractPipeline(BasePipeline):
         self.logger.info(f"Feature : indexer enabled : {page_indexer_enabled}")
         self.logger.info(f"Feature : cleaner enabled : {page_cleaner_enabled}")
         self.logger.info(f"Feature : boundary enabled : {page_boundary_enabled}")
+        self.logger.info(
+            f"Feature : template matching enabled : {template_matching_enabled}"
+        )
 
         for group, classifiers in self.classifier_groups.items():
             self.logger.info(f"Loaded classifiers : {group}, {len(classifiers)}")
@@ -281,9 +338,13 @@ class ExtractPipeline(BasePipeline):
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
 
+        print(f"before boundary : {len(frames)}")
         frames, boundary_meta = self.boundary(
             ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
         )
+
+        print(f"after boundary : {len(frames)}")
+
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )
@@ -294,8 +355,19 @@ class ExtractPipeline(BasePipeline):
             root_asset_dir,
             engine_name=self.engine_name,
         )
+
+        def_id = runtime_conf.get("template_matching", {}).get("definition_id", "0")
+        template_matching_meta = self.template_matching(
+            def_id,
+            frames,
+            root_asset_dir,
+            ocr_results,
+            enabled=template_matching_enabled,
+        )
+
         metadata["ocr"] = ocr_results
         metadata["boundary"] = boundary_meta
+        metadata["template_matching"] = template_matching_meta
 
         self.execute_classifier_and_indexer_pipeline(
             frames,
@@ -423,12 +495,11 @@ class ExtractPipeline(BasePipeline):
             )
 
         root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
-
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 
         if runtime_conf is None:
-            self.logger.warning("runtime_conf is None, using default config")
+            self.logger.warning("runtime_conf is None, using default " "config")
             runtime_conf = {}
 
         try:

@@ -60,7 +60,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         """
         super().__init__(True, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document matcher : {model_name_or_path}")
+        self.logger.info(f"VQNNF matcher model : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.labels = labels
