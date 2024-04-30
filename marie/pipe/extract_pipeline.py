@@ -248,7 +248,7 @@ class ExtractPipeline(BasePipeline):
             self.logger.warning("Template matcher is not configured")
             return []
 
-        # definition_file = "/home/gbugaj/dev/grapnel-tooling/dataset-selectors/ready/120791.definition.json"
+        # definition_file = "~/dev/grapnel-tooling/dataset-selectors/ready/120791.definition.json"
         definition_file = os.path.join(
             self.template_matching_definitions, f"{definition_id}.definition.json"
         )

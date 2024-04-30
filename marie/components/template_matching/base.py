@@ -149,11 +149,6 @@ class BaseTemplateMatcher(ABC):
                     reductions=2,
                     return_intermediate_states=False,
                 )
-                if False:
-                    cv2.imwrite(
-                        f"/tmp/dim/template_downscaled_{k}.png",
-                        template_frame,
-                    )
 
                 template_frames[k] = template_frame
                 template_box = [
@@ -308,10 +303,10 @@ class BaseTemplateMatcher(ABC):
 
             result_scores = sorted(result_scores, reverse=True)
 
-            object_prediction_list: List[
-                ObjectPrediction
-            ] = self.to_object_prediction_list(
-                result_bboxes, result_labels, result_scores
+            object_prediction_list: List[ObjectPrediction] = (
+                self.to_object_prediction_list(
+                    result_bboxes, result_labels, result_scores
+                )
             )
 
             if postprocess is not None:
@@ -410,17 +405,17 @@ class BaseTemplateMatcher(ABC):
         :param bboxes:  bounding boxes to visualize
         :param labels:  labels to visualize
         :param scores:  scores to visualize
-        :param frame:  frame to draw the predictions on
+        :param frame_cp:  frame to draw the predictions on
         :param index:  index of the frame
         :param border_only:  whether to draw only the border of the bounding boxes
         :return:
         """
-
+        frm = frame.copy()
         colors = {label: np.random.randint(0, 255, 3).tolist() for label in set(labels)}
         for bbox, label, score in zip(bboxes, labels, scores):
             if border_only:
                 cv2.rectangle(
-                    frame,
+                    frm,
                     (bbox[0], bbox[1]),
                     (bbox[0] + bbox[2], bbox[1] + bbox[3]),
                     # (0, 255, 0),
@@ -428,7 +423,7 @@ class BaseTemplateMatcher(ABC):
                     2,
                 )
             else:
-                overlay = frame.copy()
+                overlay = frm.copy()
                 cv2.rectangle(
                     overlay,
                     (bbox[0], bbox[1]),
@@ -437,9 +432,9 @@ class BaseTemplateMatcher(ABC):
                     -1,
                 )
                 alpha = 0.5
-                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+                frm = cv2.addWeighted(overlay, alpha, frm, 1 - alpha, 0)
             cv2.putText(
-                frame,
+                frm,
                 f"{score:.2f}",
                 # (bbox[0], bbox[1] + bbox[3] // 2 + 5),
                 (bbox[0], bbox[1] - 5),
@@ -451,7 +446,7 @@ class BaseTemplateMatcher(ABC):
 
         # create random id for the frame
         rid = np.random.randint(0, 1000)
-        cv2.imwrite(f"/tmp/dim/results_frame_{index}-rid_{rid}.png", frame)
+        cv2.imwrite(f"/tmp/dim/results_frame_{index}-rid_{rid}.png", frm)
 
     def filter_scores(
         self, bboxes, labels, scores, snippets, score_threshold
