@@ -172,10 +172,7 @@ def match_templates(
         f"Matching templates in the frames using the template matching definition: {definition}"
     )
     print(f"Frames: {len(frames)}")
-
-    # matcher = MetaTemplateMatcher(model_name_or_path="NONE")
     doc = definition
-
     if len(doc.selectors) == 0:
         return {"error": "selectors not present"}
 
@@ -185,11 +182,6 @@ def match_templates(
         template_labels,
         template_texts,
     ) = convert_template_selectors(doc.selectors, doc.window_size)
-
-    # ocr_engine = get_ocr_engine()
-    # metadata = ocr_engine.extract(
-    #     frames, PSMode.SPARSE, CoordinateFormat.XYWH
-    # )
 
     results = matcher.run(
         frames=frames,
