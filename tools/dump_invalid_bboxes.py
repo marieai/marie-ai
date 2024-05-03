@@ -48,19 +48,25 @@ def process_image(img_path, box_processor, icr_processor):
         "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
-    dump_bboxes(image, result, prefix=name, threshold=0.90)
-
-
-def process_dir(image_dir: str):
-    box_processor, trocr_processor, craf_processor = build_ocr_engines()
-    engines = {"trocr": trocr_processor, "craft": craf_processor}
-
-    for idx, img_path in enumerate(glob.glob(os.path.join(image_dir, "*.*"))):
-        try:
-            print(img_path)
-            process_image(img_path, box_processor, trocr_processor)
-        except Exception as e:
-            print(e)
+    # text_filters = ["PATIENT:", "NAME:", "MEMBER:"],
+    # ngram = 3,
+    dump_bboxes(
+        image,
+        result,
+        prefix=name,
+        threshold=0.90,
+        text_filters=[
+            "DATE:",
+            "ACCT#:",
+            "ACCT:",
+            "ACCT",
+            "ACCOUNT",
+            "CLAIM#:",
+            "CLAIM:",
+            "NUMBER:",
+        ],
+        ngram=3,
+    )
 
 
 def process_dir(image_dir: str, box_processor, trocr_processor):
@@ -75,6 +81,7 @@ def process_dir(image_dir: str, box_processor, trocr_processor):
             process_image(img_path, box_processor, trocr_processor)
         except Exception as e:
             print(e)
+            raise e
 
 
 def _verify_dir(text_to_validate, image_dir: str, ocr_processor):
@@ -145,23 +152,26 @@ if __name__ == "__main__":
     box_processor, trocr_processor, craf_processor = build_ocr_engines()
     engines = {"trocr": trocr_processor, "craft": craf_processor}
 
-    fragment = cv2.imread(
-        "/home/greg/datasets/SROIE_OCR/lines/icr/162305841_6_1713596222984/lines/162305841_6_38_0.9737.png"
-    )
-    result = trocr_processor.recognize_from_fragments([fragment])
+    if False:
+        fragment = cv2.imread(
+            "/home/greg/datasets/SROIE_OCR/lines/icr/162305841_6_1713596222984/lines/162305841_6_38_0.9737.png"
+        )
+        result = trocr_processor.recognize_from_fragments([fragment])
 
-    print("Result: ", result)
+        print("Result: ", result)
 
     # Before:  {'confidence': 0.6603, 'id': 'img-0', 'text': 'INN3802 409710 00 THEPPENTO BEROSS'}
     # AFTER    {'confidence': 0.9704, 'id': 'img-0', 'text': '07/12/2022 430 97110 GO THERAPEUTIC EXERCISES 2 $398.50 $91.60'}]
 
-    if False:
+    if True:
         process_dir(
             # "/home/greg/datasets/funsd_dit/IMAGES/LbxIDImages_boundingBox_6292023", --DONE
             # "/home/greg/datasets/funsd_dit/IMAGES/bboxes/03-2024", -- DONE
             # "/home/greg/datasets/corr-indexer/traindeck-raw-01/images/corr-indexing/train",  # -- DONE
             # "/home/greg/datasets/private/eob-extract/converted/imgs/eob-extract/eob-002",
-            "/home/greg/datasets/private/medical_page_classification/raw_v2/EOB",
+            # "/home/greg/datasets/private/medical_page_classification/raw_v2/EOB",
+            # "/home/greg/datasets/private/medical_page_classification/raw_v2/EOB",
+            "/home/greg/datasets/private/eob-extract/converted/imgs/eob-extract/eob-004",
             box_processor,
             trocr_processor,
         )
