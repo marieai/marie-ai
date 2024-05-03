@@ -98,7 +98,7 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
 
 
 def line_merge(
-    image, bboxes: List[List[int]], enable_visualization: Optional[bool] = True
+    image, bboxes: List[List[int]], enable_visualization: Optional[bool] = False
 ) -> List[List[int]]:
     """Merge overlapping bounding boxes into lines
 

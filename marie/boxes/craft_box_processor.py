@@ -3,6 +3,7 @@ from __future__ import print_function
 import copy
 import math
 import os
+import sys
 import time
 import warnings
 
@@ -34,7 +35,7 @@ from marie.utils.utils import ensure_exists
 from .line_processor import find_line_number, line_merge
 
 # FIXME : Rework package import
-# sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
 
@@ -285,6 +286,7 @@ class BoxProcessorCraft(BoxProcessor):
 
         # LinkRefiner
         refine_net = None
+        refine = None
         if refine:
             from craft.refinenet import RefineNet
 

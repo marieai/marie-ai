@@ -81,18 +81,12 @@ def find_overlap_vertical(box, data):
             intersection_area = y_bottom - y_top
 
             # compute the area of both AABBs
-            # bb1_area = (bb1['x2'] - bb1['x1']) * (bb1['y2'] - bb1['y1'])
-            # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
             # We are giving our box areas same width as we areonly interested in H IOU
             faux_w = 1
             bb1_area = faux_w * h
             bb2_area = faux_w * _h
 
             dr = h / _h
-            # bb2_area = (bb2['x2'] - bb2['x1']) * (bb2['y2'] - bb2['y1'])
-            # compute the intersection over union by taking the intersection
-            # area and dividing it by the sum of prediction + ground-truth areas - the interesection area
-            # iou = intersection_area / float(bb1_area + bb2_area - intersection_area)
             # clamping the iou to 0.0 - 1.0 to avoid any weirdness with floating point precision failing the assert
             iou = max(
                 min(
@@ -224,9 +218,9 @@ def compute_iou(box1, box2):
     # get the center of the box
     x_overlap = max(0, min(x2, x4) - max(x1, x3))
     y_overlap = max(0, min(y2, y4) - max(y1, y3))
-
+    #
     # print(
-    #     f"y_overlap: {y_overlap} y_overlap2: {y_overlap2}  : box1: {box1} box2: {box2}"
+    #     f"x_overlap: {y_overlap} y_overlap: {y_overlap}  : box1: {box1} box2: {box2}"
     # )
 
     intersection = x_overlap * y_overlap

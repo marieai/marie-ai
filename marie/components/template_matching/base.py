@@ -254,7 +254,7 @@ class BaseTemplateMatcher(ABC):
 
                 prediction_time_end = time.time() - prediction_time_start
                 durations_in_seconds["prediction"] = prediction_time_end
-                print(
+                self.logger.debug(
                     "Slice-prediction performed in",
                     durations_in_seconds["prediction"],
                     "seconds.",
@@ -350,7 +350,7 @@ class BaseTemplateMatcher(ABC):
                             frame_index=frame_idx,
                         )
                     )
-                    cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
+                    # cv2.imwrite(f"/tmp/dim/snippet/snippet_{label}_{idx}.png", snippet)
                     idx += 1
 
             if len(frame.shape) == 2:

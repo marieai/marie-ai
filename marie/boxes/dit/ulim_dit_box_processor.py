@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw
 from detectron2.config import get_cfg
+from torchvision.ops.boxes import box_iou
 
 from ditod import add_vit_config
 from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
@@ -19,8 +20,10 @@ from marie.detectron.detector import OptimizedDetectronPredictor
 from marie.logging.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.utils.image_utils import imwrite, paste_fragment
-from marie.utils.overlap import merge_boxes
+from marie.utils.overlap import merge_boxes, compute_iou, find_overlap
 from marie.utils.resize_image import resize_image
+from marie.utils.utils import ensure_exists
+from marie.utils.image_utils import hash_frames_fast
 
 
 def setup_cfg(args, device):
@@ -73,9 +76,11 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-    image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy"
+        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy",
+        blackout=False,
+        blackout_color=(0, 0, 0, 255),
 ) -> PIL.Image:
-    """Visualize bounding boxes on the image
+    """Visualize bounding boxes on the image#
     Args:
         image(Union[np.ndarray | PIL.Image.Image]): numpy array of shape (H, W), where H is the image height and W is the image width.
         bboxes(np.ndarray): Bounding boxes for image (xmin,ymin,xmax,ymax)
@@ -99,28 +104,104 @@ def visualize_bboxes(
         if format == "xywh":
             box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
+        fill_color = (
+            int(np.random.random() * 256),
+            int(np.random.random() * 256),
+            int(np.random.random() * 256),
+            125,
+        )
+        width = 1
+        if blackout:
+            fill_color = blackout_color
+            width = 0
+
         draw.rectangle(
             box,
             outline="#993300",
-            fill=(
-                int(np.random.random() * 256),
-                int(np.random.random() * 256),
-                int(np.random.random() * 256),
-                125,
-            ),
-            width=1,
+            fill=fill_color,
+            width=width,
         )
 
-        draw.text(
-            (box[0] + 10, box[1] - 10),
-            text=f"{idx}",
-            fill="red",
-            width=1,
-        )
+        if not blackout:
+            draw.text(
+                (box[0] + 10, box[1] - 10),
+                text=f"{idx}",
+                fill="red",
+                width=1,
+            )
         idx += 1
 
     # viz_img.show()
     return viz_img
+
+
+def is_surrounded_by_black(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Check the first and last row
+    if not np.all(gray[0] == 0) or not np.all(gray[-1] == 0):
+        return False
+
+    # Check the first and last column
+    if not np.all(gray[:, 0] == 0) or not np.all(gray[:, -1] == 0):
+        return False
+
+    return True
+
+
+def is_mostly_on_black_background(image, threshold=0.5):
+    # Convert the image to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Count the number of black pixels
+    black_pixels = np.sum(gray == 0)
+
+    # Calculate the total number of pixels in the image
+    total_pixels = gray.size
+
+    # Calculate the ratio of black pixels to total pixels
+    ratio = black_pixels / total_pixels
+
+    # If the ratio is above the threshold, the image is mostly on a black background
+    return ratio > threshold
+
+
+def blackout_bboxes(
+        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, bbox_format="xyxy", fill_color=(255, 255, 255)
+) -> np.ndarray:
+    """
+    Blackout bounding boxes on the image.
+
+    This function takes an image and a set of bounding boxes, and blacks out the regions of the image
+    that are within the bounding boxes. The format of the bounding boxes can be either "xyxy" or "xywh",
+    where "xyxy" represents the top left and bottom right corners of the bounding box and "xywh" represents
+    the top left corner, width, and height of the bounding box.
+
+    :param image: The input image as a numpy array or PIL Image.
+    :param bboxes: The bounding boxes as a numpy array(default : xyxy)
+    :param bbox_format: The format of the bounding boxes. Can be either "xyxy" or "xywh". Defaults to "xyxy".
+    :param fill_color: The color to fill the bounding boxes with. Defaults to (255, 255, 255).
+    :return: The image with the bounding boxes blacked out.
+    """
+
+    if image is None:
+        raise ValueError(
+            "Input image can't be empty"
+        )
+
+    if isinstance(image, PIL.Image.Image):
+        image = np.array(image)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    for i, box in enumerate(bboxes):
+        box = [int(x) for x in box]
+        if bbox_format == "xywh":
+            box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+        snippet = image[box[1]:box[3], box[0]:box[2]]
+        if is_surrounded_by_black(snippet) or is_mostly_on_black_background(snippet):
+            continue
+        image[box[1]:box[3], box[0]:box[2], :] = fill_color
+
+    return image
 
 
 def lines_from_bboxes(image, bboxes):
@@ -166,10 +247,6 @@ def lines_from_bboxes(image, bboxes):
     half_cols = cols // 2
     stride = cols // min(160, cols)
     horizontal_size = stride if stride > 1 else half_cols
-    #
-    # print(f"cols: {cols}")
-    # print(f"half_cols: {half_cols}")
-    # print(f"horizontal_size: {horizontal_size}")
     horizontal_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_size, 1))
 
     # Apply morphology operations
@@ -218,7 +295,7 @@ def lines_from_bboxes(image, bboxes):
 
 
 def crop_to_content_box(
-    frame: np.ndarray, content_aware=False
+        frame: np.ndarray, content_aware=False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
@@ -275,7 +352,7 @@ def crop_to_content_box(
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
+    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
@@ -311,15 +388,17 @@ class BoxProcessorUlimDit(BoxProcessor):
     """
 
     def __init__(
-        self,
-        work_dir: str = "/tmp/boxes",
-        models_dir: str = __model_path__,
-        cuda: bool = False,
+            self,
+            work_dir: str = "/tmp/boxes",
+            models_dir: str = __model_path__,
+            cuda: bool = False,
+            refinement: bool = True,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info("Box processor [dit, cuda={}]".format(cuda))
         self.logger.info(f"Loading model from config dir {__config_dir__}")
+        self.refinement = refinement
 
         args = get_parser().parse_args(
             [
@@ -348,46 +427,11 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
-    def psm_sparse(
-        self,
-        image: np.ndarray,
-        bbox_optimization: Optional[bool] = False,
-        bbox_context_aware: Optional[bool] = True,
-        enable_visualization: Optional[bool] = False,
-    ):
+    def psm_sparse_step(self, image: np.ndarray, adj_x: int, adj_y: int):
+
         try:
-            self.logger.debug(f"Starting box predictions : {image.shape}")
-            #  this should match Detectron2 model input size
-            # this is to ensure that the model works correctly
-            # FIXME : This is a hack
-            # TODO : Update the model to work with any size image
-            adj_x = 0
-            adj_y = 0
-            orig_image = image
-
-            # Both height and width are smaller than the minimum size then frame the image
-            if (
-                image.shape[0] < self.min_size_test[0]
-                or image.shape[1] < self.min_size_test[1]
-            ):
-                self.logger.debug(
-                    f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
-                )
-                # TODO : This is a hack, we need to update the model to work with smaller images
-                # currently we are resizing the image to 1/2  of the minimum width which is 800
-                image, coord = resize_image(
-                    image,
-                    (self.min_size_test[0], self.min_size_test[1]),
-                    keep_max_size=True,
-                )
-                self.logger.debug(f"Resized image  : {image.shape}, {coord}")
-                # cv2.imwrite(f"/tmp/marie/bbox_framed.png", image)
-                adj_x = coord[0]
-                adj_y = coord[1]
-
             rp = self.predictor(image)
             # detach the predictions from GPU to avoid memory leak
-            image = orig_image
             predictions = rp["instances"]
             # Following will hang if we move the predictions from GPU to CPU all at once
             # This is a workaround to avoid the hanging
@@ -415,7 +459,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             # check if boxes are empty, which means no boxes were detected(blank image)
             if boxes is None or len(boxes) == 0:
                 self.logger.debug(f"No boxes predicted.")
-                return [], [], [], [], []
+                return [], [], []
 
             bboxes = _convert_boxes(boxes)
             self.logger.debug(f"Predicted boxes : {len(boxes)}")
@@ -448,24 +492,111 @@ class BoxProcessorUlimDit(BoxProcessor):
                 )
             if len_b == 0:
                 self.logger.debug(f"No boxes found within requirements")
-                return [], [], [], [], []
+                return [], [], []
 
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
+            return bboxes, classes, scores
+        except Exception as e:
+            self.logger.error(f"Error in PSM_SPARSE_STEP : {e}")
+        return [], [], []
+
+    def psm_sparse(
+            self,
+            image: np.ndarray,
+            bbox_optimization: Optional[bool] = False,
+            bbox_context_aware: Optional[bool] = True,
+            enable_visualization: Optional[bool] = False,
+    ):
+        try:
+            self.logger.debug(f"Starting box predictions : {image.shape}")
+            #  this should match Detectron2 model input size
+            # this is to ensure that the model works correctly
+            # FIXME : This is a hack
+            # TODO : Update the model to work with any size image
+            adj_x = 0
+            adj_y = 0
+            # Both height and width are smaller than the minimum size then frame the image
+            if (
+                    image.shape[0] < self.min_size_test[0]
+                    or image.shape[1] < self.min_size_test[1]
+            ):
+                self.logger.debug(
+                    f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
+                )
+                # TODO : This is a hack, we need to update the model to work with smaller images
+                # currently we are resizing the image to 1/2  of the minimum width which is 800
+                image, coord = resize_image(
+                    image,
+                    (self.min_size_test[0], self.min_size_test[1]),
+                    keep_max_size=True,
+                )
+                self.logger.debug(f"Resized image  : {image.shape}, {coord}")
+                adj_x = coord[0]
+                adj_y = coord[1]
+
+            refinement_steps = 1
+            if self.refinement:
+                refinement_steps = 3
+
+            bboxes, classes, scores = [], [], []
+            refinement_image = image
+            hash_id = hash_frames_fast(frames=[refinement_image])
+            ensure_exists("/tmp/boxes")
+
+            for i in range(refinement_steps):
+                try:
+                    bboxes_, classes_, scores_ = self.psm_sparse_step(refinement_image, adj_x, adj_y)
+                    refinement_copy = copy.deepcopy(refinement_image)
+                    refinement_image = blackout_bboxes(refinement_image, bboxes_, bbox_format="xyxy")
+                    if enable_visualization:
+                        cv2.imwrite(f"/tmp/boxes/refinement_image_{hash_id}_{i}.png", refinement_image)
+
+                    if i == 0:
+                        bboxes.extend(bboxes_)
+                        classes.extend(classes_)
+                        scores.extend(scores_)
+                        continue
+
+                    if np.array_equal(refinement_copy, refinement_image):
+                        self.logger.info(f"Refinement step {i} : No change in image")
+                        break
+
+                    self.logger.warning(f"Refinement step {i} : {len(bboxes_)}")
+                    if len(bboxes_) == 0:
+                        self.logger.debug(f"No boxes predicted in refinement step {i}")
+                        break
+
+                    bbox1_tensor = torch.tensor(bboxes).float()
+                    bbox2_tensor = torch.tensor(bboxes_).float()
+                    ious_tensors = box_iou(bbox1_tensor, bbox2_tensor)
+                    indices = torch.where(ious_tensors > 0.1)
+
+                    src_indices = indices[0]
+                    tgt_indices = indices[1]
+
+                    bboxes_ = np.delete(bboxes_, tgt_indices, axis=0)
+                    classes_ = np.delete(classes_, tgt_indices, axis=0)
+                    scores_ = np.delete(scores_, tgt_indices, axis=0)
+
+                    bboxes.extend(bboxes_)
+                    classes.extend(classes_)
+                    scores.extend(scores_)
+                    self.logger.info(f"Boxes size : {len(bboxes)}")
+                except Exception as e:
+                    self.logger.error(f"Error in refinement step {i} : {e}")
+                    raise e
 
             if bbox_optimization:
-                # extract snippets from the image
                 for i, box in enumerate(bboxes):
                     box = np.array(box).astype(np.int32)
                     x0, y0, x1, y1 = box
                     w = x1 - x0
                     h = y1 - y0
-                    snippet = image[y0 : y0 + h, x0 : x0 + w :]
+                    snippet = image[y0: y0 + h, x0: x0 + w:]
                     offset, cropped = crop_to_content_box(
                         snippet, content_aware=bbox_context_aware
                     )
-                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}.png", snippet)
-                    # cv2.imwrite(f"/tmp/fragments/snippet_{i}_cropped.png", cropped)
                     adj_box = [
                         box[0] + offset[0],
                         box[1] + offset[1],
@@ -525,13 +656,13 @@ class BoxProcessorUlimDit(BoxProcessor):
 
     @torch.no_grad()
     def extract_bounding_boxes(
-        self,
-        _id,
-        key,
-        img: Union[np.ndarray, PIL.Image.Image],
-        psm=PSMode.SPARSE,
-        bbox_optimization: Optional[bool] = False,
-        bbox_context_aware: Optional[bool] = True,
+            self,
+            _id,
+            key,
+            img: Union[np.ndarray, PIL.Image.Image],
+            psm=PSMode.SPARSE,
+            bbox_optimization: Optional[bool] = False,
+            bbox_context_aware: Optional[bool] = True,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -615,7 +746,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
+                    snippet = img[y0: y0 + h, x0: x0 + w:]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)

@@ -28,18 +28,8 @@ def check_boundry_registration():
         model_name_or_path="../../model_zoo/unilm/dit/object_detection/document_boundary",
         use_gpu=True,
     )
-    # "/home/greg/tmp/demo/PID_114_6529_0_177272981_page_0002.png"
-    # "/home/greg/tmp/demo/PID_114_6529_0_177104327_page_0004.png"
-    # "/home/greg/tmp/demo/PID_114_6416_0_177360024_page_0002.png"
-    # "/home/greg/tmp/demo/PID_114_6529_0_177104346_page_0003.png"
-    # "/home/greg/tmp/demo/PID_114_6416_0_177272667_page_0002.png"
-    # "/home/greg/tmp/demo/PID_114_6416_0_177360024_page_0001.png"
-    # "/home/gbugaj/tmp/demo/158851107_3.png"
-    # "/home/gbugaj/dev/workflow/mbx-grapnel/mbx-grapnel-engine/src/test/resources/test-deck/Integration_201295814/PID_1707_8728_0_201218706.tif"
-
-    filepath = "/home/gbugaj/datasets/private/scan-of-scan/04-08-2024/PID_402_8220_0_200802683.tif"
-    filepath = "/home/gbugaj/analysis/grapnel/document-boundary/200942298_1712966490091/PID_3736_11058_0_200942298.tif"  # => 201458362
-    # filepath = "/home/gbugaj/analysis/grapnel/document-boundary/201324503_1712956863847/PID_5872_13170_0_201324503.tif" # => 201493262
+    filepath = "~/PID_402_8220_0_200802683.tif"
+    filepath = "~/PID_3736_11058_0_200942298.tif"  # => 201458362
 
     basename = filepath.split("/")[-1].split(".")[0]
     documents = docs_from_file(filepath)
@@ -71,9 +61,6 @@ def check_boundry_registration():
         clean_filename,
         sort_key=lambda name: int(name.split("/")[-1].split(".")[0]),
     )
-
-    # tiff_frames = frames_from_file(clean_filename)
-    # merge_tiff_frames(tiff_frames, os.path.join(basedir, f"{basename}_resave_{registration_method}.tif"))
 
 
 if __name__ == "__main__":

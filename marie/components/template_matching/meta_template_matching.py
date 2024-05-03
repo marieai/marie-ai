@@ -4,12 +4,17 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 import torch
+from joblib import Parallel, delayed
+from PIL import Image
+from torch import nn
 
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...embeddings.jina.jina_embeddings import JinaEmbeddings
+from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings
 from ...utils.overlap import merge_bboxes_as_block
+from ...utils.resize_image import resize_image
 from ...utils.utils import ensure_exists
 from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
@@ -72,7 +77,13 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         self.embeddings_processor = JinaEmbeddings(
             model_name_or_path="hf://jinaai/jina-embeddings-v2-base-en"
         )
-        self.enable_visualization = False
+        self.embeddings_processor_clip = OpenAIEmbeddings(
+            model_name_or_path="marie/clip-snippet-rn50x4"
+            # model_name_or_path="hf://openai/clip-vit-base-patch32"
+        )
+        self.cached_embeddings_clips = {}
+
+        self.enable_visualization = True
 
     def predict(
         self,
@@ -114,6 +125,19 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                     f"Skipping template_text {template_text} as it is too short : {min_word_length}"
                 )
                 continue
+
+            template_bbox = template_boxes[idx]
+            temp_x, temp_y, temp_w, temp_h = template_bbox
+
+            temp_x = int(max(temp_x, 0))
+            temp_y = int(max(temp_y, 0))
+            template_image = template_frames[idx]
+            fragment = template_image[
+                temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
+            ]
+
+            cv2.imwrite(f"/tmp/dim/meta_{idx}_fragment.png", fragment)
+
             ngram = len(template_text.split(" "))
             ngrams = [ngram - 1, ngram, ngram + 1]
             ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
@@ -133,10 +157,14 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                     key = "_".join(ngram_words)
                     box = merge_bboxes_as_block(ngram_boxes)
                     x, y, w, h = box
-                    snippet = frame[y : y + h, x : x + w :]
+                    ngram_snippet = frame[y : y + h, x : x + w :]
+
                     ngram_words = " ".join(ngram_words).strip().upper()
                     template_text = template_text.strip().upper()
-                    sim_val = round(self.score(ngram_words, template_text, snippet), 3)
+                    sim_val = round(
+                        self.score(ngram_words, template_text, ngram_snippet, fragment),
+                        3,
+                    )
 
                     if ngram_words == template_text or sim_val > score_threshold:
                         predictions.append(
@@ -151,7 +179,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                             ensure_exists(f"/tmp/fragments/meta/{key}")
                             cv2.imwrite(
                                 f"/tmp/fragments/meta/{k}_{round(sim_val, 3)}.png",
-                                snippet,
+                                ngram_snippet,
                             )
                         k += 1
 
@@ -167,7 +195,34 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
             ).embeddings[0]
         return self.embedding_cache[text]
 
-    def score(self, ngram_words: str, template_text: str, query_pred_snippet) -> float:
+    def get_embedding_image(
+        self, image: np.ndarray, words: list, boxes: list
+    ) -> np.ndarray:
+        key = image.tobytes()
+        if key in self.cached_embeddings_clips:
+            return self.cached_embeddings_clips[key]
+
+        # This is a pre-processing step to get the embeddings for the words and boxes in the image
+        # this is critical for the similarity calculation that we resize with PADDING and not just scaling
+        # image = resize_image(image, (224, 224))[0]
+        if image.shape[0] != 224 or image.shape[1] != 224:
+            raise ValueError("Image must be 224x224")
+
+        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        embedding = self.embeddings_processor_clip.get_embeddings(
+            texts=words, boxes=boxes, image=image
+        )
+
+        self.cached_embeddings_clips[key] = embedding.embeddings
+        return embedding.embeddings
+
+    def score(
+        self,
+        ngram_words: str,
+        template_text: str,
+        query_snippet: np.ndarray,
+        template_snippet: np.ndarray,
+    ) -> float:
         from Levenshtein import distance
         from numpy.linalg import norm
 
@@ -176,14 +231,30 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         if sim_val < 0.5:
             return sim_val
 
+        t_clip = resize_image(template_snippet, (224, 224))[0]
+        q_clip = resize_image(query_snippet, (224, 224))[0]
+
+        template_snippet_features = self.get_embedding_image(t_clip, words=[], boxes=[])
+        query_pred_snippet_features = self.get_embedding_image(
+            q_clip, words=[], boxes=[]
+        )
+
         query_embedding = self.get_embedding(ngram_words)
         template_embedding = self.get_embedding(template_text)
-        cosine = lambda a, b: (a @ b.T) / (norm(a) * norm(b))
-        cos_sim_val = cosine(query_embedding, template_embedding)
-        total_sim = (sim_val + cos_sim_val) / 2
-        sout = (
-            f"similarity : {sim_val} - {cos_sim_val} ---- {total_sim} --- {ngram_words}"
+
+        cosine = nn.CosineSimilarity(dim=1)
+        embedding_sim = cosine(
+            torch.from_numpy(template_snippet_features).view(1, -1),
+            torch.from_numpy(query_pred_snippet_features).view(1, -1),
         )
-        print(sout)
+        embedding_sim = embedding_sim.cpu().numpy()[0]
+
+        cos_sim_val = cosine(
+            torch.from_numpy(query_embedding).view(1, -1),
+            torch.from_numpy(template_embedding).view(1, -1),
+        )
+        cos_sim_val = cos_sim_val.cpu().numpy()[0]
+        total_sim = (sim_val + cos_sim_val + embedding_sim) / 3
+        sout = f"similarity : {sim_val:<10} - {cos_sim_val:<10} > {embedding_sim:<10} ---- {total_sim:<10} --- {ngram_words}"
         self.logger.debug(sout)
         return total_sim
