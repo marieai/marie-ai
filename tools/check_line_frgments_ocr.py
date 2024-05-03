@@ -22,7 +22,9 @@ def build_ocr_engines():
     )
 
     trocr_processor = TrOcrProcessor(
-        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=use_cuda
+        models_dir="/mnt/data/marie-ai/model_zoo/trocr",
+        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET30/checkpoint_best.pt",
+        cuda=use_cuda,
     )
     # craft_processor = CraftOcrProcessor(cuda=True)
     craft_processor = None
@@ -56,7 +58,10 @@ def verify_dir(src_dir: str, output_dir: str, processor) -> None:
     # Get a list of all image directories
     ext = "jpg"
     format = "SROIE"  # SROIE / TEXT # READY dir contains plain text files CONVERTED dir contains SROIE format
-    img_dirs = glob.glob(os.path.join(src_dir, f"*.{ext}"))
+    # ext = "png"
+    # format = "TEXT"  # SROIE / TEXT # READY dir contains plain text files CONVERTED dir contains SROIE format
+
+    img_dirs = glob.glob(os.path.join(src_dir, f"*.{ext}"), recursive=True)
     print("Total images: ", len(img_dirs))
 
     correct_predictions = 0
@@ -89,10 +94,20 @@ def verify_dir(src_dir: str, output_dir: str, processor) -> None:
             else:
                 expected_text = text
 
+            expected_text = expected_text.strip().upper()
+
             fragment = cv2.imread(src_image)
             results = trocr_processor.recognize_from_fragments([fragment])
             predicted_text = results[0]["text"]
+            predicted_text = predicted_text.strip().upper()
             confidence = results[0]["confidence"]
+
+            # REMOVE SPACES AND STIP
+            expected_text = expected_text.strip()
+            predicted_text = predicted_text.strip()
+            # expected_text = expected_text.replace(" ", "")
+            # predicted_text = predicted_text.replace(" ", "")
+
             differences = difflib.ndiff(expected_text, predicted_text)
             diff_str = " ".join(
                 differences
@@ -111,6 +126,7 @@ def verify_dir(src_dir: str, output_dir: str, processor) -> None:
             print(f"Similarity: ", similarity)
 
             total_predictions += 1
+
             if expected_text == predicted_text:
                 correct_predictions += 1
 
@@ -145,7 +161,7 @@ if __name__ == "__main__":
 
     if True:
         verify_dir(
-            "/home/greg/datasets/SROIE_OCR/converted/",
+            "/home/greg/datasets/SROIE_OCR/converted",
             "/home/greg/datasets/SROIE_OCR/validation",
             trocr_processor,
         )
