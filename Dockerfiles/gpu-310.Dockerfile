@@ -110,11 +110,11 @@ RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore && \
 RUN cd /tmp/ && \
     python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
 
-
-RUN git clone https://github.com/NVIDIA/apex && \
-    cd apex && git checkout 2386a912164b0c5cfcd8be7a2b890fbac5607c82 && \
-    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
-    python3 setup.py install --cpp_ext --cuda_ext
+# No inference is being done currently 
+#RUN git clone https://github.com/NVIDIA/apex && \
+#    cd apex && git checkout 2386a912164b0c5cfcd8be7a2b890fbac5607c82 && \
+#    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
+#    python3 setup.py install --cpp_ext --cuda_ext
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
 
