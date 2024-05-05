@@ -14,7 +14,7 @@ from tqdm import tqdm
 from marie.constants import __config_dir__, __model_path__
 from marie.logging.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
-from tools import ensure_exists
+from marie.utils.utils import ensure_exists
 
 from ...api.docs import MarieDoc
 from ...detectron.detector import OptimizedDetectronPredictor
