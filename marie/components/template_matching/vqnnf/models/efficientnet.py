@@ -21,7 +21,7 @@ def model_eff_b0():
 
     # TODO: Add config for model loading
     models_name_or_path = os.path.join(
-        __model_path__, "efficientnet_b0", "ef_model_tuned.pth"
+        __model_path__, "template_matching", "efficientnet_b0", "ef_model_tuned.pth"
     )
     checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
 
@@ -53,7 +53,7 @@ def model_effv2_s():
         out_indices=[0, 1, 2, 3, 4],
     )
     models_name_or_path: str = os.path.join(
-        __model_path__, "efficientnetv2_s", "ef_model_tuned.pth"
+        __model_path__, "template_matching", "efficientnetv2_s", "ef_model_tuned.pth"
     )
     checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
 
