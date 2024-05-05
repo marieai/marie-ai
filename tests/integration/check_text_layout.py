@@ -9,10 +9,8 @@ from marie.document import TrOcrProcessor
 from marie.document.layoutreader import TextLayout
 from marie.executor.ner.utils import normalize_bbox, unnormalize_box
 from marie.logger import setup_logger
-from marie.registry_base import RegistryHolder
-from marie.timer import Timer
 from marie.utils.json import load_json_file, store_json_object
-from marie.utils.utils import current_milli_time, ensure_exists
+from marie.utils.utils import ensure_exists
 
 logger = setup_logger(__name__)
 
