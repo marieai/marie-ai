@@ -543,7 +543,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             refinement_image = image
             hash_id = hash_frames_fast(frames=[refinement_image])
             ensure_exists("/tmp/boxes")
-
+            enable_visualization = True
             for i in range(refinement_steps):
                 try:
                     bboxes_, classes_, scores_ = self.psm_sparse_step(refinement_image, adj_x, adj_y)
