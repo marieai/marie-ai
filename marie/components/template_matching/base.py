@@ -483,14 +483,16 @@ class BaseTemplateMatcher(ABC):
         :return:  a list of ObjectPrediction
         """
 
+        label_id = {label: idx for idx, label in enumerate(set(labels))}
         object_prediction_list: List[ObjectPrediction] = []
+
         for bbox, label, score in zip(bboxes, labels, scores):
             # convert to x, y, x2, y2
             bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
 
             object_prediction = ObjectPrediction(
                 category_name=label,
-                category_id=0,
+                category_id=label_id[label],
                 bbox=bbox,
                 score=score,
                 shift_amount=[0, 0],

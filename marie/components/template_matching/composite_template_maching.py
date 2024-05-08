@@ -69,16 +69,21 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
         results = []
         postprocess = self.setup_postprocess()
 
+        tp_frames = template_frames
+        tp_boxes = template_boxes
+        tp_labels = template_labels
+        tp_texts = template_texts
+
         for matcher in self.matchers:
             with TimeContext(
                 f"Evaluating matcher : {matcher.__class__.__name__}", logger=self.logger
             ):
                 result = matcher.run(
                     frames=frames,
-                    template_frames=template_frames,
-                    template_boxes=template_boxes,
-                    template_labels=template_labels,
-                    template_texts=template_texts,
+                    template_frames=tp_frames,
+                    template_boxes=tp_boxes,
+                    template_labels=tp_labels,
+                    template_texts=tp_texts,
                     metadata=metadata,
                     score_threshold=score_threshold,
                     scoring_strategy=scoring_strategy,
@@ -90,8 +95,24 @@ class CompositeTemplateMatcher(BaseTemplateMatcher):
                     batch_size=batch_size,
                 )
                 results.extend(result)
+
                 if self.break_on_match and result:
                     break
+                    # TODO : THIS NEEDS TO BE CONFIGURABLE
+                    for label in template_labels:
+                        for r in result:
+                            if r.label == label:
+                                try:
+                                    idx = tp_labels.index(label)
+                                except ValueError:
+                                    idx = -1
+                                if idx >= 0:
+                                    tp_frames.pop(idx)
+                                    tp_boxes.pop(idx)
+                                    tp_labels.pop(idx)
+                                    tp_texts.pop(idx)
+                    if len(tp_labels) == 0:
+                        break
 
         converted_results = []
         results_by_page = {}

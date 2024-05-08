@@ -102,6 +102,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
     ) -> list[TemplateMatchResult]:
 
         predictions = []
+
         if words is None or word_boxes is None:
             self.logger.warning("No words or word_boxes provided. Skipping prediction.")
             return predictions
@@ -142,10 +143,20 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
             ngrams = [ngram - 1, ngram, ngram + 1]
             ngrams = [n for n in ngrams if 0 < n <= len(page_words)]
 
+            candidates = []
             for ngram in ngrams:
                 for i in range(len(page_words) - ngram + 1):
                     ngram_words = page_words[i : i + ngram]
                     ngram_boxes = page_boxes[i : i + ngram]
+
+                    # # each ngram word should be at least 3 characters
+                    # if any(len(w) < min_word_length for w in ngram_words):
+                    #     self.logger.debug(
+                    #         f"Skipping ngram {ngram_words} as it is too short : {min_word_length}"
+                    #     )
+                    #     continue
+                    # TODO add check for distance between words in ngram
+
                     if word_lines:
                         ngram_lines = word_lines[i : i + ngram]
                         if len(set(ngram_lines)) > 1:
@@ -167,14 +178,20 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                     )
 
                     if ngram_words == template_text or sim_val > score_threshold:
-                        predictions.append(
-                            TemplateMatchResult(
-                                bbox=box,
-                                label=template_label,
-                                score=sim_val,
-                                similarity=sim_val,
-                            )
+                        candidates.append(
+                            {
+                                "ngram": ngram,
+                                "words": ngram_words,
+                                "similarity": sim_val,
+                                "candidate": TemplateMatchResult(
+                                    bbox=box,
+                                    label=template_label,
+                                    score=sim_val,
+                                    similarity=sim_val,
+                                ),
+                            }
                         )
+
                         if self.enable_visualization:
                             ensure_exists(f"/tmp/fragments/meta/{key}")
                             cv2.imwrite(
@@ -182,6 +199,22 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                                 ngram_snippet,
                             )
                         k += 1
+
+            # choose the most specific prediction group
+            if candidates:
+                sorted_candidates = sorted(
+                    candidates,
+                    key=lambda x: (x['ngram'], x['similarity']),
+                    reverse=False,
+                )
+                most_specific_prediction = sorted_candidates[0]
+                candidates = [
+                    x
+                    for x in sorted_candidates
+                    if x['ngram'] == most_specific_prediction['ngram']
+                ]
+                for prediction in candidates:
+                    predictions.append(prediction["candidate"])
 
         return predictions
 
@@ -256,5 +289,6 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         cos_sim_val = cos_sim_val.cpu().numpy()[0]
         total_sim = (sim_val + cos_sim_val + embedding_sim) / 3
         sout = f"similarity : {sim_val:<10} - {cos_sim_val:<10} > {embedding_sim:<10} ---- {total_sim:<10} --- {ngram_words}"
-        self.logger.debug(sout)
+        self.logger.info(sout)
+        print(sout)
         return total_sim
