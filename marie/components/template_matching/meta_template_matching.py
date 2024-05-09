@@ -20,6 +20,16 @@ from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
 
 
+def is_overlap(bbox1, bbox2):
+    x1, y1, w1, h1 = bbox1
+    x2, y2, w2, h2 = bbox2
+
+    if x1 < x2 + w2 and x1 + w1 > x2 and y1 < y2 + h2 and y1 + h1 > y2:
+        return True
+
+    return False
+
+
 class MetaTemplateMatcher(BaseTemplateMatcher):
     """
     This class is used to match a template in an image using the Pattern Matching algorithm.
@@ -200,21 +210,29 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
                             )
                         k += 1
 
-            # choose the most specific prediction group
             if candidates:
                 sorted_candidates = sorted(
                     candidates,
-                    key=lambda x: (x['ngram'], x['similarity']),
+                    key=lambda x: (x['ngram']),
                     reverse=False,
                 )
-                most_specific_prediction = sorted_candidates[0]
-                candidates = [
-                    x
-                    for x in sorted_candidates
-                    if x['ngram'] == most_specific_prediction['ngram']
-                ]
-                for prediction in candidates:
-                    predictions.append(prediction["candidate"])
+                for sc in sorted_candidates:
+                    candidate = sc["candidate"]
+                    for prediction in predictions:
+                        x1, y1, w1, h1 = candidate.bbox
+                        x2, y2, w2, h2 = prediction.bbox
+                        if candidate.label == prediction.label and (
+                            x1 < x2 + w2
+                            and x1 + w1 > x2
+                            and y1 < y2 + h2
+                            and y1 + h1 > y2
+                        ):
+                            self.logger.info(
+                                f"Skipping candidate {candidate} as it overlaps with {prediction}"
+                            )
+                            break
+                    else:
+                        predictions.append(candidate)
 
         return predictions
 
