@@ -503,7 +503,6 @@ class ExtractPipeline(BasePipeline):
             runtime_conf = {}
 
         try:
-
             if regions and len(regions) > 0:
                 return self.execute_regions_pipeline(
                     ref_id,
