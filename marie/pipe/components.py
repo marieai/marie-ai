@@ -9,8 +9,19 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier, TransformersDocumentIndexer
+from marie.components.document_registration.unilm_dit import (
+    NoopDocumentBoundaryRegistration,
+    UnilmDocumentBoundaryRegistration,
+)
+from marie.components.template_matching import (
+    CompositeTemplateMatcher,
+    MetaTemplateMatcher,
+    VQNNFTemplateMatcher,
+)
+from marie.constants import __config_dir__, __model_path__
 from marie.excepts import BadConfigSource
 from marie.logging.predefined import default_logger as logger
+from marie.logging.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
@@ -286,6 +297,156 @@ def setup_indexers(
     return document_indexers
 
 
+def setup_indexers(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_indexer",
+    device: str = "cuda",
+    ocr_engine: Optional[OcrEngine] = None,
+) -> dict[str, any]:
+    """
+    Setup the document indexers(Named Entity Recognition) for the pipeline
+    :param pipeline_config: pipeline configuration
+    :param key: key to use in the pipeline config
+    :param device: device to use for classification (cpu or cuda)
+    :param ocr_engine: OCR engine to use for the pipeline (default: None)
+    :return: document classifiers grouped by their group names and indexed by their names
+    """
+
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    document_indexers = dict()
+    configs = pipeline_config[key] if key in pipeline_config else []
+
+    for config in configs:
+        if "model_name_or_path" not in config:
+            raise BadConfigSource(
+                f"Missing model_name_or_path in indexer config : {config}"
+            )
+
+        if not config.get("enabled", True):
+            logger.warning(f"Skipping indexer : {config['model_name_or_path']}")
+            continue
+
+        model_name_or_path = config["model_name_or_path"]
+        device = config["device"] if "device" in config else "cpu"
+        name = config["name"] if "name" in config else config["model_name_or_path"]
+        model_type = config["type"] if "type" in config else "transformers"
+        logger.info(f"Using model : {model_name_or_path} on device : {device}")
+
+        if name in document_indexers:
+            raise BadConfigSource(f"Duplicate indexer name : {name}")
+
+        if "group" not in config:
+            raise BadConfigSource(f"Missing group in indexer config : {config}")
+
+        group = config["group"] if "group" in config else "default"
+
+        if group not in document_indexers:
+            document_indexers[group] = dict()
+
+        model_filter = config["filter"] if "filter" in config else {}
+        # TODO: Add support for other indexer types
+        if model_type == "transformers":
+            document_indexers[group][name] = {
+                "indexer": TransformersDocumentIndexer(
+                    model_name_or_path=model_name_or_path,
+                    devices=[device],
+                    ocr_engine=ocr_engine,
+                ),
+                "filter": model_filter,
+                "group": group,
+            }
+
+        else:
+            raise ValueError(f"Invalid indexer type : {model_type}")
+
+    return document_indexers
+
+
+def setup_document_boundary(
+    pipeline_config: Optional[dict] = None,
+    key: str = "page_boundary",
+    device: str = "cuda",
+) -> Union[UnilmDocumentBoundaryRegistration, NoopDocumentBoundaryRegistration]:
+    use_cuda = True if device == "cuda" and torch.cuda.is_available() else False
+
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    if key not in pipeline_config:
+        logger.warning(f"Missing {key} in pipeline config, using default config")
+        return NoopDocumentBoundaryRegistration()
+
+    config = pipeline_config[key] if key in pipeline_config else {}
+
+    if "model_name_or_path" not in config:
+        raise BadConfigSource(
+            f"Missing model_name_or_path in document boundary config : {config}"
+        )
+
+    if not config.get("enabled", True):
+        logger.warning(
+            f"Page boundary disabled (using NOOP): {config['model_name_or_path']}"
+        )
+        return NoopDocumentBoundaryRegistration()
+
+    return UnilmDocumentBoundaryRegistration(
+        model_name_or_path=config["model_name_or_path"],
+        use_gpu=use_cuda,
+    )
+
+
+def setup_template_matching(
+    pipeline_config: Optional[dict] = None,
+    key: str = "template_matcher",
+    device: str = "cuda",
+):
+    if pipeline_config is None:
+        logger.warning("Pipeline config is None, using default config")
+        pipeline_config = {}
+
+    if key not in pipeline_config:
+        logger.warning(f"Missing {key} in pipeline config, using default config")
+        return NoopDocumentBoundaryRegistration()
+
+    config = pipeline_config[key] if key in pipeline_config else {}
+
+    # if "model_name_or_path" not in config:
+    #     raise BadConfigSource(
+    #         f"Missing model_name_or_path in document template matching config : {config}"
+    #     )
+
+    if "definitions_path" not in config:
+        raise BadConfigSource(
+            f"Missing definitions_path in document template matching config : {config}"
+        )
+    resolved_definitions_path = os.path.join(__model_path__, config["definitions_path"])
+    if not os.path.exists(resolved_definitions_path):
+        raise BadConfigSource(
+            f"Invalid definitions_path in document template matching config : {config}"
+        )
+
+    if not config.get("enabled", True):
+        logger.warning(
+            f"Template matching disabled (using NOOP): {config['model_name_or_path']}"
+        )
+        return None
+
+    matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
+    matcher_meta = MetaTemplateMatcher(model_name_or_path="NONE")
+    matcher = CompositeTemplateMatcher(
+        matchers=[matcher_meta, matcher_vqnnft], break_on_match=True
+    )
+
+    logger.info(
+        f"Loaded template matching definitions from {resolved_definitions_path}"
+    )
+    return matcher, resolved_definitions_path
+
+
 def restore_assets(
     ref_id: str,
     ref_type: str,
@@ -295,7 +456,7 @@ def restore_assets(
 ) -> str or None:
     """
     Restore assets from primary storage (S3) into root asset directory. This restores
-    the assets from the last run of the extrac pipeline.
+    the assets from the last run of the extract pipeline.
 
     :param ref_id: document reference id (e.g. filename)
     :param ref_type: document reference type(e.g. document, page, process)
@@ -305,7 +466,6 @@ def restore_assets(
     :param overwrite: if True, overwrite existing assets in root asset directory
     :return:
     """
-
     s3_root_path = s3_asset_path(ref_id, ref_type)
     connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
     if not connected:
@@ -416,6 +576,7 @@ def ocr_frames(
     coord_format: CoordinateFormat = CoordinateFormat.XYWH,
     regions: [] = None,
     runtime_conf: Optional[dict[str, any]] = None,
+    engine_name: str = "default",
 ) -> dict:
     """
     Perform OCR on the frames and return the results
@@ -428,6 +589,7 @@ def ocr_frames(
     :param coord_format: coordinate format(default: XYWH)
     :param regions: regions to perform OCR on (default: None)
     :param runtime_conf: runtime configuration for the pipeline (e.g. which steps to execute) default is None.
+    :param engine_name: OCR engine to use (default: default)
     :return: OCR results
 
     Example runtime_conf payload:
@@ -454,7 +616,7 @@ def ocr_frames(
     output_dir = ensure_exists(os.path.join(root_asset_dir, "results"))
     filename, prefix, suffix = split_filename(ref_id)
 
-    engine = ocr_engines["default"]
+    engine = ocr_engines[engine_name]
     if regions and len(regions) > 0:
         engine = ocr_engines["best"]
 
@@ -494,6 +656,62 @@ def ocr_frames(
     return results
 
 
-# force False
-# json_path /tmp/generators/f918a115f8474f63da92b4676483caf3/results/157154493_4.json
-# json_path 157154493_4.json
+def load_pipeline(
+    pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
+) -> tuple[str, dict[str, any], dict[str, any]]:
+    # TODO : Need to refactor this (use the caller to get the device and then fallback to the pipeline config)
+    # sometimes we have CUDA/GPU support but want to only use CPU
+    use_cuda = torch.cuda.is_available()
+    if os.environ.get("MARIE_DISABLE_CUDA"):
+        use_cuda = False
+    device = pipeline_config.get("device", "cpu" if not use_cuda else "cuda")
+    if device == "cuda" and not use_cuda:
+        device = "cpu"
+
+    if "name" not in pipeline_config:
+        raise BadConfigSource("Invalid pipeline config, missing name field")
+
+    pipeline_name = pipeline_config["name"]
+    document_classifiers = setup_classifiers(
+        pipeline_config, key="page_classifier", device=device, ocr_engine=ocr_engine
+    )
+
+    document_sub_classifiers = setup_classifiers(
+        pipeline_config, key="sub_classifier", device=device, ocr_engine=ocr_engine
+    )
+
+    classifier_groups = dict()
+    for classifier_group, classifiers in document_classifiers.items():
+        sub_classifiers = document_sub_classifiers.get(classifier_group, {})
+        classifier_groups[classifier_group] = {
+            "group": classifier_group,
+            "classifiers": classifiers,
+            "sub_classifiers": sub_classifiers,
+        }
+
+    document_indexers = setup_indexers(
+        pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
+    )
+
+    indexer_groups = dict()
+    for group, indexer in document_indexers.items():
+        indexer_groups[group] = {
+            "group": group,
+            "indexer": indexer,
+        }
+
+    # dump information about the loaded classifiers that are grouped by the classifier group
+    for classifier_group, classifiers in document_classifiers.items():
+        logger.info(
+            f"Loaded classifiers :{classifier_group},  {len(classifiers)},  {classifiers.keys()}"
+        )
+    for classifier_group, classifiers in document_sub_classifiers.items():
+        logger.info(
+            f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
+        )
+
+    logger.info(
+        f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
+    )
+
+    return pipeline_name, classifier_groups, indexer_groups

@@ -4,7 +4,7 @@ import time
 import traceback
 import typing
 from collections import namedtuple
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 import fairseq
 import torch
@@ -25,6 +25,7 @@ from marie.models.icr.memory_dataset import MemoryDataset
 # required to register text_recognition
 from marie.models.unilm.trocr.task import TextRecognitionTask
 from marie.models.utils import torch_gc
+from marie.registry.model_registry import ModelRegistry
 from marie.utils.utils import batchify
 
 faux_t = TextRecognitionTask
@@ -63,7 +64,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
             "data": "",
             "fp16": fp16,
             "bp16": bp16,
-            "dict_path_or_url": decoder_pretrained  # We are loading models from a local-path
+            "dict_path_or_url": decoder_pretrained,  # We are loading models from a local-path
             # "decoder_pretrained": None,
         },
     )
@@ -190,26 +191,41 @@ class TrOcrProcessor(OcrProcessor):
     def __init__(
         self,
         work_dir: str = "/tmp/icr",
-        models_dir: str = os.path.join(__model_path__, "trocr"),
+        model_name_or_path: Union[str, os.PathLike] = None,
         cuda: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(work_dir, cuda, **kwargs)
-        model_path = os.path.join(models_dir, "trocr-large-printed.pt")
+        model_path = os.path.join(__model_path__, "trocr", "trocr-large-printed.pt")
+        if model_name_or_path:
+            registry_kwargs = {
+                "__model_path__": __model_path__,
+                "use_auth_token": False,
+            }
+            # model_name_or_path = ModelRegistry.get(
+            #     model_name_or_path,
+            #     version=None,
+            #     raise_exceptions_for_missing_entries=True,
+            #     **registry_kwargs,
+            # )
+            assert os.path.exists(model_name_or_path)
+            logger.info(f"Resolved model : {model_name_or_path}")
+            model_path = model_name_or_path
+
         logger.info(f"TROCR ICR processor [cuda={cuda}] : {model_path}")
         if not os.path.exists(model_path):
-            raise Exception(f"File not found : {model_path}")
+            raise FileNotFoundError(f"File not found : {model_path}")
 
         # device = "cuda" if torch.cuda.is_available() else "cpu"
         # device = "cpu"
         if cuda and not torch.cuda.is_available():
-            raise Exception("CUDA specified but no cuda devices found ")
+            raise RuntimeError("CUDA specified but no cuda devices found ")
 
         device = "cuda" if cuda else "cpu"
 
         start = time.time()
         # TODO : make this configurable
-        beam = 1  # default beam size is 5
+        beam = 5  # default beam size is 5
         (
             model,
             cfg,

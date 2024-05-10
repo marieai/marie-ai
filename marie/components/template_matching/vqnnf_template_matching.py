@@ -60,7 +60,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
         """
         super().__init__(True, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document matcher : {model_name_or_path}")
+        self.logger.info(f"VQNNF matcher model : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.labels = labels
@@ -146,7 +146,8 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                 :, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w
             ]
 
-            if True:
+            # TODO : Make this a debug option
+            if False:
                 template_plot = cv2.rectangle(
                     template_image.copy(), (x, y), (x + w, y + h), (0, 255, 0), 2
                 )
@@ -241,6 +242,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                     )
                 )
 
+                # TODO : Make this a debug option
                 if False:  # verbose:
                     cv2.imwrite(
                         f"/tmp/dim/{idx}_{k}_template_nnf.png",
@@ -294,7 +296,7 @@ class VQNNFTemplateMatcher(BaseTemplateMatcher):
                         template_snippet,
                     )
 
-                if True:
+                if False:
                     stacked = np.hstack((template_snippet, query_pred_snippet))
                     cv2.imwrite(
                         f"/tmp/dim/final/stacked_{idx}_{k}__{round(sim_val, 3)}.png",

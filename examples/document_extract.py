@@ -91,6 +91,9 @@ def process_extract(
                 "page_splitter": {
                     "enabled": True,
                 },
+                "page_boundary": {
+                    "enabled": True,
+                },
                 "ocr": {
                     "document": {
                         "model": "default",

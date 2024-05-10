@@ -65,7 +65,6 @@ def setup_storage():
             "S3_SECRET_ACCESS_KEY": "MARIESECRETACCESSKEY",
             "S3_STORAGE_BUCKET_NAME": "marie",
             "S3_ENDPOINT_URL" : "http://localhost:8000",
-            # "S3_ENDPOINT_URL": "http://64.62.141.143:8000",
             "S3_ADDRESSING_STYLE": "path"
         }
     )

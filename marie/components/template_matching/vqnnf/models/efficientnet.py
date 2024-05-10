@@ -6,7 +6,9 @@ import torch.nn.functional as F
 from efficientnet_pytorch import EfficientNet
 from torch import nn
 
-DEVICE = "cuda"
+from marie.constants import __model_path__
+
+DEVICE = "cuda"  # TODO : Add device to config
 
 
 def model_eff_b0():
@@ -16,13 +18,13 @@ def model_eff_b0():
         features_only=True,
         out_indices=[0, 1, 2, 3, 4],
     )
-    checkpoint = torch.load(
-        os.path.expanduser(
-            "~/dev/grapnel-tooling/outputs/efficientnet_b0/ef_model_pretrained_49_True.pth"
-        ),
-        map_location=DEVICE,
+
+    # TODO: Add config for model loading
+    models_name_or_path = os.path.join(
+        __model_path__, "template_matching", "efficientnet_b0", "ef_model_tuned.pth"
     )
-    print("Loading trained model weights...")
+    checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
+
     model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
     keys_to_remove = [
@@ -50,13 +52,11 @@ def model_effv2_s():
         features_only=True,
         out_indices=[0, 1, 2, 3, 4],
     )
-    checkpoint = torch.load(
-        os.path.expanduser(
-            '~/dev/grapnel-tooling/outputs/ef_model_pretrained_49_True.pth'
-        ),
-        map_location=DEVICE,
+    models_name_or_path: str = os.path.join(
+        __model_path__, "template_matching", "efficientnetv2_s", "ef_model_tuned.pth"
     )
-    print("Loading trained model weights...")
+    checkpoint = torch.load(models_name_or_path, map_location=DEVICE)
+
     model_state_dict = checkpoint["model_state_dict"]
     # remove the keys that are not in the model for feature extraction, we are pre-training our model on custom classes
     keys_to_remove = [
@@ -95,6 +95,7 @@ class EfficientNetHyperColumn(nn.Module):
         super().__init__()
         self.stride = stride
         self.num_features = num_features  # 40, 80, 192, 512
+        # TODO: Add config for model type
         self.model_type = (
             "efficientnetv2_s"  # or efficientnetv2_s efficientnet_b0_eff efficientne_b0
         )

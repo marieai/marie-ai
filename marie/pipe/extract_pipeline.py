@@ -5,30 +5,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 
+import cv2
 import numpy as np
 import torch
-from docarray import DocList
 from PIL import Image
 
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
-from marie.logging.logger import MarieLogger
-from marie.ocr import CoordinateFormat
-from marie.ocr.util import get_known_ocr_engines, get_words_and_boxes
-from marie.pipe import (
-    ClassifierPipelineComponent,
-    NamedEntityPipelineComponent,
-    PipelineComponent,
-    PipelineContext,
+from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
+from marie.components.template_matching.document_matched import (
+    load_template_matching_definitions,
+    match_templates,
 )
+from marie.ocr import CoordinateFormat
+from marie.ocr.util import get_known_ocr_engines
+from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
+    load_pipeline,
     ocr_frames,
     restore_assets,
     s3_asset_path,
-    setup_classifiers,
-    setup_indexers,
+    setup_document_boundary,
     setup_overlay,
+    setup_template_matching,
     split_filename,
     store_assets,
 )
@@ -43,7 +43,7 @@ from marie.utils.utils import ensure_exists
 from marie.utils.zip_ops import merge_zip
 
 
-class ExtractPipeline:
+class ExtractPipeline(BasePipeline):
     """
     Extract pipeline for documents.
 
@@ -76,9 +76,11 @@ class ExtractPipeline:
         self,
         pipeline_config: dict[str, any] = None,
         cuda: bool = True,
+        silence_exceptions: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(silence_exceptions, **kwargs)
+        self.default_pipeline_config = pipeline_config
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
         use_cuda = torch.cuda.is_available()
@@ -89,18 +91,20 @@ class ExtractPipeline:
         if device == "cuda" and not use_cuda:
             device = "cpu"
 
-        self.logger = MarieLogger(context=self.__class__.__name__)
         self.overlay_processor = setup_overlay(pipeline_config)
-        self.ocr_engines = get_known_ocr_engines(device=device)
-        self.document_classifiers = setup_classifiers(pipeline_config)
-        self.document_indexers = setup_indexers(pipeline_config)
+        self.boundary_processor = setup_document_boundary(pipeline_config)
+        self.engine_name = "default"
 
-        self.logger.info(
-            f"Loaded classifiers : {len(self.document_classifiers)},  {self.document_classifiers.keys()}"
-        )
+        self.ocr_engines = get_known_ocr_engines(device=device, engine=self.engine_name)
+        (
+            self.pipeline_name,
+            self.classifier_groups,
+            self.indexer_groups,
+        ) = load_pipeline(pipeline_config, self.ocr_engines[self.engine_name])
 
-        self.logger.info(
-            f"Loaded indexers : {len(self.document_indexers)},  {self.document_indexers.keys()}"
+        # TODO : Refactor this to use the pipeline_config instead of the some of the hardcoded values
+        self.matcher, self.template_matching_definitions = setup_template_matching(
+            device=device, pipeline_config=pipeline_config
         )
 
     def segment(
@@ -121,7 +125,10 @@ class ExtractPipeline:
         :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
         :return:
         """
-        self.logger.info(f"Segmenting frames for {ref_id}")
+        self.logger.info(f"Segmenting [{len(frames)}] frames for {ref_id}")
+        if len(frames) == 0:
+            self.logger.warning(f"No frames to segment for {ref_id}")
+            raise ValueError("No frames to segment")
 
         output_dir = ensure_exists(os.path.join(root_asset_dir, "clean"))
         filename, prefix, suffix = split_filename(ref_id)
@@ -174,6 +181,86 @@ class ExtractPipeline:
 
         return clean_frames
 
+    def boundary(
+        self,
+        ref_id: str,
+        frames: Union[list[np.ndarray], list[Image.Image]],
+        root_asset_dir: str,
+        enabled: bool = True,
+    ) -> tuple[list[np.ndarray], list[dict[str, any]]]:
+        """
+        Run boundary registration on the frames and return the registered frames
+
+        :param ref_id: reference id of the document
+        :param frames: frames to find the boundary for
+        :param root_asset_dir: root directory to store the boundary frames
+        :param enabled: enable/disable segmentation (default is True), this does not prevent TIFFs from being generated
+        :return: registered frames
+        """
+        self.logger.info(f"Boundary detection:{enabled}, {ref_id}")
+        documents = docs_from_image(frames)
+        registered_frames = []
+        metadata = []
+
+        if enabled:
+            try:
+                output_dir = ensure_exists(os.path.join(root_asset_dir, "boundary"))
+                results = self.boundary_processor.run(
+                    documents, registration_method="fit_to_page"
+                )
+                for i, (frame, result) in enumerate(zip(frames, results)):
+                    boundary: DocumentBoundaryPrediction = result.tags[
+                        "document_boundary"
+                    ]
+                    meta = boundary.to_dict(include_images=False)
+                    meta["page"] = i
+                    metadata.append(meta)
+                    self.logger.info(f"Boundary detected {i} : {boundary.detected}")
+                    if boundary.detected:
+                        frame = boundary.aligned_image
+                        cv2.imwrite(
+                            os.path.join(output_dir, f"boundary_{i}.png"),
+                            boundary.aligned_image,
+                        )
+                    registered_frames.append(frame)
+            except Exception as e:
+                self.logger.warning(
+                    f"Unable to perform document boundary (using original frame) : {e}"
+                )
+        else:
+            registered_frames = frames
+
+        assert len(registered_frames) == len(frames)
+        return registered_frames, metadata
+
+    def template_matching(
+        self,
+        definition_id: str,
+        frames: Union[list[np.ndarray], list[Image.Image]],
+        root_asset_dir: str,
+        ocr_results: dict,
+        enabled: bool = True,
+    ) -> list[dict[str, any]]:
+        """ """
+
+        self.logger.info(f"Template matching")
+        if self.matcher is None:
+            self.logger.warning("Template matcher is not configured")
+            return []
+
+        # definition_file = "~/dev/grapnel-tooling/dataset-selectors/ready/120791.definition.json"
+        definition_file = os.path.join(
+            self.template_matching_definitions, f"{definition_id}.definition.json"
+        )
+        if not os.path.exists(definition_file):
+            self.logger.warning(
+                f"Template definition file not found : {definition_file}"
+            )
+            return []
+
+        definition = load_template_matching_definitions(definition_file)
+        return match_templates(frames, definition, self.matcher, ocr_results)
+
     def execute_frames_pipeline(
         self,
         ref_id: str,
@@ -206,36 +293,32 @@ class ExtractPipeline:
         )
 
         page_indexer_enabled = runtime_conf.get("page_indexer", {}).get("enabled", True)
-        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get("enabled", True)
-
-        self.logger.info(
-            f"Feature : page classifier enabled : {page_classifier_enabled}"
+        page_cleaner_enabled = runtime_conf.get("page_cleaner", {}).get(
+            "enabled", False
+        )  # default to False, client should enable
+        page_boundary_enabled = runtime_conf.get("page_boundary", {}).get(
+            "enabled", True
         )
-        self.logger.info(f"Feature : page indexer enabled : {page_indexer_enabled}")
-        self.logger.info(f"Feature : page cleaner enabled : {page_cleaner_enabled}")
+        template_matching_enabled = runtime_conf.get("template_matching", {}).get(
+            "enabled", True
+        )
 
-        post_processing_pipeline = []
+        self.logger.info(f"Feature : classifier enabled : {page_classifier_enabled}")
+        self.logger.info(f"Feature : indexer enabled : {page_indexer_enabled}")
+        self.logger.info(f"Feature : cleaner enabled : {page_cleaner_enabled}")
+        self.logger.info(f"Feature : boundary enabled : {page_boundary_enabled}")
+        self.logger.info(
+            f"Feature : template matching enabled : {template_matching_enabled}"
+        )
 
-        if page_classifier_enabled:
-            post_processing_pipeline.append(
-                ClassifierPipelineComponent(
-                    name="classifier_pipeline_component",
-                    document_classifiers=self.document_classifiers,
-                )
-            )
-
-        if page_indexer_enabled:
-            post_processing_pipeline.append(
-                NamedEntityPipelineComponent(
-                    name="ner_pipeline_component",
-                    document_indexers=self.document_indexers,
-                )
-            )
+        for group, classifiers in self.classifier_groups.items():
+            self.logger.info(f"Loaded classifiers : {group}, {len(classifiers)}")
 
         metadata = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
 
@@ -244,16 +327,57 @@ class ExtractPipeline:
             ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
         )
 
+        # remove old metadata results if any (for now)
+        # Better option is to have client remove the old metadata
+        if page_boundary_enabled:
+            filename, prefix, suffix = split_filename(ref_id)
+            metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
+
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
+
+        print(f"before boundary : {len(frames)}")
+        frames, boundary_meta = self.boundary(
+            ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
+        )
+
+        print(f"after boundary : {len(frames)}")
 
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled
         )
-        ocr_results = ocr_frames(self.ocr_engines, ref_id, clean_frames, root_asset_dir)
-        metadata["ocr"] = ocr_results
+        ocr_results = ocr_frames(
+            self.ocr_engines,
+            ref_id,
+            clean_frames,
+            root_asset_dir,
+            engine_name=self.engine_name,
+        )
 
-        self.execute_pipeline(post_processing_pipeline, frames, ocr_results, metadata)
+        def_id = runtime_conf.get("template_matching", {}).get("definition_id", "0")
+        template_matching_meta = self.template_matching(
+            def_id,
+            frames,
+            root_asset_dir,
+            ocr_results,
+            enabled=template_matching_enabled,
+        )
+
+        metadata["ocr"] = ocr_results
+        metadata["boundary"] = boundary_meta
+        metadata["template_matching"] = template_matching_meta
+
+        self.execute_classifier_and_indexer_pipeline(
+            frames,
+            metadata,
+            metadata["ocr"],
+            self.pipeline_name,
+            self.classifier_groups,
+            self.indexer_groups,
+            page_indexer_enabled,
+        )
 
         # TODO : Convert to execution pipeline
         self.render_pdf(ref_id, frames, ocr_results, root_asset_dir)
@@ -371,16 +495,14 @@ class ExtractPipeline:
             )
 
         root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
-
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 
         if runtime_conf is None:
-            self.logger.warning("runtime_conf is None, using default config")
+            self.logger.warning("runtime_conf is None, using default " "config")
             runtime_conf = {}
 
         try:
-
             if regions and len(regions) > 0:
                 return self.execute_regions_pipeline(
                     ref_id,
@@ -482,6 +604,8 @@ class ExtractPipeline:
             sort_key=lambda name: int(name.split("/")[-1].split(".")[0]),
         )
 
+        # make copy of clea.tiff as .tif
+        shutil.copy(clean_filename, os.path.join(assets_dir, f"{prefix}.tif"))
         # rename .clean.tif to .tif.clean
         shutil.move(clean_filename, clean_filename_corrected)
 
@@ -505,42 +629,3 @@ class ExtractPipeline:
         metadata["assets"] = resolved_paths
 
         return metadata
-
-    def execute_pipeline(
-        self,
-        processing_pipeline: List[PipelineComponent],
-        frames: List,
-        ocr_results: dict,
-        metadata: dict,
-    ):
-        """Execute the post processing pipeline
-        TODO : This is temporary, we need to make this configurable
-        """
-        words = []
-        boxes = []
-        documents = docs_from_image(frames)
-
-        assert len(documents) == len(frames)
-
-        for page_idx in range(len(frames)):
-            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
-            words.append(page_words)
-            boxes.append(page_boxes)
-
-        assert len(words) == len(boxes)
-
-        context = PipelineContext(pipeline_id="post_processing_pipeline")
-        context["metadata"] = metadata
-
-        for pipe in processing_pipeline:
-            try:
-                # create a PipelineContext and pass it to the component
-                pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
-                if pipe_results.state is not None:
-                    if not isinstance(pipe_results.state, DocList):
-                        raise ValueError(
-                            f"Invalid state type : {type(pipe_results.state)}"
-                        )
-                    documents = pipe_results.state
-            except Exception as e:
-                self.logger.error(f"Error executing pipe : {e}")

@@ -105,7 +105,7 @@ def from_json_file(filename):
         return data
 
 
-def __scale_height(img, target_size, method=Image.LANCZOS):
+def __scale_height(img, target_size, method=Image.BILINEAR):
     ow, oh = img.size
     scale = oh / target_size
     w = ow / scale

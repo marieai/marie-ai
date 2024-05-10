@@ -253,6 +253,7 @@ def save_frame_as_tiff_g4(frame, output_filename):
                     photometric=photometric,
                     description=generated_name,
                     metadata=None,
+                    resolutionunit="inch",
                 )
 
             convert_group4(output_path_tmp, output_filename)

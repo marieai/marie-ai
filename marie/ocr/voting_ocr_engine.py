@@ -49,9 +49,11 @@ class VotingOcrEngine(OcrEngine):
         self.processors["default"] = {
             "enabled": True,
             "default": True,
-            "processor": default_ocr_processor
-            if default_ocr_processor is not None
-            else TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda),
+            "processor": (
+                default_ocr_processor
+                if default_ocr_processor is not None
+                else TrOcrProcessor(work_dir=self.work_dir_icr, cuda=self.has_cuda)
+            ),
         }
 
         self.processors["craft"] = {
@@ -71,7 +73,7 @@ class VotingOcrEngine(OcrEngine):
         }
 
         self.processors["tesseract"] = {
-            "enabled": True,
+            "enabled": False,
             "processor": TesseractOcrProcessor(
                 work_dir=self.work_dir_icr, cuda=self.has_cuda
             ),

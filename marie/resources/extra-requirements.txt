@@ -160,3 +160,8 @@ pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
 fast_pytorch_kmeans:          standard,core
+
+sahi:                         standard,core
+clip:                         standard,core
+efficientnet-pytorch:         standard,core
+seaborn:                      standard,core
