@@ -19,6 +19,7 @@ from marie.utils.docs import frames_from_file
 def run_extract_pipeline():
     MDC.put("request_id", "test")
     img_path = "~/tmp/analysis/document-boundary/samples/PID_808_7548_0_202343052.tif"
+    img_path = "~/dev/workflow/mbx-grapnel/mbx-grapnel-engine/src/test/resources/test-deck/Integration-12079-200687186/PID_3824_11135_0_200687186.tif"
     img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")

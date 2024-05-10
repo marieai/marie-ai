@@ -466,7 +466,6 @@ def restore_assets(
     :param overwrite: if True, overwrite existing assets in root asset directory
     :return:
     """
-
     s3_root_path = s3_asset_path(ref_id, ref_type)
     connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
     if not connected:
