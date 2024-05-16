@@ -11,8 +11,8 @@ from rich import print as rprint
 from rich.console import Console
 from rich.theme import Theme
 
-src_dir = os.path.expanduser("~/tmp/ocr-diffs/v3/ocr2")
-output_dir = os.path.expanduser("~/tmp/ocr-diffs/reviewed-v3")
+src_dir = os.path.expanduser("~/tmp/ocr-diffs/v5/ocr1")
+output_dir = os.path.expanduser("~/tmp/ocr-diffs/reviewed-v5")
 
 os.makedirs(output_dir, exist_ok=True)
 
@@ -52,6 +52,16 @@ def save_image_and_text(image_data, text, base_name):
         f.write(text)
 
 
+def accept_word(snippet, word, base_name):
+    def callback():
+        # st.write(f"You accepted {word}")
+        st.session_state.selected_word = word
+        save_image_and_text(snippet, word, base_name)
+        st.session_state.current_file_index += 1
+
+    return callback
+
+
 def main():
     if "current_file_index" not in st.session_state:
         st.session_state.current_file_index = 0
@@ -83,42 +93,28 @@ def main():
 
     col1, col2 = st.columns(2)
     with col1:
-        # if st.button("Previous"):
-        #     on_prev()
         streamlit_shortcuts.button(
-            "Previous", on_click=on_prev, shortcut="Shift+ArrowUp"
+            "Previous", on_click=on_prev, shortcut="Shift+Ctrl+ArrowUp"
         )
 
     with col2:
-        # if st.button("Next"):
-        #     on_next()
-        streamlit_shortcuts.button("Next", on_click=on_next, shortcut="Shift+ArrowDown")
-    # add a separator
+        streamlit_shortcuts.button(
+            "Next", on_click=on_next, shortcut="Shift+Ctrl+ArrowDown"
+        )
     st.markdown("---")
 
-    # Create three columns
+    st.text(data["word1"]["text"])
+    st.text(data["word2"]["text"])
+
     col1, col2, col3 = st.columns(3)
-
-    def accept_word(snippet, word, base_name):
-        def callback():
-            # st.write(f"You accepted {word}")
-            st.session_state.selected_word = word
-            save_image_and_text(snippet, word, base_name)
-            st.session_state.current_file_index += 1
-
-        return callback
 
     with col1:
         word_1 = st.text_input("Word 1", data["word1"]["text"], key="Word1")
         streamlit_shortcuts.button(
             "Accept Word 1",
             on_click=accept_word(data["snippet"], word_1, base_name),
-            shortcut="Shift+ArrowLeft",
+            shortcut="Shift+Ctrl+ArrowLeft",
         )
-        # if st.button("X"):
-        #     st.write("You accepted Word 1:", word_1)
-        #     save_image_and_text(data["snippet"], word_1, base_name)
-        #     st.session_state.current_file_index += 1
 
     with col2:
         word_2 = st.text_input("Word 2", data["word2"]["text"], key="Word2")
@@ -126,13 +122,8 @@ def main():
         streamlit_shortcuts.button(
             "Accept Word 2",
             on_click=accept_word(data["snippet"], word_2, base_name),
-            shortcut="Shift+ArrowRight",
+            shortcut="Shift+Ctrl+ArrowRight",
         )
-
-        # if st.button("Accept Word 2"):
-        #     st.write("You accepted Word 2:", word_2)
-        #     save_image_and_text(data["snippet"], word_2, base_name)
-        #     st.session_state.current_file_index += 1
 
     st.write("Last selected word:", st.session_state.selected_word)
 
@@ -140,18 +131,14 @@ def main():
     st.markdown(
         """
     ## Shortcut Keys
-    - **Shift + ArrowUp**: Previous
-    - **Shift + ArrowDown**: Next
-    - **Shift + ArrowLeft**: Accept Word 1
-    - **Shift + ArrowRight**: Accept Word 2
+    - **Shift + Ctrl + ArrowUp**: Previous
+    - **Shift + Ctrl + ArrowDown**: Next
+    - **Shift + Ctrl + ArrowLeft**: Accept Word 1
+    - **Shift + Ctrl + ArrowRight**: Accept Word 2
     """
     )
 
     with col3:
-        st.text(word_1)
-        st.text(word_2)
-
-        # Create a diff line
         diff = difflib.ndiff(word_1, word_2)
         diff_line = "\n".join(diff)
         st.text("Diff:")
