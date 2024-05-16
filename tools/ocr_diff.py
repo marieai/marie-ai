@@ -31,7 +31,7 @@ def build_ocr_engines():
     )
 
     ocr2_processor = TrOcrProcessor(
-        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET27/checkpoint_best.pt",
+        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET38/checkpoint_best.pt",
         cuda=use_cuda,
     )
 
@@ -42,27 +42,18 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 def create_image_with_text(snippet, text1, text2, output_path):
-    # Create a new image with space for the text
     width, height = snippet.size
     new_image = Image.new("RGB", (width, height + 60), (255, 255, 255))
-
-    # Paste the snippet onto the new image
     new_image.paste(snippet, (0, 0))
-
-    # Get a drawing context
     draw = ImageDraw.Draw(new_image)
 
     # Load a font (this font should be available on your system)
     # font = ImageFont.truetype("arial", 15)
-
-    # Load the default font
     font = ImageFont.load_default()
 
-    # Draw the text onto the new image
     draw.text((10, height + 10), text1, font=font, fill=(0, 0, 0))
     draw.text((10, height + 30), text2, font=font, fill=(0, 0, 0))
 
-    # Save the new image
     new_image.save(output_path)
 
 
@@ -87,7 +78,7 @@ def process_image(img_path, box_processor, ocr1_processor, ocr2_processor):
         "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
-    output_dir = os.path.expanduser("~/tmp/ocr-diffs/v3")
+    output_dir = os.path.expanduser("~/tmp/ocr-diffs/v5")
     output_dir_raw = os.path.join(output_dir, "raw")
     output_dir_diff = os.path.join(output_dir, "diff")
     output_dir_ocr1 = os.path.join(output_dir, "ocr1")
@@ -107,10 +98,14 @@ def process_image(img_path, box_processor, ocr1_processor, ocr2_processor):
 
         print("word : ", word1, word2)
         # filter only for words that contain digits
-        if not any(char.isdigit() for char in word1["text"]):
-            continue
+        # if not any(char.isdigit() for char in word1["text"]):
+        #     continue
 
-        if word1["text"] != word2["text"]:
+        # only compare words with low confidence
+        conf1 = word1["confidence"]
+        conf2 = word2["confidence"]
+
+        if word1["text"] != word2["text"] and (conf1 > 0.8 and conf1 > conf2):
             print("DIFFERENT")
             print(word1)
             print(word2)
@@ -119,8 +114,20 @@ def process_image(img_path, box_processor, ocr1_processor, ocr2_processor):
             conf2 = word2["confidence"]
 
             mix_word_len = min(len(word1["text"]), len(word2["text"]))
-            if mix_word_len < 3:
-                print("skipping short word : " + word1["text"] + " " + word2["text"])
+            # if mix_word_len < 3:
+            #     print("skipping short word : " + word1["text"] + " " + word2["text"])
+            #     continue
+
+            # check for any digit or dollar sign
+            if (
+                not any(char.isdigit() for char in word1["text"])
+                and not any(char.isdigit() for char in word2["text"])
+                and not any(char == "$" for char in word1["text"])
+                and not any(char == "$" for char in word2["text"])
+            ):
+                print(
+                    "skipping non digit word : " + word1["text"] + " " + word2["text"]
+                )
                 continue
 
             # clip the image snippet from the original image
@@ -186,7 +193,8 @@ if __name__ == "__main__":
     box_processor, ocr1_processor, ocr2_processor = build_ocr_engines()
 
     process_dir(
-        "/home/greg/datasets/funsd_dit/IMAGES/LbxIDImages_boundingBox_6292023",
+        # "/home/greg/datasets/funsd_dit/IMAGES/LbxIDImages_boundingBox_6292023",
+        "~/datasets/private/eob-extract/converted/imgs/eob-extract/eob-003",
         box_processor,
         ocr1_processor,
         ocr2_processor,
