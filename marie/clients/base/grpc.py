@@ -142,7 +142,9 @@ class GRPCBaseClient(BaseClient):
                                     compression=self.compression,
                                     **kwargs,
                                 )
-                                async for response in stream_rpc.stream_rpc_with_retry():
+                                async for (
+                                    response
+                                ) in stream_rpc.stream_rpc_with_retry():
                                     yield response
                             else:
                                 unary_rpc = UnaryRpc(
