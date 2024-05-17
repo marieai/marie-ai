@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any, Dict, Optional
 
 from docarray import BaseDoc, DocList
+from docarray.documents.legacy import LegacyDocument
 from rich.traceback import install
 
 import marie.helper
@@ -31,6 +32,8 @@ from marie.messaging.events import EngineEventData, MarieEvent
 from marie.messaging.publisher import event_builder
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
+from marie.utils.json import store_json_object
+from marie.utils.pydantic import patch_pydantic_schema_2x
 from marie.utils.types import strtobool
 from marie_server.rest_extension import extend_rest_interface
 
@@ -176,6 +179,19 @@ def main(
     __main__(yml_config, env, env_file)
 
 
+def patch_libs():
+    """Patch the libraries"""
+    logger.warning("Patching libraries")
+    # patch pydantic schema
+    # LegacyDocument.schema = classmethod(patch_pydantic_schema_2x)
+    #
+    # schema = LegacyDocument.schema()
+    # logger.info(f"Schema : {schema}")
+
+    # store_json_object(schema, os.path.join("/home/greg/tmp/marie", "schema-2.x.json"))
+    # print(schema)
+
+
 def __main__(
     yml_config: str,
     env: Optional[Dict[str, str]] = None,
@@ -264,6 +280,8 @@ def __main__(
     if "DUMP_ENV" in os.environ:
         for k, v in os.environ.items():
             print(f"{k} = {v}")
+
+    patch_libs()
 
     # Load the config file and set up the toast events
     config = load_yaml(yml_config, substitute=True, context=context)

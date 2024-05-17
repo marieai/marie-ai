@@ -506,3 +506,9 @@ act.secrets
 ```
 MARIE_CORE_RELEASE_TOKEN=ghp_ABC
 ```
+
+## Pydantic
+```bash
+pydantic                                     1.10.15
+pydantic_core                                2.10.1
+```

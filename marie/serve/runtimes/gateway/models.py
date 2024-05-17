@@ -183,9 +183,11 @@ def protobuf_to_pydantic_model(
 
         all_fields[field_name] = (
             field_type,
-            Field(default_factory=default_factory)
-            if default_factory
-            else Field(default=default_value),
+            (
+                Field(default_factory=default_factory)
+                if default_factory
+                else Field(default=default_value)
+            ),
         )
 
     # Post-processing (Handle oneof fields)
