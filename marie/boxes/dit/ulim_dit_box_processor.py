@@ -76,9 +76,11 @@ def _convert_boxes(boxes):
 
 
 def visualize_bboxes(
-        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, format="xyxy",
-        blackout=False,
-        blackout_color=(0, 0, 0, 255),
+    image: Union[np.ndarray, PIL.Image.Image],
+    bboxes: np.ndarray,
+    format="xyxy",
+    blackout=False,
+    blackout_color=(0, 0, 0, 255),
 ) -> PIL.Image:
     """Visualize bounding boxes on the image#
     Args:
@@ -104,7 +106,7 @@ def visualize_bboxes(
         if format == "xywh":
             box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
-        fill_color = (
+        fill_color_rgbaa = (
             int(np.random.random() * 256),
             int(np.random.random() * 256),
             int(np.random.random() * 256),
@@ -112,13 +114,13 @@ def visualize_bboxes(
         )
         width = 1
         if blackout:
-            fill_color = blackout_color
+            fill_color_rgbaa = blackout_color
             width = 0
 
         draw.rectangle(
             box,
             outline="#993300",
-            fill=fill_color,
+            fill=fill_color_rgbaa,
             width=width,
         )
 
@@ -149,24 +151,18 @@ def is_surrounded_by_black(image):
 
 
 def is_mostly_on_black_background(image, threshold=0.5):
-    # Convert the image to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # Count the number of black pixels
     black_pixels = np.sum(gray == 0)
-
-    # Calculate the total number of pixels in the image
     total_pixels = gray.size
-
-    # Calculate the ratio of black pixels to total pixels
     ratio = black_pixels / total_pixels
-
-    # If the ratio is above the threshold, the image is mostly on a black background
     return ratio > threshold
 
 
 def blackout_bboxes(
-        image: Union[np.ndarray, PIL.Image.Image], bboxes: np.ndarray, bbox_format="xyxy", fill_color=(255, 255, 255)
+    image: Union[np.ndarray, PIL.Image.Image],
+    bboxes: np.ndarray,
+    bbox_format="xyxy",
+    fill_color=(255, 255, 255),
 ) -> np.ndarray:
     """
     Blackout bounding boxes on the image.
@@ -184,9 +180,7 @@ def blackout_bboxes(
     """
 
     if image is None:
-        raise ValueError(
-            "Input image can't be empty"
-        )
+        raise ValueError("Input image can't be empty")
 
     if isinstance(image, PIL.Image.Image):
         image = np.array(image)
@@ -196,10 +190,10 @@ def blackout_bboxes(
         box = [int(x) for x in box]
         if bbox_format == "xywh":
             box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
-        snippet = image[box[1]:box[3], box[0]:box[2]]
+        snippet = image[box[1] : box[3], box[0] : box[2]]
         if is_surrounded_by_black(snippet) or is_mostly_on_black_background(snippet):
             continue
-        image[box[1]:box[3], box[0]:box[2], :] = fill_color
+        image[box[1] : box[3], box[0] : box[2], :] = fill_color
 
     return image
 
@@ -295,7 +289,7 @@ def lines_from_bboxes(image, bboxes):
 
 
 def crop_to_content_box(
-        frame: np.ndarray, content_aware=False
+    frame: np.ndarray, content_aware=False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop given image to content and return new box with the offset.
@@ -352,7 +346,7 @@ def crop_to_content_box(
         h = indices[0].max() - y
         w = indices[1].max() - x
 
-    cropped = frame[y: y + h + 1, x: x + w + 1].copy()
+    cropped = frame[y : y + h + 1, x : x + w + 1].copy()
     dt = time.time() - start
     # create offset box in LTRB format (left, top, right, bottom) from XYWH format
     offset = [x, y, img_w - w, img_h - h]
@@ -388,11 +382,11 @@ class BoxProcessorUlimDit(BoxProcessor):
     """
 
     def __init__(
-            self,
-            work_dir: str = "/tmp/boxes",
-            models_dir: str = __model_path__,
-            cuda: bool = False,
-            refinement: bool = True,
+        self,
+        work_dir: str = "/tmp/boxes",
+        models_dir: str = __model_path__,
+        cuda: bool = False,
+        refinement: bool = True,
     ):
         super().__init__(work_dir, models_dir, cuda)
         self.logger = MarieLogger(self.__class__.__name__)
@@ -427,8 +421,16 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
+    @torch.no_grad()
     def psm_sparse_step(self, image: np.ndarray, adj_x: int, adj_y: int):
+        """
+        Perform a step in the PSM sparse pipeline.
 
+        :param image: The input image.
+        :param adj_x: The adjustment in the x-direction.
+        :param adj_y: The adjustment in the y-direction.
+        :return: A tuple containing the bounding boxes, predicted classes, and scores.
+        """
         try:
             rp = self.predictor(image)
             # detach the predictions from GPU to avoid memory leak
@@ -502,11 +504,12 @@ class BoxProcessorUlimDit(BoxProcessor):
         return [], [], []
 
     def psm_sparse(
-            self,
-            image: np.ndarray,
-            bbox_optimization: Optional[bool] = False,
-            bbox_context_aware: Optional[bool] = True,
-            enable_visualization: Optional[bool] = False,
+        self,
+        image: np.ndarray,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
+        bbox_refinement: Optional[bool] = None,
+        enable_visualization: Optional[bool] = False,
     ):
         try:
             self.logger.debug(f"Starting box predictions : {image.shape}")
@@ -518,8 +521,8 @@ class BoxProcessorUlimDit(BoxProcessor):
             adj_y = 0
             # Both height and width are smaller than the minimum size then frame the image
             if (
-                    image.shape[0] < self.min_size_test[0]
-                    or image.shape[1] < self.min_size_test[1]
+                image.shape[0] < self.min_size_test[0]
+                or image.shape[1] < self.min_size_test[1]
             ):
                 self.logger.debug(
                     f"Image size is too small : {image.shape}, resizing to {self.min_size_test}"
@@ -535,22 +538,35 @@ class BoxProcessorUlimDit(BoxProcessor):
                 adj_x = coord[0]
                 adj_y = coord[1]
 
+            # check if we need to perform refinement and have an override to disable it
             refinement_steps = 1
+            default_refinement = self.refinement
+            if bbox_refinement is not None:
+                self.refinement = bbox_refinement
             if self.refinement:
                 refinement_steps = 3
-
+            self.logger.info(f"Refinement : {self.refinement}")
+            self.refinement = default_refinement
             bboxes, classes, scores = [], [], []
             refinement_image = image
             hash_id = hash_frames_fast(frames=[refinement_image])
             ensure_exists("/tmp/boxes")
             enable_visualization = True
+
             for i in range(refinement_steps):
                 try:
-                    bboxes_, classes_, scores_ = self.psm_sparse_step(refinement_image, adj_x, adj_y)
+                    bboxes_, classes_, scores_ = self.psm_sparse_step(
+                        refinement_image, adj_x, adj_y
+                    )
                     refinement_copy = copy.deepcopy(refinement_image)
-                    refinement_image = blackout_bboxes(refinement_image, bboxes_, bbox_format="xyxy")
+                    refinement_image = blackout_bboxes(
+                        refinement_image, bboxes_, bbox_format="xyxy"
+                    )
                     if enable_visualization:
-                        cv2.imwrite(f"/tmp/boxes/refinement_image_{hash_id}_{i}.png", refinement_image)
+                        cv2.imwrite(
+                            f"/tmp/boxes/refinement_image_{hash_id}_{i}.png",
+                            refinement_image,
+                        )
 
                     if i == 0:
                         bboxes.extend(bboxes_)
@@ -593,7 +609,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                     x0, y0, x1, y1 = box
                     w = x1 - x0
                     h = y1 - y0
-                    snippet = image[y0: y0 + h, x0: x0 + w:]
+                    snippet = image[y0 : y0 + h, x0 : x0 + w :]
                     offset, cropped = crop_to_content_box(
                         snippet, content_aware=bbox_context_aware
                     )
@@ -656,13 +672,14 @@ class BoxProcessorUlimDit(BoxProcessor):
 
     @torch.no_grad()
     def extract_bounding_boxes(
-            self,
-            _id,
-            key,
-            img: Union[np.ndarray, PIL.Image.Image],
-            psm=PSMode.SPARSE,
-            bbox_optimization: Optional[bool] = False,
-            bbox_context_aware: Optional[bool] = True,
+        self,
+        _id,
+        key,
+        img: Union[np.ndarray, PIL.Image.Image],
+        psm=PSMode.SPARSE,
+        bbox_optimization: Optional[bool] = False,
+        bbox_context_aware: Optional[bool] = True,
+        bbox_refinement: Optional[bool] = None,
     ) -> Tuple[Any, Any, Any, Any, Any]:
         if img is None:
             raise Exception("Input image can't be empty")
@@ -690,7 +707,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             # Page Segmentation Model
             if psm == PSMode.SPARSE:
                 bboxes, polys, scores, lines_bboxes, classes = self.psm_sparse(
-                    image, bbox_optimization, bbox_context_aware
+                    image, bbox_optimization, bbox_context_aware, bbox_refinement
                 )
             # elif psm == PSMode.WORD:
             #     bboxes, polys, scores, lines_bboxes, classes = self.psm_word(image_norm)
@@ -746,7 +763,7 @@ class BoxProcessorUlimDit(BoxProcessor):
                 # self.logger.debug(f" index = {i} box_adj = {box_adj}  : {h} , {w}  > {box}")
                 # Class 0 == Text
                 if classes[i] == 0:
-                    snippet = img[y0: y0 + h, x0: x0 + w:]
+                    snippet = img[y0 : y0 + h, x0 : x0 + w :]
                     line_number = find_line_number(lines_bboxes, box_adj)
                     fragments.append(snippet)
                     rect_from_poly.append(box_adj)
