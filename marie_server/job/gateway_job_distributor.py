@@ -1,8 +1,6 @@
 from typing import Any, Optional
 
-from m import Document
-
-from marie import DocumentArray
+from marie import Document, DocumentArray
 from marie.clients.request import asyncio
 from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer

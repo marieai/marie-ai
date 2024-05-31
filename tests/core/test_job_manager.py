@@ -1,5 +1,4 @@
 import asyncio
-import json
 import multiprocessing
 import os
 import random
@@ -8,13 +7,11 @@ import threading
 import time
 
 import pytest
-from docarray import Document
 
-from marie import Deployment, DocumentArray, Executor, requests
+from marie import Deployment, Document, DocumentArray, Executor, requests
 from marie.enums import PollingType
 from marie.parsers import set_deployment_parser
 from marie.proto import jina_pb2
-from marie.serve.networking import GrpcConnectionPool, _ReplicaList
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
@@ -61,13 +58,13 @@ async def check_job_running(job_manager, job_id):
 @pytest.fixture
 async def job_manager(tmp_path):
     storage = InMemoryKV()
-
+    # TODO: Externalize the storage configuration
     storage_config = {"hostname": "127.0.0.1", "port": 5432, "username": "postgres", "password": "123456",
                       "database": "postgres",
                       "default_table": "kv_store_a", "max_pool_size": 5,
                       "max_connections": 5}
 
-    # storage = PostgreSQLKV(config=storage_config, reset=True)
+    storage = PostgreSQLKV(config=storage_config, reset=True)
     yield JobManager(storage=storage, job_distributor=NoopJobDistributor())
 
 

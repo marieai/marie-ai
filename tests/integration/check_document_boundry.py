@@ -28,8 +28,10 @@ def check_boundry_registration():
         model_name_or_path="../../model_zoo/unilm/dit/object_detection/document_boundary",
         use_gpu=True,
     )
-    filepath = "~/PID_402_8220_0_200802683.tif"
-    filepath = "~/PID_3736_11058_0_200942298.tif"  # => 201458362
+    filepath = "~/PID_3736_11058_0_200942298.tif"
+    filepath = "~/tmp/analysis/document-boundary/samples/204169581/PID_3585_10907_0_204169581.tif"
+    filepath = "~/tmp/analysis/document-boundary/samples/203822066/PID_3585_10907_0_203822066.tif"
+    filepath = "~/tmp/analysis/document-boundary/samples/204446542/PID_3585_10907_0_204446542.tif"
 
     basename = filepath.split("/")[-1].split(".")[0]
     documents = docs_from_file(filepath)
