@@ -10,16 +10,22 @@ from marie.excepts import BadConfigSource
 class PostgresqlMixin:
     """Bind PostgreSQL database provider."""
 
-    provider = 'postgres'
+    provider = "postgres"
 
-    def _setup_storage(self, config: Dict[str, Any], create_table_callback: Optional[Callable] = None,
-                       reset_table_callback: Optional[Callable] = None) -> None:
+    def _setup_storage(
+        self,
+        config: Dict[str, Any],
+        create_table_callback: Optional[Callable] = None,
+        reset_table_callback: Optional[Callable] = None,
+        connection_only=False,
+    ) -> None:
         """
         Setup PostgreSQL connection pool.
 
         @param config:
         @param create_table_callback: Create table if it doesn't exist.
         @param reset_table_callback:  Reset table if it exists.
+        @param connection_only:       Only connect to the database.
         @return:
         """
         try:
@@ -28,10 +34,6 @@ class PostgresqlMixin:
             username = config["username"]
             password = config["password"]
             database = config["database"]
-            self.table = config["default_table"]
-
-            if self.table is None or self.table == "":
-                raise ValueError("default_table cannot be empty")
 
             max_connections = 10
             self.postgreSQL_pool = psycopg2.pool.SimpleConnectionPool(
@@ -43,11 +45,20 @@ class PostgresqlMixin:
                 host=hostname,
                 port=port,
             )
+
+            if connection_only:
+                self.logger.info(f"Connected to postgresql database: {config}")
+                return
+
+            self.table = config["default_table"]
+            if self.table is None or self.table == "":
+                raise ValueError("default_table cannot be empty")
+
             self._init_table(create_table_callback, reset_table_callback)
 
         except Exception as e:
             raise BadConfigSource(
-                f'Cannot connect to postgresql database: {config}, {e}'
+                f"Cannot connect to postgresql database: {config}, {e}"
             )
 
     def __enter__(self):
@@ -70,8 +81,11 @@ class PostgresqlMixin:
         connection.autocommit = False
         return connection
 
-    def _init_table(self, create_table_callback: Optional[Callable] = None,
-                    reset_table_callback: Optional[Callable] = None) -> None:
+    def _init_table(
+        self,
+        create_table_callback: Optional[Callable] = None,
+        reset_table_callback: Optional[Callable] = None,
+    ) -> None:
         """
         Use table if exists or create one if it doesn't.
         """
@@ -102,9 +116,14 @@ class PostgresqlMixin:
             (self.table,),
         ).fetchall()[0][0]
 
-    def _execute_sql_gracefully(self, statement, data=tuple(), *,
-                                named_cursor_name: Optional[str] = None,
-                                itersize: Optional[int] = 10000) -> psycopg2.extras.DictCursor:
+    def _execute_sql_gracefully(
+        self,
+        statement,
+        data=tuple(),
+        *,
+        named_cursor_name: Optional[str] = None,
+        itersize: Optional[int] = 10000,
+    ) -> psycopg2.extras.DictCursor:
         try:
             if named_cursor_name:
                 cursor = self.connection.cursor(named_cursor_name)
