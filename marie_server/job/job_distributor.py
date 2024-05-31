@@ -6,7 +6,7 @@ from marie_server.job.common import JobInfo
 
 class JobDistributor(abc.ABC):
     """
-    Job Distributor is responsible for publishing jobs to the underlying executor which can be a gateway/flow.
+    Job Distributor is responsible for publishing jobs to the underlying executor which can be a gateway/flow/deployment.
     """
 
     @abc.abstractmethod

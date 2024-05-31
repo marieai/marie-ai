@@ -550,8 +550,9 @@ class BoxProcessorUlimDit(BoxProcessor):
             bboxes, classes, scores = [], [], []
             refinement_image = image
             hash_id = hash_frames_fast(frames=[refinement_image])
-            ensure_exists("/tmp/boxes")
-            enable_visualization = True
+
+            if enable_visualization:
+                ensure_exists("/tmp/boxes")
 
             for i in range(refinement_steps):
                 try:

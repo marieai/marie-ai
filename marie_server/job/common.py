@@ -14,6 +14,8 @@ JOB_NAME_METADATA_KEY = "job_name"
 INTERNAL_NAMESPACE_PREFIX = "marie_internal"
 JOB_STATUS_KEY = f"{INTERNAL_NAMESPACE_PREFIX}/job_status"
 
+ActorHandle = Any
+
 
 class JobStatus(str, Enum):
     """An enumeration for describing the status of a job."""
