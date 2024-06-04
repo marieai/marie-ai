@@ -1167,7 +1167,7 @@ class WorkerRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request
         """
-        self.logger.debug("recv a stream request")
+        self.logger.debug("recv a stream request from client")
         async for request in request_iterator:
             yield await self.process_data([request], context)
 

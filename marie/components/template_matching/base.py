@@ -255,9 +255,7 @@ class BaseTemplateMatcher(ABC):
                 prediction_time_end = time.time() - prediction_time_start
                 durations_in_seconds["prediction"] = prediction_time_end
                 self.logger.debug(
-                    "Slice-prediction performed in",
-                    durations_in_seconds["prediction"],
-                    "seconds.",
+                    f"Slice-prediction performed in {durations_in_seconds['prediction']} seconds."
                 )
 
                 for prediction in predictions:
