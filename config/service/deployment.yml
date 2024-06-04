@@ -5,11 +5,25 @@ with:
     metas:
       py_modules:
         - marie.executor.text
+  replicas: 1
+  name: ext_dep
+  protocol: [grpc]
 
-  replicas: 3
-  name: extract_exec
-  protocol: [grpc, http]
-#  port: [54321, 54322, 54323]
-#  port: [51000, 52000, 53000]
+  # monitoring
+  monitoring: true
+  port_monitoring: 57843
+
+  host: 0.0.0.0
+  port_in: [52000]
+  #port: [52000, 51000]
+
 #  discovery: True
 #  discovery_host:
+
+gateway:
+  port:
+    - {{ grpc_port }}
+    - {{ http_port }}
+  protocol:
+    - grpc
+    - http
