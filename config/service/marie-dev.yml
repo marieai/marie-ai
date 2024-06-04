@@ -142,7 +142,7 @@ with:
       tags:
         - classify
 
-prefetch: 1
+prefetch: 4
 
 executors:
 #  - name: extract_executor
@@ -197,7 +197,7 @@ executors:
         py_modules:
           - marie.executor.text
     timeout_ready: 3000000
-    replicas: 1
+    replicas: 4
     #    replicas: ${{ CONTEXT.gpu_device_count }}
     env:
       CUDA_VISIBLE_DEVICES: RR
