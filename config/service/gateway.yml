@@ -1,0 +1,16 @@
+!HTTPGateway
+gateway:
+  title: "Marie Gateway"
+  cors: true
+  protocol:
+    - http
+    - grpc
+
+  # monitoring
+  monitoring: true
+  port_monitoring: 57843
+
+  host: 0.0.0.0
+  # host: 192.168.1.11
+  port: [52000]
+
