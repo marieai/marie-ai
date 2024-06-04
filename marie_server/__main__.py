@@ -288,7 +288,7 @@ def __main__(
     prefetch = config.get("prefetch", 1)
 
     # flow or deployment
-    if False:
+    if True:
         f = Flow.load_config(
             config,
             extra_search_paths=[
@@ -302,7 +302,7 @@ def __main__(
             external=True,
         ).config_gateway(prefetch=prefetch)
 
-    if True:
+    if False:
         f = Deployment.load_config(
             config,
             extra_search_paths=[
@@ -356,10 +356,10 @@ def setup_server(config: Dict[str, Any]) -> None:
     Set up the server
     :param config: the config
     """
-    # setup_toast_events(config.get("toast", {}))
-    # setup_storage(config.get("storage", {}))
-    # setup_auth(config.get("auth", {}))
-    #
+    setup_toast_events(config.get("toast", {}))
+    setup_storage(config.get("storage", {}))
+    setup_auth(config.get("auth", {}))
+
     # setup_scheduler(config.get("scheduler", {}))
 
 

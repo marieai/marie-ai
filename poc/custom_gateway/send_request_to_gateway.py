@@ -9,17 +9,17 @@ from marie import Client
 async def check_executor_via_client():
     parameters = {}
     parameters["payload"] = {"payload": "test"}  # THIS IS TEMPORARY HERE
-    docs = DocList(TextDoc(text="test"))
+    docs = DocList([TextDoc(text="test")])
 
     client = Client(
-        host="192.168.1.11", port=52000, protocol="grpc", request_size=-1, asyncio=True
+        host="127.0.0.1", port=52000, protocol="grpc", request_size=-1, asyncio=True
     )
 
-    ready = await client.is_flow_ready()
-    print(f"Flow is ready: {ready}")
+    # ready = await client.is_flow_ready()
+    # print(f"Flow is ready: {ready}")
 
     async for resp in client.post(
-        on="/document/extract",
+        on="executor0/",
         docs=docs,
         parameters=parameters,
         request_size=-1,
@@ -27,6 +27,8 @@ async def check_executor_via_client():
         return_exceptions=True,
     ):
         print(resp)
+
+        await asyncio.sleep(1)
 
     print("DONE")
 
