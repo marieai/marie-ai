@@ -11,16 +11,19 @@ from marie import Gateway as BaseGateway
 from marie.serve.runtimes.servers.composite import CompositeServer
 
 
-class MarieGateway(BaseGateway, CompositeServer):
-    """A custom Gateway for Marie."""
+class MarieServerGateway(BaseGateway, CompositeServer):
+    """A custom Gateway for Marie server.
+    Effectively we are providing a custom implementation of the Gateway class that providers communication between individual executors and the server.
+
+    This utilizes service discovery to find deployed Executors from discovered gateways that could have spawned them(Flow/Deployment).
+
+    """
 
     def __init__(self, **kwargs):
         """Initialize a new Gateway."""
-
         super().__init__(**kwargs)
 
-        from fastapi import Body, status
-        from fastapi.responses import JSONResponse
+        self.streamer
 
         def _extend_rest_function(app):
             @app.get("/endpoint")
@@ -33,6 +36,7 @@ class MarieGateway(BaseGateway, CompositeServer):
                     exec_endpoint="/",
                     # exec_endpoint="/endpoint",
                     # target_executor="executor0",
+                    return_results=False,
                 ):
                     result = docs[0].text
                 return {"result": result}

@@ -9,21 +9,11 @@ with:
   name: ext_dep
   protocol: [grpc]
 
-  # monitoring
-  monitoring: true
-  port_monitoring: 57843
+#  # monitoring
+#  monitoring: true
+#  port_monitoring: 57843
 
-  host: 0.0.0.0
-  port_in: [52000]
+#  host: 0.0.0.0
+#  port: [52000]
+
   #port: [52000, 51000]
-
-#  discovery: True
-#  discovery_host:
-
-gateway:
-  port:
-    - {{ grpc_port }}
-    - {{ http_port }}
-  protocol:
-    - grpc
-    - http
