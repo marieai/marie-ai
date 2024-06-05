@@ -23,8 +23,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         """Initialize a new Gateway."""
         super().__init__(**kwargs)
 
-        self.streamer
-
         def _extend_rest_function(app):
             @app.get("/endpoint")
             async def get(text: str):

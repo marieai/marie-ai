@@ -402,10 +402,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         self._init_workspace = workspace
 
         if __dry_run_endpoint__ not in self.requests:
-            self.requests[
-                __dry_run_endpoint__
-            ] = _FunctionWithSchema.get_function_with_schema(
-                self.__class__._dry_run_func
+            self.requests[__dry_run_endpoint__] = (
+                _FunctionWithSchema.get_function_with_schema(
+                    self.__class__._dry_run_func
+                )
             )
         else:
             self.logger.warning(
@@ -413,10 +413,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 f' So it is recommended not to expose this endpoint. '
             )
         if type(self) == BaseExecutor:
-            self.requests[
-                __default_endpoint__
-            ] = _FunctionWithSchema.get_function_with_schema(
-                self.__class__._dry_run_func
+            self.requests[__default_endpoint__] = (
+                _FunctionWithSchema.get_function_with_schema(
+                    self.__class__._dry_run_func
+                )
             )
 
         self._lock = contextlib.AsyncExitStack()
@@ -596,14 +596,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 _func = getattr(self.__class__, func)
                 if callable(_func):
                     # the target function is not decorated with `@requests` yet
-                    self.requests[
-                        endpoint
-                    ] = _FunctionWithSchema.get_function_with_schema(_func)
+                    self.requests[endpoint] = (
+                        _FunctionWithSchema.get_function_with_schema(_func)
+                    )
                 elif typename(_func) == 'marie.executors.decorators.FunctionMapper':
                     # the target function is already decorated with `@requests`, need unwrap with `.fn`
-                    self.requests[
-                        endpoint
-                    ] = _FunctionWithSchema.get_function_with_schema(_func.fn)
+                    self.requests[endpoint] = (
+                        _FunctionWithSchema.get_function_with_schema(_func.fn)
+                    )
                 else:
                     raise TypeError(
                         f'expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}'
@@ -620,7 +620,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         ):
             return
 
+        remove_keys = set()
+        for k in self.requests.keys():
+            if k != '/invocations':
+                remove_keys.add(k)
+
         if '/invocations' in self.requests:
+            for k in remove_keys:
+                self.requests.pop(k)
             return
 
         if (
@@ -633,12 +640,16 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                     f'Using "{endpoint_to_use}" as "/invocations" route'
                 )
                 self.requests['/invocations'] = self.requests[endpoint_to_use]
+                for k in remove_keys:
+                    self.requests.pop(k)
                 return
 
         if len(self.requests) == 1:
             route = list(self.requests.keys())[0]
             self.logger.warning(f'Using "{route}" as "/invocations" route')
             self.requests['/invocations'] = self.requests[route]
+            for k in remove_keys:
+                self.requests.pop(k)
             return
 
         raise ValueError('Cannot identify the endpoint to use for "/invocations"')
@@ -1103,7 +1114,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
-        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER', 'AZURE'].
         :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param py_modules: The customized python modules need to be imported before loading the executor
 

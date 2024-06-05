@@ -1,9 +1,10 @@
 import time
 
 import pytest
-from docarray import DocumentArray
+from docarray import DocList
+from docarray.documents import TextDoc
 
-from marie import Executor, Flow, requests
+from marie import DocumentArray, Executor, Flow, requests
 
 
 @pytest.fixture()
@@ -23,7 +24,7 @@ def test_long_flow_keep_alive(slow_executor):
     # it tests that the connection to a flow that take a lot of time to process will not be killed by the keepalive feature
 
     with Flow().add(uses=slow_executor) as f:
-        docs = f.search(inputs=DocumentArray.empty(10))
+        docs = f.search(inputs=DocList[TextDoc]([TextDoc()]))
 
     for doc_ in docs:
         assert doc_.text == 'process'

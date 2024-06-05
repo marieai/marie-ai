@@ -41,7 +41,7 @@ def get_fastapi_app(
     from marie.serve.runtimes.gateway.models import _to_camel_case
 
     if not docarray_v2:
-        logger.warning('Only docarray v2 is supported with Sagemaker. ')
+        logger.warning('Only docarray v2 is supported with CSP. ')
         return
 
     class Header(BaseModel):
@@ -117,7 +117,7 @@ def get_fastapi_app(
             if body.parameters is not None:
                 req.parameters = body.parameters
             req.header.exec_endpoint = endpoint_path
-            req.document_array_cls = DocList[input_doc_model]
+            req.document_array_cls = DocList[input_doc_list_model]
 
             data = body.data
             if isinstance(data, list):
@@ -230,10 +230,23 @@ def get_fastapi_app(
         if endpoint != '_jina_dry_run_':
             input_doc_model = input_output_map['input']['model']
             output_doc_model = input_output_map['output']['model']
-            parameters_model = input_output_map['parameters']['model'] or Optional[Dict]
-            default_parameters = (
-                ... if input_output_map['parameters']['model'] else None
-            )
+            parameters_model = input_output_map['parameters']['model']
+            parameters_model_needed = parameters_model is not None
+            if parameters_model_needed:
+                try:
+                    _ = parameters_model()
+                    parameters_model_needed = False
+                except:
+                    parameters_model_needed = True
+                parameters_model = (
+                    parameters_model
+                    if parameters_model_needed
+                    else Optional[parameters_model]
+                )
+                default_parameters = ... if parameters_model_needed else None
+            else:
+                parameters_model = Optional[Dict]
+                default_parameters = None
 
             _config = inherit_config(InnerConfig, BaseDoc.__config__)
             endpoint_input_model = pydantic.create_model(
