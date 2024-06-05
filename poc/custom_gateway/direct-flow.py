@@ -18,15 +18,13 @@ class TestExecutor(Executor):
         *args,
         **kwargs,
     ):
-        print(f"FirstExec func called : {len(docs)}")
-        print(f"FirstExec funct : {parameters}")
-
+        print(f"FirstExec func called : {len(docs)}, {parameters}")
         for doc in docs:
             doc.text += " First"
 
         return {
             "parameters": parameters,
-            "data": "Data",
+            "data": "Data reply",
         }
 
 
@@ -63,20 +61,18 @@ def main_deployment():
 
 def main():
     context = {"name": "test"}
-    yml_config = "/mnt/data/marie-ai/config/service/deployment.yml"
-
-    # Load the config file and set up the toast events
-    config = load_yaml(yml_config, substitute=True, context=context)
-
+    # yml_config = "/mnt/data/marie-ai/config/service/deployment.yml"
+    # # Load the config file and set up the toast events
+    # config = load_yaml(yml_config, substitute=True, context=context)
+    print("Bootstrapping server gateway")
     with (
         Flow()
         .add(uses=TestExecutor)
         .config_gateway(
-            uses=MariePodGateway,
-            protocols=["GRPC", "HTTP"],
-            ports=[61000, 61001],
+            uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
         ) as f
     ):
+
         f.block()
 
 

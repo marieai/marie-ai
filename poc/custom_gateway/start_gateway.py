@@ -8,12 +8,13 @@ from poc.custom_gateway.server_gateway import MarieServerGateway
 def main():
     print("Bootstrapping server gateway")
     with (
-        Flow().config_gateway(
+        Flow()
+        .config_gateway(
             uses=MarieServerGateway, protocols=["GRPC", "HTTP"], ports=[52000, 51000]
         )
-        # .add(tls=False, host="0.0.0.0", external=True, port=61876)
-        as flow
+        .add(tls=False, host="0.0.0.0", external=True, port=61000) as flow
     ):
+
         flow.block()
 
 
