@@ -9,7 +9,46 @@ from marie.conf.helper import load_yaml
 from poc.custom_gateway.deployment_gateway import MariePodGateway
 
 
+class TestExecutorXYZ(Executor):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        print("TestExecutorXYZ init called")
+
+        # emulate the long loading time
+        import time
+
+        time.sleep(5)
+
+    @requests(on="/")
+    def func(
+        self,
+        docs: DocList[TextDoc],
+        parameters: dict = {},
+        *args,
+        **kwargs,
+    ):
+        print(f"FirstExec func called : {len(docs)}, {parameters}")
+        for doc in docs:
+            doc.text += " First"
+
+        return {
+            "parameters": parameters,
+            "data": "Data reply",
+        }
+
+
 class TestExecutor(Executor):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        print("TestExecutor init called")
+
+        # emulate the long loading time
+        import time
+
+        time.sleep(5)
+
     @requests(on="/")
     def func(
         self,
@@ -67,12 +106,11 @@ def main():
     print("Bootstrapping server gateway")
     with (
         Flow()
-        .add(uses=TestExecutor)
+        .add(uses=TestExecutor, name="executor0", replicas=3)
         .config_gateway(
             uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
         ) as f
     ):
-
         f.block()
 
 
