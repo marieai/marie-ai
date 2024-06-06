@@ -7,8 +7,8 @@ from multiprocessing import Process
 
 import grpc
 import pytest
-from docarray import Document, DocumentArray
 
+from marie import Document, DocumentArray
 from marie.clients.request import request_generator
 from marie.helper import random_port
 from marie.parsers import set_gateway_parser
@@ -493,7 +493,7 @@ async def test_grpc_gateway_runtime_reflection():
 
     p = multiprocessing.Process(target=_create_runtime)
     p.start()
-    time.sleep(1.0)
+    time.sleep(2.0)
     assert BaseServer.is_ready(ctrl_address=f'127.0.0.1:{port}')
 
     async with grpc.aio.insecure_channel(f'127.0.0.1:{port}') as channel:

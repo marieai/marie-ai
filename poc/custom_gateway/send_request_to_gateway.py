@@ -4,12 +4,19 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Client
+from marie.serve.runtimes.servers.grpc import GRPCServer
 
 
 async def main():
     """
     This function sends a request to a Marie server gateway.
     """
+
+    ctrl_address = "0.0.0.0:61000"
+    res = GRPCServer.is_ready(ctrl_address)
+    print(f"res: {res}")
+
+    return
     parameters = {}
     parameters["payload"] = {"payload": "sample payload"}
     docs = DocList[TextDoc]([TextDoc(text="Sample Text")])
