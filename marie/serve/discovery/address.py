@@ -8,7 +8,7 @@ def b2str(i_b):
     return i_b.decode()
 
 
-class Address(abc.ABCMeta):
+class Address(abc.ABC):
     """gRPC service address."""
 
     @abc.abstractmethod
