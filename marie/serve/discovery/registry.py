@@ -9,6 +9,10 @@ from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.discovery.util import form_service_key
 
 __all__ = ['EtcdServiceRegistry']
+
+logging.basicConfig(
+    level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 log = logging.getLogger(__name__)
 
 
@@ -125,7 +129,7 @@ class EtcdServiceRegistry(ServiceRegistry):
 
     def heartbeat(self, service_addr=None, service_ttl=5):
         """service heartbeat."""
-        log.info(f"Heartbeat service_addr : {service_addr}")
+        log.debug(f"Heartbeat service_addr : {service_addr}")
         if service_addr:
             lease = self.get_lease(service_addr, service_ttl)
             leases = ((service_addr, lease),)
