@@ -155,7 +155,7 @@ class EtcdClient(object):
             raise ValueError(
                 f"Initialize etcd client failed failed after {self.retry_times} times."
             )
-        log.info('using etcd cluster from {} with namespace "{}"', addr, namespace)
+        log.info(f'using etcd cluster from {addr} with namespace "{namespace}"')
 
     def _mangle_key(self, k: str) -> bytes:
         if k.startswith('/'):
