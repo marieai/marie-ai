@@ -5,6 +5,8 @@ __all__ = ['Address', 'PlainAddress', 'JsonAddress']
 
 
 def b2str(i_b):
+    if isinstance(i_b, str):
+        return i_b
     return i_b.decode()
 
 

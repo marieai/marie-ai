@@ -1,13 +1,15 @@
-"""gRPC service registry module."""
-
 import abc
+import logging
+import time
 from typing import Union
 
 from marie.serve.discovery import RepeatedTimer
 from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.discovery.util import form_service_key
 
 __all__ = ['EtcdServiceRegistry']
+log = logging.getLogger(__name__)
 
 
 class ServiceRegistry(abc.ABC):
@@ -30,7 +32,7 @@ class ServiceRegistry(abc.ABC):
 
 
 class EtcdServiceRegistry(ServiceRegistry):
-    """gRPC service registry based on etcd."""
+    """service registry based on etcd."""
 
     def __init__(
         self,
@@ -57,10 +59,10 @@ class EtcdServiceRegistry(ServiceRegistry):
         self.setup_heartbeat()
 
     def get_lease(self, service_addr, service_ttl):
-        """Get a gRPC service lease from etcd.
+        """Get a service lease from etcd.
 
-        :param service_addr: gRPC service address.
-        :param service_ttl: gRPC service lease ttl(seconds).
+        :param service_addr: service address.
+        :param service_ttl: service lease ttl(seconds).
         :rtype `etcd3.lease.Lease`
 
         """
@@ -73,10 +75,6 @@ class EtcdServiceRegistry(ServiceRegistry):
         self._leases[service_addr] = lease
         return lease
 
-    def _form_service_key(self, service_name, service_addr):
-        """Return service's key in etcd."""
-        return '/'.join((service_name, service_addr))
-
     def register(
         self,
         service_names: Union[str, list[str]],
@@ -85,12 +83,12 @@ class EtcdServiceRegistry(ServiceRegistry):
         addr_cls=None,
         metadata=None,
     ) -> int:
-        """Register gRPC services with the same address.
+        """Register services with the same address.
 
         :param service_names: A collection of service name.
         :param service_addr: server address.
         :param service_ttl: service ttl(seconds).
-        :param addr_cls: format class of gRPC service address.
+        :param addr_cls: format class of service address.
         :param metadata: extra meta data for JsonAddress.
         rtype `etcd3.lease.Lease`
         """
@@ -98,8 +96,17 @@ class EtcdServiceRegistry(ServiceRegistry):
             service_names = [service_names]
         lease = self.get_lease(service_addr, service_ttl)
         addr_cls = addr_cls or PlainAddress
+
         for service_name in service_names:
-            key = self._form_service_key(service_name, service_addr)
+            key = form_service_key(service_name, service_addr)
+            resolved = self._client.get(key)
+
+            if resolved:
+                log.warning(
+                    f"Service already registered : {service_name}@{service_addr}"
+                )
+                continue
+
             if addr_cls == JsonAddress:
                 addr_obj = addr_cls(service_addr, metadata=metadata)
             else:
@@ -107,7 +114,9 @@ class EtcdServiceRegistry(ServiceRegistry):
 
             addr_val = addr_obj.add_value()
             put_key, _ = self._client.put(key, addr_val, lease=lease)
-            print("Registering service", service_name, service_addr, put_key)
+            log.warning(
+                f"Registering service : {service_name}@{service_addr} : {put_key}"
+            )
             try:
                 self._services[service_addr].add(service_name)
             except KeyError:
@@ -116,6 +125,7 @@ class EtcdServiceRegistry(ServiceRegistry):
 
     def heartbeat(self, service_addr=None, service_ttl=5):
         """service heartbeat."""
+        log.info(f"Heartbeat service_addr : {service_addr}")
         if service_addr:
             lease = self.get_lease(service_addr, service_ttl)
             leases = ((service_addr, lease),)
@@ -123,36 +133,43 @@ class EtcdServiceRegistry(ServiceRegistry):
             leases = tuple(self._leases.items())
 
         for service_addr, lease in leases:
-            print("Refreshing lease for", service_addr, lease.remaining_ttl)
-            print(self._services[service_addr])
+            registered = self._services.get(service_addr, None)
+            if not registered:
+                continue
+            log.debug(f"Refreshing lease for: {service_addr}, {lease.remaining_ttl}")
+
             ret = lease.refresh()[0]
             if ret.TTL == 0:
-                self.register(self._services[service_addr], service_addr, lease.ttl)
+                self.register(
+                    self._services.get(service_addr, []), service_addr, lease.ttl
+                )
 
     def unregister(self, service_names, service_addr, addr_cls=None):
-        """Unregister gRPC services with the same address.
+        """Unregister services with the same address.
 
-        :param service_names: A collection of gRPC service name.
-        :param service_addr: gRPC server address.
-
+        :param service_names: A collection of service name.
+        :param service_addr: server address.
+        :param addr_cls: format class of service address.
         """
+
         addr_cls = addr_cls or PlainAddress
         etcd_delete = True
         if addr_cls != PlainAddress:
             etcd_delete = False
 
+        registered_services = self._services.get(service_addr, {})
         for service_name in service_names:
-            key = self._form_service_key(service_name, service_addr)
+            log.info(f"Unregistering service : {service_name}@{service_addr}")
+            key = form_service_key(service_name, service_addr)
             if etcd_delete:
                 self._client.delete(key)
             else:
                 self._client.put(addr_cls(service_addr).delete_value())
-
-            self._services.get(service_addr, {}).discard(service_name)
+            registered_services.discard(service_name)
 
     def setup_heartbeat(self):
-        print(
-            "Setting up heartbeat for etcd service registry  : ", self._heartbeat_time
+        log.info(
+            f"Setting up heartbeat for etcd service registry  : {self._heartbeat_time}",
         )
         if self._heartbeat_time > 0:
             rt = RepeatedTimer(
@@ -161,9 +178,74 @@ class EtcdServiceRegistry(ServiceRegistry):
             )
 
 
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="service discovery etcd cluster")
+    parser.add_argument(
+        "--host",
+        help="the etcd host, default = 127.0.0.1",
+        required=False,
+        default="127.0.0.1",
+    )
+    parser.add_argument(
+        "--port",
+        help="the etcd port, default = 2379",
+        required=False,
+        default=2379,
+        type=int,
+    )
+    parser.add_argument("--ca-cert", help="the etcd ca-cert", required=False)
+    parser.add_argument("--cert-key", help="the etcd cert key", required=False)
+    parser.add_argument("--cert-cert", help="the etcd cert", required=False)
+    parser.add_argument("--service-key", help="the service key", required=True)
+    parser.add_argument(
+        "--service-addr", help="the service address host:port ", required=True
+    )
+    parser.add_argument(
+        "--lease-ttl",
+        help="the lease ttl in seconds, default is 10",
+        required=False,
+        default=10,
+        type=int,
+    )
+    parser.add_argument("--my-id", help="my identifier", required=True)
+    parser.add_argument(
+        "--timeout",
+        help="the etcd operation timeout in seconds, default is 2",
+        required=False,
+        type=int,
+        default=2,
+    )
+    args = parser.parse_args()
+
+    params = {"host": args.host, "port": args.port, "timeout": args.timeout}
+    if args.ca_cert:
+        params["ca_cert"] = args.ca_cert
+    if args.cert_key:
+        params["cert_key"] = args.cert_key
+    if args.cert_cert:
+        params["cert_cert"] = args.cert_cert
+
+    log.info(f"args : {args}")
+
+    etcd_registry = EtcdServiceRegistry(args.host, args.port, heartbeat_time=5)
+    etcd_registry.register([args.service_key], args.service_addr, args.lease_ttl)
+
+    try:
+        while True:
+            time.sleep(2)  # Keep the program running.
+    except KeyboardInterrupt:
+        etcd_registry.unregister([args.service_key], args.service_addr)
+        print("Service unregistered.")
+
+
 if __name__ == '__main__':
+    main()
+
+if __name__ == '__main__XXXX':
     etcd_registry = EtcdServiceRegistry('127.0.0.1', 2379, heartbeat_time=5)
-    etcd_registry.register(['gateway/service_test'], '127.0.0.1:50011', 12)
+    etcd_registry.register(['gateway/service_test'], '127.0.0.1:50011', 6)
 
     print(etcd_registry._services)
     print(etcd_registry._leases)

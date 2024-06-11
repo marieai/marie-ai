@@ -1,11 +1,16 @@
 import abc
+import logging
 import threading
 import time
 
 from marie.serve.discovery.address import PlainAddress
-from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.discovery.etcd_client import EtcdClient, Event
 
 __all__ = ['EtcdServiceResolver']
+
+from marie.serve.discovery.util import form_service_key
+
+log = logging.getLogger(__name__)
 
 
 class ServiceResolver(abc.ABC):
@@ -61,6 +66,7 @@ class EtcdServiceResolver(ServiceResolver):
             if etcd_client
             else EtcdClient(etcd_host, etcd_port, namespace=namespace)
         )
+        self.watched_services = {}
         self._names = {}
         self._addr_cls = addr_cls or PlainAddress
 
@@ -95,7 +101,7 @@ class EtcdServiceResolver(ServiceResolver):
         if self._addr_cls != PlainAddress:
             plain = False
 
-        for val, metadata in keys:
+        for val, metadata in keys.items():
             if plain:
                 vals.append(self._addr_cls.from_value(val))
             else:
@@ -138,9 +144,40 @@ class EtcdServiceResolver(ServiceResolver):
 
             time.sleep(self._listen_timeout)
 
-    def watch_service(self, service_name: str, event_callback: callable):
+    def watch_service(
+        self, service_name: str, event_callback: callable, notify_on_start=True
+    ):
+        """Watch service event."""
+        log.info(f"Watching service : {service_name} for changes.")
+        log.info(f"Notify on start : {notify_on_start}")
         watch_id = self._client.add_watch_prefix_callback(service_name, event_callback)
-        print("Watching service:", service_name, watch_id)
+        # print("Watching service:", service_name, watch_id)
+        self.watched_services[service_name] = watch_id
+        if notify_on_start:
+            resolved = self._client.get_prefix(service_name)
+            for val, metadata in resolved.items():
+                print("Resolved service:", service_name, val, metadata)
+                key = form_service_key(service_name, val)
+                event = Event(
+                    service_name,
+                    'put',
+                    metadata,
+                )
+                event_callback(service_name, event)
+
+    def stop_watch_service(self, service_name: str = None) -> None:
+        """Stop watching services."""
+
+        if service_name:
+            watch_id = self.watched_services.pop(service_name, None)
+            if watch_id:
+                self._client.cancel_watch(watch_id)
+                print("Stop watching service:", service_name, watch_id)
+        else:
+            for service_name, watch_id in self.watched_services.items():
+                self._client.cancel_watch(watch_id)
+                print("Stop watching service:", service_name, watch_id)
+            self.watched_services.clear()
 
     def start_listener(self, daemon=True):
         """Start listen thread.
