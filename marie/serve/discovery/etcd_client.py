@@ -12,15 +12,15 @@ from etcd3 import etcdrpc
 from etcd3.client import EtcdTokenCallCredentials
 from grpc._channel import _Rendezvous
 
-__all__ = ['EtcdClient', 'Event']
+__all__ = ["EtcdClient", "Event"]
 
-Event = namedtuple('Event', 'key event value')
+Event = namedtuple("Event", "key event value")
 log = logging.getLogger(__name__)
 
-quote = functools.partial(_quote, safe='')
+quote = functools.partial(_quote, safe="")
 
 
-def make_dict_from_pairs(key_prefix, pairs, path_sep='/'):
+def make_dict_from_pairs(key_prefix, pairs, path_sep="/"):
     result = {}
     len_prefix = len(key_prefix)
     if isinstance(pairs, dict):
@@ -33,7 +33,7 @@ def make_dict_from_pairs(key_prefix, pairs, path_sep='/'):
         subkey = k[len_prefix:]
         if subkey.startswith(path_sep):
             subkey = subkey[1:]
-        path_components = subkey.split('/')
+        path_components = subkey.split("/")
         parent = result
         for p in path_components[:-1]:
             p = unquote(p)
@@ -41,14 +41,14 @@ def make_dict_from_pairs(key_prefix, pairs, path_sep='/'):
                 parent[p] = {}
             if p in parent and not isinstance(parent[p], dict):
                 root = parent[p]
-                parent[p] = {'': root}
+                parent[p] = {"": root}
             parent = parent[p]
         parent[unquote(path_components[-1])] = v
     return result
 
 
 def _slash(v: str):
-    return v.rstrip('/') + '/' if len(v) > 0 else ''
+    return v.rstrip("/") + "/" if len(v) > 0 else ""
 
 
 def reauthenticate(etcd_sync, creds, executor):
@@ -56,11 +56,11 @@ def reauthenticate(etcd_sync, creds, executor):
     # Related issue: kragniz/python-etcd3#580
     etcd_sync.auth_stub = etcdrpc.AuthStub(etcd_sync.channel)
     auth_request = etcdrpc.AuthenticateRequest(
-        name=creds['user'],
-        password=creds['password'],
+        name=creds["user"],
+        password=creds["password"],
     )
     resp = etcd_sync.auth_stub.Authenticate(auth_request, etcd_sync.timeout)
-    etcd_sync.metadata = (('token', resp.token),)
+    etcd_sync.metadata = (("token", resp.token),)
     etcd_sync.call_credentials = grpc.metadata_call_credentials(
         EtcdTokenCallCredentials(resp.token)
     )
@@ -77,11 +77,11 @@ def reconn_reauth_adaptor(meth: Callable):
             except etcd3.exceptions.ConnectionFailedError:
                 if num_reconn_tries >= 20:
                     log.warning(
-                        'etcd3 connection failed more than %d times. retrying after 1 sec...',
+                        "etcd3 connection failed more than %d times. retrying after 1 sec...",
                         num_reconn_tries,
                     )
                 else:
-                    log.debug('etcd3 connection failed. retrying after 1 sec...')
+                    log.debug("etcd3 connection failed. retrying after 1 sec...")
                 time.sleep(1.0)
                 num_reconn_tries += 1
                 continue
@@ -96,7 +96,7 @@ def reconn_reauth_adaptor(meth: Callable):
                     if num_reauth_tries > 0:
                         raise
                     reauthenticate(self.client, self._creds, None)
-                    log.debug('etcd3 reauthenticated due to auth token expiration.')
+                    log.debug("etcd3 reauthenticated due to auth token expiration.")
                     num_reauth_tries += 1
                     continue
                 else:
@@ -119,9 +119,9 @@ class EtcdClient(object):
         self,
         etcd_host,
         etcd_port,
-        namespace='marie',
+        namespace="marie",
         credentials=None,
-        encoding='utf8',
+        encoding="utf8",
         retry_times=10,
     ):
         self._host = etcd_host
@@ -133,39 +133,42 @@ class EtcdClient(object):
         self.ns = namespace
         self._creds = credentials
 
-        addr = f'{etcd_host}:{etcd_port}'
+        addr = f"{etcd_host}:{etcd_port}"
         times = 0
+        last_ex = None
         while times < self.retry_times:
             try:
                 self.client = etcd3.client(
                     host=self._host,
                     port=self._port,
-                    user=credentials.get('user') if credentials else None,
-                    password=credentials.get('password') if credentials else None,
+                    user=credentials.get("user") if credentials else None,
+                    password=credentials.get("password") if credentials else None,
                 )
                 self._cluster = [member._etcd_client for member in self.client.members]
                 break
             except grpc.RpcError as e:
+                times += 1
+                last_ex = e
                 if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
-                    log.debug('etcd3 connection failed. retrying after 1 sec...')
+                    log.debug("etcd3 connection failed. retrying after 1 sec...")
                     time.sleep(1)
                     continue
                 raise e
         if times >= self.retry_times:
             raise ValueError(
-                f"Initialize etcd client failed failed after {self.retry_times} times."
+                f"Initialize etcd client failed failed after {self.retry_times} times. Due to {last_ex}"
             )
         log.info(f'using etcd cluster from {addr} with namespace "{namespace}"')
 
     def _mangle_key(self, k: str) -> bytes:
-        if k.startswith('/'):
+        if k.startswith("/"):
             k = k[1:]
-        return f'/{self.ns}/{k}'.encode(self.encoding)
+        return f"/{self.ns}/{k}".encode(self.encoding)
 
     def _demangle_key(self, k: Union[bytes, str]) -> str:
         if isinstance(k, bytes):
             k = k.decode(self.encoding)
-        prefix = f'/{self.ns}/'
+        prefix = f"/{self.ns}/"
         if k.startswith(prefix):
             k = k[len(prefix) :]
         return k
@@ -212,16 +215,16 @@ class EtcdClient(object):
                     # server restarting or terminated
                     return
                 else:
-                    raise RuntimeError(f'Unexpected RPC Error: {response}')
+                    raise RuntimeError(f"Unexpected RPC Error: {response}")
 
             for ev in response.events:
                 log.info(f"Received etcd event: {ev}")
                 if isinstance(ev, etcd3.events.PutEvent):
-                    ev_type = 'put'
+                    ev_type = "put"
                 elif isinstance(ev, etcd3.events.DeleteEvent):
-                    ev_type = 'delete'
+                    ev_type = "delete"
                 else:
-                    raise TypeError('Not recognized etcd event type.')
+                    raise TypeError("Not recognized etcd event type.")
                 # etcd3 library uses a separate thread for its watchers.
                 event = Event(
                     self._demangle_key(ev.key),
@@ -246,13 +249,13 @@ class EtcdClient(object):
     @reconn_reauth_adaptor
     def watch(self, key: str, callback, **kwargs):
         scope_prefix = ""
-        mangled_key = self._mangle_key(f'{_slash(scope_prefix)}{key}')
+        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
         return self._watch(mangled_key, callback, **kwargs)
 
     @reconn_reauth_adaptor
     def add_watch_prefix_callback(self, key_prefix: str, callback: Callable, **kwargs):
         scope_prefix = ""
-        mangled_key = self._mangle_key(f'{_slash(scope_prefix)}{key_prefix}')
+        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
         return self._watch(mangled_key, callback, prefix=True, **kwargs)
 
     @reconn_reauth_adaptor
@@ -286,7 +289,7 @@ class EtcdClient(object):
         """
 
         scope_prefix = ""
-        mangled_key = self._mangle_key(f'{_slash(scope_prefix)}{key}')
+        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
         val = self.client.put(mangled_key, str(val).encode(self.encoding), lease=lease)
         return mangled_key, val
 
@@ -305,10 +308,10 @@ class EtcdClient(object):
 
         def _flatten(prefix: str, inner_dict: Mapping[str, str]) -> None:
             for k, v in inner_dict.items():
-                if k == '':
+                if k == "":
                     flattened_key = prefix
                 else:
-                    flattened_key = prefix + '/' + quote(k)
+                    flattened_key = prefix + "/" + quote(k)
                 if isinstance(v, dict):
                     _flatten(flattened_key, v)
                 else:
@@ -320,7 +323,7 @@ class EtcdClient(object):
             [],
             [
                 self.client.transactions.put(
-                    self._mangle_key(f'{_slash(scope_prefix)}{k}'),
+                    self._mangle_key(f"{_slash(scope_prefix)}{k}"),
                     str(v).encode(self.encoding),
                 )
                 for k, v in flattened_dict.items()
@@ -329,7 +332,7 @@ class EtcdClient(object):
         )
 
     @reconn_reauth_adaptor
-    def get_prefix(self, key_prefix: str, sort_order=None, sort_target='key') -> dict:
+    def get_prefix(self, key_prefix: str, sort_order=None, sort_target="key") -> dict:
         """
         Retrieves all key-value pairs under the given key prefix as a nested dictionary.
         All dictionary keys are automatically unquoted.
@@ -340,7 +343,7 @@ class EtcdClient(object):
         :return: A dict object representing the data.
         """
         scope_prefix = ""
-        mangled_key_prefix = self._mangle_key(f'{_slash(scope_prefix)}{key_prefix}')
+        mangled_key_prefix = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
         results = self.client.get_prefix(
             mangled_key_prefix, sort_order=sort_order, sort_target=sort_target
         )
@@ -349,7 +352,7 @@ class EtcdClient(object):
         }
 
         return make_dict_from_pairs(
-            f'{_slash(scope_prefix)}{key_prefix}', pair_sets, '/'
+            f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
         )
 
     @reconn_reauth_adaptor
@@ -360,19 +363,19 @@ class EtcdClient(object):
     @reconn_reauth_adaptor
     def delete(self, key: str):
         scope_prefix = ""
-        mangled_key = self._mangle_key(f'{_slash(scope_prefix)}{key}')
+        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
         return self.client.delete(mangled_key)
 
     @reconn_reauth_adaptor
     def delete_prefix(self, key_prefix: str):
         scope_prefix = ""
-        mangled_key_prefix = self._mangle_key(f'{_slash(scope_prefix)}{key_prefix}')
+        mangled_key_prefix = self._mangle_key(f"{_slash(scope_prefix)}{key_prefix}")
         return self.client.delete_prefix(mangled_key_prefix)
 
     @reconn_reauth_adaptor
     def replace(self, key: str, initial_val: str, new_val: str):
         scope_prefix = ""
-        mangled_key = self._mangle_key(f'{_slash(scope_prefix)}{key}')
+        mangled_key = self._mangle_key(f"{_slash(scope_prefix)}{key}")
         return self.client.replace(mangled_key, initial_val, new_val)
 
     @reconn_reauth_adaptor
@@ -380,23 +383,23 @@ class EtcdClient(object):
         return self.client.cancel_watch(watch_id)
 
 
-if __name__ == '__main__':
-    etcd_client = EtcdClient('localhost', 2379)
-    etcd_client.put('key', 'Value XYZ')
+if __name__ == "__main__":
+    etcd_client = EtcdClient("localhost", 2379)
+    etcd_client.put("key", "Value XYZ")
 
-    kv = etcd_client.get('key')
-    print(etcd_client.get('key'))
+    kv = etcd_client.get("key")
+    print(etcd_client.get("key"))
     # etcd_client.delete('key')
-    print(etcd_client.get('key'))
+    print(etcd_client.get("key"))
 
-    kv = {'key1': 'Value 1', 'key2': 'Value 2', 'key3': 'Value 3'}
+    kv = {"key1": "Value 1", "key2": "Value 2", "key3": "Value 3"}
 
-    etcd_client.put_prefix('prefix', kv)
+    etcd_client.put_prefix("prefix", kv)
 
-    print(etcd_client.get_prefix('prefix'))
+    print(etcd_client.get_prefix("prefix"))
 
     print("------ GET ALL ---------")
     for kv in etcd_client.get_all():
-        v = kv[0].decode('utf8')
-        k = kv[1].key.decode('utf8')
+        v = kv[0].decode("utf8")
+        k = kv[1].key.decode("utf8")
         print(k, v)
