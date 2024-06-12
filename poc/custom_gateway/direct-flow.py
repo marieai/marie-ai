@@ -47,7 +47,7 @@ class TestExecutor(Executor):
         # emulate the long loading time
         import time
 
-        time.sleep(5)
+        time.sleep(1)
 
     @requests(on="/")
     def func(
@@ -105,11 +105,17 @@ def main():
     # config = load_yaml(yml_config, substitute=True, context=context)
     print("Bootstrapping server gateway")
     with (
-        Flow()
-        .add(uses=TestExecutor, name="executor0", replicas=3)
-        .config_gateway(
-            uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
-        ) as f
+        Flow(
+            discovery=True,  # server gateway does not need discovery service
+            discovery_host='127.0.0.1',
+            discovery_port=2379,
+            discovery_watchdog_interval=5,
+        ).add(uses=TestExecutor, name="executor0", replicas=3)
+        # .config_gateway(
+        #     uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
+        # )
+        #
+        as f
     ):
         f.block()
 

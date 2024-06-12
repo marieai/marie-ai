@@ -3,10 +3,10 @@ import logging
 import time
 from typing import Union
 
-from marie.serve.discovery import RepeatedTimer
 from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.discovery.util import form_service_key
+from marie.utils.timer import RepeatedTimer
 
 __all__ = ['EtcdServiceRegistry']
 
