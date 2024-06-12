@@ -1870,19 +1870,24 @@ class Flow(
 
         runtime_args = self._deployment_nodes[GATEWAY_NAME].args
 
-        for gport, gprotocol in zip(port_gateway, protocol_gateway):
-            # TODO : Need to implement GRPC and WEBSOCKET
-            if gprotocol == ProtocolType.HTTP:
-                self._setup_service_discovery(
-                    name=f"marie-{GATEWAY_NAME}",
-                    host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
-                    port=gport,
-                    scheme=runtime_args.scheme if 'scheme' in runtime_args else 'http',
-                    discovery=runtime_args.discovery,
-                    discovery_host=runtime_args.discovery_host,
-                    discovery_port=runtime_args.discovery_port,
-                    discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
-                )
+        if runtime_args.discovery:
+            for gport, gprotocol in zip(port_gateway, protocol_gateway):
+                if gprotocol in (ProtocolType.HTTP, ProtocolType.GRPC):
+                    self._setup_service_discovery(
+                        protocol=gprotocol,
+                        name=f"marie-{GATEWAY_NAME}",
+                        host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
+                        port=gport,
+                        scheme=(
+                            runtime_args.scheme if 'scheme' in runtime_args else 'http'
+                        ),
+                        discovery=runtime_args.discovery,
+                        discovery_host=runtime_args.discovery_host,
+                        discovery_port=runtime_args.discovery_port,
+                        discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
+                    )
+        else:
+            self.logger.warning('Service Discovery is disabled for gateway.')
 
         self._build_level = FlowBuildLevel.RUNNING
 
@@ -2441,7 +2446,6 @@ class Flow(
             http_ext_table.add_row(':books:', 'Redoc', redoc_link)
 
             if self.gateway_args.expose_graphql_endpoint:
-
                 http_ext_table.add_row(':strawberry:', 'GraphQL UI', graphql_ui_link)
 
             if True or self.gateway_args.discovery:

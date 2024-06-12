@@ -1,11 +1,15 @@
 import threading
+import warnings
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import requests
 
+from marie._annotations import deprecated
+from marie.enums import ProtocolType
 from marie.helper import get_internal_ip
 from marie.importer import ImportExtensions
-from marie.serve.discovery.timer import RepeatedTimer
+from marie.serve.discovery.registry import EtcdServiceRegistry
+from marie.utils.timer import RepeatedTimer
 
 if TYPE_CHECKING:  # pragma: no cover
     import consul
@@ -15,6 +19,49 @@ class DiscoveryServiceMixin:
     """Instrumentation mixin for Service Discovery handling"""
 
     def _setup_service_discovery(
+        self,
+        protocol: ProtocolType,
+        name: str,
+        host: str,
+        port: int,
+        scheme: Optional[str] = 'http',
+        discovery: Optional[bool] = False,
+        discovery_host: Optional[str] = '0.0.0.0',
+        discovery_port: Optional[int] = 8500,
+        discovery_scheme: Optional[str] = 'http',
+        discovery_watchdog_interval: Optional[int] = 60,
+    ) -> None:
+        if self.logger is None:
+            raise Exception("Expected logger to be configured")
+
+        if protocol == ProtocolType.GRPC:
+            self._setup_service_discovery_etcd(
+                name=name,
+                host=host,
+                port=port,
+                scheme=scheme,
+                discovery=discovery,
+                discovery_host=discovery_host,
+                discovery_port=discovery_port,
+                discovery_scheme=discovery_scheme,
+                discovery_watchdog_interval=discovery_watchdog_interval,
+            )
+        elif protocol == ProtocolType.HTTP:  # DEPRECATED : HTTP is deprecated
+            self._setup_service_discovery_consul(
+                name=name,
+                host=host,
+                port=port,
+                scheme=scheme,
+                discovery=discovery,
+                discovery_host=discovery_host,
+                discovery_port=discovery_port,
+                discovery_scheme=discovery_scheme,
+                discovery_watchdog_interval=discovery_watchdog_interval,
+            )
+        else:
+            raise NotImplementedError(f"Protocol {protocol} is not supported")
+
+    def _setup_service_discovery_etcd(
         self,
         name: str,
         host: str,
@@ -33,6 +80,31 @@ class DiscoveryServiceMixin:
         self.discovery_host = discovery_host
         self.discovery_port = discovery_port
         self.discovery_scheme = discovery_scheme
+
+        self.logger.info("Setting up service discovery ETCD ...")
+        scheme = 'grpc'
+        ctrl_address = f"{scheme}://{host}:{port}"
+        ctrl_address = f"{host}:{port}"
+        service_name = "gateway/service_test"
+
+        etcd_registry = EtcdServiceRegistry('127.0.0.1', 2379, heartbeat_time=5)
+        lease = etcd_registry.register([service_name], ctrl_address, 6)
+
+        self.logger.info("Lease ID: %s", lease.id)
+
+    @deprecated
+    def _setup_service_discovery_consul(
+        self,
+        name: str,
+        host: str,
+        port: int,
+        scheme: Optional[str] = 'http',
+        discovery: Optional[bool] = False,
+        discovery_host: Optional[str] = '0.0.0.0',
+        discovery_port: Optional[int] = 8500,
+        discovery_scheme: Optional[str] = 'http',
+        discovery_watchdog_interval: Optional[int] = 60,
+    ) -> None:
 
         if discovery:
             with ImportExtensions(
