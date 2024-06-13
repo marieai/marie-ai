@@ -1885,6 +1885,7 @@ class Flow(
                         discovery_host=runtime_args.discovery_host,
                         discovery_port=runtime_args.discovery_port,
                         discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
+                        runtime_args=runtime_args,
                     )
         else:
             self.logger.warning('Service Discovery is disabled for gateway.')
@@ -2466,6 +2467,23 @@ class Flow(
                     expand=False,
                 )
             )
+
+        pod_ext_table = self._init_table()
+
+        for name, deployment in self:
+            for replica in deployment.pod_args['pods'][0]:
+                pod_ext_table.add_row(
+                    ':lock:',
+                    replica.name,
+                    f'[link=://{replica.host}:{replica.port[0]}]{replica.host}:{replica.port[0]}[/]',
+                )
+        all_panels.append(
+            Panel(
+                pod_ext_table,
+                title=':gem: [b]Deployment Nodes[/]',
+                expand=False,
+            )
+        )
 
         if self.monitoring:
             monitor_ext_table = self._init_table()

@@ -1,5 +1,6 @@
 import inspect
 import os
+import time
 
 from docarray import DocList
 from docarray.documents import TextDoc
@@ -10,17 +11,14 @@ from poc.custom_gateway.deployment_gateway import MariePodGateway
 
 
 class TestExecutorXYZ(Executor):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("TestExecutorXYZ init called")
 
         # emulate the long loading time
-        import time
+        # time.sleep(5)
 
-        time.sleep(5)
-
-    @requests(on="/")
+    @requests(on="/classify")
     def func(
         self,
         docs: DocList[TextDoc],
@@ -39,17 +37,13 @@ class TestExecutorXYZ(Executor):
 
 
 class TestExecutor(Executor):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
-
         # emulate the long loading time
-        import time
-
         time.sleep(1)
 
-    @requests(on="/")
+    @requests(on="/extract")
     def func(
         self,
         docs: DocList[TextDoc],
@@ -107,15 +101,14 @@ def main():
     with (
         Flow(
             discovery=True,  # server gateway does not need discovery service
-            discovery_host='127.0.0.1',
+            discovery_host="127.0.0.1",
             discovery_port=2379,
             discovery_watchdog_interval=5,
-        ).add(uses=TestExecutor, name="executor0", replicas=3)
-        # .config_gateway(
-        #     uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
-        # )
-        #
-        as f
+        )
+        .add(uses=TestExecutor, name="executor0", replicas=3)
+        .config_gateway(
+            # uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
+        ) as f
     ):
         f.block()
 

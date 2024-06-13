@@ -1,7 +1,7 @@
 import abc
 import json
 
-__all__ = ['Address', 'PlainAddress', 'JsonAddress']
+__all__ = ["Address", "PlainAddress", "JsonAddress"]
 
 
 def b2str(i_b):
@@ -62,29 +62,32 @@ class JsonAddress(Address):
     def add_value(self):
         return self._serializer(
             {
-                'Op': self.add_op,
-                'Addr': self._addr,
-                'Metadata': self._serializer(self._metadata),
+                "Op": self.add_op,
+                "Addr": self._addr,
+                "Metadata": self._serializer(self._metadata),
             }
         )
 
     def delete_value(self):
         return self._serializer(
             {
-                'Op': self.delete_op,
-                'Addr': self._addr,
-                'Metadata': self._serializer(self._metadata),
+                "Op": self.delete_op,
+                "Addr": self._addr,
+                "Metadata": self._serializer(self._metadata),
             }
         )
 
     @classmethod
     def from_value(cls, val, deserializer=json.loads):
         addr_val = deserializer(b2str(val))
-        addr_val['Metadata'] = deserializer(addr_val['Metadata'])
-        addr_op = addr_val['Op']
-        if addr_op == cls.add_op:
-            return True, addr_val['Addr']
-        elif addr_op == cls.delete_op:
-            return False, addr_val['Addr']
+        addr_val["Metadata"] = deserializer(addr_val["Metadata"])
+        addr_op = addr_val["Op"]
+        if False:
+            if addr_op == cls.add_op:
+                return True, addr_val["Addr"]
+            elif addr_op == cls.delete_op:
+                return False, addr_val["Addr"]
 
-        raise ValueError('invalid address value.')
+            raise ValueError("invalid address value.")
+
+        return JsonAddress(addr_val["Addr"], addr_val["Metadata"])

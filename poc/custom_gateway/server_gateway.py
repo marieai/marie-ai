@@ -1,8 +1,8 @@
 import asyncio
+import json
 import time
-import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Union
+from typing import Optional
 from urllib.parse import urlparse
 
 import grpc
@@ -14,9 +14,11 @@ import marie.helper
 from marie import Gateway as BaseGateway
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.resolver import EtcdServiceResolver
-from marie.serve.networking import create_async_channel_stub
+from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 
@@ -34,6 +36,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
+        self.deployment_nodes = {}
         self.setup_service_discovery()
 
         def _extend_rest_function(app):
@@ -58,7 +61,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     def setup_service_discovery(
         self,
-        etcd_host: Optional[str] = '0.0.0.0',
+        etcd_host: Optional[str] = "0.0.0.0",
         etcd_port: Optional[int] = 2379,
         watchdog_interval: Optional[int] = 2,
     ):
@@ -98,11 +101,25 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         elif ev_type == "delete":
             self.logger.info(f"Service {service} is unavailable")
         else:
-            raise TypeError(f'Not recognized event type : {ev_type}')
+            raise TypeError(f"Not recognized event type : {ev_type}")
 
     def gateway_server_online(self, service, event_value):
+        """
+        :param service: The name of the service that is available.
+        :param event_value: The value of the event that triggered the method.
+        :return: None
+
+        This method is used to handle the event when a gateway server comes online. It checks if the gateway server is ready and then discovers all executors from the gateway. It updates the gateway streamer with the discovered nodes.
+
+        """
         self.logger.info(f"Service {service} is available @ {event_value}")
-        ctrl_address = f"{event_value}"
+
+        # convert event_value to JsonAddress
+        json_address = JsonAddress.from_value(event_value)
+        ctrl_address = json_address._addr
+        metadata = json.loads(json_address._metadata)
+
+        self.logger.info(f"JsonAddress : {ctrl_address}, {metadata}")
 
         max_tries = 10
         tries = 0
@@ -125,43 +142,96 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger.info(f"Gateway is ready at {ctrl_address}")
         # discover all executors from the gateway
         # stub =  jina_pb2_grpc.JinaDiscoverEndpointsRPCStub(GRPCServer.get_channel(ctrl_address))
-        deployment_name = "gateway-xyz"
-        TLS_PROTOCOL_SCHEMES = ['grpcs']
+        TLS_PROTOCOL_SCHEMES = ["grpcs"]
 
         parsed_address = urlparse(ctrl_address)
         address = parsed_address.netloc if parsed_address.netloc else ctrl_address
         use_tls = parsed_address.scheme in TLS_PROTOCOL_SCHEMES
         channel_options = None
-        timeout = 2
+        timeout = 1
 
-        print(f"address: {address}")
-        print(f"use_tls: {use_tls}")
+        for executor, deployment_addresses in metadata.items():
+            print(f"deployment_addresses: {deployment_addresses}")
+            for deployment_address in deployment_addresses:
+                print(f"deployment_address: {deployment_address}")
+                endpoints = []
+                tries = 0
+                while tries < max_tries:
+                    try:
+                        with get_grpc_channel(
+                            address,
+                            tls=use_tls,
+                            root_certificates=None,
+                            options=channel_options,
+                        ) as channel:
+                            metadata = ()
+                            stub = jina_pb2_grpc.JinaDiscoverEndpointsRPCStub(channel)
+                            response, call = stub.endpoint_discovery.with_call(
+                                jina_pb2.google_dot_protobuf_dot_empty__pb2.Empty(),
+                                timeout=timeout,
+                                metadata=metadata,
+                            )
+                            self.logger.info(f"response: {response.endpoints}")
+                            endpoints = response.endpoints
+                            break
+                    except grpc.RpcError as e:
+                        time.sleep(1)
+                        tries += 1
+                        if (
+                            e.code() != grpc.StatusCode.UNAVAILABLE
+                            or tries >= max_tries
+                        ):
+                            raise
 
-        for i in range(2):
-            try:
-                with get_grpc_channel(
-                    address,
-                    tls=use_tls,
-                    root_certificates=None,
-                    options=channel_options,
-                ) as channel:
-                    metadata = ()
-                    stub = jina_pb2_grpc.JinaDiscoverEndpointsRPCStub(channel)
-                    response, call = stub.endpoint_discovery.with_call(
-                        jina_pb2.google_dot_protobuf_dot_empty__pb2.Empty(),
-                        timeout=timeout,
-                        metadata=metadata,
+                for endpoint in endpoints:
+                    if executor not in self.deployment_nodes:
+                        self.deployment_nodes[executor] = []
+                    deployment_details = {
+                        "address": deployment_address,
+                        "endpoint": endpoint,
+                        "executor": executor,
+                    }
+                    self.deployment_nodes[executor].append(deployment_details)
+                    self.logger.info(
+                        f"Discovered endpoint: {executor} : {deployment_details}"
                     )
-                    self.logger.info(f"response: {response}")
-                    break
-            except grpc.RpcError as e:
-                if e.code() != grpc.StatusCode.UNAVAILABLE or i == 1:
-                    raise
 
-        # validate the service address
-        # if False:
-        #     while True:
-        #         self.logger.info("Checking service address...")
-        #         await asyncio.sleep(watchdog_interval)
-        #
-        # asyncio.create_task(_start_watcher())
+        for executor, nodes in self.deployment_nodes.items():
+            self.logger.info(f"Discovered nodes for executor : {executor}")
+            for node in nodes:
+                self.logger.info(f"\tNode : {node}")
+
+        self.update_gateway_streamer()
+
+    def update_gateway_streamer(self):
+        """Update the gateway streamer with the discovered executors."""
+        self.logger.info("Updating gateway streamer")
+        # FIXME: testing with only one executor
+        deployments_addresses = {}
+        graph_description = {
+            "start-gateway": ["executor0"],
+            "executor0": ["end-gateway"],
+        }
+        deployments_metadata = {"deployment0": {"key": "value"}}
+        for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
+            connections = []
+            for node in nodes:
+                address = node["address"]
+                parsed_address = urlparse(address)
+                port = parsed_address.port
+                host = parsed_address.hostname
+                connections.append(f"{host}:{port}")
+            deployments_addresses[executor] = list(set(connections))
+
+        print(f"graph_description: {graph_description}")
+        print(f"deployments_addresses: {deployments_addresses}")
+
+        streamer = GatewayStreamer(
+            graph_representation=graph_description,
+            executor_addresses=deployments_addresses,
+            deployments_metadata=deployments_metadata,
+            load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
+            # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+        )
+
+        print(f"streamer: {streamer}")

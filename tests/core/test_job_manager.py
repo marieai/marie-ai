@@ -7,6 +7,8 @@ import threading
 import time
 
 import pytest
+from docarray import DocList
+from docarray.documents import TextDoc
 
 from marie import Deployment, Document, DocumentArray, Executor, requests
 from marie.enums import PollingType
@@ -59,10 +61,16 @@ async def check_job_running(job_manager, job_id):
 async def job_manager(tmp_path):
     storage = InMemoryKV()
     # TODO: Externalize the storage configuration
-    storage_config = {"hostname": "127.0.0.1", "port": 5432, "username": "postgres", "password": "123456",
-                      "database": "postgres",
-                      "default_table": "kv_store_a", "max_pool_size": 5,
-                      "max_connections": 5}
+    storage_config = {
+        "hostname": "127.0.0.1",
+        "port": 5432,
+        "username": "postgres",
+        "password": "123456",
+        "database": "postgres",
+        "default_table": "kv_store_a",
+        "max_pool_size": 5,
+        "max_connections": 5,
+    }
 
     storage = PostgreSQLKV(config=storage_config, reset=True)
     yield JobManager(storage=storage, job_distributor=NoopJobDistributor())
@@ -86,8 +94,12 @@ async def test_list_jobs(job_manager: JobManager):
         metadata=metadata,
     )
 
-    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1))
-    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "2", JobStatus.SUCCEEDED), 1))
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1)
+    )
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_manager, "2", JobStatus.SUCCEEDED), 1)
+    )
 
     await async_wait_for_condition_async_predicate(
         check_job_succeeded, job_manager=job_manager, job_id="1"
@@ -120,7 +132,11 @@ async def test_pass_job_id(job_manager):
     )
     assert returned_id == submission_id
 
-    _ = asyncio.create_task(async_delay(update_job_status(job_manager, submission_id, JobStatus.SUCCEEDED), 1))
+    _ = asyncio.create_task(
+        async_delay(
+            update_job_status(job_manager, submission_id, JobStatus.SUCCEEDED), 1
+        )
+    )
 
     await async_wait_for_condition_async_predicate(
         check_job_succeeded, job_manager=job_manager, job_id=submission_id
@@ -143,7 +159,9 @@ async def test_simultaneous_submit_job(job_manager):
     )
 
     for job_id in job_ids:
-        _ = asyncio.create_task(async_delay(update_job_status(job_manager, job_id, JobStatus.SUCCEEDED), 1))
+        _ = asyncio.create_task(
+            async_delay(update_job_status(job_manager, job_id, JobStatus.SUCCEEDED), 1)
+        )
 
         await async_wait_for_condition_async_predicate(
             check_job_succeeded, job_manager=job_manager, job_id=job_id
@@ -164,7 +182,9 @@ async def test_simultaneous_with_same_id(job_manager):
     assert "Job with submission_id 1 already exists" in str(excinfo.value)
 
     # Check that the (first) job can still succeed.
-    _ = asyncio.create_task(async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1))
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_manager, "1", JobStatus.SUCCEEDED), 1)
+    )
 
     await async_wait_for_condition_async_predicate(
         check_job_succeeded, job_manager=job_manager, job_id="1"
@@ -174,12 +194,12 @@ async def test_simultaneous_with_same_id(job_manager):
 class StreamerTestExecutor(Executor):
     @requests
     def foo(self, docs, parameters, **kwargs):
-        text_to_add = parameters.get('text_to_add', 'default ')
+        text_to_add = parameters.get("text_to_add", "default ")
         for doc in docs:
             doc.text += text_to_add
 
 
-def _create_worker_runtime(port, uses, name=''):
+def _create_worker_runtime(port, uses, name=""):
     args = _generate_pod_args()
     args.port = [port]
     args.name = name
@@ -190,40 +210,40 @@ def _create_worker_runtime(port, uses, name=''):
 
 def _setup(pod0_port, pod1_port):
     pod0_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(pod0_port, 'StreamerTestExecutor')
+        target=_create_worker_runtime, args=(pod0_port, "StreamerTestExecutor")
     )
     pod0_process.start()
 
     pod1_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(pod1_port, 'StreamerTestExecutor')
+        target=_create_worker_runtime, args=(pod1_port, "StreamerTestExecutor")
     )
     pod1_process.start()
 
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'0.0.0.0:{pod0_port}',
+        ctrl_address=f"0.0.0.0:{pod0_port}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'0.0.0.0:{pod1_port}',
+        ctrl_address=f"0.0.0.0:{pod1_port}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
     return pod0_process, pod1_process
 
 
 @pytest.mark.parametrize(
-    'parameters, target_executor, expected_text',
+    "parameters, target_executor, expected_text",
     [  # (None, None, 'default default '),
-        ({'pod0__text_to_add': 'param_pod0 '}, None, 'param_pod0 default '),
-        (None, 'pod1', 'default '),
-        ({'pod0__text_to_add': 'param_pod0 '}, 'pod0', 'param_pod0 '),
+        ({"pod0__text_to_add": "param_pod0 "}, None, "param_pod0 default "),
+        (None, "pod1", "default "),
+        ({"pod0__text_to_add": "param_pod0 "}, "pod0", "param_pod0 "),
     ],
 )
-@pytest.mark.parametrize('results_in_order', [False, True])
+@pytest.mark.parametrize("results_in_order", [False, True])
 @pytest.mark.asyncio
 async def test_gateway_job_manager(
-        port_generator, parameters, target_executor, expected_text, results_in_order
+    port_generator, parameters, target_executor, expected_text, results_in_order
 ):
     pod0_port = port_generator()
     pod1_port = port_generator()
@@ -240,15 +260,15 @@ async def test_gateway_job_manager(
     )
 
     try:
-        input_da = DocumentArray.empty(60)
-        resp = DocumentArray.empty(0)
+        input_da = DocList([TextDoc(text="default ") for _ in range(60)])
+        resp = DocList([])
         num_resp = 0
         async for r in gateway_streamer.stream_docs(
-                docs=input_da,
-                request_size=10,
-                parameters=parameters,
-                target_executor=target_executor,
-                results_in_order=results_in_order,
+            docs=input_da,
+            request_size=10,
+            parameters=parameters,
+            target_executor=target_executor,
+            results_in_order=results_in_order,
         ):
             num_resp += 1
             resp.extend(r)
@@ -274,18 +294,18 @@ async def test_gateway_job_manager(
 
 
 def _create_regular_deployment(
-        port,
-        name='',
-        executor=None,
-        noblock_on_start=True,
-        polling=PollingType.ANY,
-        shards=None,
-        replicas=None,
+    port,
+    name="",
+    executor=None,
+    noblock_on_start=True,
+    polling=PollingType.ANY,
+    shards=None,
+    replicas=None,
 ):
     # return Deployment(uses=executor, include_gateway=False, noblock_on_start=noblock_on_start, replicas=replicas,
     #                   shards=shards)
 
-    args = set_deployment_parser().parse_args(['--port', str(port)])
+    args = set_deployment_parser().parse_args(["--port", str(port)])
     args.name = name
     if shards:
         args.shards = shards
@@ -304,7 +324,7 @@ class FastSlowPIDExecutor(Executor):
         assert len(docs) == 1
         doc = docs[0]
         r = 0
-        if doc.text == 'slow':
+        if doc.text == "slow":
             # random sleep between 0.1 and 0.5
             # time.sleep(.5)
             r = random.random() / 2 + 0.1
@@ -312,8 +332,8 @@ class FastSlowPIDExecutor(Executor):
             time.sleep(r)
 
         print(f"{os.getpid()} : {doc.id}  >> {doc.text} : {r}")
-        doc.text += f'return encode {os.getpid()}'
-        doc.tags['pid'] = os.getpid()
+        doc.text += f"return encode {os.getpid()}"
+        doc.tags["pid"] = os.getpid()
 
 
 class NoopJobDistributor(JobDistributor):
@@ -321,32 +341,45 @@ class NoopJobDistributor(JobDistributor):
         super().__init__(*args, **kwargs)
 
     async def submit_job(self, job_info: JobInfo) -> DataRequest:
-        print(f'NoopJobDistributor: {job_info}')
+        print(f"NoopJobDistributor: {job_info}")
         if job_info.status != JobStatus.PENDING:
-            raise Exception('Job status is not PENDING')
+            raise Exception("Job status is not PENDING")
 
         r = DataRequest()
         r.status.code = jina_pb2.StatusProto.ERROR
 
         return r
 
+
 @pytest.mark.asyncio
 async def test_deployment_gateway_streamer(port_generator):
     deployment_port = port_generator()
-    graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
+    graph_description = {
+        "start-gateway": ["deployment0"],
+        "deployment0": ["end-gateway"],
+    }
 
     replica_count = 4
-    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
-                                            noblock_on_start=False, replicas=replica_count, shards=None)
+    deployment = _create_regular_deployment(
+        deployment_port,
+        "deployment0",
+        executor=FastSlowPIDExecutor.__name__,
+        noblock_on_start=False,
+        replicas=replica_count,
+        shards=None,
+    )
     deployment.start()
 
-    connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
+    connections = [
+        f"{host}:{port}" for host, port in zip(deployment.hosts, deployment.ports)
+    ]
     deployments_addresses = {"deployment0": connections}
     deployments_metadata = {"deployment0": {"key": "value"}}
 
     # manually start the deployment
     gateway_streamer = GatewayStreamer(
-        graph_representation=graph_description, executor_addresses=deployments_addresses,
+        graph_representation=graph_description,
+        executor_addresses=deployments_addresses,
         deployments_metadata=deployments_metadata,
         load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
         # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
@@ -363,7 +396,7 @@ async def test_deployment_gateway_streamer(port_generator):
         print(f"scheduling request : {i}")
         request = DataRequest()
         # request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
-        request.data.docs = DocumentArray([Document(text='slow')])
+        request.data.docs = DocumentArray([Document(text="slow")])
         response = gateway_streamer.process_single_data(request=request)
         tasks.append(response)
         # time.sleep(.2)
@@ -374,7 +407,7 @@ async def test_deployment_gateway_streamer(port_generator):
     for response in futures:
         assert len(response.docs) == 1
         for doc in response.docs:
-            pid = int(doc.tags['pid'])
+            pid = int(doc.tags["pid"])
             if pid not in pids:
                 pids[pid] = 0
             pids[pid] += 1
@@ -391,12 +424,14 @@ async def test_deployment_gateway_streamer(port_generator):
             print("--" * 10)
             print(f"sending request : {i}")
             request = DataRequest()
-            request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
+            request.data.docs = DocumentArray(
+                [Document(text="slow" if i % 2 == 0 else "fast")]
+            )
             response = await gateway_streamer.process_single_data(request=request)
 
             assert len(response.docs) == 1
             for doc in response.docs:
-                pid = int(doc.tags['pid'])
+                pid = int(doc.tags["pid"])
                 print(pid)
                 if pid not in pids:
                     pids[pid] = 0
@@ -412,20 +447,32 @@ async def test_deployment_gateway_streamer(port_generator):
 @pytest.mark.asyncio
 async def test_deployment_with_job_manager(port_generator, job_manager):
     deployment_port = port_generator()
-    graph_description = {"start-gateway": ["deployment0"], "deployment0": ["end-gateway"]}
+    graph_description = {
+        "start-gateway": ["deployment0"],
+        "deployment0": ["end-gateway"],
+    }
 
     replica_count = 4
-    deployment = _create_regular_deployment(deployment_port, 'deployment0', executor=FastSlowPIDExecutor.__name__,
-                                            noblock_on_start=False, replicas=replica_count, shards=None)
+    deployment = _create_regular_deployment(
+        deployment_port,
+        "deployment0",
+        executor=FastSlowPIDExecutor.__name__,
+        noblock_on_start=False,
+        replicas=replica_count,
+        shards=None,
+    )
     deployment.start()
 
-    connections = [f'{host}:{port}' for host, port in zip(deployment.hosts, deployment.ports)]
+    connections = [
+        f"{host}:{port}" for host, port in zip(deployment.hosts, deployment.ports)
+    ]
     deployments_addresses = {"deployment0": connections}
     deployments_metadata = {"deployment0": {"key": "value"}}
 
     # manually start the deployment
     gateway_streamer = GatewayStreamer(
-        graph_representation=graph_description, executor_addresses=deployments_addresses,
+        graph_representation=graph_description,
+        executor_addresses=deployments_addresses,
         deployments_metadata=deployments_metadata,
         load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
         # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
@@ -433,7 +480,6 @@ async def test_deployment_with_job_manager(port_generator, job_manager):
 
     stop_event = threading.Event()
     await gateway_streamer.warmup(stop_event=stop_event)
-
 
     pids = {}
     if False:
@@ -446,7 +492,7 @@ async def test_deployment_with_job_manager(port_generator, job_manager):
             print(f"scheduling request : {i}")
             request = DataRequest()
             # request.data.docs = DocumentArray([Document(text='slow' if i % 2 == 0 else 'fast')])
-            request.data.docs = DocumentArray([Document(text='slow')])
+            request.data.docs = DocumentArray([Document(text="slow")])
             response = gateway_streamer.process_single_data(request=request)
             tasks.append(response)
             # time.sleep(.2)
@@ -457,7 +503,7 @@ async def test_deployment_with_job_manager(port_generator, job_manager):
         for response in futures:
             assert len(response.docs) == 1
             for doc in response.docs:
-                pid = int(doc.tags['pid'])
+                pid = int(doc.tags["pid"])
                 if pid not in pids:
                     pids[pid] = 0
                 pids[pid] += 1
@@ -471,7 +517,6 @@ async def test_deployment_with_job_manager(port_generator, job_manager):
 
     deployment.close()
     await gateway_streamer.close()
-
 
 
 if __name__ == "__main__":
