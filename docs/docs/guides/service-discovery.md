@@ -17,6 +17,7 @@ Verify the installation by running the following command:
 ```bash  
   docker exec -it etcd etcdctl version
 ```
+
 ```bash
 docker exec -it etcd etcdctl put 'hello' 'value-1'
 docker exec -it etcd etcdctl put 'world' 'value-2'
@@ -24,6 +25,14 @@ docker exec -it etcd etcdctl put 'world' 'value-2'
 docker exec -it etcd etcdctl get "" --prefix=true
 docker exec -it etcd etcdctl get "" --from-key
 ```
+
+
+## Purge the etcd data
+
+```bash
+docker exec -it etcd etcdctl del "" --from-key=true
+```
+  
 
 ## Install the `etcd3` package
 

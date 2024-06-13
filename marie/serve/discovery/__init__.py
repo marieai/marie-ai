@@ -1,6 +1,5 @@
 import threading
-import warnings
-from typing import TYPE_CHECKING, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import requests
 
@@ -8,6 +7,7 @@ from marie._annotations import deprecated
 from marie.enums import ProtocolType
 from marie.helper import get_internal_ip
 from marie.importer import ImportExtensions
+from marie.serve.discovery.address import JsonAddress
 from marie.serve.discovery.registry import EtcdServiceRegistry
 from marie.utils.timer import RepeatedTimer
 
@@ -24,12 +24,13 @@ class DiscoveryServiceMixin:
         name: str,
         host: str,
         port: int,
-        scheme: Optional[str] = 'http',
+        scheme: Optional[str] = "http",
         discovery: Optional[bool] = False,
-        discovery_host: Optional[str] = '0.0.0.0',
+        discovery_host: Optional[str] = "0.0.0.0",
         discovery_port: Optional[int] = 8500,
-        discovery_scheme: Optional[str] = 'http',
+        discovery_scheme: Optional[str] = "http",
         discovery_watchdog_interval: Optional[int] = 60,
+        runtime_args: Optional[Dict] = None,
     ) -> None:
         if self.logger is None:
             raise Exception("Expected logger to be configured")
@@ -45,6 +46,7 @@ class DiscoveryServiceMixin:
                 discovery_port=discovery_port,
                 discovery_scheme=discovery_scheme,
                 discovery_watchdog_interval=discovery_watchdog_interval,
+                runtime_args=runtime_args,
             )
         elif protocol == ProtocolType.HTTP:  # DEPRECATED : HTTP is deprecated
             self._setup_service_discovery_consul(
@@ -66,31 +68,46 @@ class DiscoveryServiceMixin:
         name: str,
         host: str,
         port: int,
-        scheme: Optional[str] = 'http',
+        scheme: Optional[str] = "http",
         discovery: Optional[bool] = False,
-        discovery_host: Optional[str] = '0.0.0.0',
+        discovery_host: Optional[str] = "0.0.0.0",
         discovery_port: Optional[int] = 8500,
-        discovery_scheme: Optional[str] = 'http',
+        discovery_scheme: Optional[str] = "http",
         discovery_watchdog_interval: Optional[int] = 60,
+        runtime_args: Optional[Dict] = None,
     ) -> None:
         if self.logger is None:
             raise Exception("Expected logger to be configured")
+        if runtime_args is None:
+            raise Exception("Expected runtime_args to be configured")
 
-        self.sd_state = 'started'
+        self.logger.info("Setting up service discovery ETCD ...")
+        self.sd_state = "started"
         self.discovery_host = discovery_host
         self.discovery_port = discovery_port
         self.discovery_scheme = discovery_scheme
-
-        self.logger.info("Setting up service discovery ETCD ...")
-        scheme = 'grpc'
+        deployments_addresses = runtime_args.deployments_addresses
+        scheme = "grpc"
         ctrl_address = f"{scheme}://{host}:{port}"
         ctrl_address = f"{host}:{port}"
         service_name = "gateway/service_test"
 
-        etcd_registry = EtcdServiceRegistry('127.0.0.1', 2379, heartbeat_time=5)
-        lease = etcd_registry.register([service_name], ctrl_address, 6)
+        self.logger.info(f"Deployments addresses: {deployments_addresses}")
 
-        self.logger.info("Lease ID: %s", lease.id)
+        etcd_registry = EtcdServiceRegistry(
+            "127.0.0.1",
+            2379,
+            heartbeat_time=5,
+        )
+        lease = etcd_registry.register(
+            [service_name],
+            ctrl_address,
+            6,
+            addr_cls=JsonAddress,
+            metadata=deployments_addresses,
+        )
+
+        self.logger.info(f"Lease ID: {lease.id}")
 
     @deprecated
     def _setup_service_discovery_consul(
@@ -98,23 +115,27 @@ class DiscoveryServiceMixin:
         name: str,
         host: str,
         port: int,
-        scheme: Optional[str] = 'http',
+        scheme: Optional[str] = "http",
         discovery: Optional[bool] = False,
-        discovery_host: Optional[str] = '0.0.0.0',
+        discovery_host: Optional[str] = "0.0.0.0",
         discovery_port: Optional[int] = 8500,
-        discovery_scheme: Optional[str] = 'http',
+        discovery_scheme: Optional[str] = "http",
         discovery_watchdog_interval: Optional[int] = 60,
     ) -> None:
+
+        # testing
+        if True:
+            return
 
         if discovery:
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `python-consul` to use the service discovery functionality of marie',
+                help_text="You need to install the `python-consul` to use the service discovery functionality of marie",
             ):
                 import consul
 
                 # Ban advertising 0.0.0.0 or setting it as a service address #2961
-                if host == '0.0.0.0':
+                if host == "0.0.0.0":
                     host = get_internal_ip()
 
                 def _watchdog_target():
@@ -132,7 +153,7 @@ class DiscoveryServiceMixin:
                 t = threading.Thread(target=_watchdog_target, daemon=True)
                 t.start()
 
-    def _is_discovery_online(self, client: Union['consul.Consul', None]) -> bool:
+    def _is_discovery_online(self, client: Union["consul.Consul", None]) -> bool:
         """Check if service discovery is online"""
         if client is None:
             return False
@@ -149,9 +170,9 @@ class DiscoveryServiceMixin:
         self,
     ) -> None:
         """Teardown service discovery, by unregistering existing service from the catalog"""
-        if self.sd_state != 'ready':
+        if self.sd_state != "ready":
             return
-        self.sd_state = 'stopping'
+        self.sd_state = "stopping"
         try:
             self.discovery_client.agent.service.deregister(self.service_id)
         except Exception:
@@ -172,7 +193,7 @@ class DiscoveryServiceMixin:
         # Create new service id, otherwise we will re-register same id
         self.service_id = f"{name}@{service_host}:{service_port}"
         self.service_name = "traefik-system-ingress"
-        self.sd_state = 'ready'
+        self.sd_state = "ready"
         self.discovery_client, online = self._create_discovery_client(True)
 
         def __register(_service_host, _service_port, _service_scheme):
@@ -207,7 +228,7 @@ class DiscoveryServiceMixin:
         self,
         discovery_host: str,
         discovery_port: int = 8500,
-        discovery_scheme: Optional[str] = 'http',
+        discovery_scheme: Optional[str] = "http",
     ) -> bool:
         """Verify consul connection
         Exceptions throw such as ConnectionError will be captured
@@ -237,7 +258,7 @@ class DiscoveryServiceMixin:
     def _create_discovery_client(
         self,
         verify: bool = True,
-    ) -> Tuple[Union['consul.Consul', None], bool]:
+    ) -> Tuple[Union["consul.Consul", None], bool]:
         """Create new consul client"""
         import consul
 
@@ -262,6 +283,8 @@ class DiscoveryServiceMixin:
     def _get_service_node(self, service_name, service_id):
         try:
             index, nodes = self.discovery_client.catalog.service(service_name)
+            if nodes is None:
+                return None
             for node in nodes:
                 if node["ServiceID"] == service_id:
                     return node
