@@ -8,10 +8,18 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
+from grpc import (
+    StreamStreamClientInterceptor,
+    StreamUnaryClientInterceptor,
+    UnaryStreamClientInterceptor,
+    UnaryUnaryClientInterceptor,
+)
+from grpc.aio import ClientInterceptor
 
 import marie
 import marie.helper
 from marie import Gateway as BaseGateway
+from marie.helper import get_or_reuse_loop
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
@@ -21,6 +29,10 @@ from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+
+
+def create_trace_interceptor() -> ClientInterceptor:
+    return CustomClientInterceptor()
 
 
 class MarieServerGateway(BaseGateway, CompositeServer):
@@ -36,6 +48,11 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
+
+        print('MarieServerGateway.__init__')
+        self._loop = get_or_reuse_loop()
+        print(self._loop)
+
         self.deployment_nodes = {}
         self.setup_service_discovery()
 
@@ -43,11 +60,11 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             @app.get("/endpoint")
             async def get(text: str):
                 print(f"Received request at {datetime.now()}")
-
                 result = None
                 async for docs in self.streamer.stream_docs(
                     docs=DocList[TextDoc]([TextDoc(text=text)]),
-                    exec_endpoint="/",
+                    # exec_endpoint="/extract",  # _jina_dry_run_
+                    exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
                     # exec_endpoint="/endpoint",
                     # target_executor="executor0",
                     return_results=False,
@@ -206,32 +223,64 @@ class MarieServerGateway(BaseGateway, CompositeServer):
     def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
-        # FIXME: testing with only one executor
-        deployments_addresses = {}
-        graph_description = {
-            "start-gateway": ["executor0"],
-            "executor0": ["end-gateway"],
-        }
-        deployments_metadata = {"deployment0": {"key": "value"}}
-        for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
-            connections = []
-            for node in nodes:
-                address = node["address"]
-                parsed_address = urlparse(address)
-                port = parsed_address.port
-                host = parsed_address.hostname
-                connections.append(f"{host}:{port}")
-            deployments_addresses[executor] = list(set(connections))
 
-        print(f"graph_description: {graph_description}")
-        print(f"deployments_addresses: {deployments_addresses}")
+        async def _streamer_setup():
+            # FIXME: testing with only one executor
+            deployments_addresses = {}
+            graph_description = {
+                "start-gateway": ["executor0"],
+                "executor0": ["end-gateway"],
+            }
+            deployments_metadata = {"deployment0": {"key": "value"}}
+            for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
+                connections = []
+                for node in nodes:
+                    address = node["address"]
+                    parsed_address = urlparse(address)
+                    port = parsed_address.port
+                    host = parsed_address.hostname
+                    connections.append(f"{host}:{port}")
+                deployments_addresses[executor] = list(set(connections))
 
-        streamer = GatewayStreamer(
-            graph_representation=graph_description,
-            executor_addresses=deployments_addresses,
-            deployments_metadata=deployments_metadata,
-            load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
-            # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
-        )
+            print(f"graph_description: {graph_description}")
+            print(f"deployments_addresses: {deployments_addresses}")
 
-        print(f"streamer: {streamer}")
+            streamer = GatewayStreamer(
+                graph_representation=graph_description,
+                executor_addresses=deployments_addresses,
+                deployments_metadata=deployments_metadata,
+                load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
+                aio_tracing_client_interceptors=[create_trace_interceptor()],
+                # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
+            )
+            self.streamer = streamer
+
+        print(f"loop: {self._loop}")
+        self._loop.create_task(_streamer_setup())
+
+
+class CustomClientInterceptor(
+    grpc.aio.UnaryUnaryClientInterceptor,
+    grpc.aio.UnaryStreamClientInterceptor,
+    grpc.aio.StreamUnaryClientInterceptor,
+    grpc.aio.StreamStreamClientInterceptor,
+):
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        print(f"intercept_unary_unary: {client_call_details}, {request}")
+        return await continuation(client_call_details, request)
+
+    async def intercept_unary_stream(self, continuation, client_call_details, request):
+        print(f"intercept_unary_stream: {client_call_details}, {request}")
+        return await continuation(client_call_details, request)
+
+    async def intercept_stream_unary(
+        self, continuation, client_call_details, request_iterator
+    ):
+        print(f"intercept_stream_unary: {client_call_details}, {request_iterator}")
+        return await continuation(client_call_details, request_iterator)
+
+    async def intercept_stream_stream(
+        self, continuation, client_call_details, request_iterator
+    ):
+        print(f"intercept_stream_stream: {client_call_details}, {request_iterator}")
+        return await continuation(client_call_details, request_iterator)
