@@ -65,7 +65,7 @@ class LoadBalancer(metaclass=abc.ABCMeta):
     ) -> "LoadBalancer":
         """
         Get the load balancer based on the type.
-        :param logger:
+        :param logger: Logger to be used.
         :param load_balancer_type: Type of load balancer.
         :param deployment_name: Name of the deployment.
         :return:
