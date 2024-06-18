@@ -26,6 +26,8 @@ from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie_server.job.common import JobInfo, JobStatus
+from marie_server.job.gateway_job_distributor import GatewayJobDistributor
 
 
 def create_trace_interceptor() -> ClientInterceptor:
@@ -55,22 +57,38 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
+        self.distributor = GatewayJobDistributor(
+            gateway_streamer=self.streamer, logger=self.logger
+        )
 
         def _extend_rest_function(app):
             @app.get("/endpoint")
             async def get(text: str):
                 self.logger.info(f"Received request at {datetime.now()}")
-                result = None
-                async for docs in self.streamer.stream_docs(
-                    docs=DocList[TextDoc]([TextDoc(text=text)]),
-                    # exec_endpoint="/extract",  # _jina_dry_run_
-                    exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
-                    # exec_endpoint="/endpoint",
-                    # target_executor="executor0",
-                    return_results=False,
-                ):
-                    result = docs[0].text
-                return {"result": result}
+                docs = DocList[TextDoc]([TextDoc(text=text)])
+                doc = TextDoc(text=text)
+
+                if False:
+                    result = await self.distributor.submit_job(
+                        JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
+                        doc=doc,
+                    )
+
+                    return {"result": result}
+
+                if True:
+                    result = None
+                    async for docs in self.streamer.stream_docs(
+                        docs=DocList[TextDoc]([TextDoc(text=text)]),
+                        # doc=TextDoc(text=text),
+                        # exec_endpoint="/extract",  # _jina_dry_run_
+                        exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
+                        # exec_endpoint="/endpoint",
+                        # target_executor="executor0",
+                        return_results=True,
+                    ):
+                        result = docs[0].text
+                    return {"result": result}
 
             @app.get("/check")
             async def get_health(text: str):
@@ -87,13 +105,17 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         """
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
+        self.setup_service_discovery()
 
     async def run_server(self):
         """Run servers inside CompositeServer forever"""
-        await asyncio.create_task(super().run_server())
+        # self._loop.create_task(self.process_events())
+        run_server_tasks = []
+        for server in self.servers:
+            run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        self.setup_service_discovery()
-        self._loop.create_task(self.process_events())
+        run_server_tasks.append(asyncio.create_task(self.process_events()))
+        await asyncio.gather(*run_server_tasks)
 
     def setup_service_discovery(
         self,
@@ -125,7 +147,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             self.logger.info(f"checking : {resolver.resolve(service_name)}")
             resolver.watch_service(service_name, self.handle_discovery_event)
 
-            resolver.resolve(service_name)
             # validate the service address
             if False:
                 while True:
@@ -317,6 +338,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 aio_tracing_client_interceptors=[create_trace_interceptor()],
             )
             self.streamer = streamer
+            self.distributor.streamer = streamer
 
         self._loop.create_task(_streamer_setup())
 
@@ -407,3 +429,6 @@ class CustomClientInterceptor(
     ):
         print(f"intercept_stream_stream: {client_call_details}, {request_iterator}")
         return await continuation(client_call_details, request_iterator)
+
+
+# clear;for i in {0..10};do curl localhost:51000/endpoint?text=x_${i} ;done;
