@@ -52,11 +52,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
-
-        print("MarieServerGateway.__init__")
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
-        self.setup_service_discovery()
+        self.event_queue = asyncio.Queue()
 
         def _extend_rest_function(app):
             @app.get("/endpoint")
@@ -83,13 +81,35 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         marie.helper.extend_rest_interface = _extend_rest_function
 
+    async def setup_server(self):
+        """
+        setup servers inside CompositeServer
+        """
+        self.logger.debug(f"Setting up MarieGateway server")
+        await super().setup_server()
+
+    async def run_server(self):
+        """Run servers inside CompositeServer forever"""
+        await asyncio.create_task(super().run_server())
+
+        self.setup_service_discovery()
+        self._loop.create_task(self.process_events())
+
     def setup_service_discovery(
         self,
         etcd_host: Optional[str] = "0.0.0.0",
         etcd_port: Optional[int] = 2379,
         watchdog_interval: Optional[int] = 2,
     ):
-        """Setup service discovery for the gateway."""
+        """
+         Setup service discovery for the gateway.
+
+        :param etcd_host: Optional[str] - The host address of the ETCD service. Default is "0.0.0.0".
+        :param etcd_port: Optional[int] - The port of the ETCD service. Default is 2379.
+        :param watchdog_interval: Optional[int] - The interval in seconds between each service address check. Default is 2.
+        :return: None
+
+        """
         self.logger.info("Setting up service discovery ")
         service_name = "gateway/service_test"
 
@@ -104,6 +124,8 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
             self.logger.info(f"checking : {resolver.resolve(service_name)}")
             resolver.watch_service(service_name, self.handle_discovery_event)
+
+            resolver.resolve(service_name)
             # validate the service address
             if False:
                 while True:
@@ -114,30 +136,50 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     def handle_discovery_event(self, service, event):
         """
+        Enqueue the event to be processed.
+        :param service:
+        :param event:
+        :return:
+        """
+
+        async def _enqueue_event():
+            await self.event_queue.put((service, event))
+
+        self._loop.create_task(_enqueue_event())
+
+    async def process_events(self):
+        """
         Handle a discovery event.
 
         :param service: The service that triggered the event.
         :param event: The event object containing information about the event.
         :return: None
         """
-        self.logger.info(f"Event from service : {service}, {event}")
-        ev_type = event.event
-        ev_key = event.key
-        ev_value = event.value
+        while True:
+            service, event = await self.event_queue.get()
+            try:
+                self.logger.info(f"Event from service : {service}, {event}")
+                self.logger.info(f"Queue size: {self.event_queue.qsize()}")
 
-        if ev_type == "put":
-            self.gateway_server_online(service, ev_value)
-        elif ev_type == "delete":
-            self.logger.info(f"Service {service} is unavailable")
-            print("event: ", event)
-            print("ev_type: ", ev_type)
-            print("ev_value: ", ev_value)
-            self.gateway_server_offline(service, ev_value)
-        else:
-            raise TypeError(f"Not recognized event type : {ev_type}")
+                ev_type = event.event
+                ev_key = event.key
+                ev_value = event.value
+                if ev_type == "put":
+                    self.gateway_server_online(service, ev_value)
+                elif ev_type == "delete":
+                    self.logger.info(f"Service {service} is unavailable")
+                    self.gateway_server_offline(service, ev_value)
+                else:
+                    raise TypeError(f"Not recognized event type : {ev_type}")
+            except Exception as ex:
+                self.logger.error(f"Error processing event: {ex}")
+            finally:
+                self.event_queue.task_done()
 
     def gateway_server_online(self, service, event_value):
         """
+        Handle the event when a gateway server comes online.
+
         :param service: The name of the service that is available.
         :param event_value: The value of the event that triggered the method.
         :return: None
@@ -184,9 +226,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         timeout = 1
 
         for executor, deployment_addresses in metadata.items():
-            print(f"deployment_addresses: {deployment_addresses}")
             for deployment_address in deployment_addresses:
-                print(f"deployment_address: {deployment_address}")
                 endpoints = []
                 tries = 0
                 while tries < max_tries:
@@ -282,20 +322,20 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     def gateway_server_offline(self, service: str, ev_value):
         """
+        Handle the event when a gateway server goes offline.
+
         :param service: The name of the service.
         :param ev_value: The value representing the offline gateway.
         :return: None
         """
-        # loop over the deployments_addresses and remove the offline gateway from the list
         ctrl_address = service.split("/")[-1]
         self.logger.info(
             f"Service {service} is offline @ {ctrl_address}, removing nodes"
         )
         for executor, nodes in self.deployment_nodes.items():
-            for node in nodes:
-                if node["gateway"] == ctrl_address:
-                    self.logger.info(f"Removing node: {node}")
-                    self.deployment_nodes[executor].remove(node)
+            self.deployment_nodes[executor] = [
+                node for node in nodes if node["gateway"] != ctrl_address
+            ]
         self.update_gateway_streamer()
 
 
