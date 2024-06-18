@@ -1,7 +1,6 @@
-from typing import Any, Optional
+from typing import Optional
 
 from marie import Document, DocumentArray
-from marie.clients.request import asyncio
 from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request.data import DataRequest
@@ -15,10 +14,10 @@ class GatewayJobDistributor(JobDistributor):
         gateway_streamer: Optional[GatewayStreamer] = None,
         logger: Optional[MarieLogger] = None,
     ):
-        self.gateway_streamer = gateway_streamer
+        self.streamer = gateway_streamer
         self._logger = logger or MarieLogger(self.__class__.__name__)
 
-    async def submit_job(self, job_info: JobInfo) -> DataRequest:
+    async def submit_job(self, job_info: JobInfo, doc: Document) -> DataRequest:
         self._logger.info(f"Publishing job {job_info} to gateway")
         curr_status = job_info.status
         curr_message = job_info.message
@@ -29,21 +28,32 @@ class GatewayJobDistributor(JobDistributor):
                 f"Current status is {curr_status} with message {curr_message}."
             )
 
-        # attempt to get gateway streamer if not initialized
-        if self.gateway_streamer is None:
+        # attempt to get gateDDDway streamer if not initialized
+        if self.streamer is None:
             self._logger.warning(f"Gateway streamer is not initialized")
-            self.gateway_streamer = GatewayStreamer.get_streamer()
+            raise RuntimeError("Gateway streamer is not initialized")
 
-        if self.gateway_streamer is None:
-            raise Exception("Gateway streamer is not initialized")
+        async for docs in self.streamer.stream_docs(
+            doc=doc,
+            # exec_endpoint="/extract",  # _jina_dry_run_
+            exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
+            # target_executor="executor0",
+            return_results=False,
+        ):
+            self._logger.info(f"Received {len(docs)} docs from gateway")
+            print(docs)
+            result = docs[0].text
 
-        # convert job_info to DataRequest
-        request = DataRequest()
-        # request.header.exec_endpoint = on
-        request.header.target_executor = job_info.entrypoint
-        request.parameters = job_info.metadata
+        return result
 
-        request.data.docs = DocumentArray([Document(text="sample text")])
-        response = await self.gateway_streamer.process_single_data(request=request)
+        if False:
+            # convert job_info to DataRequest
+            request = DataRequest()
+            # request.header.exec_endpoint = on
+            request.header.target_executor = job_info.entrypoint
+            request.parameters = job_info.metadata
 
-        return response
+            request.data.docs = DocumentArray([Document(text="sample text")])
+            response = await self.streamer.process_single_data(request=request)
+
+            return response
