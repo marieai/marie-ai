@@ -18,6 +18,7 @@ from marie.excepts import ExecutorError
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.networking import GrpcConnectionPool
+from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.runtimes.gateway.async_request_response_handling import (
     AsyncRequestResponseHandler,
 )
@@ -29,7 +30,7 @@ from marie.types.request.data import DataRequest, SingleDocumentRequest
 if docarray_v2:
     from docarray import DocList
 
-__all__ = ['GatewayStreamer']
+__all__ = ["GatewayStreamer"]
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor
@@ -55,15 +56,16 @@ class GatewayStreamer:
         timeout_send: Optional[float] = None,
         retries: int = 0,
         compression: Optional[str] = None,
-        runtime_name: str = 'custom gateway',
+        runtime_name: str = "custom gateway",
         prefetch: int = 0,
-        logger: Optional['MarieLogger'] = None,
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        meter: Optional['Meter'] = None,
-        aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-        tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
+        logger: Optional["MarieLogger"] = None,
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        meter: Optional["Meter"] = None,
+        aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+        tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         grpc_channel_options: Optional[list] = None,
-        load_balancer_type: Optional[str] = 'round_robin',
+        load_balancer_type: Optional[str] = "round_robin",
+        load_balancer: Optional[LoadBalancer] = None,
     ):
         """
         :param graph_representation: A dictionary describing the topology of the Deployments. 2 special nodes are expected, the name `start-gateway` and `end-gateway` to
@@ -85,7 +87,7 @@ class GatewayStreamer:
         :param aio_tracing_client_interceptors: Optional list of aio grpc tracing server interceptors.
         :param tracing_client_interceptor: Optional gprc tracing server interceptor.
         :param grpc_channel_options: Optional gprc channel options.
-        :param load_balancer_type: Optional load balancer type. Default is round robin.
+        :param load_balancer_type: Optional load balancer type. Default is round-robin.
         """
         self.logger = logger or MarieLogger(self.__class__.__name__)
         self.topology_graph = TopologyGraph(
@@ -113,6 +115,7 @@ class GatewayStreamer:
             tracing_client_interceptor,
             grpc_channel_options,
             load_balancer_type,
+            load_balancer,
         )
         request_handler = AsyncRequestResponseHandler(
             metrics_registry, meter, runtime_name, logger
@@ -143,7 +146,8 @@ class GatewayStreamer:
         aio_tracing_client_interceptors,
         tracing_client_interceptor,
         grpc_channel_options=None,
-        load_balancer_type='round_robin',
+        load_balancer_type=None,
+        load_balancer=None,
     ):
         # add the connections needed
         connection_pool = GrpcConnectionPool(
@@ -156,6 +160,7 @@ class GatewayStreamer:
             tracing_client_interceptor=tracing_client_interceptor,
             channel_options=grpc_channel_options,
             load_balancer_type=load_balancer_type,
+            load_balancer=load_balancer,
         )
         for deployment_name, addresses in deployments_addresses.items():
             for address in addresses:
@@ -216,7 +221,7 @@ class GatewayStreamer:
         parameters: Optional[Dict] = None,
         results_in_order: bool = False,
         return_type: Type[DocumentArray] = DocumentArray,
-    ) -> AsyncIterator[Tuple[Union[DocumentArray, 'Request'], 'ExecutorError']]:
+    ) -> AsyncIterator[Tuple[Union[DocumentArray, "Request"], "ExecutorError"]]:
         """
         stream Documents and yield Documents or Responses and unpacked Executor error if any.
 
@@ -256,14 +261,14 @@ class GatewayStreamer:
 
     async def stream_doc(
         self,
-        doc: 'Document',
+        doc: "Document",
         return_results: bool = False,
         exec_endpoint: Optional[str] = None,
         target_executor: Optional[str] = None,
         parameters: Optional[Dict] = None,
         request_id: Optional[str] = None,
         return_type: Type[DocumentArray] = DocumentArray,
-    ) -> AsyncIterator[Tuple[Union[DocumentArray, 'Request'], 'ExecutorError']]:
+    ) -> AsyncIterator[Tuple[Union[DocumentArray, "Request"], "ExecutorError"]]:
         """
         stream Documents and yield Documents or Responses and unpacked Executor error if any.
 
@@ -421,15 +426,15 @@ class GatewayStreamer:
 
         :return: Returns an instance of `GatewayStreamer`
         """
-        if 'JINA_STREAMER_ARGS' in os.environ:
-            args_dict = json.loads(os.environ['JINA_STREAMER_ARGS'])
+        if "JINA_STREAMER_ARGS" in os.environ:
+            args_dict = json.loads(os.environ["JINA_STREAMER_ARGS"])
             return GatewayStreamer(**args_dict)
         else:
-            raise OSError('JINA_STREAMER_ARGS environment variable is not set')
+            raise OSError("JINA_STREAMER_ARGS environment variable is not set")
 
     @staticmethod
     def _set_env_streamer_args(**kwargs):
-        os.environ['JINA_STREAMER_ARGS'] = json.dumps(kwargs)
+        os.environ["JINA_STREAMER_ARGS"] = json.dumps(kwargs)
 
 
 class _ExecutorStreamer:
@@ -507,7 +512,7 @@ class _ExecutorStreamer:
 
     async def stream_doc(
         self,
-        inputs: 'Document',
+        inputs: "Document",
         on: Optional[str] = None,
         parameters: Optional[Dict] = None,
         **kwargs,

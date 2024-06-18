@@ -30,13 +30,14 @@ class _ReplicaList:
         histograms: _NetworkingHistograms,
         logger,
         runtime_name: str,
-        aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-        tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
-        deployment_name: str = '',
+        aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+        tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
+        deployment_name: str = "",
         channel_options: Optional[Union[list, Dict[str, Any]]] = None,
         load_balancer_type: Optional[
             Union[LoadBalancerType, str]
         ] = LoadBalancerType.ROUND_ROBIN,
+        load_balancer: Optional[LoadBalancer] = None,
     ):
         self.runtime_name = runtime_name
         self._connections = []
@@ -49,11 +50,15 @@ class _ReplicaList:
         self.tracing_client_interceptors = tracing_client_interceptor
         self._deployment_name = deployment_name
         self.channel_options = channel_options
+
         # a set containing all the ConnectionStubs that will be created using add_connection
         # this set is not updated in reset_connection and remove_connection
-        self.load_balancer = LoadBalancer.get_load_balancer(
-            load_balancer_type, deployment_name, logger
-        )
+        if load_balancer is not None:
+            self.load_balancer = load_balancer
+        else:
+            self.load_balancer = LoadBalancer.get_load_balancer(
+                load_balancer_type, deployment_name, logger
+            )
 
     async def reset_connection(self, address: str, deployment_name: str):
         """
@@ -64,7 +69,7 @@ class _ReplicaList:
         :param address: Target address of this connection
         :param deployment_name: Target deployment of this connection
         """
-        self._logger.debug(f'resetting connection for {deployment_name} to {address}')
+        self._logger.debug(f"resetting connection for {deployment_name} to {address}")
         parsed_address = urlparse(address)
         resolved_address = parsed_address.netloc if parsed_address.netloc else address
         if (
@@ -132,7 +137,7 @@ class _ReplicaList:
 
     def _create_connection(self, address, deployment_name: str):
         self._logger.debug(
-            f'create_connection connection for {deployment_name} to {address}'
+            f"create_connection connection for {deployment_name} to {address}"
         )
         parsed_address = urlparse(address)
         address = parsed_address.netloc if parsed_address.netloc else address

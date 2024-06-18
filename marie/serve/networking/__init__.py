@@ -22,6 +22,7 @@ from marie.importer import ImportExtensions
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
+from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import (
@@ -63,12 +64,13 @@ class GrpcConnectionPool:
         runtime_name,
         logger: Optional[MarieLogger] = None,
         compression: Optional[str] = None,
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        meter: Optional['Meter'] = None,
-        aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-        tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        meter: Optional["Meter"] = None,
+        aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+        tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
-        load_balancer_type: Optional[str] = 'round_robin',
+        load_balancer_type: Optional[str] = "round_robin",
+        load_balancer: Optional[LoadBalancer] = None,
     ):
         self._logger = logger or MarieLogger(self.__class__.__name__)
         self.channel_options = channel_options
@@ -82,32 +84,32 @@ class GrpcConnectionPool:
         if metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the monitoring functionality of marie',
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Summary
 
             sending_requests_time_metrics = Summary(
-                'sending_request_seconds',
-                'Time spent between sending a request to the Executor/Head and receiving the response',
+                "sending_request_seconds",
+                "Time spent between sending a request to the Executor/Head and receiving the response",
                 registry=metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(runtime_name)
 
             received_response_bytes = Summary(
-                'received_response_bytes',
-                'Size in bytes of the response returned from the Head/Executor',
+                "received_response_bytes",
+                "Size in bytes of the response returned from the Head/Executor",
                 registry=metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(runtime_name)
 
             send_requests_bytes_metrics = Summary(
-                'sent_request_bytes',
-                'Size in bytes of the request sent to the Head/Executor',
+                "sent_request_bytes",
+                "Size in bytes of the request sent to the Head/Executor",
                 registry=metrics_registry,
-                namespace='marie',
-                labelnames=('runtime_name',),
+                namespace="marie",
+                labelnames=("runtime_name",),
             ).labels(runtime_name)
         else:
             sending_requests_time_metrics = None
@@ -123,21 +125,21 @@ class GrpcConnectionPool:
         if meter:
             self._histograms = _NetworkingHistograms(
                 sending_requests_time_metrics=meter.create_histogram(
-                    name='marie_sending_request_seconds',
-                    unit='s',
-                    description='Time spent between sending a request to the Executor/Head and receiving the response',
+                    name="marie_sending_request_seconds",
+                    unit="s",
+                    description="Time spent between sending a request to the Executor/Head and receiving the response",
                 ),
                 received_response_bytes=meter.create_histogram(
-                    name='marie_received_response_bytes',
-                    unit='By',
-                    description='Size in bytes of the response returned from the Head/Executor',
+                    name="marie_received_response_bytes",
+                    unit="By",
+                    description="Size in bytes of the response returned from the Head/Executor",
                 ),
                 send_requests_bytes_metrics=meter.create_histogram(
-                    name='marie_sent_request_bytes',
-                    unit='By',
-                    description='Size in bytes of the request sent to the Head/Executor',
+                    name="marie_sent_request_bytes",
+                    unit="By",
+                    description="Size in bytes of the request sent to the Head/Executor",
                 ),
-                histogram_metric_labels={'runtime_name': runtime_name},
+                histogram_metric_labels={"runtime_name": runtime_name},
             )
         else:
             self._histograms = _NetworkingHistograms()
@@ -153,6 +155,7 @@ class GrpcConnectionPool:
             tracing_client_interceptor=self.tracing_client_interceptor,
             channel_options=self.channel_options,
             load_balancer_type=load_balancer_type,
+            load_balancer=load_balancer,
         )
         self._deployment_address_map = {}
 
@@ -192,7 +195,7 @@ class GrpcConnectionPool:
             for replica_list in shard_replica_lists:
                 connections.append(replica_list)
         else:
-            raise ValueError(f'Unsupported polling type {polling_type}')
+            raise ValueError(f"Unsupported polling type {polling_type}")
 
         for replica_list in connections:
             task = self._send_requests(
@@ -233,7 +236,7 @@ class GrpcConnectionPool:
             )
         else:
             self._logger.debug(
-                f'no available connections for deployment {deployment} and shard {shard_id}'
+                f"no available connections for deployment {deployment} and shard {shard_id}"
             )
             return None
 
@@ -273,7 +276,7 @@ class GrpcConnectionPool:
             return result
         else:
             self._logger.debug(
-                f'no available connections for deployment {deployment} and shard {shard_id}'
+                f"no available connections for deployment {deployment} and shard {shard_id}"
             )
             return None
 
@@ -310,7 +313,7 @@ class GrpcConnectionPool:
             )
             return result_async_generator
         else:
-            self._logger.debug(f'no available connections for deployment {deployment}')
+            self._logger.debug(f"no available connections for deployment {deployment}")
             return None
 
     def add_connection(
@@ -369,16 +372,16 @@ class GrpcConnectionPool:
         self,
         error: AioRpcError,
         retry_i: int = 0,
-        request_id: str = '',
+        request_id: str = "",
         tried_addresses: Set[str] = {
-            ''
+            ""
         },  # same deployment can have multiple addresses (replicas)
         total_num_tries: int = 1,  # number of retries + 1
-        current_address: str = '',  # the specific address that was contacted during this attempt
-        current_deployment: str = '',  # the specific deployment that was contacted during this attempt
+        current_address: str = "",  # the specific address that was contacted during this attempt
+        current_deployment: str = "",  # the specific deployment that was contacted during this attempt
         connection_list: Optional[_ReplicaList] = None,
-        task_type: str = 'DataRequest',
-    ) -> 'Optional[Union[AioRpcError, InternalNetworkError]]':
+        task_type: str = "DataRequest",
+    ) -> "Optional[Union[AioRpcError, InternalNetworkError]]":
         # connection failures, cancelled requests, and timed out requests should be retried
         # all other cases should not be retried and will be raised immediately
         # connection failures have the code grpc.StatusCode.UNAVAILABLE
@@ -390,15 +393,15 @@ class GrpcConnectionPool:
         skip_resetting = False
         if (
             error.code() == grpc.StatusCode.UNAVAILABLE
-            and 'not the leader' in error.details()
+            and "not the leader" in error.details()
         ):
             self._logger.debug(
-                f'RAFT node of {current_deployment} is not the leader. Trying next replica, if available.'
+                f"RAFT node of {current_deployment} is not the leader. Trying next replica, if available."
             )
             skip_resetting = True  # no need to reset, no problem with channel
         else:
             self._logger.debug(
-                f'gRPC call to {current_deployment} for {task_type} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time.'
+                f"gRPC call to {current_deployment} for {task_type} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time."
             )
         errors_to_retry = [
             grpc.StatusCode.UNAVAILABLE,
@@ -415,7 +418,7 @@ class GrpcConnectionPool:
             return error
         elif error.code() in errors_to_retry and retry_i >= total_num_tries - 1:
             self._logger.debug(
-                f'gRPC call for {current_deployment} failed, retries exhausted'
+                f"gRPC call for {current_deployment} failed, retries exhausted"
             )
             from marie.excepts import InternalNetworkError
 
@@ -447,13 +450,13 @@ class GrpcConnectionPool:
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
-    ) -> 'asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]':
+    ) -> "asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]":
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
 
         if endpoint:
             metadata = metadata or {}
-            metadata['endpoint'] = endpoint
+            metadata["endpoint"] = endpoint
 
         if metadata:
             metadata = tuple(metadata.items())
@@ -483,7 +486,10 @@ class GrpcConnectionPool:
                         break
                 tried_addresses.add(current_connection.address)
                 try:
-                    async for resp, metadata_resp in current_connection.send_single_doc_request(
+                    async for (
+                        resp,
+                        metadata_resp,
+                    ) in current_connection.send_single_doc_request(
                         request=request,
                         metadata=metadata,
                         compression=self.compression,
@@ -501,7 +507,7 @@ class GrpcConnectionPool:
                         current_address=current_connection.address,
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,
-                        task_type='SingleDocumentRequest',
+                        task_type="SingleDocumentRequest",
                     )
                     if error:
                         yield error, None
@@ -520,13 +526,13 @@ class GrpcConnectionPool:
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
-    ) -> 'asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]':
+    ) -> "asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]":
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
 
         if endpoint:
             metadata = metadata or {}
-            metadata['endpoint'] = endpoint
+            metadata["endpoint"] = endpoint
 
         if metadata:
             metadata = tuple(metadata.items())
@@ -573,7 +579,7 @@ class GrpcConnectionPool:
                         current_address=current_connection.address,
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,
-                        task_type='DataRequest',
+                        task_type="DataRequest",
                     )
                     if error:
                         return error
@@ -623,7 +629,7 @@ class GrpcConnectionPool:
                         current_deployment=connection.deployment_name,
                         connection_list=connection_list,
                         total_num_tries=total_num_tries,
-                        task_type='EndpointDiscovery',
+                        task_type="EndpointDiscovery",
                     )
                     if error:
                         raise error

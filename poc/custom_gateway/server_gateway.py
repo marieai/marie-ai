@@ -2,18 +2,12 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from grpc import (
-    StreamStreamClientInterceptor,
-    StreamUnaryClientInterceptor,
-    UnaryStreamClientInterceptor,
-    UnaryUnaryClientInterceptor,
-)
 from grpc.aio import ClientInterceptor
 
 import marie
@@ -24,7 +18,10 @@ from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.resolver import EtcdServiceResolver
+from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
+from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
+from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
@@ -33,6 +30,13 @@ from marie.serve.runtimes.servers.grpc import GRPCServer
 
 def create_trace_interceptor() -> ClientInterceptor:
     return CustomClientInterceptor()
+
+
+def create_balancer_interceptor() -> LoadBalancerInterceptor:
+    def notify(event, connection):
+        print(f"notify: {event}, {connection}")
+
+    return GatewayLoadBalancerInterceptor(notifier=notify)
 
 
 class MarieServerGateway(BaseGateway, CompositeServer):
@@ -49,17 +53,15 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
 
-        print('MarieServerGateway.__init__')
+        print("MarieServerGateway.__init__")
         self._loop = get_or_reuse_loop()
-        print(self._loop)
-
         self.deployment_nodes = {}
         self.setup_service_discovery()
 
         def _extend_rest_function(app):
             @app.get("/endpoint")
             async def get(text: str):
-                print(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now()}")
                 result = None
                 async for docs in self.streamer.stream_docs(
                     docs=DocList[TextDoc]([TextDoc(text=text)]),
@@ -71,6 +73,11 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 ):
                     result = docs[0].text
                 return {"result": result}
+
+            @app.get("/check")
+            async def get_health(text: str):
+                self.logger.info(f"Received request at {datetime.now()}")
+                return {"result": "ok"}
 
             return app
 
@@ -96,9 +103,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             )
 
             self.logger.info(f"checking : {resolver.resolve(service_name)}")
-
             resolver.watch_service(service_name, self.handle_discovery_event)
-
             # validate the service address
             if False:
                 while True:
@@ -108,6 +113,13 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         asyncio.create_task(_start_watcher())
 
     def handle_discovery_event(self, service, event):
+        """
+        Handle a discovery event.
+
+        :param service: The service that triggered the event.
+        :param event: The event object containing information about the event.
+        :return: None
+        """
         self.logger.info(f"Event from service : {service}, {event}")
         ev_type = event.event
         ev_key = event.key
@@ -117,6 +129,10 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             self.gateway_server_online(service, ev_value)
         elif ev_type == "delete":
             self.logger.info(f"Service {service} is unavailable")
+            print("event: ", event)
+            print("ev_type: ", ev_type)
+            print("ev_value: ", ev_value)
+            self.gateway_server_offline(service, ev_value)
         else:
             raise TypeError(f"Not recognized event type : {ev_type}")
 
@@ -207,6 +223,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                         "address": deployment_address,
                         "endpoint": endpoint,
                         "executor": executor,
+                        "gateway": ctrl_address,
                     }
                     self.deployment_nodes[executor].append(deployment_details)
                     self.logger.info(
@@ -242,21 +259,87 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     connections.append(f"{host}:{port}")
                 deployments_addresses[executor] = list(set(connections))
 
-            print(f"graph_description: {graph_description}")
-            print(f"deployments_addresses: {deployments_addresses}")
+            self.logger.info(f"graph_description: {graph_description}")
+            self.logger.info(f"deployments_addresses: {deployments_addresses}")
+
+            load_balancer = RoundRobinLoadBalancer(
+                "deployment-gateway",
+                self.logger,
+                tracing_interceptors=[create_balancer_interceptor()],
+            )
 
             streamer = GatewayStreamer(
                 graph_representation=graph_description,
                 executor_addresses=deployments_addresses,
                 deployments_metadata=deployments_metadata,
                 load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
+                load_balancer=load_balancer,
                 aio_tracing_client_interceptors=[create_trace_interceptor()],
-                # load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
             )
             self.streamer = streamer
 
-        print(f"loop: {self._loop}")
         self._loop.create_task(_streamer_setup())
+
+    def gateway_server_offline(self, service: str, ev_value):
+        """
+        :param service: The name of the service.
+        :param ev_value: The value representing the offline gateway.
+        :return: None
+        """
+        # loop over the deployments_addresses and remove the offline gateway from the list
+        ctrl_address = service.split("/")[-1]
+        self.logger.info(
+            f"Service {service} is offline @ {ctrl_address}, removing nodes"
+        )
+        for executor, nodes in self.deployment_nodes.items():
+            for node in nodes:
+                if node["gateway"] == ctrl_address:
+                    self.logger.info(f"Removing node: {node}")
+                    self.deployment_nodes[executor].remove(node)
+        self.update_gateway_streamer()
+
+
+class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
+    def __init__(self, notifier: Optional[Callable] = None):
+        super().__init__()
+        self.active_connection = None
+        self.notifier = notifier
+
+    def notify(self, event: str, connection: _ConnectionStubs):
+        """
+        :param event: The event that triggered the notification.
+        :param connection: The connection that initiated the event.
+        :return: None
+
+        """
+        if self.notifier:
+            self.notifier(event, connection)
+
+    def on_connection_released(self, connection):
+        print(f"on_connection_released: {connection}")
+        self.active_connection = None
+        self.notify("released", connection)
+
+    def on_connection_failed(self, connection: _ConnectionStubs, exception):
+        print(f"on_connection_failed: {connection}, {exception}")
+        self.active_connection = None
+        self.notify("failed", connection)
+
+    def on_connection_acquired(self, connection: _ConnectionStubs):
+        print(f"on_connection_acquired: {connection}")
+        self.active_connection = connection
+        self.notify("acquired", connection)
+
+    def on_connections_updated(self, connections: list[_ConnectionStubs]):
+        print(f"on_connections_updated: {connections}")
+        self.notify("updated", connections)
+
+    def get_active_connection(self):
+        """
+        Get the active connection.
+        :return:
+        """
+        return self.active_connection
 
 
 class CustomClientInterceptor(
