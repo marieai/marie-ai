@@ -1,13 +1,13 @@
-from typing import Dict
+from typing import Dict, Optional
 
 from pydantic import BaseModel
 
 
 def _to_camel_case(snake_str: str) -> str:
-    components = snake_str.split('_')
+    components = snake_str.split("_")
     # We capitalize the first letter of each component except the first one
     # with the 'title' method and join them together.
-    return components[0] + ''.join(x.title() for x in components[1:])
+    return components[0] + "".join(x.title() for x in components[1:])
 
 
 class JinaHealthModel(BaseModel):
@@ -19,7 +19,8 @@ class JinaHealthModel(BaseModel):
 class JinaInfoModel(BaseModel):
     """Pydantic BaseModel for Jina status, used as the response model in REST app."""
 
-    jina: Dict
+    jina: Optional[Dict]
+    marie: Optional[Dict]
     envs: Dict
 
     class Config:

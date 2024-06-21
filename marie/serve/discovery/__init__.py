@@ -95,7 +95,7 @@ class DiscoveryServiceMixin:
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
 
         etcd_registry = EtcdServiceRegistry(
-            "127.0.0.1",
+            "0.0.0.0",
             2379,
             heartbeat_time=5,
         )
