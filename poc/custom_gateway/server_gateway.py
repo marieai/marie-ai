@@ -13,6 +13,7 @@ from grpc.aio import ClientInterceptor
 import marie
 import marie.helper
 from marie import Gateway as BaseGateway
+from marie.excepts import RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
@@ -62,6 +63,10 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         )
 
         def _extend_rest_function(app):
+            @app.on_event("shutdown")
+            async def _shutdown():
+                await self.distributor.close()
+
             @app.get("/endpoint")
             async def get(text: str):
                 self.logger.info(f"Received request at {datetime.now()}")
@@ -85,10 +90,12 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                         exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
                         # exec_endpoint="/endpoint",
                         # target_executor="executor0",
-                        return_results=True,
+                        return_results=False,
                     ):
                         result = docs[0].text
-                    return {"result": result}
+                        # result = docs
+                        print(f"result: {result}")
+                        return {"result": result}
 
             @app.get("/check")
             async def get_health(text: str):
@@ -105,19 +112,19 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         """
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
-        self.setup_service_discovery()
+        await self.setup_service_discovery()
 
     async def run_server(self):
         """Run servers inside CompositeServer forever"""
-        # self._loop.create_task(self.process_events())
         run_server_tasks = []
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        run_server_tasks.append(asyncio.create_task(self.process_events()))
+        # task for processing events
+        run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
         await asyncio.gather(*run_server_tasks)
 
-    def setup_service_discovery(
+    async def setup_service_discovery(
         self,
         etcd_host: Optional[str] = "0.0.0.0",
         etcd_port: Optional[int] = 2379,
@@ -153,51 +160,67 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     self.logger.info("Checking service address...")
                     await asyncio.sleep(watchdog_interval)
 
-        asyncio.create_task(_start_watcher())
+        task = asyncio.create_task(_start_watcher())
+        try:
+            await task  # This raises an exception if the task had an exception
+        except Exception as e:
+            self.logger.error(
+                f"Initialize etcd client failed failed on {etcd_host}:{etcd_port}"
+            )
+            if isinstance(e, RuntimeFailToStart):
+                raise e
+            raise RuntimeFailToStart(
+                f"Initialize etcd client failed failed on {etcd_host}:{etcd_port}, ensure the etcd server is running."
+            )
 
-    def handle_discovery_event(self, service, event):
+    def handle_discovery_event(self, service: str, event: str) -> None:
         """
         Enqueue the event to be processed.
-        :param service:
-        :param event:
+        :param service: The name of the service that is available.
+        :param event: The event that triggered the method.
         :return:
         """
 
-        async def _enqueue_event():
-            await self.event_queue.put((service, event))
+        self._loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(self.event_queue.put((service, event)))
+        )
 
-        self._loop.create_task(_enqueue_event())
-
-    async def process_events(self):
+    async def process_events(self, max_errors=5) -> None:
         """
         Handle a discovery event.
-
-        :param service: The service that triggered the event.
-        :param event: The event object containing information about the event.
+        :param max_errors: The maximum number of errors to allow before stopping the event processing.
         :return: None
         """
+
+        error_counter = 0
         while True:
             service, event = await self.event_queue.get()
             try:
-                self.logger.info(f"Event from service : {service}, {event}")
-                self.logger.info(f"Queue size: {self.event_queue.qsize()}")
-
+                self.logger.info(
+                    f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
+                )
                 ev_type = event.event
                 ev_key = event.key
                 ev_value = event.value
                 if ev_type == "put":
-                    self.gateway_server_online(service, ev_value)
+                    await self.gateway_server_online(service, ev_value)
                 elif ev_type == "delete":
                     self.logger.info(f"Service {service} is unavailable")
-                    self.gateway_server_offline(service, ev_value)
+                    await self.gateway_server_offline(service, ev_value)
                 else:
                     raise TypeError(f"Not recognized event type : {ev_type}")
+                error_counter = 0  # reset error counter on successful processing
             except Exception as ex:
                 self.logger.error(f"Error processing event: {ex}")
+                error_counter += 1
+                if error_counter >= max_errors:
+                    self.logger.error(f"Reached maximum error limit: {max_errors}")
+                    break
+                await asyncio.sleep(1)
             finally:
                 self.event_queue.task_done()
 
-    def gateway_server_online(self, service, event_value):
+    async def gateway_server_online(self, service, event_value):
         """
         Handle the event when a gateway server comes online.
 
@@ -230,7 +253,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             tries += 1
 
         if is_ready is False:
-            self.logger.info(
+            self.logger.warning(
                 f"Gateway is not ready at {ctrl_address} after {max_tries}, will retry on next event"
             )
             return
@@ -296,53 +319,52 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             for node in nodes:
                 self.logger.info(f"\tNode : {node}")
 
-        self.update_gateway_streamer()
+        await self.update_gateway_streamer()
 
-    def update_gateway_streamer(self):
+    async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
 
-        async def _streamer_setup():
-            # FIXME: testing with only one executor
-            deployments_addresses = {}
-            graph_description = {
-                "start-gateway": ["executor0"],
-                "executor0": ["end-gateway"],
-            }
-            deployments_metadata = {"deployment0": {"key": "value"}}
-            for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
-                connections = []
-                for node in nodes:
-                    address = node["address"]
-                    parsed_address = urlparse(address)
-                    port = parsed_address.port
-                    host = parsed_address.hostname
-                    connections.append(f"{host}:{port}")
-                deployments_addresses[executor] = list(set(connections))
+        # FIXME: testing with only one executor
+        deployments_addresses = {}
+        graph_description = {
+            "start-gateway": ["executor0"],
+            "executor0": ["end-gateway"],
+        }
+        deployments_metadata = {"deployment0": {"key": "value"}}
+        for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
+            connections = []
+            for node in nodes:
+                address = node["address"]
+                parsed_address = urlparse(address)
+                port = parsed_address.port
+                host = parsed_address.hostname
+                connections.append(f"{host}:{port}")
+            deployments_addresses[executor] = list(set(connections))
 
-            self.logger.info(f"graph_description: {graph_description}")
-            self.logger.info(f"deployments_addresses: {deployments_addresses}")
+        self.logger.info(f"graph_description: {graph_description}")
+        self.logger.info(f"deployments_addresses: {deployments_addresses}")
 
-            load_balancer = RoundRobinLoadBalancer(
-                "deployment-gateway",
-                self.logger,
-                tracing_interceptors=[create_balancer_interceptor()],
-            )
+        load_balancer = RoundRobinLoadBalancer(
+            "deployment-gateway",
+            self.logger,
+            tracing_interceptors=[create_balancer_interceptor()],
+        )
 
-            streamer = GatewayStreamer(
-                graph_representation=graph_description,
-                executor_addresses=deployments_addresses,
-                deployments_metadata=deployments_metadata,
-                load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
-                load_balancer=load_balancer,
-                aio_tracing_client_interceptors=[create_trace_interceptor()],
-            )
-            self.streamer = streamer
-            self.distributor.streamer = streamer
+        streamer = GatewayStreamer(
+            graph_representation=graph_description,
+            executor_addresses=deployments_addresses,
+            deployments_metadata=deployments_metadata,
+            load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
+            load_balancer=load_balancer,
+            aio_tracing_client_interceptors=[create_trace_interceptor()],
+        )
+        self.streamer = streamer
+        self.distributor.streamer = streamer
+        request_models_map = streamer._endpoints_models_map
+        self.logger.info(f"request_models_map: {request_models_map}")
 
-        self._loop.create_task(_streamer_setup())
-
-    def gateway_server_offline(self, service: str, ev_value):
+    async def gateway_server_offline(self, service: str, ev_value):
         """
         Handle the event when a gateway server goes offline.
 
@@ -358,7 +380,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             self.deployment_nodes[executor] = [
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
-        self.update_gateway_streamer()
+        await self.update_gateway_streamer()
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):

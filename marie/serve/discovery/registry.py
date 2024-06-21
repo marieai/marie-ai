@@ -1,17 +1,22 @@
 import abc
+import asyncio
 import logging
+import threading
 import time
 from typing import Union
 
+import etcd3
+
+from marie.helper import get_or_reuse_loop
 from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.discovery.util import form_service_key
 from marie.utils.timer import RepeatedTimer
 
-__all__ = ['EtcdServiceRegistry']
+__all__ = ["EtcdServiceRegistry"]
 
 logging.basicConfig(
-    level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 log = logging.getLogger(__name__)
 
@@ -42,7 +47,7 @@ class EtcdServiceRegistry(ServiceRegistry):
         self,
         etcd_host: str,
         etcd_port: int,
-        etcd_client: object = None,
+        etcd_client: EtcdClient = None,
         heartbeat_time=-1,
     ):
         """Initialize etcd service registry.
@@ -59,8 +64,10 @@ class EtcdServiceRegistry(ServiceRegistry):
         self._client = etcd_client if etcd_client else EtcdClient(etcd_host, etcd_port)
         self._leases = {}
         self._services = {}
+        self._loop = get_or_reuse_loop()
         self._heartbeat_time = heartbeat_time
-        self.setup_heartbeat()
+        self.setup_heartbeat_async()
+        # self.setup_heartbeat()
 
     def get_lease(self, service_addr, service_ttl):
         """Get a service lease from etcd.
@@ -129,7 +136,7 @@ class EtcdServiceRegistry(ServiceRegistry):
 
     def heartbeat(self, service_addr=None, service_ttl=5):
         """service heartbeat."""
-        log.debug(f"Heartbeat service_addr : {service_addr}")
+        log.info(f"Heartbeat service_addr : {service_addr}")
         if service_addr:
             lease = self.get_lease(service_addr, service_ttl)
             leases = ((service_addr, lease),)
@@ -140,13 +147,30 @@ class EtcdServiceRegistry(ServiceRegistry):
             registered = self._services.get(service_addr, None)
             if not registered:
                 continue
-            log.debug(f"Refreshing lease for: {service_addr}, {lease.remaining_ttl}")
-
-            ret = lease.refresh()[0]
-            if ret.TTL == 0:
-                self.register(
-                    self._services.get(service_addr, []), service_addr, lease.ttl
+            try:
+                log.debug(
+                    f"Refreshing lease for: {service_addr}, {lease.remaining_ttl}"
                 )
+                ret = lease.refresh()[0]
+                if ret.TTL == 0:
+                    self.register(
+                        self._services.get(service_addr, []),
+                        service_addr,
+                        lease.ttl,
+                    )
+            except (ValueError, etcd3.exceptions.ConnectionFailedError) as e:
+                if (
+                    isinstance(e, etcd3.exceptions.ConnectionFailedError)
+                    or str(e) == "Trying to use a failed node"
+                ):
+                    log.warning(
+                        f"Trying to use a failed node, attempting to reconnect."
+                    )
+                    if self._client.reconnect():
+                        log.info("Reconnected to etcd")
+                        lease.etcd_client = self._client.client
+            except Exception as e:
+                raise e
 
     def unregister(self, service_names, service_addr, addr_cls=None):
         """Unregister services with the same address.
@@ -171,7 +195,39 @@ class EtcdServiceRegistry(ServiceRegistry):
                 self._client.put(addr_cls(service_addr).delete_value())
             registered_services.discard(service_name)
 
+    def setup_heartbeat_async(self):
+        """
+        Set up an asynchronous heartbeat process.
+
+        :return: None
+        """
+
+        async def _heartbeat_setup():
+            initial_delay = self._heartbeat_time
+            await asyncio.sleep(initial_delay)
+            while True:
+                try:
+                    self.heartbeat()
+                    await asyncio.sleep(self._heartbeat_time)
+                except Exception as e:
+                    log.error(f"Error in heartbeat : {str(e)}")
+
+        def _polling_status():
+            task = self._loop.create_task(_heartbeat_setup())
+            self._loop.run_until_complete(task)
+
+        polling_status_thread = threading.Thread(
+            target=_polling_status,
+            daemon=True,
+        )
+        polling_status_thread.start()
+
     def setup_heartbeat(self):
+        """
+        This method is used to set up a heartbeat for the etcd service registry.
+
+        :return: None
+        """
         log.info(
             f"Setting up heartbeat for etcd service registry  : {self._heartbeat_time}",
         )
@@ -244,12 +300,12 @@ def main():
         print("Service unregistered.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
-if __name__ == '__main__XXXX':
-    etcd_registry = EtcdServiceRegistry('127.0.0.1', 2379, heartbeat_time=5)
-    etcd_registry.register(['gateway/service_test'], '127.0.0.1:50011', 6)
+if __name__ == "__main__XXXX":
+    etcd_registry = EtcdServiceRegistry("127.0.0.1", 2379, heartbeat_time=5)
+    etcd_registry.register(["gateway/service_test"], "127.0.0.1:50011", 6)
 
     print(etcd_registry._services)
     print(etcd_registry._leases)

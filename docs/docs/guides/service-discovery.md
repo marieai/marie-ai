@@ -15,7 +15,7 @@ http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379
 Verify the installation by running the following command:
 
 ```bash  
-  docker exec -it etcd etcdctl version
+docker exec -it etcd etcdctl version
 ```
 
 ```bash

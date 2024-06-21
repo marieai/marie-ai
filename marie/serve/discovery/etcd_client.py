@@ -14,6 +14,8 @@ from grpc._channel import _Rendezvous
 
 __all__ = ["EtcdClient", "Event"]
 
+from marie.excepts import RuntimeFailToStart
+
 Event = namedtuple("Event", "key event value")
 log = logging.getLogger(__name__)
 
@@ -67,6 +69,13 @@ def reauthenticate(etcd_sync, creds, executor):
 
 
 def reconn_reauth_adaptor(meth: Callable):
+    """
+    Retry connection and authentication for the given method.
+
+    :param meth: The method to be wrapped.
+    :return: The wrapped method.
+    """
+
     @functools.wraps(meth)
     def wrapped(self, *args, **kwargs):
         num_reauth_tries = 0
@@ -124,46 +133,22 @@ class EtcdClient(object):
         encoding="utf8",
         retry_times=10,
     ):
+        self.client = None  # type: etcd3.client
         self._host = etcd_host
         self._port = etcd_port
         self._client_idx = 0
         self._cluster = None
         self.encoding = encoding
-        self.retry_times = retry_times
+        self.retry_times = 3  # retry_times
         self.ns = namespace
         self._creds = credentials
 
-        addr = f"{etcd_host}:{etcd_port}"
-        times = 0
-        last_ex = None
-        while times < self.retry_times:
-            try:
-                self.client = etcd3.client(
-                    host=self._host,
-                    port=self._port,
-                    user=credentials.get("user") if credentials else None,
-                    password=credentials.get("password") if credentials else None,
-                )
-                self._cluster = [member._etcd_client for member in self.client.members]
-                break
-            except grpc.RpcError as e:
-                times += 1
-                last_ex = e
-                if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
-                    log.debug("etcd3 connection failed. retrying after 1 sec...")
-                    time.sleep(1)
-                    continue
-                raise e
-        if times >= self.retry_times:
-            raise ValueError(
-                f"Initialize etcd client failed failed after {self.retry_times} times. Due to {last_ex}"
-            )
-        log.info(f'using etcd cluster from {addr} with namespace "{namespace}"')
+        self.connect()
 
-    def _mangle_key(self, k: str) -> bytes:
-        if k.startswith("/"):
-            k = k[1:]
-        return f"/{self.ns}/{k}".encode(self.encoding)
+    def _mangle_key(self, key: str) -> bytes:
+        if key.startswith("/"):
+            key = key[1:]
+        return f"/{self.ns}/{key}".encode(self.encoding)
 
     def _demangle_key(self, k: Union[bytes, str]) -> str:
         if isinstance(k, bytes):
@@ -176,9 +161,8 @@ class EtcdClient(object):
     def call(self, method, *args, **kwargs):
         """Etcd operation proxy method."""
         if self._cluster is None:
-            raise ValueError("Etcd client not initialized.")
+            raise RuntimeFailToStart("Etcd client not initialized.")
 
-        print("Method:", method, args, kwargs)
         times = 0
         while times < self.retry_times:
             client = self._cluster[self._client_idx]
@@ -381,6 +365,53 @@ class EtcdClient(object):
     @reconn_reauth_adaptor
     def cancel_watch(self, watch_id):
         return self.client.cancel_watch(watch_id)
+
+    @reconn_reauth_adaptor
+    def reconnect(self) -> bool:
+        """
+        Reconnect to etcd. This method is used to recover from a connection failure.
+        :return: True if reconnected successfully. False otherwise.
+        """
+        log.warning("Reconnecting to etcd.")
+        try:
+            connected = self.connect()
+        except Exception as e:
+            log.error(f"Failed to reconnect to etcd. {e}")
+            connected = False
+        log.warning(f"Reconnected to etcd. {connected}")
+        return connected
+
+    def connect(self) -> bool:
+        addr = f"{self._host}:{self._port}"
+        times = 0
+        last_ex = None
+
+        while times < self.retry_times:
+            try:
+                self.client = etcd3.client(
+                    host=self._host,
+                    port=self._port,
+                    user=self._creds.get("user") if self._creds else None,
+                    password=self._creds.get("password") if self._creds else None,
+                )
+                self._cluster = [member._etcd_client for member in self.client.members]
+                break
+            except grpc.RpcError as e:
+                times += 1
+                last_ex = e
+                if e.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.UNKNOWN):
+                    log.error(
+                        f"etcd3 connection failed. retrying after 1 sec, attempt # {times} of {self.retry_times}"
+                    )
+                    time.sleep(1)
+                    continue
+                raise e
+        if times >= self.retry_times:
+            raise RuntimeFailToStart(
+                f"Initialize etcd client failed failed after {self.retry_times} times. Due to {last_ex}"
+            )
+        log.info(f'using etcd cluster from {addr} with namespace "{self.ns}"')
+        return True
 
 
 if __name__ == "__main__":
