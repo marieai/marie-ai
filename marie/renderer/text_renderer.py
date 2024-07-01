@@ -58,7 +58,7 @@ class TextRenderer(ResultRenderer):
         x_hist = np.digitize(x_space, bins, right=True)
 
         # ['meta', 'words', 'lines']
-        if True:
+        if False:
             print(f"Image size  : {shape}")
             print(f"Char ratio  : {char_ratio}")
             print(f"Char width  : {char_width}")
@@ -77,8 +77,8 @@ class TextRenderer(ResultRenderer):
         force_word_index_sort = False
         min_spacing = 500
         max_characters_per_line = ceil(w // char_width)
-
-        print(f"max_characters_per_line = {max_characters_per_line}")
+        if False:
+            print(f"max_characters_per_line = {max_characters_per_line}")
 
         for i, line in enumerate(lines):
             bbox = line["bbox"]
@@ -131,9 +131,10 @@ class TextRenderer(ResultRenderer):
                 #     min_spacing = spaces
 
                 line_buffer = line_buffer[:grid_space] + text + line_buffer[grid_space:]
-                print(f"{grid_space} : {spaces}  > {text}")
-
-            print(line_buffer)
+                if False:
+                    print(f"{grid_space} : {spaces}  > {text}")
+            if False:
+                print(line_buffer)
             buffer += line_buffer
             if i < len(lines) - 1:
                 buffer += "\n"

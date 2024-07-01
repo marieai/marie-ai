@@ -154,13 +154,23 @@ def get_font(size):
 
 
 def visualize_icr(
-    frames: Union[np.ndarray, List[Image.Image]], results: Dict[str, Any], filename=None
-):
+    frames: Union[np.ndarray, List[Image.Image]],
+    results: List[Dict[str, Any]],
+    color: Tuple[int, int, int, int] = (150, 255, 150, 150),
+    font_size: int = 15,
+    padding: int = 8,
+    cache_image: bool = False,
+    filename_prefix: str = "visualize_icr",
+) -> PIL.Image:
     """Visualize ICR results
-    :param frames:
-    :param results:
-    :param filename:
-    :return:
+    :param frames:  Image or list of images
+    :param results: ICR results
+    :param color: Color of overlay boxes
+    :param font_size: Font size of the text
+    :param padding: Padding around the text
+    :param cache_image: Default False. If True, image will be cached in `/tmp/tensors/`
+    :param filename_prefix:  cached image name {filename_prefix}_{page_idx}.png (only used if cache_image=True)
+    :return: Image with Overlay boxes containing ICR results
     """
     assert len(frames) == len(results)
     ensure_exists("/tmp/tensors/")
@@ -175,56 +185,38 @@ def visualize_icr(
         else:
             viz_img = img
 
-        size = 14
-        draw = ImageDraw.Draw(viz_img, "RGBA")
-        font = get_font(size)
+        font = get_font(font_size)
 
         words_all = []
         words = np.array(result["words"])
-        lines_bboxes = np.array(result["meta"]["lines_bboxes"])
 
         for i, item in enumerate(words):
             box = item["box"]
-            text = f'({i}){item["text"]}'
+            text = item["text"]
             words_all.append(text)
 
-            # get text size
-            # text_size = font.getsize(text) #  Use getbbox or getlength instead.
+            # get text dimensions
             text_size = font.getbbox(text)
             text_w = text_size[2] - text_size[0]
             text_h = text_size[3] - text_size[1]
-
-            button_size = (text_w + 8, text_h + 8)
-            # button_size = (text_size[0] + 8, text_size[1] + 8)
+            button_size = (text_w + padding, text_h + padding)
 
             # create image with correct size and black background
-            button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
+            button_img = Image.new("RGBA", button_size, color=color)
             # put text on button with 10px margins
             button_draw = ImageDraw.Draw(button_img, "RGBA")
             button_draw.text(
-                (4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1
+                (padding // 2, padding // 2),
+                text=text,
+                font=font,
+                stroke_width=0,
+                fill=(0, 0, 0, 0),
+                width=1,
             )
-            # draw.rectangle(box, outline="red", width=1)
-            # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
             # put button on source image in position (0, 0)
             viz_img.paste(button_img, (box[0], box[1]))
 
-        for i, box in enumerate(lines_bboxes):
-            draw_box(
-                draw,
-                box,
-                None,  # f"{q_text} : {q_confidence}",
-                get_random_color(),
-                font,
-            )
+        if cache_image:
+            viz_img.save(f"/tmp/tensors/{filename_prefix}_{page_idx}.png")
 
-        if filename is None:
-            viz_img.save(f"/tmp/tensors/visualize_icr_{page_idx}.png")
-        else:
-            viz_img.save(f"/tmp/tensors/viz_{filename}_{page_idx}.png")
-
-        del viz_img
-        st = " ".join(words_all)
-        # print(st)
-
-    # viz_img.show()
+        return viz_img
