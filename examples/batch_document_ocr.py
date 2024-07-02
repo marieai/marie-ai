@@ -103,7 +103,7 @@ def process_request(
                     "enabled": False,
                 },
                 "template_matching": {
-                    "enabled": True,
+                    "enabled": False,
                     "definition_id": "120791",
                 },
             }
