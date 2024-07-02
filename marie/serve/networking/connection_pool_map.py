@@ -2,6 +2,7 @@ import os
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from marie.logging.logger import MarieLogger
+from marie.serve.networking import LoadBalancer
 from marie.serve.networking.instrumentation import (
     _NetworkingHistograms,
     _NetworkingMetrics,
@@ -23,10 +24,11 @@ class _ConnectionPoolMap:
         logger: Optional[MarieLogger],
         metrics: _NetworkingMetrics,
         histograms: _NetworkingHistograms,
-        aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-        tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
+        aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+        tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         channel_options: Optional[list] = None,
-        load_balancer_type: Optional[str] = 'round_robin',
+        load_balancer_type: Optional[str] = "round_robin",
+        load_balancer: Optional[LoadBalancer] = None,
     ):
         self._logger = logger
         # this maps deployments to shards or heads
@@ -36,21 +38,22 @@ class _ConnectionPoolMap:
         self._metrics = metrics
         self._histograms = histograms
         self.runtime_name = runtime_name
-        if os.name != 'nt':
-            os.unsetenv('http_proxy')
-            os.unsetenv('https_proxy')
+        if os.name != "nt":
+            os.unsetenv("http_proxy")
+            os.unsetenv("https_proxy")
         self.aio_tracing_client_interceptors = aio_tracing_client_interceptors
         self.tracing_client_interceptor = tracing_client_interceptor
         self.channel_options = channel_options
         self.load_balancer_type = load_balancer_type
+        self.load_balancer = load_balancer
 
     def add_replica(self, deployment: str, shard_id: int, address: str):
-        self._add_connection(deployment, shard_id, address, 'shards')
+        self._add_connection(deployment, shard_id, address, "shards")
 
     def add_head(
         self, deployment: str, address: str, head_id: Optional[int] = 0
     ):  # the head_id is always 0 for now, this will change when scaling the head
-        self._add_connection(deployment, head_id, address, 'heads')
+        self._add_connection(deployment, head_id, address, "heads")
 
     def get_replicas(
         self,
@@ -61,7 +64,7 @@ class _ConnectionPoolMap:
     ) -> Optional[_ReplicaList]:
         # returns all replicas of a given deployment, using a given shard
         if deployment in self._deployments:
-            type_ = 'heads' if head else 'shards'
+            type_ = "heads" if head else "shards"
             if entity_id is None and head:
                 entity_id = 0
             return self._get_connection_list(
@@ -69,7 +72,7 @@ class _ConnectionPoolMap:
             )
         else:
             self._logger.debug(
-                f'Unknown deployment {deployment}, no replicas available'
+                f"Unknown deployment {deployment}, no replicas available"
             )
             return None
 
@@ -78,9 +81,9 @@ class _ConnectionPoolMap:
         # result is a list of 'shape' (num_shards, num_replicas), containing all replicas for all shards
         replicas = []
         if deployment in self._deployments:
-            for shard_id in self._deployments[deployment]['shards']:
+            for shard_id in self._deployments[deployment]["shards"]:
                 replicas.append(
-                    self._get_connection_list(deployment, 'shards', shard_id)
+                    self._get_connection_list(deployment, "shards", shard_id)
                 )
         return replicas
 
@@ -125,7 +128,7 @@ class _ConnectionPoolMap:
 
     def _add_deployment(self, deployment: str):
         if deployment not in self._deployments:
-            self._deployments[deployment] = {'shards': {}, 'heads': {}}
+            self._deployments[deployment] = {"shards": {}, "heads": {}}
             self._access_count[deployment] = 0
 
     def _add_connection(
@@ -147,29 +150,30 @@ class _ConnectionPoolMap:
                 deployment_name=deployment,
                 channel_options=self.channel_options,
                 load_balancer_type=self.load_balancer_type,
+                load_balancer=self.load_balancer,
             )
             self._deployments[deployment][type][entity_id] = connection_list
 
         if not self._deployments[deployment][type][entity_id].has_connection(address):
             self._logger.debug(
-                f'adding connection for deployment {deployment}/{type}/{entity_id} to {address}'
+                f"adding connection for deployment {deployment}/{type}/{entity_id} to {address}"
             )
             self._deployments[deployment][type][entity_id].add_connection(
                 address, deployment_name=deployment
             )
             self._logger.debug(
-                f'connection for deployment {deployment}/{type}/{entity_id} to {address} added'
+                f"connection for deployment {deployment}/{type}/{entity_id} to {address} added"
             )
         else:
             self._logger.debug(
-                f'ignoring activation of pod for deployment {deployment}, {address} already known'
+                f"ignoring activation of pod for deployment {deployment}, {address} already known"
             )
 
     async def remove_head(self, deployment, address, head_id: Optional[int] = 0):
-        return await self._remove_connection(deployment, head_id, address, 'heads')
+        return await self._remove_connection(deployment, head_id, address, "heads")
 
     async def remove_replica(self, deployment, address, shard_id: Optional[int] = 0):
-        return await self._remove_connection(deployment, shard_id, address, 'shards')
+        return await self._remove_connection(deployment, shard_id, address, "shards")
 
     async def _remove_connection(self, deployment, entity_id, address, type):
         if (
@@ -177,7 +181,7 @@ class _ConnectionPoolMap:
             and entity_id in self._deployments[deployment][type]
         ):
             self._logger.debug(
-                f'removing connection for deployment {deployment}/{type}/{entity_id} to {address}'
+                f"removing connection for deployment {deployment}/{type}/{entity_id} to {address}"
             )
             await self._deployments[deployment][type][entity_id].remove_connection(
                 address

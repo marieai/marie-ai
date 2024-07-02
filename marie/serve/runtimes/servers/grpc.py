@@ -157,7 +157,7 @@ class GRPCServer(BaseServer):
             await self.health_servicer.set(
                 service, health_pb2.HealthCheckResponse.SERVING
             )
-        self.logger.debug(f'GRPC server setup successful')
+        self.logger.debug(f'GRPC server setup successful : {bind_addr}')
 
     async def shutdown(self):
         """Free other resources allocated with the server, e.g, gateway object, ..."""

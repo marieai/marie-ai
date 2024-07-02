@@ -947,7 +947,8 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
     except:
         __hubble_version__ = 'not-available'
     try:
-        from jcloud import __version__ as __jcloud_version__
+        # from jcloud import __version__ as __jcloud_version__
+        raise ImportError('jcloud is not available')
     except:
         __jcloud_version__ = 'not-available'
 

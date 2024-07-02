@@ -16,7 +16,7 @@ from marie.logging.logger import MarieLogger
 from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter
 from marie.types.request.data import DataRequest
 
-__all__ = ['RequestStreamer']
+__all__ = ["RequestStreamer"]
 
 from marie._docarray import DocumentArray
 from marie.types.request.data import Response
@@ -36,13 +36,13 @@ class RequestStreamer:
     def __init__(
         self,
         request_handler: Callable[
-            ['Request'], Tuple[Awaitable['Request'], Optional[Awaitable['Request']]]
+            ["Request"], Tuple[Awaitable["Request"], Optional[Awaitable["Request"]]]
         ],
-        result_handler: Callable[['Request'], Optional['Request']],
+        result_handler: Callable[["Request"], Optional["Request"]],
         prefetch: int = 0,
         iterate_sync_in_thread: bool = True,
         end_of_iter_handler: Optional[Callable[[], None]] = None,
-        logger: Optional['MarieLogger'] = None,
+        logger: Optional["MarieLogger"] = None,
         **logger_kwargs,
     ):
         """
@@ -80,11 +80,11 @@ class RequestStreamer:
         # Flow.
         # create loop and get from topology_graph
         _endpoints_models_map = {}
-        self.logger.debug(f'Get all endpoints from TopologyGraph')
+        self.logger.debug(f"Get all endpoints from TopologyGraph")
         endpoints = await topology_graph._get_all_endpoints(
             connection_pool, retry_forever=True, is_cancel=is_cancel
         )
-        self.logger.debug(f'Got all endpoints from TopologyGraph {endpoints}')
+        self.logger.debug(f"Got all endpoints from TopologyGraph {endpoints}")
         if endpoints is not None:
             for endp in endpoints:
                 for origin_node in topology_graph.origin_nodes:
@@ -103,14 +103,14 @@ class RequestStreamer:
                         _endpoints_models_map[endp] = leaf_input_output_model[0]
         cached_models = {}
         for k, v in _endpoints_models_map.items():
-            if v['input'].__name__ not in cached_models:
-                cached_models[v['input'].__name__] = v['input']
+            if v["input"].__name__ not in cached_models:
+                cached_models[v["input"].__name__] = v["input"]
             else:
-                v['input'] = cached_models[v['input'].__name__]
-            if v['output'].__name__ not in cached_models:
-                cached_models[v['output'].__name__] = v['output']
+                v["input"] = cached_models[v["input"].__name__]
+            if v["output"].__name__ not in cached_models:
+                cached_models[v["output"].__name__] = v["output"]
             else:
-                v['output'] = cached_models[v['output'].__name__]
+                v["output"] = cached_models[v["output"].__name__]
         return _endpoints_models_map
 
     async def stream_doc(
@@ -118,7 +118,7 @@ class RequestStreamer:
         request,
         context=None,
         *args,
-    ) -> AsyncIterator['Request']:
+    ) -> AsyncIterator["Request"]:
         """
         stream requests from client iterator and stream responses back.
 
@@ -141,7 +141,7 @@ class RequestStreamer:
                 context.set_code(err.code())
                 context.set_trailing_metadata(err.trailing_metadata())
                 self.logger.error(
-                    f'Error while getting responses from deployments: {err.details()}'
+                    f"Error while getting responses from deployments: {err.details()}"
                 )
                 r = Response()
                 if err.request_id:
@@ -149,13 +149,13 @@ class RequestStreamer:
                 yield r
             else:  # HTTP and WS need different treatment further up the stack
                 self.logger.error(
-                    f'Error while getting responses from deployments: {err.details()}'
+                    f"Error while getting responses from deployments: {err.details()}"
                 )
                 raise
         except (
             Exception
         ) as err:  # HTTP and WS need different treatment further up the stack
-            self.logger.error(f'Error while getting responses from deployments: {err}')
+            self.logger.error(f"Error while getting responses from deployments: {err}")
             raise err
 
     async def stream(
@@ -166,7 +166,7 @@ class RequestStreamer:
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
         *args,
-    ) -> AsyncIterator['Request']:
+    ) -> AsyncIterator["Request"]:
         """
         stream requests from client iterator and stream responses back.
 
@@ -181,13 +181,13 @@ class RequestStreamer:
         prefetch = prefetch or self._prefetch
         if context is not None:
             for metadatum in context.invocation_metadata():
-                if metadatum.key == '__results_in_order__':
-                    results_in_order = metadatum.value == 'true'
-                if metadatum.key == '__prefetch__':
+                if metadatum.key == "__results_in_order__":
+                    results_in_order = metadatum.value == "true"
+                if metadatum.key == "__prefetch__":
                     try:
                         prefetch = int(metadatum.value)
                     except:
-                        self.logger.debug(f'Couldn\'t parse prefetch to int value!')
+                        self.logger.debug(f"Couldn't parse prefetch to int value!")
 
         try:
             async_iter: AsyncIterator = self._stream_requests(
@@ -206,7 +206,7 @@ class RequestStreamer:
                 context.set_code(err.code())
                 context.set_trailing_metadata(err.trailing_metadata())
                 self.logger.error(
-                    f'Error while getting responses from deployments: {err.details()}'
+                    f"Error while getting responses from deployments: {err.details()}"
                 )
                 r = Response()
                 if err.request_id:
@@ -214,13 +214,13 @@ class RequestStreamer:
                 yield r
             else:  # HTTP and WS need different treatment further up the stack
                 self.logger.error(
-                    f'Error while getting responses from deployments: {err.details()}'
+                    f"Error while getting responses from deployments: {err.details()}"
                 )
                 raise
         except (
             Exception
         ) as err:  # HTTP and WS need different treatment further up the stack
-            self.logger.error(f'Error while getting responses from deployments: {err}')
+            self.logger.error(f"Error while getting responses from deployments: {err}")
             raise err
 
     async def _stream_requests(
@@ -257,7 +257,7 @@ class RequestStreamer:
         async def exception_raise(exception):
             raise exception
 
-        def callback(future: 'asyncio.Future'):
+        def callback(future: "asyncio.Future"):
             """callback to be run after future is completed.
             1. Put the future in the result queue.
             2. Remove the future from futures when future is completed.
@@ -269,7 +269,7 @@ class RequestStreamer:
             """
             result_queue.put_nowait(future)
 
-        def hanging_callback(future: 'asyncio.Future'):
+        def hanging_callback(future: "asyncio.Future"):
             floating_results_queue.put_nowait(future)
 
         async def iterate_requests() -> None:

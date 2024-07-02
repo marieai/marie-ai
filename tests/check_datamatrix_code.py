@@ -23,7 +23,7 @@ def process_data_matrix(filename):
     if len(unique_values) > 2:
         ret, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-    pad = 50
+    pad = 100
     gray = cv2.copyMakeBorder(gray, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
     decoded_objects = decode(gray, corrections=3)
 
@@ -31,6 +31,7 @@ def process_data_matrix(filename):
 
     output = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     for obj in decoded_objects:
+        print("Decoded Data : ", obj.data.decode('utf-8'))
         rect = obj.rect
         cv2.rectangle(output, (rect.left, rect.top), (rect.left + rect.width, rect.top + rect.height), (0, 0, 255), 2)
         # cv2.putText(output, obj.data.decode('utf-8'), (rect.left, rect.top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)

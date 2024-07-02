@@ -16,9 +16,6 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
         super().__init__(deployment_name, logger)
         self._rr_counter = 0  # round robin counter
 
-    async def get_next_connection(self, num_retries=3):
-        return await self._get_next_connection(num_retries=num_retries)
-
     async def _get_next_connection(self, num_retries=3):
         # Find the connection with the least active connections
         min_active_connections = int(1e9)
@@ -36,9 +33,9 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
             self._rr_counter = 0
 
         self._logger.debug(
-            f'least_connection_balancer.py: min_use_connections: {min_use_connections}'
-            f' min_active_connections: {min_active_connections}'
-            f' self._rr_counter: {self._rr_counter}'
+            f"least_connection_balancer.py: min_use_connections: {min_use_connections}"
+            f" min_active_connections: {min_active_connections}"
+            f" self._rr_counter: {self._rr_counter}"
         )
 
         # Round robin between the connections with the least active connections
@@ -54,12 +51,12 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
             if all_connections_unavailable:
                 if num_retries <= 0:
                     raise EstablishGrpcConnectionError(
-                        f'Error while resetting connections {self._connections} for {self._deployment_name}. Connections cannot be used.'
+                        f"Error while resetting connections {self._connections} for {self._deployment_name}. Connections cannot be used."
                     )
             elif connection is None:
                 # give control back to async event loop so connection resetting can be completed; then retry
                 self._logger.debug(
-                    f' No valid connection found for {self._deployment_name}, give chance for potential resetting of connection'
+                    f" No valid connection found for {self._deployment_name}, give chance for potential resetting of connection"
                 )
                 return await self._get_next_connection(num_retries=num_retries - 1)
         except IndexError:

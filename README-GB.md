@@ -476,6 +476,9 @@ https://github.com/fioresxcat/VAT_245/tree/fa526ac7e2ce9bb392ca66bd86305d69caee7
 # Table Transformer and Table Detection
 https://github.com/NielsRogge/Transformers-Tutorials/blob/master/Table%20Transformer/Using_Table_Transformer_for_table_detection_and_table_structure_recognition.ipynb
 
+# IDEAS
+dedoc
+https://github.com/ispras/dedoc/blob/master/dedoc/structure_constructors/abstract_structure_constructor.py
 
 
 https://cloud.google.com/document-ai
@@ -505,4 +508,20 @@ event.json
 act.secrets
 ```
 MARIE_CORE_RELEASE_TOKEN=ghp_ABC
+```
+
+## Pydantic
+```bash
+pydantic                                     1.10.15
+pydantic_core                                2.10.1
+```
+
+
+
+
+
+#  Rewriting history
+
+```bash
+  git filter-repo --mailmap mailmap --force
 ```

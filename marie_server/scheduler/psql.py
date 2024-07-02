@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import traceback
+from enum import Enum
 from typing import Any, Dict, Generator, List
 
 import psycopg2
@@ -9,10 +10,16 @@ from marie.excepts import BadConfigSource
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
+from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.scheduler import Scheduler
+from marie_server.scheduler.state import States
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
+
+
+DEFAULT_SCHEMA = "marie_scheduler"
+COMPLETION_JOB_PREFIX = f"__state__{States.COMPLETED.value}__"
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
@@ -21,50 +28,73 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
         self.logger = MarieLogger("PostgreSQLJobScheduler")
         print("config", config)
         self.running = False
-        self._setup_storage(config)
+        self._setup_storage(config, connection_only=True)
+
+    def create_tables(self, schema: str):
+        """
+        :param schema: The name of the schema where the tables will be created.
+        :return: None
+        """
+        commands = [
+            create_schema(schema),
+            create_version_table(schema),
+            create_job_state_enum(schema),
+            create_job_table(schema),
+            clone_job_table_for_archive(schema),
+            create_schedule_table(schema),
+            create_subscription_table(schema),
+            add_archived_on_to_archive(schema),
+            add_archived_on_index_to_archive(schema),
+            add_id_index_to_archive(schema),
+            create_index_singleton_on(schema),
+            create_index_singleton_key_on(schema),
+            create_index_job_name(schema),
+            create_index_job_fetch(schema),
+        ]
+
+        query = ";\n".join(commands)
+
+        locked_query = f"""
+           BEGIN;
+           SET LOCAL statement_timeout = '30s';
+           SELECT pg_try_advisory_lock(1);
+           {query};
+           SELECT pg_advisory_unlock(1);
+           COMMIT;
+           """
+
+        with self:
+            self._execute_sql_gracefully(locked_query)
 
     def start_schedule(self) -> None:
+        """
+        Starts the job scheduling agent.
+
+        :return: None
+        """
         logger.info("Starting job scheduling agent")
+        self.create_tables(DEFAULT_SCHEMA)
 
-        def _run():
-            try:
+        if False:
+
+            def _run():
                 try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
 
-                if loop is None:
-                    asyncio.run(self.__poll())
-                else:
-                    loop.run_until_complete(self.__poll())
-            except Exception as e:
-                logger.error(f"Unable to setup job scheduler: {e}")
-                logger.error(traceback.format_exc())
+                    if loop is None:
+                        asyncio.run(self.__poll())
+                    else:
+                        loop.run_until_complete(self.__poll())
+                except Exception as e:
+                    logger.error(f"Unable to setup job scheduler: {e}")
+                    logger.error(traceback.format_exc())
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-
-    def _create_table(self, table_name: str) -> None:
-        """Create the table if it doesn't exist."""
-        print("creating table : ", table_name)
-
-        self._execute_sql_gracefully(
-            f"""
-             CREATE TABLE IF NOT EXISTS  queue (
-                 id UUID PRIMARY KEY,
-                 created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                 updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
-
-                 scheduled_for TIMESTAMP WITH TIME ZONE NOT NULL,
-                 failed_attempts INT NOT NULL,
-                 status INT NOT NULL,
-                 message JSONB NOT NULL
-             );
-
-             CREATE INDEX index_queue_on_scheduled_for ON queue (scheduled_for);
-             CREATE INDEX index_queue_on_status ON queue (status);
-             """,
-        )
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join()  # FOR TESTING PURPOSES ONLY
 
     async def __poll(self):
         print("Starting poller with psql")
@@ -109,22 +139,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
         :param limit: the maximal number records to get
         :return:
         """
-        try:
-            cursor = self.connection.cursor("doc_iterator")
-            cursor.itersize = 10000
-            cursor.execute(
-                f"""
-                SELECT * FROM job_queue
-                """
-                # + (f" limit = {limit}" if limit > 0 else "")
-            )
-            for record in cursor:
-                print(record)
-                doc_id = record[0]
 
-                yield doc_id
+        with self:
+            try:
+                cursor = self.connection.cursor("doc_iterator")
+                cursor.itersize = 10000
+                cursor.execute(
+                    f"""
+                    SELECT * FROM job_queue
+                    """
+                    # + (f" limit = {limit}" if limit > 0 else "")
+                )
+                for record in cursor:
+                    print(record)
+                    doc_id = record[0]
 
-        except (Exception, psycopg2.Error) as error:
-            self.logger.error(f"Error importing snapshot: {error}")
-            self.connection.rollback()
-        self.connection.commit()
+                    yield doc_id
+
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error importing snapshot: {error}")
+                self.connection.rollback()
+            self.connection.commit()

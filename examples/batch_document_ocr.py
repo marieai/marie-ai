@@ -99,10 +99,22 @@ def process_request(
                 "page_cleaner": {
                     "enabled": False,
                 },
+                "page_boundary": {
+                    "enabled": False,
+                },
+                "template_matching": {
+                    "enabled": False,
+                    "definition_id": "120791",
+                },
             }
         ],
     }
 
+    # Hostname:    'GEXT-04'
+    # VirtualHost: '/'
+    # Port: '5672'
+    # TLS: 'false'
+    # docker run -d --name extract-rabbitmq rabbitmq:3-management-alpine
     # Upload file to api
     logger.info(f"Uploading to marie-ai for processing : {file}")
 

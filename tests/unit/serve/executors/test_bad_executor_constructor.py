@@ -1,6 +1,8 @@
 import pytest
+from docarray.documents.legacy import LegacyDocument
 
 from marie import Executor, Flow, requests
+from marie.utils.pydantic import patch_pydantic_schema_2x
 
 
 class GoodExecutor(Executor):
@@ -22,6 +24,7 @@ class GoodExecutor2(Executor):
 
 
 def test_bad_executor_constructor():
+
     # executor can be used as out of Flow as Python object
     exec1 = GoodExecutor()
     exec2 = GoodExecutor2({}, {}, {}, {})

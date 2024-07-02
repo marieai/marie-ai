@@ -66,7 +66,7 @@ def run_raft(
         raft_id,
         raft_dir,
         args.name,
-        score_threshold=executor_target,
+        executor_target,
         **raft_configuration,
     )
 
@@ -149,10 +149,12 @@ def run(
         )
     except Exception as ex:
         logger.error(
-            f'{ex!r} during {runtime_cls!r} initialization'
-            + f'\n add "--quiet-error" to suppress the exception details'
-            if not args.quiet_error
-            else '',
+            (
+                f'{ex!r} during {runtime_cls!r} initialization'
+                + f'\n add "--quiet-error" to suppress the exception details'
+                if not args.quiet_error
+                else ''
+            ),
             exc_info=not args.quiet_error,
         )
     else:

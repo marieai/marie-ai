@@ -192,8 +192,8 @@ class WorkerRequestHandler:
 
         return extend_rest_interface(app)
 
-    def _http_fastapi_sagemaker_app(self, **kwargs):
-        from marie.serve.runtimes.worker.http_sagemaker_app import get_fastapi_app
+    def _http_fastapi_csp_app(self, **kwargs):
+        from jina.serve.runtimes.worker.http_csp_app import get_fastapi_app
 
         request_models_map = self._executor._get_endpoint_models_dict()
 
@@ -1167,7 +1167,7 @@ class WorkerRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request
         """
-        self.logger.debug("recv a stream request")
+        self.logger.debug("recv a stream request from client")
         async for request in request_iterator:
             yield await self.process_data([request], context)
 

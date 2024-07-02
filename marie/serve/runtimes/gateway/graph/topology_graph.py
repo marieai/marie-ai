@@ -224,15 +224,15 @@ class TopologyGraph:
                             self._pydantic_models_by_endpoint = {}
                             models_created_by_name = {}
                             for endpoint, inner_dict in schemas.items():
-                                input_model_name = inner_dict["input"]["name"]
-                                input_model_schema = inner_dict["input"]["model"]
+                                input_model_name = inner_dict['input']['name']
+                                input_model_schema = inner_dict['input']['model']
                                 if input_model_schema in models_schema_list:
                                     input_model = models_list[
                                         models_schema_list.index(input_model_schema)
                                     ]
-                                    models_created_by_name[
-                                        input_model_name
-                                    ] = input_model
+                                    models_created_by_name[input_model_name] = (
+                                        input_model
+                                    )
                                 else:
                                     if input_model_name not in models_created_by_name:
                                         if input_model_schema == legacy_doc_schema:
@@ -245,24 +245,24 @@ class TopologyGraph:
                                                     models_created_by_name,
                                                 )
                                             )
-                                        models_created_by_name[
-                                            input_model_name
-                                        ] = input_model
+                                        models_created_by_name[input_model_name] = (
+                                            input_model
+                                        )
                                     input_model = models_created_by_name[
                                         input_model_name
                                     ]
                                     models_schema_list.append(input_model_schema)
                                     models_list.append(input_model)
 
-                                output_model_name = inner_dict["output"]["name"]
-                                output_model_schema = inner_dict["output"]["model"]
+                                output_model_name = inner_dict['output']['name']
+                                output_model_schema = inner_dict['output']['model']
                                 if output_model_schema in models_schema_list:
                                     output_model = models_list[
                                         models_schema_list.index(output_model_schema)
                                     ]
-                                    models_created_by_name[
-                                        output_model_name
-                                    ] = output_model
+                                    models_created_by_name[output_model_name] = (
+                                        output_model
+                                    )
                                 else:
                                     if output_model_name not in models_created_by_name:
                                         if output_model_name == legacy_doc_schema:
@@ -275,18 +275,18 @@ class TopologyGraph:
                                                     models_created_by_name,
                                                 )
                                             )
-                                        models_created_by_name[
-                                            output_model_name
-                                        ] = output_model
+                                        models_created_by_name[output_model_name] = (
+                                            output_model
+                                        )
                                     output_model = models_created_by_name[
                                         output_model_name
                                     ]
                                     models_schema_list.append(output_model)
                                     models_list.append(output_model)
 
-                                parameters_model_name = inner_dict["parameters"]["name"]
-                                parameters_model_schema = inner_dict["parameters"][
-                                    "model"
+                                parameters_model_name = inner_dict['parameters']['name']
+                                parameters_model_schema = inner_dict['parameters'][
+                                    'model'
                                 ]
                                 if parameters_model_schema is not None:
                                     if parameters_model_schema in models_schema_list:
@@ -600,17 +600,17 @@ class TopologyGraph:
             list_of_outputs = []
             for outgoing_node in self.outgoing_nodes:
                 list_of_maps = outgoing_node._get_leaf_input_output_model(
-                    previous_input=new_map["input"] if new_map is not None else None,
-                    previous_output=new_map["output"] if new_map is not None else None,
-                    previous_is_generator=new_map["is_generator"]
-                    if new_map is not None
-                    else None,
-                    previous_is_singleton_doc=new_map["is_singleton_doc"]
-                    if new_map is not None
-                    else None,
-                    previous_parameters=new_map["parameters"]
-                    if new_map is not None
-                    else None,
+                    previous_input=new_map['input'] if new_map is not None else None,
+                    previous_output=new_map['output'] if new_map is not None else None,
+                    previous_is_generator=(
+                        new_map['is_generator'] if new_map is not None else None
+                    ),
+                    previous_is_singleton_doc=(
+                        new_map['is_singleton_doc'] if new_map is not None else None
+                    ),
+                    previous_parameters=(
+                        new_map['parameters'] if new_map is not None else None
+                    ),
                     endpoint=endpoint,
                 )
                 # We are interested in the last one, that will be the task that awaits all the previous
@@ -732,7 +732,6 @@ class TopologyGraph:
             return request
 
     class _EndGatewayNode(_ReqReplyNode):
-
         """
         Dummy node to be added before the gateway. This is to solve a problem we had when implementing `floating Executors`.
         If we do not add this at the end, this structure does not work:
@@ -809,9 +808,11 @@ class TopologyGraph:
             metadata = deployments_metadata.get(node_name, None)
             nodes[node_name] = self._ReqReplyNode(
                 name=node_name,
-                number_of_parts=num_parts_per_node[node_name]
-                if num_parts_per_node[node_name] > 0
-                else 1,
+                number_of_parts=(
+                    num_parts_per_node[node_name]
+                    if num_parts_per_node[node_name] > 0
+                    else 1
+                ),
                 floating=node_name in floating_deployment_set,
                 filter_condition=condition,
                 metadata=metadata,

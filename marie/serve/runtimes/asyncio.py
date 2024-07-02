@@ -206,6 +206,22 @@ class AsyncNewLoopRuntime:
                 cors=getattr(self.args, 'cors', None),
                 is_cancel=self.is_cancel,
             )
+        elif (
+            hasattr(self.args, 'provider') and self.args.provider == ProviderType.AZURE
+        ):
+            from marie.serve.runtimes.servers.http import AzureHTTPServer
+
+            return AzureHTTPServer(
+                name=self.args.name,
+                runtime_args=self.args,
+                req_handler_cls=self.req_handler_cls,
+                proxy=getattr(self.args, 'proxy', None),
+                uvicorn_kwargs=getattr(self.args, 'uvicorn_kwargs', None),
+                ssl_keyfile=getattr(self.args, 'ssl_keyfile', None),
+                ssl_certfile=getattr(self.args, 'ssl_certfile', None),
+                cors=getattr(self.args, 'cors', None),
+                is_cancel=self.is_cancel,
+            )
         elif not hasattr(self.args, 'protocol') or (
             len(self.args.protocol) == 1 and self.args.protocol[0] == ProtocolType.GRPC
         ):
@@ -338,10 +354,12 @@ class AsyncNewLoopRuntime:
             self.logger.debug(f'{self!r} is interrupted by user')
         elif exc_type and issubclass(exc_type, Exception):
             self.logger.error(
-                f'{exc_val!r} during {self.run_forever!r}'
-                + f'\n add "--quiet-error" to suppress the exception details'
-                if not self.args.quiet_error
-                else '',
+                (
+                    f'{exc_val!r} during {self.run_forever!r}'
+                    + f'\n add "--quiet-error" to suppress the exception details'
+                    if not self.args.quiet_error
+                    else ''
+                ),
                 exc_info=not self.args.quiet_error,
             )
         try:
@@ -351,10 +369,12 @@ class AsyncNewLoopRuntime:
             pass
         except Exception as ex:
             self.logger.error(
-                f'{ex!r} during {self.teardown!r}'
-                + f'\n add "--quiet-error" to suppress the exception details'
-                if not self.args.quiet_error
-                else '',
+                (
+                    f'{ex!r} during {self.teardown!r}'
+                    + f'\n add "--quiet-error" to suppress the exception details'
+                    if not self.args.quiet_error
+                    else ''
+                ),
                 exc_info=not self.args.quiet_error,
             )
 

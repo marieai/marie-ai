@@ -1,5 +1,6 @@
 import argparse
 import os
+from collections.abc import Iterable
 from typing import List, Optional, Union
 
 import cv2
@@ -9,6 +10,7 @@ from detectron2.config import get_cfg
 from detectron2.utils.visualizer import ColorMode, Visualizer
 from ditod import add_vit_config
 from docarray import DocList
+from torchvision.ops.boxes import batched_nms
 from tqdm import tqdm
 
 from marie.constants import __config_dir__, __model_path__
@@ -375,8 +377,32 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
                 return [default_prediction]
 
             if len(boxes) > 1:
-                self.logger.warning(f"Multiple boxes detected, skipping segmentation.")
-                return [default_prediction]
+
+                min_score = 0.7
+                indices = np.where(scores > min_score)
+                scores = scores[indices]
+                boxes = boxes[indices]
+                classes = classes[indices]
+
+                if len(boxes) == 0:
+                    self.logger.warning(
+                        f"No segmentation boxes predicted. No boxes above threshold."
+                    )
+                    return [default_prediction]
+
+                post_nms_topk = 1
+                nms_thresh = 0.5
+                keep = batched_nms(
+                    torch.tensor(boxes.astype(np.float32)),
+                    torch.tensor(scores.astype(np.float32)),
+                    torch.tensor(classes),
+                    nms_thresh,
+                )
+
+                keep = keep[:post_nms_topk]
+                boxes = [boxes[keep]]
+                scores = [scores[keep]]
+                classes = [classes[keep]]
 
             boundary_bbox = [int(x) for x in boxes[0]]  # xyxy format
             # TODO : add this as a parameter

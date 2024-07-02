@@ -283,7 +283,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
-        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER', 'AZURE'].
         :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
@@ -984,7 +984,7 @@ class Flow(
         :param port_monitoring: The port on which the prometheus server is exposed, default is a random port between [49152, 65535]
         :param prefer_platform: The preferred target Docker platform. (e.g. "linux/amd64", "linux/arm64")
         :param protocol: Communication protocol of the server exposed by the Executor. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
-        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER', 'AZURE'].
         :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param py_modules: The customized python modules need to be imported before loading the executor
 
@@ -1416,7 +1416,7 @@ class Flow(
 
               Used to control the speed of data input into a Flow. 0 disables prefetch (1000 requests is the default)
         :param protocol: Communication protocol of the server exposed by the Gateway. This can be a single value or a list of protocols, depending on your chosen Gateway. Choose the convenient protocols from: ['GRPC', 'HTTP', 'WEBSOCKET'].
-        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER'].
+        :param provider: If set, Executor is translated to a custom container compatible with the chosen provider. Choose the convenient providers from: ['NONE', 'SAGEMAKER', 'AZURE'].
         :param provider_endpoint: If set, Executor endpoint will be explicitly chosen and used in the custom container operated by the provider.
         :param proxy: If set, respect the http_proxy and https_proxy environment variables. otherwise, it will unset these proxy variables before start. gRPC seems to prefer no proxy
         :param py_modules: The customized python modules need to be imported before loading the gateway
@@ -1787,10 +1787,8 @@ class Flow(
             op_flow._deployment_nodes[GATEWAY_NAME].args.graph_description = json.dumps(
                 op_flow._get_graph_representation()
             )
-            op_flow._deployment_nodes[
-                GATEWAY_NAME
-            ].args.deployments_addresses = json.dumps(
-                op_flow._get_deployments_addresses()
+            op_flow._deployment_nodes[GATEWAY_NAME].args.deployments_addresses = (
+                json.dumps(op_flow._get_deployments_addresses())
             )
 
             op_flow._deployment_nodes[GATEWAY_NAME].update_pod_args()
@@ -1872,19 +1870,25 @@ class Flow(
 
         runtime_args = self._deployment_nodes[GATEWAY_NAME].args
 
-        for gport, gprotocol in zip(port_gateway, protocol_gateway):
-            # TODO : Need to implement GRPC and WEBSOCKET
-            if gprotocol == ProtocolType.HTTP:
-                self._setup_service_discovery(
-                    name=f"marie-{GATEWAY_NAME}",
-                    host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
-                    port=gport,
-                    scheme=runtime_args.scheme if 'scheme' in runtime_args else 'http',
-                    discovery=runtime_args.discovery,
-                    discovery_host=runtime_args.discovery_host,
-                    discovery_port=runtime_args.discovery_port,
-                    discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
-                )
+        if runtime_args.discovery:
+            for gport, gprotocol in zip(port_gateway, protocol_gateway):
+                if gprotocol in (ProtocolType.HTTP, ProtocolType.GRPC):
+                    self._setup_service_discovery(
+                        protocol=gprotocol,
+                        name=f"marie-{GATEWAY_NAME}",
+                        host=self.host if self.host != '0.0.0.0' else get_internal_ip(),
+                        port=gport,
+                        scheme=(
+                            runtime_args.scheme if 'scheme' in runtime_args else 'http'
+                        ),
+                        discovery=runtime_args.discovery,
+                        discovery_host=runtime_args.discovery_host,
+                        discovery_port=runtime_args.discovery_port,
+                        discovery_watchdog_interval=runtime_args.discovery_watchdog_interval,
+                        runtime_args=runtime_args,
+                    )
+        else:
+            self.logger.warning('Service Discovery is disabled for gateway.')
 
         self._build_level = FlowBuildLevel.RUNNING
 
@@ -2031,7 +2035,6 @@ class Flow(
             if not running_in_event_loop:
                 asyncio.get_event_loop().run_until_complete(_async_wait_all())
             else:
-                # TODO: the same logic that one fails all other fail should be done also here
                 for k, v in self:
                     wait_ready_threads.append(
                         threading.Thread(target=_wait_ready, args=(k, v), daemon=True)
@@ -2444,7 +2447,6 @@ class Flow(
             http_ext_table.add_row(':books:', 'Redoc', redoc_link)
 
             if self.gateway_args.expose_graphql_endpoint:
-
                 http_ext_table.add_row(':strawberry:', 'GraphQL UI', graphql_ui_link)
 
             if True or self.gateway_args.discovery:
@@ -2465,6 +2467,23 @@ class Flow(
                     expand=False,
                 )
             )
+
+        pod_ext_table = self._init_table()
+
+        for name, deployment in self:
+            for replica in deployment.pod_args['pods'][0]:
+                pod_ext_table.add_row(
+                    ':lock:',
+                    replica.name,
+                    f'[link=://{replica.host}:{replica.port[0]}]{replica.host}:{replica.port[0]}[/]',
+                )
+        all_panels.append(
+            Panel(
+                pod_ext_table,
+                title=':gem: [b]Deployment Nodes[/]',
+                expand=False,
+            )
+        )
 
         if self.monitoring:
             monitor_ext_table = self._init_table()

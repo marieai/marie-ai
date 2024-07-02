@@ -337,13 +337,9 @@ class ExtractPipeline(BasePipeline):
 
         # burst frames into individual images
         burst_frames(ref_id, frames, root_asset_dir)
-
-        print(f"before boundary : {len(frames)}")
         frames, boundary_meta = self.boundary(
             ref_id, frames, root_asset_dir, enabled=page_boundary_enabled
         )
-
-        print(f"after boundary : {len(frames)}")
 
         clean_frames = self.segment(
             ref_id, frames, root_asset_dir, enabled=page_cleaner_enabled

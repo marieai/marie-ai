@@ -23,7 +23,7 @@ def build_ocr_engines():
 
     trocr_processor = TrOcrProcessor(
         models_dir="/mnt/data/marie-ai/model_zoo/trocr",
-        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET30/checkpoint_best.pt",
+        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET41/checkpoint_best.pt",
         cuda=use_cuda,
     )
     # craft_processor = CraftOcrProcessor(cuda=True)

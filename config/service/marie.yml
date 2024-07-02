@@ -142,7 +142,7 @@ with:
       tags:
         - classify
 
-prefetch: 4
+prefetch: 1
 
 executors:
 #  - name: extract_executor
@@ -159,8 +159,8 @@ executors:
 
   - name: extract_t
     uses:
-      jtype: TextExtractionExecutor
-#      jtype: TextExtractionExecutorMock
+#      jtype: TextExtractionExecutor
+      jtype: TextExtractionExecutorMock
       with:
         storage:
           # postgresql configuration. Will be used only if value of backend is "psql"

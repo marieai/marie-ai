@@ -1,28 +1,28 @@
-from docarray import DocumentArray
-
+# from docarray import DocumentArray
 from marie import Executor, requests
+from marie._docarray import Document, DocumentArray
 from marie.parsers import set_pod_parser
 
 
 class ProcessExecutor(Executor):
-    @requests(on='/')
+    @requests(on="/")
     def process(self, docs: DocumentArray, **kwargs):
         for doc in docs:
-            doc.text = doc.text + 'world'
-            doc.tags['processed'] = True
+            doc.text = doc.text + "world"
+            doc.tags["processed"] = True
 
 
 def _validate_dummy_custom_gateway_response(port, expected):
     import requests
 
-    resp = requests.get(f'http://127.0.0.1:{port}/').json()
+    resp = requests.get(f"http://127.0.0.1:{port}/").json()
     assert resp == expected
 
 
 def _validate_custom_gateway_process(port, text, expected):
     import requests
 
-    resp = requests.get(f'http://127.0.0.1:{port}/stream?text={text}').json()
+    resp = requests.get(f"http://127.0.0.1:{port}/stream?text={text}").json()
     assert resp == expected
 
 

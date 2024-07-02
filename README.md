@@ -127,6 +127,13 @@ aws s3 cp some_file.txt s3://mybucket  --profile marie --endpoint-url http://loc
 aws s3 --profile marie --endpoint-url=http://127.0.0.1:8000 ls --recursive s3://
 ```
 
+Remove files from the bucket
+```shell
+aws s3 rm  s3://marie --recursive --profile marie --endpoint-url http://localhost:8000
+```
+
+
+
 # Production setup
 
 

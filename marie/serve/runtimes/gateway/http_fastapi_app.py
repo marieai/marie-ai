@@ -325,9 +325,9 @@ def get_fastapi_app(
         }
         for k, v in crud.items():
             v['tags'] = ['CRUD']
-            v[
-                'description'
-            ] = f'Post data requests to the Flow. Executors with `@requests(on="{k}")` will respond.'
+            v['description'] = (
+                f'Post data requests to the Flow. Executors with `@requests(on="{k}")` will respond.'
+            )
             expose_executor_endpoint(exec_endpoint=k, **v)
 
     if openapi_tags:

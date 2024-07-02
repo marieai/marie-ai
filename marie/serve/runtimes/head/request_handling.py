@@ -358,9 +358,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                             output_model_schema = inner_dict['output']['model']
 
                             if input_model_schema == legacy_doc_schema:
-                                models_created_by_name[
-                                    input_model_name
-                                ] = LegacyDocument
+                                models_created_by_name[input_model_name] = (
+                                    LegacyDocument
+                                )
                             elif input_model_name not in models_created_by_name:
                                 input_model = _create_pydantic_model_from_schema(
                                     input_model_schema, input_model_name, {}
@@ -368,9 +368,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                                 models_created_by_name[input_model_name] = input_model
 
                             if output_model_name == legacy_doc_schema:
-                                models_created_by_name[
-                                    output_model_name
-                                ] = LegacyDocument
+                                models_created_by_name[output_model_name] = (
+                                    LegacyDocument
+                                )
                             elif output_model_name not in models_created_by_name:
                                 output_model = _create_pydantic_model_from_schema(
                                     output_model_schema, output_model_name, {}
@@ -471,7 +471,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             )
             context.set_trailing_metadata(metadata.items())
             return response
-        except InternalNetworkError as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
+        except (
+            InternalNetworkError
+        ) as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
             return self._handle_internalnetworkerror(
                 err=err, context=context, response=Response()
             )
@@ -480,9 +482,12 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             Exception,
         ) as ex:  # some other error, keep streaming going just add error info
             self.logger.error(
-                f'{ex!r}' + f'\n add "--quiet-error" to suppress the exception details'
-                if not self.args.quiet_error
-                else '',
+                (
+                    f'{ex!r}'
+                    + f'\n add "--quiet-error" to suppress the exception details'
+                    if not self.args.quiet_error
+                    else ''
+                ),
                 exc_info=not self.args.quiet_error,
             )
             requests[0].add_exception(ex, executor=None)
@@ -522,7 +527,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             )
             response.endpoints.extend(worker_response.endpoints)
             response.schemas.update(worker_response.schemas)
-        except InternalNetworkError as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
+        except (
+            InternalNetworkError
+        ) as err:  # can't connect, Flow broken, interrupt the streaming through gRPC error mechanism
             return self._handle_internalnetworkerror(
                 err=err, context=context, response=response
             )
