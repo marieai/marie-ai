@@ -515,3 +515,13 @@ MARIE_CORE_RELEASE_TOKEN=ghp_ABC
 pydantic                                     1.10.15
 pydantic_core                                2.10.1
 ```
+
+
+
+
+
+#  Rewriting history
+
+```bash
+  git filter-repo --mailmap mailmap --force
+```
