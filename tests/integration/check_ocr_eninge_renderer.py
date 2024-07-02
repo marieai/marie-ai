@@ -3,6 +3,7 @@ import os
 
 import cv2
 import torch
+from PIL import Image
 
 from marie.boxes.box_processor import PSMode
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
@@ -42,7 +43,19 @@ def process_file(ocr_engine: OcrEngine, img_path: str):
         key = img_path.split("/")[-1]
         frames = frames_from_file(img_path)
 
-        results = ocr_engine.extract(frames, PSMode.SPARSE, CoordinateFormat.XYWH)
+        # test failure of small region
+        frame = frames[0]
+        xywh = (1691, 473, 255, 28)
+        fragment = frame[xywh[1]:xywh[1] + xywh[3], xywh[0]:xywh[0] + xywh[2]]
+        cv2.imwrite(f"/tmp/fragments/{key}.png", fragment)
+
+        pil_frag = Image.open(img_path).crop(
+            (xywh[0], xywh[1], xywh[0] + xywh[2], xywh[1] + xywh[3])
+        )
+        pil_frag.save(f"/tmp/fragments/{key}-PIL.png")
+        # save the fragment
+
+        results = ocr_engine.extract([pil_frag], PSMode.SPARSE, CoordinateFormat.XYWH)
 
         print("Testing text renderer")
         json_path = os.path.join("/tmp/fragments", f"results-{key}.json")
@@ -142,7 +155,7 @@ if __name__ == "__main__":
 
     img_path = "~/tmp/4007/176073139.tif"
     img_path = "~/tmp/demo/159581778_1.png"
-    img_path = os.path.expanduser("~/tmp/demo")
+    # img_path = os.path.expanduser("~/tmp/demo")
     # img_path = os.path.expanduser("/home/gbugaj/dev/marieai/marie-ai/assets/template_matching/sample-001.png")
 
     use_cuda = torch.cuda.is_available()
