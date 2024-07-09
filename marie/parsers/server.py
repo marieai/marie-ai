@@ -1,7 +1,7 @@
 """Argparser module for server"""
 
 from marie.parsers.base import set_base_parser
-from marie.parsers.helper import KVAppendAction, add_arg_group
+from marie.parsers.helper import KVAppendAction, _chf, add_arg_group
 
 
 def set_server_parser(parser=None):
@@ -13,8 +13,26 @@ def set_server_parser(parser=None):
     if not parser:
         parser = set_base_parser()
 
-    gp = add_arg_group(parser, title='Server Feature')
+    sp = parser.add_subparsers(
+        dest='ctl_cli',
+        required=True,
+    )
 
+    watch_parser = sp.add_parser(
+        'watch',
+        description='Watch the server deployments in real-time',
+        formatter_class=_chf,
+    )
+
+    watch_parser.add_argument(
+        '--etcd-host',
+        type=str,
+        help='The host address of etcd server to watch',
+    )
+
+    # return parser
+
+    gp = add_arg_group(parser, title='Server Feature')
     gp.add_argument(
         '--start',
         action='store_true',

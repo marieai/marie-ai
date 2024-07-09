@@ -243,6 +243,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         max_tries = 10
         tries = 0
         is_ready = False
+
         while tries < max_tries:
             self.logger.info(f"checking is ready at {ctrl_address}")
             is_ready = GRPCServer.is_ready(ctrl_address)
