@@ -4,11 +4,13 @@ from pathlib import Path
 from typing import Union
 
 from rich.text import TextType
+from textual.app import ComposeResult
+from textual.containers import Vertical
 from textual.widgets import Label, TabbedContent, TabPane
 
 
-class DataCatalog(TabbedContent, can_focus=True):
-    BORDER_TITLE = "Data Catalog"
+class DataCatalog(Vertical, can_focus=True):
+    BORDER_TITLE = "Deployment Catalog"
 
     def __init__(
         self,
@@ -24,7 +26,7 @@ class DataCatalog(TabbedContent, can_focus=True):
     ):
         super().__init__(
             *titles,
-            initial=initial,
+            # initial=initial,
             name=name,
             id=id,
             classes=classes,
@@ -36,5 +38,14 @@ class DataCatalog(TabbedContent, can_focus=True):
 
     def on_mount(self) -> None:
         # create dummy child components
-        self.add_pane(TabPane("Endpoints", Label("No data available-Nodes")))
-        self.add_pane(TabPane("Jobs", Label("No data available")))
+        # self.add_pane(TabPane("Endpoints", Label("No data available-Nodes")))
+        # self.add_pane(TabPane("Jobs", Label("No data available")))
+        pass
+
+    def compose(self) -> ComposeResult:
+        # add the files container
+        files_container = Vertical(
+            Label("Files"),
+            Label("No data available"),
+        )
+        yield files_container
