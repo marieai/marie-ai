@@ -140,6 +140,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         """
         self.logger.info("Setting up service discovery ")
+        # FIXME : This is a temporary solution to test the service discovery
         service_name = "gateway/service_test"
 
         async def _start_watcher():
@@ -153,12 +154,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
             self.logger.info(f"checking : {resolver.resolve(service_name)}")
             resolver.watch_service(service_name, self.handle_discovery_event)
-
-            # validate the service address
-            if False:
-                while True:
-                    self.logger.info("Checking service address...")
-                    await asyncio.sleep(watchdog_interval)
 
         task = asyncio.create_task(_start_watcher())
         try:

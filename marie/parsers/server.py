@@ -30,6 +30,12 @@ def set_server_parser(parser=None):
         help='The host address of etcd server to watch',
     )
 
+    watch_parser.add_argument(
+        '--etcd-port',
+        type=str,
+        help='The port of etcd server to watch',
+    )
+
     # return parser
 
     gp = add_arg_group(parser, title='Server Feature')

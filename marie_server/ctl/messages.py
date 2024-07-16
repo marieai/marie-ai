@@ -10,3 +10,9 @@ class WidgetMounted(Message):
     def __init__(self, widget: "Widget") -> None:
         super().__init__()
         self.widget = widget
+
+
+class EtcdConnected(Message):
+    def __init__(self, connection) -> None:
+        super().__init__()
+        self.connection = connection

@@ -404,3 +404,13 @@ TopBar {
     content-align: right middle;
     color: #8f9fc1;
 }
+
+SeparatorBar {
+    background: #192036;
+    height: 1;
+    layout: horizontal;
+    padding: 0;
+    margin: 0;
+    /*text-style: underline;*/
+    border: none;
+}
