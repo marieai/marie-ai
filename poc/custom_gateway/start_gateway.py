@@ -2,6 +2,7 @@ import time
 
 from marie import Flow
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from poc.custom_gateway.request_handling_custom import GatewayRequestHandler
 from poc.custom_gateway.server_gateway import MarieServerGateway
 
 
@@ -24,6 +25,13 @@ def main():
         return
 
     # gateway --protocol http --discovery --discovery-host 127.0.0.1 --discovery-port 8500 --host 192.168.102.65 --port 5555
+
+    # we could override the default GatewayRequestHandler with our custom GatewayRequestHandler
+    # but for now we will do monkey patching in MarieGatewayServer
+    if False:
+        from marie.serve.runtimes.gateway import request_handling
+
+        request_handling.GatewayRequestHandler = GatewayRequestHandler
 
     with (
         Flow(
