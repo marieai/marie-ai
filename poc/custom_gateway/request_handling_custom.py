@@ -30,7 +30,7 @@ class GatewayRequestHandler:
         tracing_client_interceptor=None,
         **kwargs,
     ):
-        print("GatewayRequestHandler INITED")
+        print("CUSTOM GATEWAY REQUEST HANDLER INITIALIZED")
         import json
 
         from marie.serve.runtimes.gateway.streamer import (
@@ -264,8 +264,6 @@ class GatewayRequestHandler:
         :yield: responses to the request after streaming to Executors in Flow
         """
         self.logger.debug('recv a stream request GATEWAY')
-        print(self.stream)
-        # print current method
 
         async for resp in self.streamer.rpc_stream(
             request_iterator=request_iterator, context=context, *args, **kwargs

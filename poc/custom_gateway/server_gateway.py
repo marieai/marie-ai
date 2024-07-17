@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Optional
 from urllib.parse import urlparse
 
 import grpc
@@ -24,11 +24,20 @@ from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
+
+if TYPE_CHECKING:  # pragma: no cover
+    import grpc
+
+    from marie.logging.logger import MarieLogger
+    from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+    from marie.types.request import Request
 
 
 def create_trace_interceptor() -> ClientInterceptor:
@@ -62,10 +71,29 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             gateway_streamer=self.streamer, logger=self.logger
         )
 
+        # perform monkey patching
+        GatewayRequestHandler.stream = self.custom_stream
+        GatewayRequestHandler.Call = (
+            self.custom_stream
+        )  # Call is an alias for stream in GatewayRequestHandler
+        GatewayRequestHandler.dry_run = self.custom_dry_run
+
         def _extend_rest_function(app):
             @app.on_event("shutdown")
             async def _shutdown():
                 await self.distributor.close()
+
+            @app.get("/job/submit")
+            async def job_submit(text: str):
+                self.logger.info(f"Received request at {datetime.now}")
+                doc = TextDoc(text=text)
+
+                result = await self.distributor.submit_job(
+                    JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
+                    doc=doc,
+                )
+
+                return {"result": result}
 
             @app.get("/endpoint")
             async def get(text: str):
@@ -106,6 +134,29 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         marie.helper.extend_rest_interface = _extend_rest_function
 
+    async def custom_stream(
+        self, request_iterator, context=None, *args, **kwargs
+    ) -> AsyncIterator['Request']:
+        # Your custom logic here
+        print("Custom stream logic")
+
+        async for request in request_iterator:
+            # Process each request. This is just a placeholder logic.
+            print(f"Processing request: {request}")
+            print(request.parameters)
+            print(request.data)
+
+            # there will be only one request in the stream
+            yield request
+            break
+
+    async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
+        print("Running custom dry run logic")
+
+        status_message = StatusMessage()
+        status_message.set_code(jina_pb2.StatusProto.SUCCESS)
+        return status_message.proto
+
     async def setup_server(self):
         """
         setup servers inside CompositeServer
@@ -126,16 +177,16 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     async def setup_service_discovery(
         self,
-        etcd_host: Optional[str] = "0.0.0.0",
-        etcd_port: Optional[int] = 2379,
-        watchdog_interval: Optional[int] = 2,
+        etcd_host: str = "0.0.0.0",
+        etcd_port: int = 2379,
+        watchdog_interval: int = 2,
     ):
         """
          Setup service discovery for the gateway.
 
-        :param etcd_host: Optional[str] - The host address of the ETCD service. Default is "0.0.0.0".
-        :param etcd_port: Optional[int] - The port of the ETCD service. Default is 2379.
-        :param watchdog_interval: Optional[int] - The interval in seconds between each service address check. Default is 2.
+        :param etcd_host: str - The host address of the ETCD service. Default is "0.0.0.0".
+        :param etcd_port: int - The port of the ETCD service. Default is 2379.
+        :param watchdog_interval: int - The interval in seconds between each service address check. Default is 2.
         :return: None
 
         """
