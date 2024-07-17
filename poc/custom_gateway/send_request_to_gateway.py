@@ -112,14 +112,12 @@ async def main():
         raise ValueError(f"Unknown command: {args.command}")
 
     print(parameters)
-    asyncio.get_event_loop().stop()
-    return
+    # asyncio.get_event_loop().stop()
+    # return
 
     #  python ./send_request_to_gateway.py status marie_23433
     #  python ./send_request_to_gateway.py submit --no-wait ./script.sh arg1 arg2 arg3
     #  python ./send_request_to_gateway.py logs marie_23433
-
-    parameters, docs = create_job_submit_request()
 
     client = Client(
         host="127.0.0.1", port=52000, protocol="grpc", request_size=-1, asyncio=True
@@ -138,7 +136,7 @@ async def main():
     ):
         print("Response: ")
         print(resp)
-        # for doc in resp:
+        # for doc in resp:G
         #     print(doc.text)
         print(resp.parameters)
         print(resp.data)
