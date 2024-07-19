@@ -480,6 +480,8 @@ https://github.com/NielsRogge/Transformers-Tutorials/blob/master/Table%20Transfo
 dedoc
 https://github.com/ispras/dedoc/blob/master/dedoc/structure_constructors/abstract_structure_constructor.py
 
+PDF-Extract-Kit
+https://github.com/opendatalab/PDF-Extract-Kit?tab=readme-ov-file
 
 https://cloud.google.com/document-ai
 
@@ -515,9 +517,6 @@ MARIE_CORE_RELEASE_TOKEN=ghp_ABC
 pydantic                                     1.10.15
 pydantic_core                                2.10.1
 ```
-
-
-
 
 
 #  Rewriting history

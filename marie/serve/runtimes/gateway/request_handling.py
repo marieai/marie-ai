@@ -22,8 +22,8 @@ class GatewayRequestHandler:
 
     def __init__(
         self,
-        args: 'SimpleNamespace',
-        logger: 'MarieLogger',
+        args: "SimpleNamespace",
+        logger: "MarieLogger",
         metrics_registry=None,
         meter=None,
         aio_tracing_client_interceptors=None,
@@ -73,7 +73,7 @@ class GatewayRequestHandler:
             tracing_client_interceptor=tracing_client_interceptor,
             grpc_channel_options=(
                 self.runtime_args.grpc_channel_options
-                if hasattr(self.runtime_args, 'grpc_channel_options')
+                if hasattr(self.runtime_args, "grpc_channel_options")
                 else None
             ),
         )
@@ -107,9 +107,9 @@ class GatewayRequestHandler:
         """
         Gratefully closes the object making sure all the floating requests are taken care and the connections are closed gracefully
         """
-        self.logger.debug(f'Closing Request Handler')
+        self.logger.debug(f"Closing Request Handler")
         await self.streamer.close()
-        self.logger.debug(f'Request Handler closed')
+        self.logger.debug(f"Request Handler closed")
 
     def _http_fastapi_default_app(
         self,
@@ -156,7 +156,7 @@ class GatewayRequestHandler:
         from aiohttp import web
 
         target_server = next(self.load_balancer_servers)
-        target_url = f'{target_server}{request.path_qs}'
+        target_url = f"{target_server}{request.path_qs}"
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -165,9 +165,9 @@ class GatewayRequestHandler:
                 try:
                     payload = await request.json()
                     if payload:
-                        request_kwargs['json'] = payload
+                        request_kwargs["json"] = payload
                 except Exception:
-                    self.logger.debug('No JSON payload found in request')
+                    self.logger.debug("No JSON payload found in request")
 
                 async with session.request(
                     request.method,
@@ -193,7 +193,7 @@ class GatewayRequestHandler:
                     return stream_response
 
         except aiohttp.ClientError as e:
-            return web.Response(text=f'Error: {str(e)}', status=500)
+            return web.Response(text=f"Error: {str(e)}", status=500)
 
     def _websocket_fastapi_default_app(self, tracing, tracer_provider):
         from marie.helper import extend_rest_interface
@@ -216,7 +216,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :returns: the response request
         """
-        self.logger.debug('recv a dry_run request')
+        self.logger.debug("recv a dry_run request")
         from marie._docarray import Document, DocumentArray
         from marie.serve.executors import __dry_run_endpoint__
 
@@ -242,7 +242,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :returns: the response request
         """
-        self.logger.debug('recv a _status request')
+        self.logger.debug("recv a _status request")
         info_proto = jina_pb2.JinaInfoProto()
         version, env_info = get_full_version()
         for k, v in version.items():
@@ -253,7 +253,7 @@ class GatewayRequestHandler:
 
     async def stream(
         self, request_iterator, context=None, *args, **kwargs
-    ) -> AsyncIterator['Request']:
+    ) -> AsyncIterator["Request"]:
         """
         stream requests from client iterator and stream responses back.
 
@@ -263,8 +263,7 @@ class GatewayRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request after streaming to Executors in Flow
         """
-        self.logger.debug('recv a stream request GATEWAY')
-        print(self.stream)
+        self.logger.debug("recv a stream request")
         # print current method
 
         async for resp in self.streamer.rpc_stream(
@@ -273,7 +272,7 @@ class GatewayRequestHandler:
             yield resp
 
     async def stream_doc(
-        self, request: SingleDocumentRequest, context: 'grpc.aio.ServicerContext'
+        self, request: SingleDocumentRequest, context: "grpc.aio.ServicerContext"
     ) -> SingleDocumentRequest:
         """
         Process the received requests and return the result as a new request
@@ -282,7 +281,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :yields: the response request
         """
-        self.logger.debug('recv a stream_doc request')
+        self.logger.debug("recv a stream_doc request")
         async for result in self.streamer.rpc_stream_doc(
             request=request,
         ):
@@ -296,7 +295,7 @@ class GatewayRequestHandler:
         :param context: grpc context
         :return: response DataRequest
         """
-        self.logger.debug(f'recv a process_single_data request')
+        self.logger.debug(f"recv a process_single_data request")
         return await self.streamer.process_single_data(request, context)
 
     async def endpoint_discovery(self, empty, context) -> jina_pb2.EndpointsProto:
@@ -309,7 +308,7 @@ class GatewayRequestHandler:
         """
         from google.protobuf import json_format
 
-        self.logger.debug('got an endpoint discovery request')
+        self.logger.debug("got an endpoint discovery request")
         response = jina_pb2.EndpointsProto()
         await self.streamer._get_endpoints_input_output_models(is_cancel=None)
         request_models_map = self.streamer._endpoints_models_map
@@ -317,10 +316,10 @@ class GatewayRequestHandler:
             schema_maps = {}
             for k, v in request_models_map.items():
                 schema_maps[k] = {}
-                schema_maps[k]['input'] = v['input'].schema()
-                schema_maps[k]['output'] = v['output'].schema()
-                schema_maps[k]['is_generator'] = v['is_generator']
-                schema_maps[k]['is_singleton_doc'] = v['is_singleton_doc']
+                schema_maps[k]["input"] = v["input"].schema()
+                schema_maps[k]["output"] = v["output"].schema()
+                schema_maps[k]["is_generator"] = v["is_generator"]
+                schema_maps[k]["is_singleton_doc"] = v["is_singleton_doc"]
             response.endpoints.extend(schema_maps.keys())
             json_format.ParseDict(schema_maps, response.schemas)
         else:

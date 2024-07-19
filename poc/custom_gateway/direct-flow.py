@@ -7,7 +7,6 @@ from docarray.documents import TextDoc
 
 from marie import Deployment, Executor, Flow, requests
 from marie.conf.helper import load_yaml
-from poc.custom_gateway.deployment_gateway import MariePodGateway
 
 
 class TestExecutorXYZ(Executor):

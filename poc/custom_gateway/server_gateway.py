@@ -2,13 +2,12 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, AsyncIterator, Callable, Optional
+from typing import AsyncIterator, Callable, Optional
 from urllib.parse import urlparse
 
 import grpc
-from docarray import DocList
+from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
-from grpc.aio import ClientInterceptor
 
 import marie
 import marie.helper
@@ -28,25 +27,17 @@ from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.types.request import Request
+from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
 
-if TYPE_CHECKING:  # pragma: no cover
-    import grpc
-
-    from marie.logging.logger import MarieLogger
-    from marie.serve.runtimes.gateway.streamer import GatewayStreamer
-    from marie.types.request import Request
-
-
-def create_trace_interceptor() -> ClientInterceptor:
-    return CustomClientInterceptor()
-
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
     def notify(event, connection):
-        print(f"notify: {event}, {connection}")
+        # print(f"notify: {event}, {connection}")
+        pass
 
     return GatewayLoadBalancerInterceptor(notifier=notify)
 
@@ -136,19 +127,131 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     async def custom_stream(
         self, request_iterator, context=None, *args, **kwargs
-    ) -> AsyncIterator['Request']:
-        # Your custom logic here
-        print("Custom stream logic")
-
+    ) -> AsyncIterator["Request"]:
+        self.logger.info(f"intercepting stream")
         async for request in request_iterator:
-            # Process each request. This is just a placeholder logic.
-            print(f"Processing request: {request}")
-            print(request.parameters)
-            print(request.data)
+            decoded = await self.decode_request(request)
+            if isinstance(decoded, AsyncIterator):
+                async for response in decoded:
+                    yield response
+            else:
+                yield decoded
 
-            # there will be only one request in the stream
-            yield request
-            break
+    async def decode_request(self, request: Request) -> AsyncIterator[Request]:
+        """
+        Decode the request and return a response.
+        :param request: The request to decode.
+        :return: The response.
+        """
+        print(f"Processing request: {request}")
+        print(request.parameters)
+        print(request.data)
+        message = request.parameters
+        if "invoke_action" not in message:
+            response = Response()
+            response.parameters = {"error": "Invalid request, missing invoke_action"}
+            return response
+
+        invoke_action = message["invoke_action"]
+        command = invoke_action.get("command")  # job
+
+        if command == "job":
+            return self.handle_job_command(invoke_action)
+        elif command == "nodes":
+            return self.handle_nodes_command(invoke_action)
+        else:
+            response = Response()
+            response.parameters = {
+                "error": f"Command not recognized or not implemented : {command}",
+            }
+            return response
+
+    async def handle_nodes_command(self, message: dict) -> AsyncIterator[Request]:
+        """
+        Handle nodes command based on the action provided in the message.
+
+        :param message: Dictionary containing the job command details.
+                        It should have the "action" key specifying the action to perform.
+        :return: Response object containing the result of the nodes command.
+
+        :raises ValueError: If the action provided in the message is not recognized.
+        """
+
+        action = message.get("action")  # list
+        self.logger.info(f"Handling nodes action : {action}")
+        if action == "list":
+            docs = DocList[TextDoc]()
+            unique_nodes = set()
+
+            for executor, nodes in self.deployment_nodes.items():
+                for node in nodes:
+                    if node["address"] not in unique_nodes:
+                        unique_nodes.add(node["address"])
+                        docs.append(TextDoc(text=node["address"]))
+
+            req = DataRequest()
+            req.document_array_cls = DocList[TextDoc]
+            req.data.docs = docs
+            req.parameters = {
+                "status": "ok",
+                "msg": "Received nodes list request",
+            }
+            yield req
+        else:
+            raise ValueError(f"Action not recognized : {action}")
+
+    async def handle_job_command(self, message: dict) -> AsyncIterator[Request]:
+        """
+        Handle job command based on the action provided in the message.
+
+        :param message: Dictionary containing the job command details.
+                        It should have the "action" key specifying the action to perform.
+        :return: Response object containing the result of the job command.
+
+        :raises ValueError: If the action provided in the message is not recognized.
+        """
+
+        action = message.get("action")  # status, submit, logs, stop
+        self.logger.info(f"Handling job action : {action}")
+
+        if action == "status":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received status request",
+            }
+            yield response
+        elif action == "submit":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "job submitted",
+                "job_id": "1234",
+            }
+            yield response
+        elif action == "logs":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received logs request",
+            }
+            yield response
+            for i in range(0, 10):
+                response = Response()
+                response.parameters = {
+                    "msg": f"log message #{i}",
+                }
+                yield response
+                await asyncio.sleep(1)
+        elif action == "events":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received events request",
+            }
+            yield response
+        else:
+            raise ValueError(f"Action not recognized : {action}")
 
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
         print("Running custom dry run logic")
@@ -246,7 +349,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
                 )
                 ev_type = event.event
-                ev_key = event.key
                 ev_value = event.value
                 if ev_type == "put":
                     await self.gateway_server_online(service, ev_value)
@@ -362,7 +464,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     )
 
         for executor, nodes in self.deployment_nodes.items():
-            self.logger.info(f"Discovered nodes for executor : {executor}")
+            self.logger.info(
+                f"Discovered nodes for executor : {executor}, {len(nodes)}"
+            )
             for node in nodes:
                 self.logger.info(f"\tNode : {node}")
 
@@ -404,7 +508,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             deployments_metadata=deployments_metadata,
             load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
             load_balancer=load_balancer,
-            aio_tracing_client_interceptors=[create_trace_interceptor()],
+            # aio_tracing_client_interceptors=[create_trace_interceptor()],
         )
         self.streamer = streamer
         self.distributor.streamer = streamer
@@ -447,22 +551,22 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
             self.notifier(event, connection)
 
     def on_connection_released(self, connection):
-        print(f"on_connection_released: {connection}")
+        # print(f"on_connection_released: {connection}")
         self.active_connection = None
         self.notify("released", connection)
 
     def on_connection_failed(self, connection: _ConnectionStubs, exception):
-        print(f"on_connection_failed: {connection}, {exception}")
+        # print(f"on_connection_failed: {connection}, {exception}")
         self.active_connection = None
         self.notify("failed", connection)
 
     def on_connection_acquired(self, connection: _ConnectionStubs):
-        print(f"on_connection_acquired: {connection}")
+        # print(f"on_connection_acquired: {connection}")
         self.active_connection = connection
         self.notify("acquired", connection)
 
     def on_connections_updated(self, connections: list[_ConnectionStubs]):
-        print(f"on_connections_updated: {connections}")
+        # print(f"on_connections_updated: {connections}")
         self.notify("updated", connections)
 
     def get_active_connection(self):
@@ -471,33 +575,6 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
         :return:
         """
         return self.active_connection
-
-
-class CustomClientInterceptor(
-    grpc.aio.UnaryUnaryClientInterceptor,
-    grpc.aio.UnaryStreamClientInterceptor,
-    grpc.aio.StreamUnaryClientInterceptor,
-    grpc.aio.StreamStreamClientInterceptor,
-):
-    async def intercept_unary_unary(self, continuation, client_call_details, request):
-        print(f"intercept_unary_unary: {client_call_details}, {request}")
-        return await continuation(client_call_details, request)
-
-    async def intercept_unary_stream(self, continuation, client_call_details, request):
-        print(f"intercept_unary_stream: {client_call_details}, {request}")
-        return await continuation(client_call_details, request)
-
-    async def intercept_stream_unary(
-        self, continuation, client_call_details, request_iterator
-    ):
-        print(f"intercept_stream_unary: {client_call_details}, {request_iterator}")
-        return await continuation(client_call_details, request_iterator)
-
-    async def intercept_stream_stream(
-        self, continuation, client_call_details, request_iterator
-    ):
-        print(f"intercept_stream_stream: {client_call_details}, {request_iterator}")
-        return await continuation(client_call_details, request_iterator)
 
 
 # clear;for i in {0..10};do curl localhost:51000/endpoint?text=x_${i} ;done;

@@ -1,9 +1,10 @@
 import time
 
+from request_handling_custom import GatewayRequestHandler
+from server_gateway import MarieServerGateway
+
 from marie import Flow
 from marie.serve.runtimes.servers.grpc import GRPCServer
-from poc.custom_gateway.request_handling_custom import GatewayRequestHandler
-from poc.custom_gateway.server_gateway import MarieServerGateway
 
 
 def main():
@@ -11,7 +12,7 @@ def main():
 
     if False:
         ctrl_address = "0.0.0.0:61000"
-        print('waiting for all servers to be ready at : ', ctrl_address)
+        print("waiting for all servers to be ready at : ", ctrl_address)
         while True:
             print(f"checking is ready at {ctrl_address}")
             res = GRPCServer.is_ready(ctrl_address)
