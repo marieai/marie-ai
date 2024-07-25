@@ -1,11 +1,6 @@
-from typing import Any, Optional
+from typing import Optional
 
-from marie_server.job.common import (
-    ActorHandle,
-    JobInfo,
-    JobInfoStorageClient,
-    JobStatus,
-)
+from marie_server.job.common import ActorHandle, JobInfoStorageClient, JobStatus
 from marie_server.job.job_distributor import JobDistributor
 
 

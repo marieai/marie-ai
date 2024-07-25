@@ -7,27 +7,30 @@ from typing import Any, Dict, Generator, List
 import psycopg2
 
 from marie.excepts import BadConfigSource
+from marie.helper import get_or_reuse_loop
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.scheduler.fixtures import *
+from marie_server.scheduler.models import ScheduledJob
 from marie_server.scheduler.scheduler import Scheduler
 from marie_server.scheduler.state import States
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
-
 DEFAULT_SCHEMA = "marie_scheduler"
 COMPLETION_JOB_PREFIX = f"__state__{States.COMPLETED.value}__"
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
+    """A PostgreSQL-based job scheduler."""
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__()
-        self.logger = MarieLogger("PostgreSQLJobScheduler")
-        print("config", config)
+        self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         self.running = False
+        self._loop = get_or_reuse_loop()
         self._setup_storage(config, connection_only=True)
 
     def create_tables(self, schema: str):
@@ -64,7 +67,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
            """
 
         with self:
-            self._execute_sql_gracefully(locked_query)
+            try:
+                self._execute_sql_gracefully(locked_query)
+            except (Exception, psycopg2.Error) as error:
+                if isinstance(error, psycopg2.errors.DuplicateTable):
+                    self.logger.warning("Tables already exist, skipping creation.")
+                else:
+                    self.logger.error(f"Error creating tables: {error}")
+                    self.connection.rollback()
+
+    def wipe(self) -> None:
+        """Clears the schedule storage."""
+        raise NotImplementedError("Wipe is not implemented for PostgreSQLJobScheduler")
 
     def start_schedule(self) -> None:
         """
@@ -74,6 +88,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
         """
         logger.info("Starting job scheduling agent")
         self.create_tables(DEFAULT_SCHEMA)
+        self.running = True
 
         if False:
 
@@ -111,13 +126,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                 has_records = True
                 print("record", record)
                 await self.schedule(record)
-
             wait_time = (
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
 
     def stop_schedule(self) -> None:
-        pass
+        self.running = False
 
     def debug_info(self) -> str:
         pass
@@ -127,7 +141,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
     #     records.append({"id": 1, "name": "test"})
     #     return records
 
-    async def schedule(self, record):
+    async def schedule(self, record: ScheduledJob):
+        """
+        :param record:
+        """
         print("scheduling : ", record)
 
     def get_document_iterator(
@@ -153,10 +170,54 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                 for record in cursor:
                     print(record)
                     doc_id = record[0]
-
                     yield doc_id
-
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error importing snapshot: {error}")
                 self.connection.rollback()
             self.connection.commit()
+
+    def get_job(self, job_id: str) -> ScheduledJob:
+        """
+        Get a job by its ID.
+        :param job_id:
+        """
+        schema = DEFAULT_SCHEMA
+        table = "job"
+
+        with self:
+            try:
+                cursor = self.connection.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT * From {schema}.{table} WHERE id = {job_id}`
+                    """
+                )
+                record = cursor.fetchone()
+                print("record", record)
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error importing snapshot: {error}")
+                self.connection.rollback()
+            self.connection.commit()
+
+    async def maintenance(self):
+        """
+        Performs the maintenance process, including expiring, archiving, and purging.
+
+        :return: None
+        """
+        try:
+            with self:
+                await self.expire()
+                await self.archive()
+                await self.purge()
+        except Exception as e:
+            self.logger.error(f"Error in maintenance: {e}")
+
+    async def expire(self):
+        print("Expiring jobs")
+
+    async def archive(self):
+        print("Archiving jobs")
+
+    async def purge(self):
+        print("Purging jobs")

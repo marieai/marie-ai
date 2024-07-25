@@ -1,5 +1,6 @@
 import pytest
 
+from marie_server.job.common import JobInfo, JobStatus
 from marie_server.scheduler import PostgreSQLJobScheduler
 
 
@@ -21,7 +22,9 @@ def test_job_scheduler_setup(num_jobs):
     }
 
     scheduler = PostgreSQLJobScheduler(config=scheduler_config)
-    scheduler.start_schedule()
     print(scheduler)
-
+    scheduler.start_schedule()
     assert scheduler.running
+
+    # job = JobInfo(status=JobStatus.PENDING, entrypoint="/extract")
+    # scheduler.schedule(job)

@@ -29,3 +29,9 @@ class Scheduler(abc.ABC):
     @abc.abstractmethod
     def debug_info(self) -> str:
         """Returns debug information about the scheduler."""
+        ...
+
+    @abc.abstractmethod
+    def wipe(self) -> None:
+        """Clears the schedule storage."""
+        ...
