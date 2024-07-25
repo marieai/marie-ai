@@ -17,8 +17,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
 
     def __init__(self, config: Dict[str, Any], reset=True):
         super().__init__()
-        self.logger = MarieLogger("PostgreSQLKV")
-        print("config", config)
+        self.logger = MarieLogger(self.__class__.__name__)
         self.running = False
         self._setup_storage(
             config,
