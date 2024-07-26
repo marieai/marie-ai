@@ -12,7 +12,7 @@ from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.scheduler.fixtures import *
-from marie_server.scheduler.models import JobWorkItem
+from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.scheduler import Scheduler
 from marie_server.scheduler.state import States
 
@@ -141,7 +141,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
     #     records.append({"id": 1, "name": "test"})
     #     return records
 
-    async def schedule(self, record: JobWorkItem):
+    async def schedule(self, record: WorkInfo):
         """
         :param record:
         """
@@ -176,7 +176,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                 self.connection.rollback()
             self.connection.commit()
 
-    def get_job(self, job_id: str) -> JobWorkItem:
+    def get_job(self, job_id: str) -> WorkInfo:
         """
         Get a job by its ID.
         :param job_id:

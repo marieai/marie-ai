@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
 
 
-class JobWorkItem(BaseModel):
+# https://cs.android.com/androidx/platform/frameworks/support/+/androidx-main:work/work-runtime/src/main/java/androidx/work/WorkInfo.kt
+class WorkInfo(BaseModel):
     id: str = Field(default_factory=lambda: uuid7str())
     name: str
     priority: int
