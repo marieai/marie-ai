@@ -12,14 +12,13 @@ class WorkInfo(BaseModel):
     name: str
     priority: int
     data: Dict[str, Any]
-    retryLimit: int
-    retryDelay: int
-    retryBackoff: bool
-    startAfter: datetime
-    expireInSeconds: int
-    singletonKey: str
-    keepUntil: datetime
-    onComplete: bool
+    retry_limit: int
+    retry_delay: int
+    retry_backoff: bool
+    start_after: datetime
+    expire_in_seconds: int
+    keep_until: datetime
+    on_complete: bool
 
 
 class ExistingWorkPolicy(Enum):

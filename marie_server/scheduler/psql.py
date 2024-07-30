@@ -1,19 +1,19 @@
 import asyncio
 import threading
 import traceback
-from enum import Enum
-from typing import Any, Dict, Generator, List
+from typing import Any, AsyncGenerator, Dict
 
 import psycopg2
 
-from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
+from marie_server.job.job_manager import JobManager
 from marie_server.scheduler.fixtures import *
+from marie_server.scheduler.jobscheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.scheduler import Scheduler
+from marie_server.scheduler.plans import insert_job
 from marie_server.scheduler.state import States
 
 INIT_POLL_PERIOD = 1.250  # 250ms
@@ -23,13 +23,14 @@ DEFAULT_SCHEMA = "marie_scheduler"
 COMPLETION_JOB_PREFIX = f"__state__{States.COMPLETED.value}__"
 
 
-class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
+class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     """A PostgreSQL-based job scheduler."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         self.running = False
+        self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_storage(config, connection_only=True)
 
@@ -49,8 +50,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
             add_archived_on_to_archive(schema),
             add_archived_on_index_to_archive(schema),
             add_id_index_to_archive(schema),
-            create_index_singleton_on(schema),
-            create_index_singleton_key_on(schema),
+            # create_index_singleton_on(schema),
+            # create_index_singleton_key_on(schema),
             create_index_job_name(schema),
             create_index_job_fetch(schema),
         ]
@@ -76,11 +77,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                     self.logger.error(f"Error creating tables: {error}")
                     self.connection.rollback()
 
-    def wipe(self) -> None:
+    async def wipe(self) -> None:
         """Clears the schedule storage."""
         raise NotImplementedError("Wipe is not implemented for PostgreSQLJobScheduler")
 
-    def start_schedule(self) -> None:
+    async def start(self) -> None:
         """
         Starts the job scheduling agent.
 
@@ -119,38 +120,35 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
         while self.running:
             print(f"Polling for new jobs : {wait_time}")
             await asyncio.sleep(wait_time)
-            document_iterator = self.get_document_iterator()
+            document_iterator = self.get_work_items()
             has_records = False
 
             for record in document_iterator:
                 has_records = True
                 print("record", record)
-                await self.schedule(record)
+                job_id = await self.schedule(record)
+                self.logger.info(f"Work item scheduled with ID: {job_id}")
             wait_time = (
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
 
-    def stop_schedule(self) -> None:
+    async def stop(self) -> None:
         self.running = False
 
     def debug_info(self) -> str:
-        pass
+        print("Debugging info")
 
-    # async def get_records_for_run(self) -> List[Dict[str, Any]]:
-    #     records = []
-    #     records.append({"id": 1, "name": "test"})
-    #     return records
-
-    async def schedule(self, record: WorkInfo):
+    async def schedule(self, record: WorkInfo) -> str:
         """
         :param record:
         """
         print("scheduling : ", record)
+        return "job_id"
 
-    def get_document_iterator(
+    async def get_work_items(
         self,
         limit: int = 0,
-    ) -> Generator[Any, None, None]:
+    ) -> AsyncGenerator[Any, None]:
         """Get the Jobs from the PSQL database.
 
         :param limit: the maximal number records to get
@@ -176,7 +174,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                 self.connection.rollback()
             self.connection.commit()
 
-    def get_job(self, job_id: str) -> WorkInfo:
+    async def get_job(self, job_id: str) -> WorkInfo or None:
         """
         Get a job by its ID.
         :param job_id:
@@ -198,6 +196,30 @@ class PostgreSQLJobScheduler(PostgresqlMixin, Scheduler):
                 self.logger.error(f"Error importing snapshot: {error}")
                 self.connection.rollback()
             self.connection.commit()
+
+    async def list_jobs(self) -> list[WorkInfo]:
+        print("Fetching work items")
+        work_items = []
+        return work_items
+
+    async def put_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
+        """
+        Inserts a new work item into the scheduler.
+        :param work_info: The work item to insert.
+        :param overwrite: Whether to overwrite the work item if it already exists.
+        :return:
+        """
+        insert_query = insert_job(DEFAULT_SCHEMA, work_info)
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(insert_query)
+                record = cursor.fetchone()
+                print("record", record)
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error inserting job: {error}")
+                self.connection.rollback()
+            self.connection.commit()
+        return True
 
     async def maintenance(self):
         """
