@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import traceback
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import psycopg2
 
@@ -11,7 +11,7 @@ from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.job.job_manager import JobManager
 from marie_server.scheduler.fixtures import *
-from marie_server.scheduler.jobscheduler import JobScheduler
+from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import insert_job
 from marie_server.scheduler.state import States
@@ -79,7 +79,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def wipe(self) -> None:
         """Clears the schedule storage."""
-        raise NotImplementedError("Wipe is not implemented for PostgreSQLJobScheduler")
+        schema = DEFAULT_SCHEMA
+        query = f"""
+           TRUNCATE {schema}.job, {schema}.archive
+           """
+        with self:
+            try:
+                self._execute_sql_gracefully(query)
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error clearing tables: {error}")
+                self.connection.rollback()
 
     async def start(self) -> None:
         """
@@ -154,7 +163,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param limit: the maximal number records to get
         :return:
         """
-
         with self:
             try:
                 cursor = self.connection.cursor("doc_iterator")
@@ -174,7 +182,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.connection.rollback()
             self.connection.commit()
 
-    async def get_job(self, job_id: str) -> WorkInfo or None:
+    async def get_job(self, job_id: str) -> Optional[WorkInfo]:
         """
         Get a job by its ID.
         :param job_id:
@@ -187,22 +195,96 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor = self.connection.cursor()
                 cursor.execute(
                     f"""
-                    SELECT * From {schema}.{table} WHERE id = {job_id}`
+                    SELECT
+                          id,
+                          name,
+                          priority,
+                          state,
+                          retry_limit,
+                          start_after,
+                          expire_in,
+                          data,
+                          retry_delay,
+                          retry_backoff,
+                          keep_until,
+                          on_complete
+                    FROM {schema}.{table}
+                    WHERE id = '{job_id}'
                     """
                 )
                 record = cursor.fetchone()
-                print("record", record)
+                if record:
+                    return WorkInfo(
+                        id=record[0],
+                        name=record[1],
+                        priority=record[2],
+                        state=record[3],
+                        retry_limit=record[4],
+                        start_after=record[5],
+                        expire_in_seconds=0,  # record[6], # FIXME this is wrong type
+                        data=record[7],
+                        retry_delay=record[8],
+                        retry_backoff=record[9],
+                        keep_until=record[10],
+                        on_complete=record[11],
+                    )
+                return None
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error importing snapshot: {error}")
                 self.connection.rollback()
             self.connection.commit()
 
-    async def list_jobs(self) -> list[WorkInfo]:
-        print("Fetching work items")
-        work_items = []
+    async def list_jobs(self) -> Dict[str, WorkInfo]:
+        work_items = {}
+        schema = DEFAULT_SCHEMA
+        table = "job"
+
+        with self:
+            try:
+                cursor = self.connection.cursor("doc_iterator")
+                cursor.itersize = 10000
+                cursor.execute(
+                    f"""
+                    SELECT
+                          id,
+                          name,
+                          priority,
+                          state,
+                          retry_limit,
+                          start_after,
+                          expire_in,
+                          data,
+                          retry_delay,
+                          retry_backoff,
+                          keep_until,
+                          on_complete
+                    FROM {schema}.{table}
+                    """
+                    # + (f" limit = {limit}" if limit > 0 else "")
+                )
+
+                for record in cursor:
+                    work_items[record[0]] = WorkInfo(
+                        id=record[0],
+                        name=record[1],
+                        priority=record[2],
+                        state=record[3],
+                        retry_limit=record[4],
+                        start_after=record[5],
+                        expire_in_seconds=0,  # record[6], # FIXME this is wrong type
+                        data=record[7],
+                        retry_delay=record[8],
+                        retry_backoff=record[9],
+                        keep_until=record[10],
+                        on_complete=record[11],
+                    )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error listing jobs: {error}")
+                self.connection.rollback()
+            self.connection.commit()
         return work_items
 
-    async def put_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
+    async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
         """
         Inserts a new work item into the scheduler.
         :param work_info: The work item to insert.

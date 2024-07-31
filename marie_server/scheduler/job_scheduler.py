@@ -1,5 +1,5 @@
 import abc
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from marie_server.scheduler.models import WorkInfo
 
@@ -43,7 +43,7 @@ class JobScheduler(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def put_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
+    async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
         """Inserts a new work item into the scheduler.
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
@@ -57,7 +57,7 @@ class JobScheduler(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def list_jobs(self) -> list[WorkInfo]:
+    async def list_jobs(self) -> Dict[str, WorkInfo]:
         """
         Lists all the jobs in the scheduler.
         """

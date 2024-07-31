@@ -32,7 +32,8 @@ def create_job_state_enum(schema: str):
 def create_job_table(schema: str):
     return f"""
     CREATE TABLE {schema}.job (
-      id uuid primary key not null default gen_random_uuid(),
+--       id uuid primary key not null default gen_random_uuid(),
+      id text primary key not null,
       name text not null,
       priority integer not null default(0),
       data jsonb,

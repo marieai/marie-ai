@@ -5,6 +5,8 @@ from typing import Any, Dict
 from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
 
+from marie_server.scheduler.state import States
+
 
 # https://cs.android.com/androidx/platform/frameworks/support/+/androidx-main:work/work-runtime/src/main/java/androidx/work/WorkInfo.kt
 class WorkInfo(BaseModel):
@@ -12,6 +14,7 @@ class WorkInfo(BaseModel):
     name: str
     priority: int
     data: Dict[str, Any]
+    state: States
     retry_limit: int
     retry_delay: int
     retry_backoff: bool

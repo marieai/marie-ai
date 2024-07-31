@@ -52,7 +52,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 END as start_after
             FROM
             ( SELECT
-                '{work_info.id}'::uuid as id,
+                '{work_info.id}'::text as id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
                 '{States.CREATED.value}'::{schema}.job_state as state,
