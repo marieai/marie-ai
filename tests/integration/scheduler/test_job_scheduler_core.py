@@ -1,14 +1,18 @@
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List
 
 import pytest
 from pydantic import BaseModel
+from uuid_extensions import uuid7str
 
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import States
+from marie_server.scheduler.state import WorkState
+from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 
+# Job Scheduler Tests are very similar to Job Manager Tests
 
 def compare_pydantic_models(model1: BaseModel, model2: BaseModel, excludes: List) -> Dict[str, Any]:
     """Compare two Pydantic models and return the differences.
@@ -31,19 +35,34 @@ def compare_pydantic_models(model1: BaseModel, model2: BaseModel, excludes: List
     return differences
 
 
+async def check_job_succeeded(job_scheduler: JobScheduler, job_id: str):
+    data = await job_scheduler.get_job(job_id)
+    status = data.state
+    if status == WorkState.FAILED:
+        raise RuntimeError(f"Job failed! {data}")
+    assert status in {WorkState.CREATED, WorkState.COMPLETED, WorkState.ACTIVE}
+    return status == WorkState.COMPLETED
+
+
+async def update_job_status(job_scheduler: JobScheduler, job_id: str, job_status: WorkState):
+    await job_scheduler.put_status(job_id, job_status)
+
+
 @pytest.fixture
 def num_jobs(request):
     print("request.param", request.param)
     return request.param
 
 
-def build_work_item(name: str, job_id: str) -> WorkInfo:
+def build_work_item(name: str, job_id: str = None) -> WorkInfo:
+    if job_id is None:
+        job_id = uuid7str()
     return WorkInfo(
         id=job_id,
         name=name,
         priority=0,
         data={},
-        state=States.CREATED,
+        state=WorkState.CREATED,
         retry_limit=0,
         retry_delay=0,
         retry_backoff=False,
@@ -75,9 +94,6 @@ def build_work_item(name: str, job_id: str) -> WorkInfo:
 
 #
 #
-@pytest.mark.asyncio
-async def test_list_jobs_empty(job_scheduler: JobScheduler):
-    assert await job_scheduler.list_jobs() == dict()
 
 
 @pytest.mark.asyncio
@@ -100,6 +116,11 @@ async def job_scheduler(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_jobs_empty(job_scheduler: JobScheduler):
+    assert await job_scheduler.list_jobs() == dict()
+
+
+@pytest.mark.asyncio
 async def test_list_work_items(job_scheduler: JobScheduler):
     items = await job_scheduler.list_jobs()
     assert items == dict()
@@ -119,8 +140,90 @@ async def test_list_work_items(job_scheduler: JobScheduler):
     assert 0 == len(compare_pydantic_models(w1, r1, ["keep_until", "start_after"]))
     assert 0 == len(compare_pydantic_models(w2, r2, ["keep_until", "start_after"]))
 
-    print("r1", r1)
-    print("r2", r2)
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_scheduler, "1", WorkState.COMPLETED), 1)
+    )
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_scheduler, "2", WorkState.COMPLETED), 1)
+    )
+
+    await async_wait_for_condition_async_predicate(
+        check_job_succeeded, job_scheduler=job_scheduler, job_id="1"
+    )
+    await async_wait_for_condition_async_predicate(
+        check_job_succeeded, job_scheduler=job_scheduler, job_id="2"
+    )
+
+    jobs_info = await job_scheduler.list_jobs()
+    assert "1" in jobs_info
+    assert jobs_info["1"].state == WorkState.COMPLETED
+
+    assert "2" in jobs_info
+    assert jobs_info["2"].state == WorkState.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_pass_job_id(job_scheduler: JobScheduler):
+    submission_id = "my_custom_id"
+
+    returned_id = await job_scheduler.submit_job(build_work_item("queue-001", submission_id))
+    assert returned_id == submission_id
+
+    _ = asyncio.create_task(
+        async_delay(
+            update_job_status(job_scheduler, submission_id, WorkState.COMPLETED), 1
+        )
+    )
+
+    await async_wait_for_condition_async_predicate(
+        check_job_succeeded, job_scheduler=job_scheduler, job_id=submission_id
+    )
+
+    # Check that the same job_id is rejected.
+    with pytest.raises(ValueError):
+        await job_scheduler.submit_job(build_work_item("queue-001", submission_id))
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_submit_job(job_scheduler: JobScheduler):
+    """Test that we can submit multiple jobs at once."""
+    job_ids = await asyncio.gather(
+        job_scheduler.submit_job(build_work_item("queue-001")),
+        job_scheduler.submit_job(build_work_item("queue-001")),
+        job_scheduler.submit_job(build_work_item("queue-001")),
+    )
+
+    for job_id in job_ids:
+        _ = asyncio.create_task(
+            async_delay(update_job_status(job_scheduler, job_id, WorkState.COMPLETED), 1)
+        )
+
+        await async_wait_for_condition_async_predicate(
+            check_job_succeeded, job_scheduler=job_scheduler, job_id=job_id
+        )
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_with_same_id(job_scheduler: JobScheduler):
+    """Test that we can submit multiple jobs at once with the same id.
+
+    The second job should raise a friendly error.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        await asyncio.gather(
+            job_scheduler.submit_job(build_work_item("queue-001", "1")),
+            job_scheduler.submit_job(build_work_item("queue-001", "1")),
+        )
+    assert "Job with submission_id 1 already exists" in str(excinfo.value)
+
+    # Check that the (first) job can still succeed.
+    _ = asyncio.create_task(
+        async_delay(update_job_status(job_scheduler, "1", WorkState.COMPLETED), 1)
+    )
+
+    await async_wait_for_condition_async_predicate(
+        check_job_succeeded, job_scheduler=job_scheduler, job_id="1"
+    )
 
 
 @pytest.mark.asyncio
@@ -130,7 +233,7 @@ async def test_job_scheduler_setup(job_scheduler: JobScheduler):
         name="WorkInfo-001",
         priority=0,
         data={},
-        state=States.CREATED,
+        state=WorkState.CREATED,
         retry_limit=0,
         retry_delay=0,
         retry_backoff=False,

@@ -14,13 +14,13 @@ from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import insert_job
-from marie_server.scheduler.state import States
+from marie_server.scheduler.state import WorkState
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 DEFAULT_SCHEMA = "marie_scheduler"
-COMPLETION_JOB_PREFIX = f"__state__{States.COMPLETED.value}__"
+COMPLETION_JOB_PREFIX = f"__state__{WorkState.COMPLETED.value}__"
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
@@ -284,24 +284,52 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.connection.commit()
         return work_items
 
-    async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> bool:
+    async def submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         """
         Inserts a new work item into the scheduler.
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
         :return:
         """
-        insert_query = insert_job(DEFAULT_SCHEMA, work_info)
+        new_key_added = False
+        submission_id = work_info.id
         with self:
             try:
-                cursor = self._execute_sql_gracefully(insert_query)
-                record = cursor.fetchone()
-                print("record", record)
+                cursor = self._execute_sql_gracefully(
+                    insert_job(DEFAULT_SCHEMA, work_info)
+                )
+                new_key_added = cursor is not None and cursor.rowcount > 0
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error inserting job: {error}")
+                self.logger.error(f"Error creating job: {error}")
                 self.connection.rollback()
-            self.connection.commit()
-        return True
+        if not new_key_added:
+            raise ValueError(
+                f"Job with submission_id {submission_id} already exists. "
+                "Please use a different submission_id."
+            )
+        return submission_id
+
+    async def put_status(self, job_id, status: WorkState):
+        """
+        Update the status of a job.
+        :param job_id:
+        :param status:
+        """
+        schema = DEFAULT_SCHEMA
+        table = "job"
+
+        with self:
+            try:
+                self._execute_sql_gracefully(
+                    f"""
+                    UPDATE {schema}.{table}
+                    SET state = '{status.value}'
+                    WHERE id = '{job_id}'
+                    """
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error updating job status: {error}")
+                self.connection.rollback()
 
     async def maintenance(self):
         """

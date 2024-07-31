@@ -1,7 +1,7 @@
 from enum import Enum
 
 
-class States(Enum):
+class WorkState(Enum):
     CREATED = "created"
     RETRY = "retry"
     ACTIVE = "active"

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import States
+from marie_server.scheduler.state import WorkState
 
 
 def to_timestamp_with_tz(dt: datetime):
@@ -30,7 +30,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           name,
           priority,
           state,
-          retry_limit,
+          retry_limit, 
           start_after,
           expire_in,
           data,
@@ -42,7 +42,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
         ( SELECT *,
             CASE
               WHEN right(keepUntilValue, 1) = 'Z' THEN CAST(keepUntilValue as timestamp with time zone)
-              ELSE start_after + CAST(COALESCE(keepUntilValue,'0') as interval)
+              ELSE (start_after + CAST(COALESCE(keepUntilValue,'0') as interval))
               END as keep_until
           FROM
           ( SELECT *,
@@ -55,7 +55,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 '{work_info.id}'::text as id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
-                '{States.CREATED.value}'::{schema}.job_state as state,
+                '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
                 '{to_timestamp_with_tz(work_info.start_after)}'::text as startAfterValue,
                 CAST('{work_info.expire_in_seconds}' as interval) as expire_in,

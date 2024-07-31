@@ -1,4 +1,4 @@
-from marie_server.scheduler.state import States
+from marie_server.scheduler.state import WorkState
 
 
 def create_schema(schema: str):
@@ -18,13 +18,13 @@ def create_version_table(schema: str):
 def create_job_state_enum(schema: str):
     return f"""
     CREATE TYPE {schema}.job_state AS ENUM (
-      '{States.CREATED.value}',
-      '{States.RETRY.value}',
-      '{States.ACTIVE.value}',
-      '{States.COMPLETED.value}',
-      '{States.EXPIRED.value}',
-      '{States.CANCELLED.value}',
-      '{States.FAILED.value}'
+      '{WorkState.CREATED.value}',
+      '{WorkState.RETRY.value}',
+      '{WorkState.ACTIVE.value}',
+      '{WorkState.COMPLETED.value}',
+      '{WorkState.EXPIRED.value}',
+      '{WorkState.CANCELLED.value}',
+      '{WorkState.FAILED.value}'
     )
     """
 
@@ -37,7 +37,7 @@ def create_job_table(schema: str):
       name text not null,
       priority integer not null default(0),
       data jsonb,
-      state {schema}.job_state not null default('{States.CREATED.value}'),
+      state {schema}.job_state not null default('{WorkState.CREATED.value}'),
       retry_limit integer not null default(0),
       retry_count integer not null default(0),
       retry_delay integer not null default(0),
@@ -100,13 +100,13 @@ def add_id_index_to_archive(schema):
 
 def create_index_singleton_on(schema):
     return f"""
-    CREATE UNIQUE INDEX job_singleton_on ON {schema}.job (name, singleton_on) WHERE state < '{States.EXPIRED.value}' AND singleton_key IS NULL
+    CREATE UNIQUE INDEX job_singleton_on ON {schema}.job (name, singleton_on) WHERE state < '{WorkState.EXPIRED.value}' AND singleton_key IS NULL
     """
 
 
 def create_index_singleton_key_on(schema):
     return f"""
-    CREATE UNIQUE INDEX job_singleton_key_on ON {schema}.job (name, singleton_on, singleton_key) WHERE state < '{States.EXPIRED.value}'
+    CREATE UNIQUE INDEX job_singleton_key_on ON {schema}.job (name, singleton_on, singleton_key) WHERE state < '{WorkState.EXPIRED.value}'
     """
 
 
@@ -118,5 +118,5 @@ def create_index_job_name(schema):
 
 def create_index_job_fetch(schema):
     return f"""
-    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after) WHERE state < '{States.ACTIVE.value}'
+    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after) WHERE state < '{WorkState.ACTIVE.value}'
     """
