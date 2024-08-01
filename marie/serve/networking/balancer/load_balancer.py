@@ -161,3 +161,10 @@ class LoadBalancer(abc.ABC):
         :return:
         """
         return self.active_counter
+
+    def connection_count(self) -> int:
+        """
+        Get the number of connections
+        :return:
+        """
+        return len(self._connections)

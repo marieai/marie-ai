@@ -129,10 +129,6 @@ class JobManager:
             JobStatus.SUCCEEDED, f"Job {job_id} has completed."
         )
 
-        await self.event_publisher.publish(
-            JobStatus.FAILED, f"Job {job_id} has failed."
-        )
-
         # TODO : Implement this
         if True:
             return

@@ -32,9 +32,14 @@ from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
+from marie_server.job.job_distributor import JobDistributor
+from marie_server.job.job_manager import JobManager
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
+from marie_server.storage.in_memory import InMemoryKV
+from marie_server.storage.psql import PostgreSQLKV
+from tests.core.test_job_manager import NoopJobDistributor
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -62,6 +67,19 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
 
+        storage = InMemoryKV()
+        # TODO: Externalize the storage configuration
+        kv_storage_config = {
+            "hostname": "127.0.0.1",
+            "port": 5432,
+            "username": "postgres",
+            "password": "123456",
+            "database": "postgres",
+            "default_table": "kv_store_a",
+            "max_pool_size": 5,
+            "max_connections": 5,
+        }
+
         # TODO : This is a temporary solution to test the service discovery
         scheduler_config = {
             "hostname": "localhost",
@@ -71,8 +89,11 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "password": "123456",
         }
 
+        self.distributor = NoopJobDistributor()
+        storage = PostgreSQLKV(config=kv_storage_config, reset=True)
+        job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
-            config=scheduler_config, job_manager=None
+            config=scheduler_config, job_manager=job_manager
         )
 
         # self.distributor = GatewayJobDistributor(
@@ -162,7 +183,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             else:
                 yield decoded
 
-    async def decode_request(self, request: Request) -> AsyncIterator[Request]:
+    async def decode_request(
+        self, request: Request
+    ) -> Response | AsyncIterator[Request]:
         """
         Decode the request and return a response.
         :param request: The request to decode.
@@ -572,8 +595,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         )
         self.streamer = streamer
         self.distributor.streamer = streamer
-        request_models_map = streamer._endpoints_models_map
-        self.logger.info(f"request_models_map: {request_models_map}")
+        JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
 
     async def gateway_server_offline(self, service: str, ev_value):
         """

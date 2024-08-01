@@ -38,7 +38,7 @@ class JobScheduler(abc.ABC):
 
     @abc.abstractmethod
     async def enqueue(self, work_info: WorkInfo) -> None:
-        """Enqueues a job to be executed immediately on the next available worker
+        """Enqueues a job to be executed immediately on the next available executor.
         Job will be executed according to the schedule defined in the WorkInfo object.
         """
         ...
@@ -55,6 +55,18 @@ class JobScheduler(abc.ABC):
     @abc.abstractmethod
     async def get_job(self, job_id: str) -> Optional[WorkInfo]:
         """Retrieves the job with the given job_id."""
+        ...
+
+    @abc.abstractmethod
+    def stop_job(self, job_id: str) -> bool:
+        """Request a job to exit, fire and forget.
+        Returns whether or not the job was running.
+        """
+        ...
+
+    @abc.abstractmethod
+    async def delete_job(self, job_id: str):
+        """Deletes the job with the given job_id."""
         ...
 
     @abc.abstractmethod

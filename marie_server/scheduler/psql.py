@@ -31,6 +31,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         self.running = False
         self.job_manager = job_manager
+        if job_manager is None:
+            raise ValueError("Job manager is required for JobScheduler")
         self._loop = get_or_reuse_loop()
         self._setup_storage(config, connection_only=True)
 
@@ -322,6 +324,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         await self.enqueue(work_info)
         return submission_id
+
+    def stop_job(self, job_id: str) -> bool:
+        """Request a job to exit, fire and forget.
+        Returns whether or not the job was running.
+        """
+        raise NotImplementedError
+
+    async def delete_job(self, job_id: str):
+        """Deletes the job with the given job_id."""
+        ...
+
+        raise NotImplementedError
 
     async def put_status(self, job_id, status: WorkState):
         """
