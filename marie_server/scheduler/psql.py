@@ -135,24 +135,30 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             for record in document_iterator:
                 has_records = True
                 print("record", record)
-                job_id = await self.schedule(record)
+                job_id = await self.enqueue(record)
                 self.logger.info(f"Work item scheduled with ID: {job_id}")
             wait_time = (
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
 
     async def stop(self) -> None:
+        self.logger.info("Stopping job scheduling agent")
         self.running = False
 
     def debug_info(self) -> str:
         print("Debugging info")
 
-    async def schedule(self, record: WorkInfo) -> str:
-        """
-        :param record:
-        """
-        print("scheduling : ", record)
-        return "job_id"
+    async def enqueue(self, work_info: WorkInfo) -> Optional[str]:
+        print("enqueuing work  : ", work_info)
+        if not self.job_manager.has_available_slot():
+            self.logger.info("No available slots for work, scheduling later.")
+            return None
+
+        submission_id = work_info.id
+        returned_id = await self.job_manager.submit_job(
+            entrypoint="echo hello", submission_id=submission_id
+        )
+        return returned_id
 
     async def get_work_items(
         self,
@@ -289,10 +295,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         Inserts a new work item into the scheduler.
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
-        :return:
+        :return: The ID of the inserted work item.
         """
         new_key_added = False
         submission_id = work_info.id
+
         with self:
             try:
                 cursor = self._execute_sql_gracefully(
@@ -302,11 +309,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
                 self.connection.rollback()
+                raise ValueError(
+                    f"Job creation for submission_id {submission_id} failed. "
+                    f"Please check the logs for more information. {error}"
+                )
+
         if not new_key_added:
             raise ValueError(
                 f"Job with submission_id {submission_id} already exists. "
                 "Please use a different submission_id."
             )
+
+        await self.enqueue(work_info)
         return submission_id
 
     async def put_status(self, job_id, status: WorkState):

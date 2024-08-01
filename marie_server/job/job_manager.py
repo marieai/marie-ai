@@ -14,6 +14,7 @@ from marie_server.job.common import (
     JobInfoStorageClient,
     JobStatus,
 )
+from marie_server.job.event_publisher import EventPublisher
 from marie_server.job.job_distributor import JobDistributor
 from marie_server.job.job_supervisor import JobSupervisor
 from marie_server.job.scheduling_strategies import (
@@ -41,13 +42,15 @@ def get_event_logger():
 
 
 class JobManager:
-    """Provide python APIs for job submission and management.
+    """Provide APIs for job submission and management.
 
     It does not provide persistence, all info will be lost if the cluster
     goes down.
     """
 
     JOB_MONITOR_LOOP_PERIOD_S = 1
+    # number of slots available for job submission (This will be set via service discovery)
+    SLOTS_AVAILABLE = 1
 
     def __init__(
         self,
@@ -56,6 +59,7 @@ class JobManager:
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
+        self.event_publisher = EventPublisher()
         # self._log_client = JobLogStorageClient()
         self.monitored_jobs = set()
         self._job_info_client = JobInfoStorageClient(storage)
@@ -119,8 +123,16 @@ class JobManager:
                 DEFAULT_JOB_START_TIMEOUT_SECONDS,
             )
         )
-
         is_alive = True
+
+        await self.event_publisher.publish(
+            JobStatus.SUCCEEDED, f"Job {job_id} has completed."
+        )
+
+        await self.event_publisher.publish(
+            JobStatus.FAILED, f"Job {job_id} has failed."
+        )
+
         # TODO : Implement this
         if True:
             return
@@ -423,3 +435,11 @@ class JobManager:
                 await asyncio.sleep(self.LOG_TAIL_SLEEP_S)
             else:
                 yield "".join(lines)
+
+    def has_available_slot(self) -> bool:
+        """
+        Check if there are available slots for submitting a jobs.
+
+        :return: True if there are available slots, False otherwise
+        """
+        return len(self.monitored_jobs) < self.SLOTS_AVAILABLE

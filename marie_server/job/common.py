@@ -30,8 +30,6 @@ class JobStatus(str, Enum):
     SUCCEEDED = "SUCCEEDED"
     #: The job failed.
     FAILED = "FAILED"
-    #: The job was has expired.
-    EXPIRED = "EXPIRED"
 
     def __str__(self) -> str:
         return f"{self.value}"
@@ -40,12 +38,12 @@ class JobStatus(str, Enum):
         """Return whether or not this status is terminal.
 
         A terminal status is one that cannot transition to any other status.
-        The terminal statuses are "STOPPED", "SUCCEEDED", "EXPIRED" and "FAILED"
+        The terminal statuses are "STOPPED", "SUCCEEDED" and "FAILED"
 
         Returns:
             True if this status is terminal, otherwise False.
         """
-        return self.value in {"STOPPED", "SUCCEEDED", "EXPIRED", "FAILED"}
+        return self.value in {"STOPPED", "SUCCEEDED", "FAILED"}
 
 
 @dataclass

@@ -37,8 +37,8 @@ class JobScheduler(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def schedule(self, work_info: WorkInfo) -> None:
-        """Schedules a job to be executed.
+    async def enqueue(self, work_info: WorkInfo) -> None:
+        """Enqueues a job to be executed immediately on the next available worker
         Job will be executed according to the schedule defined in the WorkInfo object.
         """
         ...

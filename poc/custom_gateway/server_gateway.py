@@ -32,6 +32,9 @@ from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
+from marie_server.scheduler import PostgreSQLJobScheduler
+from marie_server.scheduler.models import WorkInfo
+from marie_server.scheduler.state import WorkState
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -58,9 +61,23 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
-        self.distributor = GatewayJobDistributor(
-            gateway_streamer=self.streamer, logger=self.logger
+
+        # TODO : This is a temporary solution to test the service discovery
+        scheduler_config = {
+            "hostname": "localhost",
+            "port": 5432,
+            "database": "postgres",
+            "username": "postgres",
+            "password": "123456",
+        }
+
+        self.job_scheduler = PostgreSQLJobScheduler(
+            config=scheduler_config, job_manager=None
         )
+
+        # self.distributor = GatewayJobDistributor(
+        #     gateway_streamer=self.streamer, logger=self.logger
+        # )
 
         # perform monkey patching
         GatewayRequestHandler.stream = self.custom_stream
@@ -72,18 +89,26 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         def _extend_rest_function(app):
             @app.on_event("shutdown")
             async def _shutdown():
-                await self.distributor.close()
+                await self.job_scheduler.stop()
 
             @app.get("/job/submit")
             async def job_submit(text: str):
                 self.logger.info(f"Received request at {datetime.now}")
-                doc = TextDoc(text=text)
-
-                result = await self.distributor.submit_job(
-                    JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
-                    doc=doc,
+                work_info = WorkInfo(
+                    name="WorkInfo-001",
+                    priority=0,
+                    data={},
+                    state=WorkState.CREATED,
+                    retry_limit=0,
+                    retry_delay=0,
+                    retry_backoff=False,
+                    start_after=datetime.now(),
+                    expire_in_seconds=0,
+                    keep_until=datetime.now(),
+                    on_complete=False,
                 )
 
+                result = await self.job_scheduler.submit_job(work_info)
                 return {"result": result}
 
             @app.get("/endpoint")
@@ -222,13 +247,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             }
             yield response
         elif action == "submit":
-            response = Response()
-            response.parameters = {
-                "status": "ok",
-                "msg": "job submitted",
-                "job_id": "1234",
-            }
-            yield response
+            yield await self.handle_job_submit_command(message)
         elif action == "logs":
             response = Response()
             response.parameters = {
@@ -253,6 +272,46 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         else:
             raise ValueError(f"Action not recognized : {action}")
 
+    async def handle_job_submit_command(self, message: dict) -> Request:
+        """
+        Handle job submission command.
+
+        :param message: The message containing the job information.
+        :return: The response with the submission result.
+        """
+        work_info = WorkInfo(
+            name="WorkInfo-001",
+            priority=0,
+            data={},
+            state=WorkState.CREATED,
+            retry_limit=0,
+            retry_delay=0,
+            retry_backoff=False,
+            start_after=datetime.now(),
+            expire_in_seconds=0,
+            keep_until=datetime.now(),
+            on_complete=False,
+        )
+        # TODO : convert to using Errors as Values instead of Exceptions
+        try:
+            job_id = await self.job_scheduler.submit_job(work_info)
+        except ValueError as ex:
+            response = Response()
+            response.parameters = {
+                "status": "error",
+                "msg": f"Failed to submit job: {ex}",
+            }
+            return response
+
+        response = Response()
+        response.parameters = {
+            "status": "ok",
+            "msg": "job submitted",
+            "job_id": job_id,
+        }
+
+        return response
+
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
         print("Running custom dry run logic")
 
@@ -266,6 +325,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         """
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
+        await self.job_scheduler.start()
         await self.setup_service_discovery()
 
     async def run_server(self):
