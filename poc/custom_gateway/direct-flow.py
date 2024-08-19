@@ -102,9 +102,9 @@ def main():
             discovery=True,  # server gateway does not need discovery service
             discovery_host="127.0.0.1",
             discovery_port=2379,
-            discovery_watchdog_interval=5,
+            discovery_watchdog_interval=2,
         )
-        .add(uses=TestExecutor, name="executor0", replicas=3)
+        .add(uses=TestExecutor, name="executor0", replicas=1)
         .config_gateway(
             # uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
         ) as f

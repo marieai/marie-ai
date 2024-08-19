@@ -74,5 +74,5 @@ class JobSupervisor:
         # format the response
         print("Response: ", response)
         print("Response type: ", type(response))
-        print("Response data: ", response.data)
-        print("Response status: ", response.status)
+        # print("Response data: ", response.data)
+        # print("Response status: ", response.status)

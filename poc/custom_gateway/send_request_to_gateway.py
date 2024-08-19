@@ -74,6 +74,20 @@ def create_job_events_request(args: argparse.Namespace):
     return param, docs
 
 
+def create_job_list_request(args: argparse.Namespace):
+    param = {
+        "invoke_action": {
+            "action_type": "command",
+            "command": args.command,
+            "action": args.action,
+            "job_id": args.job_id,
+            "stream": "stdout",
+        }
+    }
+    docs = DocList[TextDoc]([TextDoc(text=f"Text : {_}") for _ in range(10)])
+    return param, docs
+
+
 def create_nodes_list_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
@@ -126,6 +140,8 @@ def parse_args():
     parser_stop = job_subparsers.add_parser("stop", help="Stop a running job")
     parser_stop.add_argument("job_id", type=str, help="ID of the job to stop")
 
+    parser_job_list = job_subparsers.add_parser("list", help="List all jobs")
+
     # Node command
     parser_node = subparsers.add_parser("nodes", help="Manage nodes")
     node_subparsers = parser_node.add_subparsers(
@@ -155,6 +171,8 @@ async def main():
             parameters, docs = create_job_events_request(args)
         elif args.action == "stop":
             parameters, docs = create_job_stop_request(args)
+        elif args.action == "list":
+            parameters, docs = create_job_list_request(args)
     elif args.command == "nodes":
         if args.action == "list":
             parameters, docs = create_nodes_list_request(args)

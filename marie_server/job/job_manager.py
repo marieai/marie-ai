@@ -49,7 +49,7 @@ class JobManager:
     """
 
     JOB_MONITOR_LOOP_PERIOD_S = 1
-    # number of slots available for job submission (This will be set via service discovery)
+    # number of slots available for job submission (This will be set via service discovery and will change as nodes become available)
     SLOTS_AVAILABLE = 1
 
     def __init__(

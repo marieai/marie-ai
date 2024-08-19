@@ -39,7 +39,8 @@ from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
-from tests.core.test_job_manager import NoopJobDistributor
+
+# from tests.core.test_job_manager import NoopJobDistributor
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -89,16 +90,15 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "password": "123456",
         }
 
-        self.distributor = NoopJobDistributor()
+        self.distributor = GatewayJobDistributor(
+            gateway_streamer=None, logger=self.logger
+        )
+
         storage = PostgreSQLKV(config=kv_storage_config, reset=True)
         job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
             config=scheduler_config, job_manager=job_manager
         )
-
-        # self.distributor = GatewayJobDistributor(
-        #     gateway_streamer=self.streamer, logger=self.logger
-        # )
 
         # perform monkey patching
         GatewayRequestHandler.stream = self.custom_stream
@@ -174,6 +174,16 @@ class MarieServerGateway(BaseGateway, CompositeServer):
     async def custom_stream(
         self, request_iterator, context=None, *args, **kwargs
     ) -> AsyncIterator["Request"]:
+        """
+        Intercept the stream of requests and process them.
+
+        :param request_iterator: An asynchronous iterator that provides the request objects.
+        :param context: The context of the API request. Defaults to None.
+        :param args: Additional positional arguments.
+        :param kwargs: Additional keyword arguments.
+        :return: An asynchronous iterator that yields the response objects.
+
+        """
         self.logger.info(f"intercepting stream")
         async for request in request_iterator:
             decoded = await self.decode_request(request)
@@ -208,11 +218,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         elif command == "nodes":
             return self.handle_nodes_command(invoke_action)
         else:
-            response = Response()
-            response.parameters = {
-                "error": f"Command not recognized or not implemented : {command}",
-            }
-            return response
+            return self.error_response(
+                f"Command not recognized or not implemented : {command}"
+            )
 
     async def handle_nodes_command(self, message: dict) -> AsyncIterator[Request]:
         """
@@ -246,7 +254,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             }
             yield req
         else:
-            raise ValueError(f"Action not recognized : {action}")
+            yield self.error_response(f"Action not recognized : {action}")
 
     async def handle_job_command(self, message: dict) -> AsyncIterator[Request]:
         """
@@ -293,7 +301,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             }
             yield response
         else:
-            raise ValueError(f"Action not recognized : {action}")
+            yield self.error_response(f"Action not recognized : {action}")
 
     async def handle_job_submit_command(self, message: dict) -> Request:
         """
@@ -318,21 +326,31 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         # TODO : convert to using Errors as Values instead of Exceptions
         try:
             job_id = await self.job_scheduler.submit_job(work_info)
-        except ValueError as ex:
+
             response = Response()
             response.parameters = {
-                "status": "error",
-                "msg": f"Failed to submit job: {ex}",
+                "status": "ok",
+                "msg": "job submitted",
+                "job_id": job_id,
             }
-            return response
 
+            return response
+        except ValueError as ex:
+            return self.error_response(f"Failed to submit job. {ex}")
+
+    def error_response(self, msg: str, exception: Optional[Exception]) -> Response:
+        """
+        Set the response parameters to indicate a failure.
+        :param msg: A string representing the error message.
+        :param exception: An optional exception that triggered the error.
+        :return: The response object with the error parameters set.
+        """
         response = Response()
         response.parameters = {
-            "status": "ok",
-            "msg": "job submitted",
-            "job_id": job_id,
+            "status": "error",
+            "msg": msg,
+            "exception": exception,
         }
-
         return response
 
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
@@ -593,6 +611,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             load_balancer=load_balancer,
             # aio_tracing_client_interceptors=[create_trace_interceptor()],
         )
+
         self.streamer = streamer
         self.distributor.streamer = streamer
         JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()

@@ -7,11 +7,11 @@ from marie_server.scheduler.state import WorkState
 
 class JobScheduler(abc.ABC):
     """Abstract base class for a job scheduler. This component is responsible for interfacing with
-    an external system such as cron to ensure scheduled repeated execution according to the schedule.
+    an external system such as cron,s3 etc... to ensure scheduled repeated execution according to the schedule.
 
     JobScheduler API is similar to the JobManager API, but it is focused on scheduling jobs to be executed potentially at
     a later time. The JobScheduler is responsible for managing the scheduling of jobs, while the JobManager is responsible for
-    managing the execution of jobs.
+    placement and managing the execution of jobs.
     """
 
     async def start(self) -> Any:

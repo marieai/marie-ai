@@ -11,7 +11,7 @@ class JobDistributor(abc.ABC):
     """
 
     @abc.abstractmethod
-    async def submit_job(self, job_info: JobInfo, doc: Document) -> DataRequest:
+    async def submit_job(self, job_info: JobInfo) -> DataRequest:
         """
         Publish a job.
 
