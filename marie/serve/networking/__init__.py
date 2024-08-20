@@ -3,6 +3,7 @@ import time
 from typing import (
     TYPE_CHECKING,
     AsyncGenerator,
+    Callable,
     Dict,
     List,
     Optional,
@@ -250,6 +251,7 @@ class GrpcConnectionPool:
         endpoint: Optional[str] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
+        send_callback: Optional[Callable[[List[Request]], None]] = None,
     ) -> Optional[asyncio.Task]:
         """Send a request to target via only one of the pooled connections
 
@@ -261,6 +263,7 @@ class GrpcConnectionPool:
         :param endpoint: endpoint to target with the requests
         :param timeout: timeout for sending the requests
         :param retries: number of retries per gRPC call. If <0 it defaults to max(3, num_replicas)
+        :param send_callback: callback function to call after the request has been sent
         :return: asyncio.Task representing the send call
         """
         replicas = self._connections.get_replicas(deployment, head, shard_id)
@@ -272,6 +275,7 @@ class GrpcConnectionPool:
                 metadata=metadata,
                 timeout=timeout,
                 retries=retries,
+                send_callback=send_callback,
             )
             return result
         else:
@@ -526,6 +530,7 @@ class GrpcConnectionPool:
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = None,
         retries: Optional[int] = -1,
+        send_callback: Optional[Callable[[List[Request], Dict[str, str]], None]] = None,
     ) -> "asyncio.Task[Union[Tuple, AioRpcError, InternalNetworkError]]":
         # this wraps the awaitable object from grpc as a coroutine so it can be used as a task
         # the grpc call function is not a coroutine but some _AioCall
@@ -563,6 +568,19 @@ class GrpcConnectionPool:
                 tried_addresses.add(current_connection.address)
                 connections.incr_usage(current_connection.address)
                 try:
+                    if send_callback and callable(send_callback):
+                        try:
+                            send_callback(
+                                requests,
+                                {
+                                    "request_id": requests[0].request_id,
+                                    "address": current_connection.address,
+                                    "deployment": current_connection.deployment_name,
+                                },
+                            )
+                        except Exception as e:
+                            self._logger.error(f"Error in send_callback: {e}")
+
                     return await current_connection.send_requests(
                         requests=requests,
                         metadata=metadata,

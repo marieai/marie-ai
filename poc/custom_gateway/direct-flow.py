@@ -31,7 +31,7 @@ class TestExecutorXYZ(Executor):
 
         return {
             "parameters": parameters,
-            "data": "Data reply",
+            "data": f"Data reply at {time.time()}",
         }
 
 
@@ -43,17 +43,21 @@ class TestExecutor(Executor):
         time.sleep(1)
 
     @requests(on="/extract")
-    def func(
+    def funcXX(
         self,
         docs: DocList[TextDoc],
-        parameters: dict = {},
+        parameters=None,
         *args,
         **kwargs,
     ):
+        if parameters is None:
+            parameters = {}
+
         print(f"FirstExec func called : {len(docs)}, {parameters}")
         for doc in docs:
-            doc.text += " First"
-
+            doc.text += " First Exec"
+        print("Sleeping for 5 seconds : ", time.time())
+        time.sleep(5)
         return {
             "parameters": parameters,
             "data": "Data reply",

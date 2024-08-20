@@ -151,7 +151,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         print("Debugging info")
 
     async def enqueue(self, work_info: WorkInfo) -> Optional[str]:
-        print("enqueuing work  : ", work_info)
         if not self.job_manager.has_available_slot():
             self.logger.info("No available slots for work, scheduling later.")
             return None

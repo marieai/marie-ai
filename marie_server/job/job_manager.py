@@ -50,7 +50,7 @@ class JobManager:
 
     JOB_MONITOR_LOOP_PERIOD_S = 1
     # number of slots available for job submission (This will be set via service discovery and will change as nodes become available)
-    SLOTS_AVAILABLE = 1
+    SLOTS_AVAILABLE = 0
 
     def __init__(
         self,
@@ -114,9 +114,11 @@ class JobManager:
     ):
         """Monitors the specified job until it enters a terminal state.
         @param job_id: The id of the job to monitor.
-        @param job_supervisor:
+        @param job_supervisor: The actor handle for the job supervisor.
         """
+
         self.logger.info(f"Monitoring job internal : {job_id}.")
+
         timeout = float(
             os.environ.get(
                 JOB_START_TIMEOUT_SECONDS_ENV_VAR,
@@ -125,17 +127,19 @@ class JobManager:
         )
         is_alive = True
 
-        await self.event_publisher.publish(
-            JobStatus.SUCCEEDED, f"Job {job_id} has completed."
-        )
-
-        # TODO : Implement this
-        if True:
-            return
+        # await self.event_publisher.publish(
+        #     JobStatus.SUCCEEDED, f"Job {job_id} has completed."
+        # )
 
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
+                print(f"Job status: {job_id} : {job_status}")
+                print("len(self.monitored_jobs): ", len(self.monitored_jobs))
+                print("has_available_slot: ", self.has_available_slot())
+
+                # await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
+                # continue
                 if job_status == JobStatus.PENDING:
                     # Compare the current time with the job start time.
                     # If the job is still pending, we will set the status
@@ -210,7 +214,7 @@ class JobManager:
                         is_alive = False
                         continue
 
-                await job_supervisor.ping.remote()
+                await job_supervisor.ping()
 
                 await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
             except Exception as e:

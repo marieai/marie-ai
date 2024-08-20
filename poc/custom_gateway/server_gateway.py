@@ -426,13 +426,14 @@ class MarieServerGateway(BaseGateway, CompositeServer):
     def handle_discovery_event(self, service: str, event: str) -> None:
         """
         Enqueue the event to be processed.
+
         :param service: The name of the service that is available.
         :param event: The event that triggered the method.
-        :return:
+        :return: None
         """
 
-        self._loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self.event_queue.put((service, event)))
+        asyncio.run_coroutine_threadsafe(
+            self.event_queue.put((service, event)), self._loop
         )
 
     async def process_events(self, max_errors=5) -> None:

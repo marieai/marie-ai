@@ -3,7 +3,7 @@ import copy
 import re
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Type
+from typing import Callable, Dict, List, Optional, Tuple, Type
 
 import grpc.aio
 
@@ -224,8 +224,8 @@ class TopologyGraph:
                             self._pydantic_models_by_endpoint = {}
                             models_created_by_name = {}
                             for endpoint, inner_dict in schemas.items():
-                                input_model_name = inner_dict['input']['name']
-                                input_model_schema = inner_dict['input']['model']
+                                input_model_name = inner_dict["input"]["name"]
+                                input_model_schema = inner_dict["input"]["model"]
                                 if input_model_schema in models_schema_list:
                                     input_model = models_list[
                                         models_schema_list.index(input_model_schema)
@@ -254,8 +254,8 @@ class TopologyGraph:
                                     models_schema_list.append(input_model_schema)
                                     models_list.append(input_model)
 
-                                output_model_name = inner_dict['output']['name']
-                                output_model_schema = inner_dict['output']['model']
+                                output_model_name = inner_dict["output"]["name"]
+                                output_model_schema = inner_dict["output"]["model"]
                                 if output_model_schema in models_schema_list:
                                     output_model = models_list[
                                         models_schema_list.index(output_model_schema)
@@ -284,9 +284,9 @@ class TopologyGraph:
                                     models_schema_list.append(output_model)
                                     models_list.append(output_model)
 
-                                parameters_model_name = inner_dict['parameters']['name']
-                                parameters_model_schema = inner_dict['parameters'][
-                                    'model'
+                                parameters_model_name = inner_dict["parameters"]["name"]
+                                parameters_model_schema = inner_dict["parameters"][
+                                    "model"
                                 ]
                                 if parameters_model_schema is not None:
                                     if parameters_model_schema in models_schema_list:
@@ -392,6 +392,7 @@ class TopologyGraph:
             copy_request_at_send: bool = False,
             init_task: Optional[asyncio.Task] = None,
             return_type: Type[DocumentArray] = None,
+            send_callback: Callable = None,
         ):
             # Check my condition and send request with the condition
             metadata = {}
@@ -453,6 +454,7 @@ class TopologyGraph:
                             endpoint=endpoint,
                             timeout=self._timeout_send,
                             retries=self._retries,
+                            send_callback=send_callback,
                         )
                         if issubclass(type(result), BaseException):
                             raise result
@@ -600,16 +602,16 @@ class TopologyGraph:
             list_of_outputs = []
             for outgoing_node in self.outgoing_nodes:
                 list_of_maps = outgoing_node._get_leaf_input_output_model(
-                    previous_input=new_map['input'] if new_map is not None else None,
-                    previous_output=new_map['output'] if new_map is not None else None,
+                    previous_input=new_map["input"] if new_map is not None else None,
+                    previous_output=new_map["output"] if new_map is not None else None,
                     previous_is_generator=(
-                        new_map['is_generator'] if new_map is not None else None
+                        new_map["is_generator"] if new_map is not None else None
                     ),
                     previous_is_singleton_doc=(
-                        new_map['is_singleton_doc'] if new_map is not None else None
+                        new_map["is_singleton_doc"] if new_map is not None else None
                     ),
                     previous_parameters=(
-                        new_map['parameters'] if new_map is not None else None
+                        new_map["parameters"] if new_map is not None else None
                     ),
                     endpoint=endpoint,
                 )
@@ -630,6 +632,7 @@ class TopologyGraph:
             copy_request_at_send: bool = False,
             init_task: Optional[asyncio.Task] = None,
             return_type: Type[DocumentArray] = DocumentArray,
+            send_callback: Callable = None,
         ) -> List[Tuple[bool, asyncio.Task]]:
             """
             Gets all the tasks corresponding from all the subgraphs born from this node
@@ -643,6 +646,7 @@ class TopologyGraph:
             :param request_input_has_specific_params: Parameter added for optimization. If this is False, there is no need to copy at all the request
             :param copy_request_at_send: Copy the request before actually calling the `ConnectionPool` sending
             :param init_task: Initial task to be called before sending any request
+            :param send_callback: Callback to be called when the request is sent
 
             .. note:
                 deployment1 -> outgoing_nodes: deployment2
@@ -678,6 +682,7 @@ class TopologyGraph:
                     copy_request_at_send=copy_request_at_send,
                     init_task=init_task,
                     return_type=return_type,
+                    send_callback=send_callback,
                 )
             )
             if self.leaf:  # I am like a leaf
@@ -698,6 +703,7 @@ class TopologyGraph:
                     copy_request_at_send=num_outgoing_nodes > 1
                     and request_input_has_specific_params,
                     return_type=return_type,
+                    send_callback=send_callback,
                 )
                 # We are interested in the last one, that will be the task that awaits all the previous
                 hanging_tasks_tuples.extend(t)
