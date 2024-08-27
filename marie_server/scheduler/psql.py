@@ -9,6 +9,7 @@ from marie.helper import get_or_reuse_loop
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
+from marie_server.job.common import JobStatus
 from marie_server.job.job_manager import JobManager
 from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
@@ -29,12 +30,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
-        self.running = False
-        self.job_manager = job_manager
         if job_manager is None:
             raise ValueError("Job manager is required for JobScheduler")
+        self.running = False
+        self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_storage(config, connection_only=True)
+        self.job_manager.event_publisher.subscribe(
+            [
+                JobStatus.RUNNING,
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+                JobStatus.PENDING,
+                JobStatus.STOPPED,
+            ],
+            self.handle_job_event,
+        )
+
+    async def handle_job_event(self, event_type: str, message: Any):
+        """
+        Handles a job event.
+
+        :param event_type: The type of the event.
+        :param message: The message associated with the event.
+        """
+        print(f"received message: {event_type} > {message}")
+        job_id = message.get("job_id")
+        status = JobStatus(event_type)
+        if status == JobStatus.SUCCEEDED:
+            print(f"Job succeeded : {job_id}")
+        elif status == JobStatus.FAILED:
+            print(f"Job failed : {job_id}")
+        elif status == JobStatus.RUNNING:
+            print(f"Job running : {job_id}")
+        else:
+            print(f"Unhandled status : {status}")
 
     def create_tables(self, schema: str):
         """

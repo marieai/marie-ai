@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
+from marie.logging.logger import MarieLogger
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.types.request.data import DataRequest
 from marie_server.job.common import ActorHandle, JobInfoStorageClient, JobStatus
@@ -23,7 +24,7 @@ class JobSupervisor:
         job_info_client: JobInfoStorageClient,
         job_distributor: JobDistributor,
     ):
-
+        self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
         self._job_info_client = job_info_client
         self._job_distributor = job_distributor
@@ -34,7 +35,7 @@ class JobSupervisor:
         print("Ping called : ", self.request_info)
         request_info = self.request_info
         if request_info is None:
-            return "pong"
+            return True
 
         request_id = request_info["request_id"]
         address = request_info["address"]
@@ -59,38 +60,31 @@ class JobSupervisor:
             ),
             histograms=_NetworkingHistograms(),
         )
-        response, _ = await connection_stub.send_discover_endpoint()
 
-        if response is None:
-            raise RuntimeError(
-                f"Endpoint '_jina_dry_run_' not found in {response.endpoints}"
-            )
-        else:
-            return "pong"
+        # print("DryRun - Response: ", response)
+        doc = TextDoc(text=f"sample text : _jina_dry_run_")
+        request = DataRequest()
+        request.document_array_cls = DocList[BaseDoc]()
+        request.header.exec_endpoint = "_jina_dry_run_"
+        request.header.target_executor = deployment_name
+        request.parameters = {}
+        request.data.docs = DocList([doc])
 
-        # _jina_dry_run_ is executed in synchronous mode and is not async
-        if False:
-            # print("DryRun - Response: ", response)
-            doc = TextDoc(text=f"sample text : _jina_dry_run_")
-            # convert job_info to DataRequest
-            request = DataRequest()
-            request.document_array_cls = DocList[BaseDoc]()
-            request.header.exec_endpoint = "_jina_dry_run_"
-            request.header.target_executor = deployment_name
-            request.parameters = {}
-            request.data.docs = DocList([doc])
-
+        try:
             response, _ = await connection_stub.send_requests(
                 requests=[request], metadata={}, compression=False
             )
-            print("DryRun - Response: ", response)
-
-        if response.status.code == response.status.SUCCESS:
-            return "pong"
-        else:
-            raise RuntimeError(
-                f"Endpoint '_jina_dry_run_' not found in {response.endpoints}"
-            )
+            self.logger.info(f"DryRun - Response: {response}")
+            if response.status.code == response.status.SUCCESS:
+                return True
+            else:
+                raise RuntimeError(
+                    f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
+                )
+        except Exception as e:
+            self.logger.error(f"Error during ping to {self.request_info} : {e}")
+            raise RuntimeError(f"Error during ping to : _jina_dry_run_ ")
+            # raise RuntimeError(f"Error during ping to {str(self.request_info)} : {e}")
 
     async def run(
         self,
@@ -169,9 +163,26 @@ class JobSupervisor:
             print("Response docs: ", response.data.docs)
             print("Response status: ", response.status)
 
-            await self._job_info_client.put_status(self._job_id, JobStatus.SUCCEEDED)
+            job_status = await self._job_info_client.get_status(self._job_id)
+            print("Job Status: ", job_status)
+            print("Job Status: ", job_status.is_terminal())
+
+            all_jobs = await self._job_info_client.get_all_jobs()
+            for job_id, job_info in all_jobs.items():
+                print("Job job_id : ", job_id)
+                print("Job job_id: ", job_info)
+
+            if job_status.is_terminal():
+                # If the job is already in a terminal state, then we don't need to update it. This can happen if the
+                # job was cancelled while the job was being submitted.
+                self.logger.warning(
+                    f"Job {self._job_id} is already in terminal state {job_status}."
+                )
+            else:
+                await self._job_info_client.put_status(
+                    self._job_id, JobStatus.SUCCEEDED
+                )
         except Exception as e:
-            # FIXME (Jin): This is a temporary fix to handle the case where the job distributor
             await self._job_info_client.put_status(
                 self._job_id, JobStatus.FAILED, message=str(e)
             )

@@ -130,14 +130,15 @@ class PostgresqlMixin:
                 cursor.itersize = itersize
             else:
                 cursor = self.connection.cursor()
-
             if data:
                 cursor.execute(statement, data)
             else:
                 cursor.execute(statement)
-        except psycopg2.errors.UniqueViolation as error:
+        except psycopg2.Error as error:
+            # except psycopg2.errors.UniqueViolation as error:
+            print(statement)
             self.logger.debug(f"Error while executing {statement}: {error}.")
+            raise error
             self.connection.rollback()
-
         self.connection.commit()
         return cursor

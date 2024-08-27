@@ -4,6 +4,7 @@ import time
 
 from docarray import DocList
 from docarray.documents import TextDoc
+from marie_executor import MarieExecutor
 
 from marie import Deployment, Executor, Flow, requests
 from marie.conf.helper import load_yaml
@@ -35,7 +36,7 @@ class TestExecutorXYZ(Executor):
         }
 
 
-class TestExecutor(Executor):
+class TestExecutor(MarieExecutor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
@@ -58,6 +59,9 @@ class TestExecutor(Executor):
             doc.text += " First Exec"
         print("Sleeping for 5 seconds : ", time.time())
         time.sleep(5)
+
+        print("Sleeping for 5 seconds - done: ", time.time())
+
         return {
             "parameters": parameters,
             "data": "Data reply",

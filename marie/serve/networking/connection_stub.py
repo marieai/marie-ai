@@ -189,7 +189,6 @@ class _ConnectionStubs:
             if self.single_data_stub:
                 self._record_request_bytes_metric(request.nbytes)
 
-                request.hello = "world"
                 call_result = self.single_data_stub.process_single_data(
                     request,
                     metadata=metadata,

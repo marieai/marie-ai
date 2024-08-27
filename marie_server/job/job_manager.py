@@ -16,6 +16,8 @@ from marie_server.job.common import (
 )
 from marie_server.job.event_publisher import EventPublisher
 from marie_server.job.job_distributor import JobDistributor
+from marie_server.job.job_log_storage_client import JobLogStorageClient
+from marie_server.job.job_storage_client_proxy import JobInfoStorageClientProxy
 from marie_server.job.job_supervisor import JobSupervisor
 from marie_server.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
@@ -60,9 +62,9 @@ class JobManager:
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher()
-        # self._log_client = JobLogStorageClient()
+        self._log_client = JobLogStorageClient()
         self.monitored_jobs = set()
-        self._job_info_client = JobInfoStorageClient(storage)
+        self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
 
         try:
             self.event_logger = get_event_logger()
@@ -127,16 +129,12 @@ class JobManager:
         )
         is_alive = True
 
-        # await self.event_publisher.publish(
-        #     JobStatus.SUCCEEDED, f"Job {job_id} has completed."
-        # )
-
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
                 print(f"Job status: {job_id} : {job_status}")
-                print("len(self.monitored_jobs): ", len(self.monitored_jobs))
-                print("has_available_slot: ", self.has_available_slot())
+                # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
+                # print("has_available_slot: ", self.has_available_slot())
 
                 # await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
                 # continue
@@ -187,7 +185,6 @@ class JobManager:
                         continue
 
                 if job_supervisor is None:
-                    # job_supervisor = self._get_actor_for_job(job_id)
                     raise NotImplementedError
 
                 if job_supervisor is None:
@@ -224,7 +221,7 @@ class JobManager:
                 if job_status == JobStatus.FAILED:
                     job_error_message = (
                         "See more details from the dashboard "
-                        "`Job` page or the state API `ray list jobs`."
+                        "`Job` page or the state API `marie list jobs`."
                     )
 
                 job_error_message = ""
