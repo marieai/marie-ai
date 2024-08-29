@@ -44,7 +44,7 @@ def get_event_logger():
 
 
 class JobManager:
-    """Provide APIs for job submission and management.
+    """Provide APIs for job submission and management to the cluster.
 
     It does not provide persistence, all info will be lost if the cluster
     goes down.
@@ -135,9 +135,16 @@ class JobManager:
                 print(f"Job status: {job_id} : {job_status}")
                 # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
                 # print("has_available_slot: ", self.has_available_slot())
+                if job_status.is_terminal():
+                    if job_status == JobStatus.SUCCEEDED:
+                        is_alive = False
+                        self.logger.info(f"Job {job_id} succeeded.")
+                        break
+                    elif job_status == JobStatus.FAILED:
+                        is_alive = False
+                        self.logger.error(f"Job {job_id} failed.")
+                        break
 
-                # await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
-                # continue
                 if job_status == JobStatus.PENDING:
                     # Compare the current time with the job start time.
                     # If the job is still pending, we will set the status

@@ -42,7 +42,6 @@ class GatewayJobDistributor(JobDistributor):
             raise RuntimeError("Gateway streamer is not initialized")
 
         doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
-        # convert job_info to DataRequest
         request = DataRequest()
         request.document_array_cls = DocList[BaseDoc]()
         request.header.exec_endpoint = "/extract"

@@ -5,6 +5,11 @@ from marie_server.scheduler.state import WorkState
 
 
 def to_timestamp_with_tz(dt: datetime):
+    """
+    Convert a datetime object to a timestamp with timezone.
+    :param dt:
+    :return:
+    """
     timestamp = dt.replace(tzinfo=timezone.utc).timestamp()
     return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
 
@@ -70,3 +75,33 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
     ON CONFLICT DO NOTHING
     RETURNING id
     """
+
+
+def fetch_next_job(schema: str):
+    def query(
+        name: str,
+        batch_size: int = 1,
+        include_metadata: bool = False,
+        priority: bool = True,
+    ) -> str:
+        return f"""
+        WITH next AS (
+            SELECT id
+            FROM {schema}.job
+            WHERE name = '{name}'
+              AND state < '{WorkState.ACTIVE.value}'
+              AND start_after < now()
+            ORDER BY {'priority DESC, ' if priority else ''}created_on, id
+            LIMIT {batch_size}
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE {schema}.job j SET
+            state = '{WorkState.ACTIVE.value}',
+            started_on = now(),
+            retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
+        FROM next
+        WHERE name = '{name}' AND j.id = next.id
+        RETURNING j.{'*' if include_metadata else 'id, name, priority, state, start_after, created_on'}
+        """
+
+    return query

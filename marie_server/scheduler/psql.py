@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import traceback
+from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import psycopg2
@@ -14,7 +15,11 @@ from marie_server.job.job_manager import JobManager
 from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.plans import insert_job
+from marie_server.scheduler.plans import (
+    fetch_next_job,
+    insert_job,
+    to_timestamp_with_tz,
+)
 from marie_server.scheduler.state import WorkState
 
 INIT_POLL_PERIOD = 1.250  # 250ms
@@ -22,6 +27,24 @@ MAX_POLL_PERIOD = 16.0  # 16s
 
 DEFAULT_SCHEMA = "marie_scheduler"
 COMPLETION_JOB_PREFIX = f"__state__{WorkState.COMPLETED.value}__"
+
+
+def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
+    """
+    Convert a JobStatus to a WorkState.
+    :param job_status:
+    :return:
+    """
+    if job_status == JobStatus.PENDING:
+        return WorkState.CREATED
+    elif job_status == JobStatus.RUNNING:
+        return WorkState.ACTIVE
+    elif job_status == JobStatus.SUCCEEDED:
+        return WorkState.COMPLETED
+    elif job_status == JobStatus.FAILED:
+        return WorkState.FAILED
+    else:
+        raise ValueError(f"Unknown JobStatus: {job_status}")
 
 
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
@@ -36,16 +59,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_storage(config, connection_only=True)
-        self.job_manager.event_publisher.subscribe(
-            [
-                JobStatus.RUNNING,
-                JobStatus.SUCCEEDED,
-                JobStatus.FAILED,
-                JobStatus.PENDING,
-                JobStatus.STOPPED,
-            ],
-            self.handle_job_event,
-        )
+        self._setup_event_subscriptions()
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -54,17 +68,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param event_type: The type of the event.
         :param message: The message associated with the event.
         """
-        print(f"received message: {event_type} > {message}")
+        self.logger.info(f"received message: {event_type} > {message}")
         job_id = message.get("job_id")
         status = JobStatus(event_type)
-        if status == JobStatus.SUCCEEDED:
-            print(f"Job succeeded : {job_id}")
+        work_item = await self.get_job(job_id)
+        if work_item is None:
+            self.logger.error(f"WorkItem not found: {job_id}")
+            return
+
+        completed_on = None
+        started_on = None
+
+        if status == JobStatus.PENDING:
+            self.logger.info(f"Job pending : {job_id}")
+        elif status == JobStatus.SUCCEEDED:
+            self.logger.info(f"Job succeeded : {job_id}")
+            completed_on = datetime.now()
         elif status == JobStatus.FAILED:
-            print(f"Job failed : {job_id}")
+            self.logger.info(f"Job failed : {job_id}")
         elif status == JobStatus.RUNNING:
-            print(f"Job running : {job_id}")
+            self.logger.info(f"Job running : {job_id}")
+            started_on = datetime.now()
         else:
-            print(f"Unhandled status : {status}")
+            self.logger.error(f"Unhandled status : {status}")
+
+        work_state = convert_job_status_to_work_state(status)
+        await self.put_status(job_id, work_state, started_on, completed_on)
 
     def create_tables(self, schema: str):
         """
@@ -76,6 +105,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_version_table(schema),
             create_job_state_enum(schema),
             create_job_table(schema),
+            create_job_history_table(schema),
+            create_job_update_trigger_function(schema),
+            create_job_update_trigger(schema),
             clone_job_table_for_archive(schema),
             create_schedule_table(schema),
             create_subscription_table(schema),
@@ -131,6 +163,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         logger.info("Starting job scheduling agent")
         self.create_tables(DEFAULT_SCHEMA)
         self.running = True
+        task = asyncio.create_task(self.__poll())
 
         if False:
 
@@ -164,11 +197,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             document_iterator = self.get_work_items()
             has_records = False
 
-            for record in document_iterator:
+            async for record in document_iterator:
                 has_records = True
                 print("record", record)
-                job_id = await self.enqueue(record)
+                has_slots, job_id = await self.enqueue(record)
                 self.logger.info(f"Work item scheduled with ID: {job_id}")
+                if not has_slots:
+                    self.logger.info("No available slots for work, rescheduling")
+                    break
+
             wait_time = (
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
@@ -180,20 +217,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def debug_info(self) -> str:
         print("Debugging info")
 
-    async def enqueue(self, work_info: WorkInfo) -> Optional[str]:
+    async def enqueue(self, work_info: WorkInfo) -> tuple[bool, str]:
+        """
+        Enqueues a work item for processing on the next available executor.
+
+        :param work_info: The information about the work item to be processed.
+        :return: A tuple containing a boolean indicating whether the work item was successfully enqueued and the ID of the work item.
+        """
         if not self.job_manager.has_available_slot():
-            self.logger.info("No available slots for work, scheduling later.")
-            return None
+            self.logger.info(
+                f"No available slots for work, scheduling : {work_info.id}"
+            )
+            return False, None
 
         submission_id = work_info.id
         returned_id = await self.job_manager.submit_job(
             entrypoint="echo hello", submission_id=submission_id
         )
-        return returned_id
+        return True, returned_id
 
     async def get_work_items(
         self,
-        limit: int = 0,
+        limit: int = 1,
     ) -> AsyncGenerator[Any, None]:
         """Get the Jobs from the PSQL database.
 
@@ -202,14 +247,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         with self:
             try:
-                cursor = self.connection.cursor("doc_iterator")
-                cursor.itersize = 10000
-                cursor.execute(
-                    f"""
-                    SELECT * FROM job_queue
-                    """
-                    # + (f" limit = {limit}" if limit > 0 else "")
+                fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
+                query = fetch_query_def(
+                    name="WorkInfo-001",
+                    batch_size=limit,
+                    include_metadata=False,
+                    priority=True,
                 )
+                print(query)
+
+                cursor = self.connection.cursor("doc_iterator")
+                cursor.itersize = limit
+                cursor.execute(query)
+
                 for record in cursor:
                     print(record)
                     doc_id = record[0]
@@ -366,27 +416,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         raise NotImplementedError
 
-    async def put_status(self, job_id, status: WorkState):
+    async def put_status(
+        self,
+        job_id: str,
+        status: WorkState,
+        started_on: Optional[datetime] = None,
+        completed_on: Optional[datetime] = None,
+    ):
         """
         Update the status of a job.
-        :param job_id:
-        :param status:
+        :param job_id: The ID of the job.
+        :param status: The new status of the job.
+        :param started_on: Optional start time of the job.
+        :param completed_on: Optional completion time of the job.
         """
         schema = DEFAULT_SCHEMA
         table = "job"
 
+        update_fields = [f"state = '{status.value}'"]
+        if started_on:
+            update_fields.append(
+                f"started_on = '{to_timestamp_with_tz(started_on)}'::timestamp with time zone "
+            )
+        if completed_on:
+            update_fields.append(
+                f"completed_on = '{to_timestamp_with_tz(completed_on)}'::timestamp with time zone "
+            )
+
+        update_query = f"""
+        UPDATE {schema}.{table}
+        SET {', '.join(update_fields)}
+        WHERE id = '{job_id}'
+        """
+
         with self:
-            try:
-                self._execute_sql_gracefully(
-                    f"""
-                    UPDATE {schema}.{table}
-                    SET state = '{status.value}'
-                    WHERE id = '{job_id}'
-                    """
-                )
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error updating job status: {error}")
-                self.connection.rollback()
+            self._execute_sql_gracefully(update_query)
 
     async def maintenance(self):
         """
@@ -410,3 +474,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def purge(self):
         print("Purging jobs")
+
+    def _setup_event_subscriptions(self):
+        self.job_manager.event_publisher.subscribe(
+            [
+                JobStatus.RUNNING,
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+                JobStatus.PENDING,
+                JobStatus.STOPPED,
+            ],
+            self.handle_job_event,
+        )

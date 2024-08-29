@@ -56,6 +56,64 @@ def create_job_table(schema: str):
     """
 
 
+def create_job_history_table(schema: str):
+    return f"""
+    CREATE TABLE {schema}.job_history (
+      history_id bigserial primary key,
+      id text not null,
+      name text not null,
+      priority integer not null default(0),
+      data jsonb,
+      state {schema}.job_state not null,
+      retry_limit integer not null default(0),
+      retry_count integer not null default(0),
+      retry_delay integer not null default(0),
+      retry_backoff boolean not null default false,
+      start_after timestamp with time zone not null default now(),
+      started_on timestamp with time zone,
+      expire_in interval not null default interval '15 minutes',
+      created_on timestamp with time zone not null default now(),
+      completed_on timestamp with time zone,
+      keep_until timestamp with time zone not null default now() + interval '14 days',
+      on_complete boolean not null default false,
+      output jsonb,
+      history_created_on timestamp with time zone not null default now()
+    )
+    """
+
+
+def create_job_update_trigger_function(schema: str):
+    return f"""
+    CREATE OR REPLACE FUNCTION {schema}.job_update_trigger_function()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        INSERT INTO {schema}.job_history (
+            id, name, priority, data, state, retry_limit, retry_count, retry_delay, 
+            retry_backoff, start_after, started_on, expire_in, created_on, 
+            completed_on, keep_until, on_complete, output, history_created_on
+        )
+        SELECT 
+            NEW.id, NEW.name, NEW.priority, NEW.data, NEW.state, NEW.retry_limit, 
+            NEW.retry_count, NEW.retry_delay, NEW.retry_backoff, NEW.start_after, 
+            NEW.started_on, NEW.expire_in, NEW.created_on, NEW.completed_on, 
+            NEW.keep_until, NEW.on_complete, NEW.output, now() as history_created_on
+        FROM {schema}.job
+        WHERE id = NEW.id;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """
+
+
+def create_job_update_trigger(schema: str):
+    return f"""
+    CREATE TRIGGER job_update_trigger
+    AFTER UPDATE OR INSERT ON {schema}.job
+    FOR EACH ROW
+    EXECUTE FUNCTION {schema}.job_update_trigger_function();
+    """
+
+
 def clone_job_table_for_archive(schema):
     return f"CREATE TABLE {schema}.archive (LIKE {schema}.job)"
 

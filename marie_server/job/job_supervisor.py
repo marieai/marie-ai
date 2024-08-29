@@ -13,7 +13,7 @@ from marie_server.job.job_distributor import JobDistributor
 
 class JobSupervisor:
     """
-    Supervise jobs and keep track of their status.
+    Supervise jobs and keep track of their status on the remote executor.
     """
 
     DEFAULT_JOB_STOP_WAIT_TIME_S = 3
@@ -31,8 +31,7 @@ class JobSupervisor:
         self.request_info = None
 
     async def ping(self):
-        """Used to check the health of the actor/executor/deployment."""
-        print("Ping called : ", self.request_info)
+        """Used to check the health of the executor/deployment."""
         request_info = self.request_info
         if request_info is None:
             return True
@@ -41,7 +40,7 @@ class JobSupervisor:
         address = request_info["address"]
         deployment_name = request_info["deployment"]
 
-        print(
+        self.logger.debug(
             f"Sending ping to {address} for request {request_id} on deployment {deployment_name}"
         )
 
@@ -62,7 +61,7 @@ class JobSupervisor:
         )
 
         # print("DryRun - Response: ", response)
-        doc = TextDoc(text=f"sample text : _jina_dry_run_")
+        doc = TextDoc(text=f"Text : _jina_dry_run_")
         request = DataRequest()
         request.document_array_cls = DocList[BaseDoc]()
         request.header.exec_endpoint = "_jina_dry_run_"
@@ -74,7 +73,7 @@ class JobSupervisor:
             response, _ = await connection_stub.send_requests(
                 requests=[request], metadata={}, compression=False
             )
-            self.logger.info(f"DryRun - Response: {response}")
+            self.logger.debug(f"DryRun - Response: {response}")
             if response.status.code == response.status.SUCCESS:
                 return True
             else:
@@ -83,8 +82,7 @@ class JobSupervisor:
                 )
         except Exception as e:
             self.logger.error(f"Error during ping to {self.request_info} : {e}")
-            raise RuntimeError(f"Error during ping to : _jina_dry_run_ ")
-            # raise RuntimeError(f"Error during ping to {str(self.request_info)} : {e}")
+            raise RuntimeError(f"Error during ping to {str(self.request_info)} : {e}")
 
     async def run(
         self,
@@ -164,13 +162,6 @@ class JobSupervisor:
             print("Response status: ", response.status)
 
             job_status = await self._job_info_client.get_status(self._job_id)
-            print("Job Status: ", job_status)
-            print("Job Status: ", job_status.is_terminal())
-
-            all_jobs = await self._job_info_client.get_all_jobs()
-            for job_id, job_info in all_jobs.items():
-                print("Job job_id : ", job_id)
-                print("Job job_id: ", job_info)
 
             if job_status.is_terminal():
                 # If the job is already in a terminal state, then we don't need to update it. This can happen if the

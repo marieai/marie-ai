@@ -46,15 +46,17 @@ class MarieExecutor(Executor):
                 from pynvml import NVMLError, nvmlSystemGetDriverVersion
 
                 pynvml.nvmlInit()
-                print("Driver Version:", nvmlSystemGetDriverVersion())
+                self.logger.debug("Driver Version:", nvmlSystemGetDriverVersion())
                 device_count = pynvml.nvmlDeviceGetCount()
                 for i in range(device_count):
                     handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                    print("Device", i, ":", pynvml.nvmlDeviceGetName(handle))
+                    self.logger.debug(
+                        "Device", i, ":", pynvml.nvmlDeviceGetName(handle)
+                    )
                     gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                     info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
                     remaining = info.free
-                    print("Remaining memory:", remaining)
+                    self.logger.debug("Remaining memory:", remaining)
             except Exception as error:
                 self.logger.error(f"Error in DryRun: {error}")
                 has_error = True
