@@ -138,7 +138,8 @@ class PostgresqlMixin:
             # except psycopg2.errors.UniqueViolation as error:
             print(statement)
             self.logger.debug(f"Error while executing {statement}: {error}.")
-            raise error
             self.connection.rollback()
-        self.connection.commit()
+            raise error
+        finally:
+            self.connection.commit()
         return cursor

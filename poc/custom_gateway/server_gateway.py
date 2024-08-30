@@ -6,8 +6,9 @@ from typing import AsyncIterator, Callable, Optional
 from urllib.parse import urlparse
 
 import grpc
-from docarray import BaseDoc, DocList
+from docarray import DocList
 from docarray.documents import TextDoc
+from fastapi import Depends
 
 import marie
 import marie.helper
@@ -32,15 +33,12 @@ from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
-from marie_server.job.job_distributor import JobDistributor
 from marie_server.job.job_manager import JobManager
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
 from marie_server.storage.in_memory import InMemoryKV
 from marie_server.storage.psql import PostgreSQLKV
-
-# from tests.core.test_job_manager import NoopJobDistributor
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -108,11 +106,18 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         GatewayRequestHandler.dry_run = self.custom_dry_run
 
         def _extend_rest_function(app):
+            from fastapi import Request
+
             @app.on_event("shutdown")
             async def _shutdown():
+                self.logger.info("Shutting down")
                 await self.job_scheduler.stop()
 
-            @app.get("/job/submit")
+            @app.api_route(
+                path="/job/submit",
+                methods=["GET"],
+                summary=f"Submit a job /api/submit",
+            )
             async def job_submit(text: str):
                 self.logger.info(f"Received request at {datetime.now}")
                 work_info = WorkInfo(
@@ -166,6 +171,58 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             async def get_health(text: str):
                 self.logger.info(f"Received request at {datetime.now()}")
                 return {"result": "ok"}
+
+            @app.api_route(
+                path="/api/jobs/{state}",
+                methods=["GET"],
+                summary=f"Job listing endpoint /api/jobs",
+            )
+            async def list_jobs(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                params = request.path_params
+                state = params.get("state")
+
+                if state:
+                    jobs = await self.job_scheduler.list_jobs(state=state)
+                else:
+                    jobs = await self.job_scheduler.list_jobs()
+
+                return {"status": "OK", "result": jobs}
+
+            @app.api_route(
+                path="/api/jobsXX/{job_id}",
+                methods=["GET"],
+                summary="Stop a job /api/jobs/{job_id}",
+            )
+            async def get_job_info(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                # params = request.query_params
+                params = request.path_params
+                job_id = params.get("job_id")
+                if not job_id:
+                    return {"status": "error", "result": "Invalid job id"}
+                job = await self.job_scheduler.get_job(job_id)
+                if not job:
+                    return {"status": "error", "result": "Job not found"}
+                return {"status": "OK", "result": job}
+
+            @app.api_route(
+                path="/api/jobs/{job_id}/stop",
+                methods=["GET"],
+                summary="Stop a job /api/jobs/{job_id}/stop",
+            )
+            async def stop_job(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                return {"status": "OK", "result": "Job stopped"}
+
+            @app.api_route(
+                path="/api/jobs/{job_id}",
+                methods=["DELETE"],
+                summary="Delete a job /api/jobs/{job_id}/stop",
+            )
+            async def delete_job(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                return {"status": "OK", "result": "Job deleted"}
 
             return app
 

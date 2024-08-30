@@ -93,7 +93,8 @@ def fetch_next_job(schema: str):
               AND start_after < now()
             ORDER BY {'priority DESC, ' if priority else ''}created_on, id
             LIMIT {batch_size}
-            FOR UPDATE SKIP LOCKED
+            
+            --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
         )
         UPDATE {schema}.job j SET
             state = '{WorkState.ACTIVE.value}',
@@ -101,7 +102,7 @@ def fetch_next_job(schema: str):
             retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
         FROM next
         WHERE name = '{name}' AND j.id = next.id
-        RETURNING j.{'*' if include_metadata else 'id, name, priority, state, start_after, created_on'}
+        RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,on_complete'}
         """
 
     return query
