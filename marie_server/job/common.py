@@ -38,7 +38,7 @@ class JobStatus(str, Enum):
         """Return whether or not this status is terminal.
 
         A terminal status is one that cannot transition to any other status.
-        The terminal statuses are "STOPPED", "SUCCEEDED", and "FAILED".
+        The terminal statuses are "STOPPED", "SUCCEEDED" and "FAILED"
 
         Returns:
             True if this status is terminal, otherwise False.

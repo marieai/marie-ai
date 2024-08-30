@@ -8,6 +8,7 @@ import inspect
 import multiprocessing
 import os
 import threading
+import time
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from types import SimpleNamespace
@@ -57,9 +58,9 @@ if docarray_v2:
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.context.context import Context
 
-__dry_run_endpoint__ = '_jina_dry_run_'
+__dry_run_endpoint__ = "_jina_dry_run_"
 
-__all__ = ['BaseExecutor', __dry_run_endpoint__]
+__all__ = ["BaseExecutor", __dry_run_endpoint__]
 
 
 def is_pydantic_model(annotation: Type) -> bool:
@@ -140,9 +141,9 @@ class ExecutorType(type(JAMLCompatible), type):
         :param cls: The class.
         :return: The class, after being registered.
         """
-        reg_cls_set = getattr(cls, '_registered_class', set())
+        reg_cls_set = getattr(cls, "_registered_class", set())
 
-        cls_id = f'{cls.__module__}.{cls.__name__}'
+        cls_id = f"{cls.__module__}.{cls.__name__}"
         if cls_id not in reg_cls_set:
             arg_spec = inspect.getfullargspec(cls.__init__)
 
@@ -150,20 +151,20 @@ class ExecutorType(type(JAMLCompatible), type):
                 arg_spec.args
             ):
                 raise TypeError(
-                    f'{cls.__init__} does not follow the full signature of `Executor.__init__`, '
-                    f'please add `**kwargs` to your __init__ function'
+                    f"{cls.__init__} does not follow the full signature of `Executor.__init__`, "
+                    f"please add `**kwargs` to your __init__ function"
                 )
             taboo = get_executor_taboo()
 
-            wrap_func(cls, ['__init__'], store_init_kwargs, taboo=taboo)
-            wrap_func(cls, ['__init__'], avoid_concurrent_lock_cls(cls))
+            wrap_func(cls, ["__init__"], store_init_kwargs, taboo=taboo)
+            wrap_func(cls, ["__init__"], avoid_concurrent_lock_cls(cls))
 
             reg_cls_set.add(cls_id)
-            setattr(cls, '_registered_class', reg_cls_set)
+            setattr(cls, "_registered_class", reg_cls_set)
         return cls
 
 
-T = TypeVar('T', bound='_FunctionWithSchema')
+T = TypeVar("T", bound="_FunctionWithSchema")
 
 
 class _FunctionWithSchema(NamedTuple):
@@ -179,10 +180,10 @@ class _FunctionWithSchema(NamedTuple):
     def validate(self):
         assert not (
             self.is_singleton_doc and self.is_batch_docs
-        ), f'Cannot specify both the `doc` and the `docs` paramater for {self.fn.__name__}'
+        ), f"Cannot specify both the `doc` and the `docs` paramater for {self.fn.__name__}"
         assert not (
             self.is_generator and self.is_batch_docs
-        ), f'Cannot specify the `docs` parameter if the endpoint {self.fn.__name__} is a generator'
+        ), f"Cannot specify the `docs` parameter if the endpoint {self.fn.__name__} is a generator"
         if docarray_v2:
             from docarray import BaseDoc, DocList
 
@@ -192,24 +193,24 @@ class _FunctionWithSchema(NamedTuple):
                     or not issubclass(self.response_schema, DocList)
                 ):
                     faulty_schema = (
-                        'request_schema'
+                        "request_schema"
                         if not issubclass(self.request_schema, DocList)
-                        else 'response_schema'
+                        else "response_schema"
                     )
                     raise Exception(
-                        f'The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a DocList. Please make sure that your endpoint used DocList for request and response schema'
+                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a DocList. Please make sure that your endpoint used DocList for request and response schema"
                     )
                 if self.is_singleton_doc and (
                     not issubclass(self.request_schema, BaseDoc)
                     or not issubclass(self.response_schema, BaseDoc)
                 ):
                     faulty_schema = (
-                        'request_schema'
+                        "request_schema"
                         if not issubclass(self.request_schema, BaseDoc)
-                        else 'response_schema'
+                        else "response_schema"
                     )
                     raise Exception(
-                        f'The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your endpoint used BaseDoc for request and response schema'
+                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your endpoint used BaseDoc for request and response schema"
                     )
             else:
                 if not issubclass(self.request_schema, BaseDoc) or not (
@@ -217,34 +218,34 @@ class _FunctionWithSchema(NamedTuple):
                     or issubclass(self.response_schema, BaseDoc)
                 ):  # response_schema may be a DocList because by default we use LegacyDocument, and for generators we ignore response
                     faulty_schema = (
-                        'request_schema'
+                        "request_schema"
                         if not issubclass(self.request_schema, BaseDoc)
-                        else 'response_schema'
+                        else "response_schema"
                     )
                     raise Exception(
-                        f'The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your streaming endpoints used BaseDoc for request and response schema'
+                        f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your streaming endpoints used BaseDoc for request and response schema"
                     )
 
     @staticmethod
     def get_function_with_schema(fn: Callable) -> T:
         # if it's not a generator function, infer the type annotation from the docs parameter
         # otherwise, infer from the doc parameter (since generator endpoints expect only 1 document as input)
-        is_generator = getattr(fn, '__is_generator__', False)
-        is_singleton_doc = 'doc' in fn.__annotations__
+        is_generator = getattr(fn, "__is_generator__", False)
+        is_singleton_doc = "doc" in fn.__annotations__
         is_batch_docs = (
             not is_singleton_doc
         )  # some tests just use **kwargs and should work as before
         assert not (
             is_singleton_doc and is_batch_docs
-        ), f'Cannot specify both the `doc` and the `docs` paramater for {fn.__name__}'
+        ), f"Cannot specify both the `doc` and the `docs` paramater for {fn.__name__}"
         assert not (
             is_generator and is_batch_docs
-        ), f'Cannot specify the `docs` parameter if the endpoint {fn.__name__} is a generator'
+        ), f"Cannot specify the `docs` parameter if the endpoint {fn.__name__} is a generator"
         docs_annotation = fn.__annotations__.get(
-            'docs', fn.__annotations__.get('doc', None)
+            "docs", fn.__annotations__.get("doc", None)
         )
         parameters_model = (
-            fn.__annotations__.get('parameters', None) if docarray_v2 else None
+            fn.__annotations__.get("parameters", None) if docarray_v2 else None
         )
         parameters_is_pydantic_model = False
         if parameters_model is not None and docarray_v2:
@@ -268,30 +269,30 @@ class _FunctionWithSchema(NamedTuple):
             pass
         elif type(docs_annotation) is str:
             warnings.warn(
-                f'`docs` annotation must be a type hint, got {docs_annotation}'
-                ' instead, you should maybe remove the string annotation. Default value'
-                'DocumentArray will be used instead.'
+                f"`docs` annotation must be a type hint, got {docs_annotation}"
+                " instead, you should maybe remove the string annotation. Default value"
+                "DocumentArray will be used instead."
             )
             docs_annotation = None
         elif not isinstance(docs_annotation, type):
             warnings.warn(
-                f'`docs` annotation must be a class if you want to use it'
-                f' as schema input, got {docs_annotation}. try to remove the Optional'
-                f'.fallback to default behavior'
-                ''
+                f"`docs` annotation must be a class if you want to use it"
+                f" as schema input, got {docs_annotation}. try to remove the Optional"
+                f".fallback to default behavior"
+                ""
             )
             docs_annotation = None
 
-        return_annotation = fn.__annotations__.get('return', None)
+        return_annotation = fn.__annotations__.get("return", None)
 
         if return_annotation is None:
             pass
         elif type(return_annotation) is str:
             warnings.warn(
-                f'`return` annotation must be a class if you want to use it'
-                f' as schema input, got {docs_annotation}. try to remove the Optional'
-                f'.fallback to default behavior'
-                ''
+                f"`return` annotation must be a class if you want to use it"
+                f" as schema input, got {docs_annotation}. try to remove the Optional"
+                f".fallback to default behavior"
+                ""
             )
             return_annotation = None
         elif isinstance(return_annotation, _GenericAlias):
@@ -308,9 +309,9 @@ class _FunctionWithSchema(NamedTuple):
 
         elif not isinstance(return_annotation, type):
             warnings.warn(
-                f'`return` annotation must be a class if you want to use it'
-                f'as schema input, got {docs_annotation}, fallback to default behavior'
-                ''
+                f"`return` annotation must be a class if you want to use it"
+                f"as schema input, got {docs_annotation}, fallback to default behavior"
+                ""
             )
             return_annotation = None
 
@@ -409,8 +410,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             )
         else:
             self.logger.warning(
-                f' Endpoint {__dry_run_endpoint__} is defined by the Executor. Be aware that this endpoint is usually reserved to enable health checks from the Client through the gateway.'
-                f' So it is recommended not to expose this endpoint. '
+                f" Endpoint {__dry_run_endpoint__} is defined by the Executor. Be aware that this endpoint is usually reserved to enable health checks from the Client through the gateway."
+                f" So it is recommended not to expose this endpoint. "
             )
         if type(self) == BaseExecutor:
             self.requests[__default_endpoint__] = (
@@ -421,7 +422,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         self._lock = contextlib.AsyncExitStack()
         try:
-            if not getattr(self.runtime_args, 'allow_concurrent', False):
+            if not getattr(self.runtime_args, "allow_concurrent", False):
                 self._lock = (
                     asyncio.Lock()
                 )  # Lock to run in Executor non async methods in a way that does not block the event loop to do health checks without the fear of having race conditions or multithreading issues.
@@ -467,49 +468,50 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 request_schema = PydanticDocument
                 response_schema = PydanticDocument
             endpoint_models[endpoint] = {
-                'input': {
-                    'name': request_schema.__name__,
-                    'model': request_schema,
+                "input": {
+                    "name": request_schema.__name__,
+                    "model": request_schema,
                 },
-                'output': {
-                    'name': response_schema.__name__,
-                    'model': response_schema,
+                "output": {
+                    "name": response_schema.__name__,
+                    "model": response_schema,
                 },
-                'is_generator': _is_generator,
-                'is_singleton_doc': _is_singleton_doc,
-                'parameters': {
-                    'name': (
+                "is_generator": _is_generator,
+                "is_singleton_doc": _is_singleton_doc,
+                "parameters": {
+                    "name": (
                         _parameters_model.__name__
                         if _parameters_model is not None
                         else None
                     ),
-                    'model': _parameters_model,
+                    "model": _parameters_model,
                 },
             }
         return endpoint_models
 
     def _dry_run_func(self, *args, **kwargs):
+        print(f"DryRun is called : {time.time()}")
         pass
 
     def _init_monitoring(self):
         if (
-            hasattr(self.runtime_args, 'metrics_registry')
+            hasattr(self.runtime_args, "metrics_registry")
             and self.runtime_args.metrics_registry
         ):
             with ImportExtensions(
                 required=True,
-                help_text='You need to install the `prometheus_client` to use the montitoring functionality of marie',
+                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
             ):
                 from prometheus_client import Summary
 
             self._summary_method = Summary(
-                'process_request_seconds',
-                'Time spent when calling the executor request method',
+                "process_request_seconds",
+                "Time spent when calling the executor request method",
                 registry=self.runtime_args.metrics_registry,
-                namespace='marie',
-                labelnames=('executor', 'executor_endpoint', 'runtime_name'),
+                namespace="marie",
+                labelnames=("executor", "executor_endpoint", "runtime_name"),
             )
-            self._metrics_buffer = {'process_request_seconds': self._summary_method}
+            self._metrics_buffer = {"process_request_seconds": self._summary_method}
 
         else:
             self._summary_method = None
@@ -517,11 +519,11 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if self.meter:
             self._process_request_histogram = self.meter.create_histogram(
-                name='marie_process_request_seconds',
-                description='Time spent when calling the executor request method',
+                name="marie_process_request_seconds",
+                description="Time spent when calling the executor request method",
             )
             self._histogram_buffer = {
-                'marie_process_request_seconds': self._process_request_histogram
+                "marie_process_request_seconds": self._process_request_histogram
             }
         else:
             self._process_request_histogram = None
@@ -531,9 +533,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         if not _runtime_args:
             _runtime_args = {}
 
-        instrumenting_module_name = _runtime_args.get('name', self.__class__.__name__)
+        instrumenting_module_name = _runtime_args.get("name", self.__class__.__name__)
 
-        args_tracer_provider = _runtime_args.get('tracer_provider', None)
+        args_tracer_provider = _runtime_args.get("tracer_provider", None)
         if args_tracer_provider:
             self.tracer_provider = args_tracer_provider
             self.tracer = self.tracer_provider.get_tracer(instrumenting_module_name)
@@ -541,7 +543,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             self.tracer_provider = None
             self.tracer = None
 
-        args_meter_provider = _runtime_args.get('meter_provider', None)
+        args_meter_provider = _runtime_args.get("meter_provider", None)
         if args_meter_provider:
             self.meter_provider = args_meter_provider
             self.meter = self.meter_provider.get_meter(instrumenting_module_name)
@@ -556,10 +558,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         :return: Returns the requests corresponding to the specific Executor instance class
         """
-        if hasattr(self, '_requests'):
+        if hasattr(self, "_requests"):
             return self._requests
         else:
-            if not hasattr(self, 'requests_by_class'):
+            if not hasattr(self, "requests_by_class"):
                 self.requests_by_class = {}
             if self.__class__.__name__ not in self.requests_by_class:
                 self.requests_by_class[self.__class__.__name__] = {}
@@ -574,7 +576,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         :return: Returns the list of endpoints bound to write methods
         """
-        if hasattr(self, '_write_methods'):
+        if hasattr(self, "_write_methods"):
             endpoints = []
             for endpoint, fn in self.requests.items():
                 if fn.fn.__name__ in self._write_methods:
@@ -599,14 +601,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                     self.requests[endpoint] = (
                         _FunctionWithSchema.get_function_with_schema(_func)
                     )
-                elif typename(_func) == 'marie.executors.decorators.FunctionMapper':
+                elif typename(_func) == "marie.executors.decorators.FunctionMapper":
                     # the target function is already decorated with `@requests`, need unwrap with `.fn`
                     self.requests[endpoint] = (
                         _FunctionWithSchema.get_function_with_schema(_func.fn)
                     )
                 else:
                     raise TypeError(
-                        f'expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}'
+                        f"expect {typename(self)}.{func} to be a function, but receiving {typename(_func)}"
                     )
 
     def _validate_sagemaker(self):
@@ -614,49 +616,50 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         # if it is not defined, we check if there is only one endpoint defined,
         # and if so, we use it as the POST /invocations endpoint, or raise an error
         if (
-            not hasattr(self, 'runtime_args')
-            or not hasattr(self.runtime_args, 'provider')
+            not hasattr(self, "runtime_args")
+            or not hasattr(self.runtime_args, "provider")
             or self.runtime_args.provider != ProviderType.SAGEMAKER.value
         ):
             return
 
         remove_keys = set()
         for k in self.requests.keys():
-            if k != '/invocations':
+            if k != "/invocations":
                 remove_keys.add(k)
 
-        if '/invocations' in self.requests:
+        if "/invocations" in self.requests:
             for k in remove_keys:
                 self.requests.pop(k)
             return
 
         if (
-            hasattr(self.runtime_args, 'provider_endpoint')
+            hasattr(self.runtime_args, "provider_endpoint")
             and self.runtime_args.provider_endpoint
         ):
-            endpoint_to_use = ('/' + self.runtime_args.provider_endpoint).lower()
-            if endpoint_to_use in list(self.requests.keys()):
-                self.logger.warning(
-                    f'Using "{endpoint_to_use}" as "/invocations" route'
-                )
-                self.requests['/invocations'] = self.requests[endpoint_to_use]
-                for k in remove_keys:
-                    self.requests.pop(k)
-                return
+            endpoint_to_use = ("/" + self.runtime_args.provider_endpoint).lower()
+        elif len(self.requests) == 1:
+            endpoint_to_use = list(self.requests.keys())[0]
+        else:
+            raise ValueError('Cannot identify the endpoint to use for "/invocations"')
 
-        if len(self.requests) == 1:
-            route = list(self.requests.keys())[0]
-            self.logger.warning(f'Using "{route}" as "/invocations" route')
-            self.requests['/invocations'] = self.requests[route]
+        if endpoint_to_use in list(self.requests.keys()):
+            self.logger.warning(f'Using "{endpoint_to_use}" as "/invocations" route')
+            self.requests["/invocations"] = self.requests[endpoint_to_use]
+            if (
+                getattr(self, "dynamic_batching", {}).get(endpoint_to_use, None)
+                is not None
+            ):
+                self.dynamic_batching["/invocations"] = self.dynamic_batching[
+                    endpoint_to_use
+                ]
+                self.dynamic_batching.pop(endpoint_to_use)
             for k in remove_keys:
                 self.requests.pop(k)
             return
 
-        raise ValueError('Cannot identify the endpoint to use for "/invocations"')
-
     def _add_dynamic_batching(self, _dynamic_batching: Optional[Dict]):
         if _dynamic_batching:
-            self.dynamic_batching = getattr(self, 'dynamic_batching', {})
+            self.dynamic_batching = getattr(self, "dynamic_batching", {})
             self.dynamic_batching.update(_dynamic_batching)
 
     def _add_metas(self, _metas: Optional[Dict]):
@@ -671,12 +674,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         target = SimpleNamespace()
         # set self values filtered by those non-exist, and non-expandable
         for k, v in tmp.items():
-            if k == 'workspace' and not (v is None or v == ''):
+            if k == "workspace" and not (v is None or v == ""):
                 warnings.warn(
-                    'Setting `workspace` via `metas.workspace` is deprecated. '
-                    'Instead, use `f.add(..., workspace=...)` when defining a a Flow in Python; '
-                    'the `workspace` parameter when defining a Flow using YAML; '
-                    'or `--workspace` when starting an Executor using the CLI.',
+                    "Setting `workspace` via `metas.workspace` is deprecated. "
+                    "Instead, use `f.add(..., workspace=...)` when defining a a Flow in Python; "
+                    "the `workspace` parameter when defining a Flow using YAML; "
+                    "or `--workspace` when starting an Executor using the CLI.",
                     category=DeprecationWarning,
                 )
             if not hasattr(target, k):
@@ -692,8 +695,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if unresolved_attr:
             _tmp = vars(self)
-            _tmp['metas'] = tmp
-            new_metas = JAML.expand_dict(_tmp)['metas']
+            _tmp["metas"] = tmp
+            new_metas = JAML.expand_dict(_tmp)["metas"]
 
             for k, v in new_metas.items():
                 if not hasattr(target, k):
@@ -704,14 +707,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                             setattr(target, k, v)
                         else:
                             raise ValueError(
-                                f'{k}={v} is not substitutable or badly referred'
+                                f"{k}={v} is not substitutable or badly referred"
                             )
                     else:
                         setattr(target, k, v)
         # `name` is important as it serves as an identifier of the executor
         # if not given, then set a name by the rule
-        if not getattr(target, 'name', None):
-            setattr(target, 'name', self.__class__.__name__)
+        if not getattr(target, "name", None):
+            setattr(target, "name", self.__class__.__name__)
 
         self.metas = target
 
@@ -751,16 +754,16 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             return await self.__acall_endpoint__(__default_endpoint__, **kwargs)
 
     async def __acall_endpoint__(
-        self, req_endpoint, tracing_context: Optional['Context'], **kwargs
+        self, req_endpoint, tracing_context: Optional["Context"], **kwargs
     ):
         # Decorator to make sure that `parameters` are passed as PydanticModels if needed
         def parameters_as_pydantic_models_decorator(func, parameters_pydantic_model):
             @functools.wraps(func)  # Step 2: Use functools.wraps to preserve metadata
             def wrapper(*args, **kwargs):
-                parameters = kwargs.get('parameters', None)
+                parameters = kwargs.get("parameters", None)
                 if parameters is not None:
                     parameters = parameters_pydantic_model(**parameters)
-                    kwargs['parameters'] = parameters
+                    kwargs["parameters"] = parameters
                 result = func(*args, **kwargs)
                 return result
 
@@ -770,7 +773,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         def loop_docs_decorator(func):
             @functools.wraps(func)  # Step 2: Use functools.wraps to preserve metadata
             def wrapper(*args, **kwargs):
-                docs = kwargs.pop('docs')
+                docs = kwargs.pop("docs")
                 if docarray_v2:
                     from docarray import DocList
 
@@ -790,7 +793,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         def async_loop_docs_decorator(func):
             @functools.wraps(func)  # Step 2: Use functools.wraps to preserve metadata
             async def wrapper(*args, **kwargs):
-                docs = kwargs.pop('docs')
+                docs = kwargs.pop("docs")
                 if docarray_v2:
                     from docarray import DocList
 
@@ -818,7 +821,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         func = original_func
         if is_generator or is_batch_docs:
             pass
-        elif kwargs.get('docs', None) is not None:
+        elif kwargs.get("docs", None) is not None:
             # This means I need to pass every doc (most likely 1, but potentially more)
             if iscoroutinefunction(original_func):
                 func = async_loop_docs_decorator(original_func)
@@ -844,7 +847,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                         )
 
         runtime_name = (
-            self.runtime_args.name if hasattr(self.runtime_args, 'name') else None
+            self.runtime_args.name if hasattr(self.runtime_args, "name") else None
         )
 
         _summary = (
@@ -855,9 +858,9 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             else None
         )
         _histogram_metric_labels = {
-            'executor': self.__class__.__name__,
-            'executor_endpoint': req_endpoint,
-            'runtime_name': runtime_name,
+            "executor": self.__class__.__name__,
+            "executor_endpoint": req_endpoint,
+            "runtime_name": runtime_name,
         }
 
         if self.tracer:
@@ -893,15 +896,15 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :return: returns the workspace of the current shard of this Executor.
         """
         workspace = (
-            getattr(self.runtime_args, 'workspace', None)
-            or getattr(self.metas, 'workspace')
+            getattr(self.runtime_args, "workspace", None)
+            or getattr(self.metas, "workspace")
             or self._init_workspace
             or __cache_path__
         )
         if workspace:
             shard_id = getattr(
                 self.runtime_args,
-                'shard_id',
+                "shard_id",
                 None,
             )
             return _get_workspace_from_name_and_shards(
@@ -955,16 +958,16 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             from hubble.executor.parsers import set_hub_pull_parser
 
             _args = ArgNamespace.kwargs2namespace(
-                {'no_usage': True, **kwargs},
+                {"no_usage": True, **kwargs},
                 set_hub_pull_parser(),
                 positional_args=(uri,),
             )
             _source = HubIO(args=_args).pull()
 
-        if not _source or _source.startswith('docker://'):
+        if not _source or _source.startswith("docker://"):
             raise ValueError(
-                f'Can not construct a native Executor from {uri}. Looks like you want to use it as a '
-                f'Docker container, you may want to use it in the Flow via `.add(uses={uri})` instead.'
+                f"Can not construct a native Executor from {uri}. Looks like you want to use it as a "
+                f"Docker container, you may want to use it in the Flow via `.add(uses={uri})` instead."
             )
         return cls.load_config(
             _source,
@@ -997,23 +1000,23 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         grpc_channel_options: Optional[dict] = None,
         grpc_metadata: Optional[dict] = None,
         grpc_server_options: Optional[dict] = None,
-        host: Optional[List[str]] = ['0.0.0.0'],
+        host: Optional[List[str]] = ["0.0.0.0"],
         install_requirements: Optional[bool] = False,
         log_config: Optional[str] = None,
         metrics: Optional[bool] = False,
         metrics_exporter_host: Optional[str] = None,
         metrics_exporter_port: Optional[int] = None,
         monitoring: Optional[bool] = False,
-        name: Optional[str] = 'executor',
+        name: Optional[str] = "executor",
         native: Optional[bool] = False,
         no_reduce: Optional[bool] = False,
         output_array_type: Optional[str] = None,
-        polling: Optional[str] = 'ANY',
+        polling: Optional[str] = "ANY",
         port: Optional[int] = None,
         port_monitoring: Optional[int] = None,
         prefer_platform: Optional[str] = None,
-        protocol: Optional[Union[str, List[str]]] = ['GRPC'],
-        provider: Optional[str] = ['NONE'],
+        protocol: Optional[Union[str, List[str]]] = ["GRPC"],
+        provider: Optional[str] = ["NONE"],
         provider_endpoint: Optional[str] = None,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -1022,7 +1025,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         reload: Optional[bool] = False,
         replicas: Optional[int] = 1,
         retries: Optional[int] = -1,
-        runtime_cls: Optional[str] = 'WorkerRuntime',
+        runtime_cls: Optional[str] = "WorkerRuntime",
         shards: Optional[int] = 1,
         ssl_certfile: Optional[str] = None,
         ssl_keyfile: Optional[str] = None,
@@ -1035,10 +1038,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         traces_exporter_host: Optional[str] = None,
         traces_exporter_port: Optional[int] = None,
         tracing: Optional[bool] = False,
-        uses: Optional[Union[str, Type['BaseExecutor'], dict]] = 'BaseExecutor',
-        uses_after: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
+        uses: Optional[Union[str, Type["BaseExecutor"], dict]] = "BaseExecutor",
+        uses_after: Optional[Union[str, Type["BaseExecutor"], dict]] = None,
         uses_after_address: Optional[str] = None,
-        uses_before: Optional[Union[str, Type['BaseExecutor'], dict]] = None,
+        uses_before: Optional[Union[str, Type["BaseExecutor"], dict]] = None,
         uses_before_address: Optional[str] = None,
         uses_dynamic_batching: Optional[dict] = None,
         uses_metas: Optional[dict] = None,
@@ -1184,7 +1187,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         uses_with: Optional[Dict] = None,
         uses_metas: Optional[Dict] = None,
         uses_requests: Optional[Dict] = None,
-        stop_event: Optional[Union['threading.Event', 'multiprocessing.Event']] = None,
+        stop_event: Optional[Union["threading.Event", "multiprocessing.Event"]] = None,
         uses_dynamic_batching: Optional[Dict] = None,
         reload: bool = False,
         **kwargs,
@@ -1203,8 +1206,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         """
         warnings.warn(
-            f'Executor.serve() is no more supported and will be deprecated soon. Use Deployment to serve an Executor instead: '
-            f'https://docs.jina.ai/concepts/executor/serve/',
+            f"Executor.serve() is no more supported and will be deprecated soon. Use Deployment to serve an Executor instead: "
+            f"https://docs.jina.ai/concepts/executor/serve/",
             DeprecationWarning,
         )
         from marie.orchestrate.deployments import Deployment
@@ -1260,8 +1263,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
         """
         warnings.warn(
-            f'Executor.to_kubernetes_yaml() is no more supported and will be deprecated soon. Use Deployment to export kubernetes YAML files: '
-            f'https://docs.jina.ai/concepts/executor/serve/#serve-via-kubernetes',
+            f"Executor.to_kubernetes_yaml() is no more supported and will be deprecated soon. Use Deployment to export kubernetes YAML files: "
+            f"https://docs.jina.ai/concepts/executor/serve/#serve-via-kubernetes",
             DeprecationWarning,
         )
         from marie.orchestrate.flow.base import Flow
@@ -1309,8 +1312,8 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         """
 
         warnings.warn(
-            f'Executor.to_docker_compose_yaml() is no more supported and will be deprecated soon. Use Deployment to export docker compose YAML files: '
-            f'https://docs.jina.ai/concepts/executor/serve/#serve-via-docker-compose',
+            f"Executor.to_docker_compose_yaml() is no more supported and will be deprecated soon. Use Deployment to export docker compose YAML files: "
+            f"https://docs.jina.ai/concepts/executor/serve/#serve-via-docker-compose",
             DeprecationWarning,
         )
         from marie.orchestrate.flow.base import Flow
@@ -1353,14 +1356,14 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 name,
                 documentation,
                 registry=self.runtime_args.metrics_registry,
-                namespace='jina',
-                labelnames=('runtime_name',),
+                namespace="jina",
+                labelnames=("runtime_name",),
             ).labels(self.runtime_args.name)
             self._metrics_buffer[name] = _summary
 
         if self._histogram_buffer and not _histogram:
             _histogram = self.meter.create_histogram(
-                name=f'jina_{name}', description=documentation
+                name=f"jina_{name}", description=documentation
             )
             self._histogram_buffer[name] = _histogram
 
@@ -1368,7 +1371,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             return MetricsTimer(
                 _summary,
                 _histogram,
-                histogram_metric_labels={'runtime_name': self.runtime_args.name},
+                histogram_metric_labels={"runtime_name": self.runtime_args.name},
             )
 
         return contextlib.nullcontext()
@@ -1378,7 +1381,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         Interface to take a snapshot from the Executor. Implement it to enable periodic snapshots
         :param snapshot_file: The file path where to store the binary representation of the Executor snapshot
         """
-        raise Exception('Raising an Exception. Snapshot is not enabled by default')
+        raise Exception("Raising an Exception. Snapshot is not enabled by default")
 
     def restore(self, snapshot_file: str):
         """

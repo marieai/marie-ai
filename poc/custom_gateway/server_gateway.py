@@ -2,13 +2,13 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Callable, Optional
+from typing import AsyncIterator, Callable, Optional
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from grpc.aio import ClientInterceptor
+from fastapi import Depends
 
 import marie
 import marie.helper
@@ -24,20 +24,27 @@ from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.types.request import Request
+from marie.types.request.data import DataRequest, Response
+from marie.types.request.status import StatusMessage
 from marie_server.job.common import JobInfo, JobStatus
 from marie_server.job.gateway_job_distributor import GatewayJobDistributor
-
-
-def create_trace_interceptor() -> ClientInterceptor:
-    return CustomClientInterceptor()
+from marie_server.job.job_manager import JobManager
+from marie_server.scheduler import PostgreSQLJobScheduler
+from marie_server.scheduler.models import WorkInfo
+from marie_server.scheduler.state import WorkState
+from marie_server.storage.in_memory import InMemoryKV
+from marie_server.storage.psql import PostgreSQLKV
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
     def notify(event, connection):
-        print(f"notify: {event}, {connection}")
+        # print(f"notify: {event}, {connection}")
+        pass
 
     return GatewayLoadBalancerInterceptor(notifier=notify)
 
@@ -58,14 +65,77 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
+
+        storage = InMemoryKV()
+        # TODO: Externalize the storage configuration
+        kv_storage_config = {
+            "hostname": "127.0.0.1",
+            "port": 5432,
+            "username": "postgres",
+            "password": "123456",
+            "database": "postgres",
+            "default_table": "kv_store_a",
+            "max_pool_size": 5,
+            "max_connections": 5,
+        }
+
+        # TODO : This is a temporary solution to test the service discovery
+        scheduler_config = {
+            "hostname": "localhost",
+            "port": 5432,
+            "database": "postgres",
+            "username": "postgres",
+            "password": "123456",
+        }
+
         self.distributor = GatewayJobDistributor(
-            gateway_streamer=self.streamer, logger=self.logger
+            gateway_streamer=None, logger=self.logger
         )
 
+        storage = PostgreSQLKV(config=kv_storage_config, reset=True)
+        job_manager = JobManager(storage=storage, job_distributor=self.distributor)
+        self.job_scheduler = PostgreSQLJobScheduler(
+            config=scheduler_config, job_manager=job_manager
+        )
+
+        # perform monkey patching
+        GatewayRequestHandler.stream = self.custom_stream
+        GatewayRequestHandler.Call = (
+            self.custom_stream
+        )  # Call is an alias for stream in GatewayRequestHandler
+        GatewayRequestHandler.dry_run = self.custom_dry_run
+
         def _extend_rest_function(app):
+            from fastapi import Request
+
             @app.on_event("shutdown")
             async def _shutdown():
-                await self.distributor.close()
+                self.logger.info("Shutting down")
+                await self.job_scheduler.stop()
+
+            @app.api_route(
+                path="/job/submit",
+                methods=["GET"],
+                summary=f"Submit a job /api/submit",
+            )
+            async def job_submit(text: str):
+                self.logger.info(f"Received request at {datetime.now}")
+                work_info = WorkInfo(
+                    name="WorkInfo-001",
+                    priority=0,
+                    data={},
+                    state=WorkState.CREATED,
+                    retry_limit=0,
+                    retry_delay=0,
+                    retry_backoff=False,
+                    start_after=datetime.now(),
+                    expire_in_seconds=0,
+                    keep_until=datetime.now(),
+                    on_complete=False,
+                )
+
+                result = await self.job_scheduler.submit_job(work_info)
+                return {"result": result}
 
             @app.get("/endpoint")
             async def get(text: str):
@@ -102,9 +172,250 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 self.logger.info(f"Received request at {datetime.now()}")
                 return {"result": "ok"}
 
+            @app.api_route(
+                path="/api/jobs/{state}",
+                methods=["GET"],
+                summary=f"Job listing endpoint /api/jobs",
+            )
+            async def list_jobs(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                params = request.path_params
+                state = params.get("state")
+
+                if state:
+                    jobs = await self.job_scheduler.list_jobs(state=state)
+                else:
+                    jobs = await self.job_scheduler.list_jobs()
+
+                return {"status": "OK", "result": jobs}
+
+            @app.api_route(
+                path="/api/jobsXX/{job_id}",
+                methods=["GET"],
+                summary="Stop a job /api/jobs/{job_id}",
+            )
+            async def get_job_info(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                # params = request.query_params
+                params = request.path_params
+                job_id = params.get("job_id")
+                if not job_id:
+                    return {"status": "error", "result": "Invalid job id"}
+                job = await self.job_scheduler.get_job(job_id)
+                if not job:
+                    return {"status": "error", "result": "Job not found"}
+                return {"status": "OK", "result": job}
+
+            @app.api_route(
+                path="/api/jobs/{job_id}/stop",
+                methods=["GET"],
+                summary="Stop a job /api/jobs/{job_id}/stop",
+            )
+            async def stop_job(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                return {"status": "OK", "result": "Job stopped"}
+
+            @app.api_route(
+                path="/api/jobs/{job_id}",
+                methods=["DELETE"],
+                summary="Delete a job /api/jobs/{job_id}/stop",
+            )
+            async def delete_job(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                return {"status": "OK", "result": "Job deleted"}
+
             return app
 
         marie.helper.extend_rest_interface = _extend_rest_function
+
+    async def custom_stream(
+        self, request_iterator, context=None, *args, **kwargs
+    ) -> AsyncIterator["Request"]:
+        """
+        Intercept the stream of requests and process them.
+
+        :param request_iterator: An asynchronous iterator that provides the request objects.
+        :param context: The context of the API request. Defaults to None.
+        :param args: Additional positional arguments.
+        :param kwargs: Additional keyword arguments.
+        :return: An asynchronous iterator that yields the response objects.
+
+        """
+        self.logger.info(f"intercepting stream")
+        async for request in request_iterator:
+            decoded = await self.decode_request(request)
+            if isinstance(decoded, AsyncIterator):
+                async for response in decoded:
+                    yield response
+            else:
+                yield decoded
+
+    async def decode_request(
+        self, request: Request
+    ) -> Response | AsyncIterator[Request]:
+        """
+        Decode the request and return a response.
+        :param request: The request to decode.
+        :return: The response.
+        """
+        print(f"Processing request: {request}")
+        print(request.parameters)
+        print(request.data)
+        message = request.parameters
+        if "invoke_action" not in message:
+            response = Response()
+            response.parameters = {"error": "Invalid request, missing invoke_action"}
+            return response
+
+        invoke_action = message["invoke_action"]
+        command = invoke_action.get("command")  # job
+
+        if command == "job":
+            return self.handle_job_command(invoke_action)
+        elif command == "nodes":
+            return self.handle_nodes_command(invoke_action)
+        else:
+            return self.error_response(
+                f"Command not recognized or not implemented : {command}"
+            )
+
+    async def handle_nodes_command(self, message: dict) -> AsyncIterator[Request]:
+        """
+        Handle nodes command based on the action provided in the message.
+
+        :param message: Dictionary containing the job command details.
+                        It should have the "action" key specifying the action to perform.
+        :return: Response object containing the result of the nodes command.
+
+        :raises ValueError: If the action provided in the message is not recognized.
+        """
+
+        action = message.get("action")  # list
+        self.logger.info(f"Handling nodes action : {action}")
+        if action == "list":
+            docs = DocList[TextDoc]()
+            unique_nodes = set()
+
+            for executor, nodes in self.deployment_nodes.items():
+                for node in nodes:
+                    if node["address"] not in unique_nodes:
+                        unique_nodes.add(node["address"])
+                        docs.append(TextDoc(text=node["address"]))
+
+            req = DataRequest()
+            req.document_array_cls = DocList[TextDoc]
+            req.data.docs = docs
+            req.parameters = {
+                "status": "ok",
+                "msg": "Received nodes list request",
+            }
+            yield req
+        else:
+            yield self.error_response(f"Action not recognized : {action}")
+
+    async def handle_job_command(self, message: dict) -> AsyncIterator[Request]:
+        """
+        Handle job command based on the action provided in the message.
+
+        :param message: Dictionary containing the job command details.
+                        It should have the "action" key specifying the action to perform.
+        :return: Response object containing the result of the job command.
+
+        :raises ValueError: If the action provided in the message is not recognized.
+        """
+
+        action = message.get("action")  # status, submit, logs, stop
+        self.logger.info(f"Handling job action : {action}")
+
+        if action == "status":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received status request",
+            }
+            yield response
+        elif action == "submit":
+            yield await self.handle_job_submit_command(message)
+        elif action == "logs":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received logs request",
+            }
+            yield response
+            for i in range(0, 10):
+                response = Response()
+                response.parameters = {
+                    "msg": f"log message #{i}",
+                }
+                yield response
+                await asyncio.sleep(1)
+        elif action == "events":
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "Received events request",
+            }
+            yield response
+        else:
+            yield self.error_response(f"Action not recognized : {action}")
+
+    async def handle_job_submit_command(self, message: dict) -> Request:
+        """
+        Handle job submission command.
+
+        :param message: The message containing the job information.
+        :return: The response with the submission result.
+        """
+        work_info = WorkInfo(
+            name="WorkInfo-001",
+            priority=0,
+            data={},
+            state=WorkState.CREATED,
+            retry_limit=0,
+            retry_delay=0,
+            retry_backoff=False,
+            start_after=datetime.now(),
+            expire_in_seconds=0,
+            keep_until=datetime.now(),
+            on_complete=False,
+        )
+        # TODO : convert to using Errors as Values instead of Exceptions
+        try:
+            job_id = await self.job_scheduler.submit_job(work_info)
+
+            response = Response()
+            response.parameters = {
+                "status": "ok",
+                "msg": "job submitted",
+                "job_id": job_id,
+            }
+
+            return response
+        except ValueError as ex:
+            return self.error_response(f"Failed to submit job. {ex}")
+
+    def error_response(self, msg: str, exception: Optional[Exception]) -> Response:
+        """
+        Set the response parameters to indicate a failure.
+        :param msg: A string representing the error message.
+        :param exception: An optional exception that triggered the error.
+        :return: The response object with the error parameters set.
+        """
+        response = Response()
+        response.parameters = {
+            "status": "error",
+            "msg": msg,
+            "exception": exception,
+        }
+        return response
+
+    async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
+        print("Running custom dry run logic")
+
+        status_message = StatusMessage()
+        status_message.set_code(jina_pb2.StatusProto.SUCCESS)
+        return status_message.proto
 
     async def setup_server(self):
         """
@@ -112,6 +423,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         """
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
+        await self.job_scheduler.start()
         await self.setup_service_discovery()
 
     async def run_server(self):
@@ -126,20 +438,21 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     async def setup_service_discovery(
         self,
-        etcd_host: Optional[str] = "0.0.0.0",
-        etcd_port: Optional[int] = 2379,
-        watchdog_interval: Optional[int] = 2,
+        etcd_host: str = "0.0.0.0",
+        etcd_port: int = 2379,
+        watchdog_interval: int = 2,
     ):
         """
          Setup service discovery for the gateway.
 
-        :param etcd_host: Optional[str] - The host address of the ETCD service. Default is "0.0.0.0".
-        :param etcd_port: Optional[int] - The port of the ETCD service. Default is 2379.
-        :param watchdog_interval: Optional[int] - The interval in seconds between each service address check. Default is 2.
+        :param etcd_host: str - The host address of the ETCD service. Default is "0.0.0.0".
+        :param etcd_port: int - The port of the ETCD service. Default is 2379.
+        :param watchdog_interval: int - The interval in seconds between each service address check. Default is 2.
         :return: None
 
         """
         self.logger.info("Setting up service discovery ")
+        # FIXME : This is a temporary solution to test the service discovery
         service_name = "gateway/service_test"
 
         async def _start_watcher():
@@ -153,12 +466,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
             self.logger.info(f"checking : {resolver.resolve(service_name)}")
             resolver.watch_service(service_name, self.handle_discovery_event)
-
-            # validate the service address
-            if False:
-                while True:
-                    self.logger.info("Checking service address...")
-                    await asyncio.sleep(watchdog_interval)
 
         task = asyncio.create_task(_start_watcher())
         try:
@@ -176,13 +483,14 @@ class MarieServerGateway(BaseGateway, CompositeServer):
     def handle_discovery_event(self, service: str, event: str) -> None:
         """
         Enqueue the event to be processed.
+
         :param service: The name of the service that is available.
         :param event: The event that triggered the method.
-        :return:
+        :return: None
         """
 
-        self._loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self.event_queue.put((service, event)))
+        asyncio.run_coroutine_threadsafe(
+            self.event_queue.put((service, event)), self._loop
         )
 
     async def process_events(self, max_errors=5) -> None:
@@ -200,7 +508,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
                 )
                 ev_type = event.event
-                ev_key = event.key
                 ev_value = event.value
                 if ev_type == "put":
                     await self.gateway_server_online(service, ev_value)
@@ -243,6 +550,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         max_tries = 10
         tries = 0
         is_ready = False
+
         while tries < max_tries:
             self.logger.info(f"checking is ready at {ctrl_address}")
             is_ready = GRPCServer.is_ready(ctrl_address)
@@ -315,7 +623,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                     )
 
         for executor, nodes in self.deployment_nodes.items():
-            self.logger.info(f"Discovered nodes for executor : {executor}")
+            self.logger.info(
+                f"Discovered nodes for executor : {executor}, {len(nodes)}"
+            )
             for node in nodes:
                 self.logger.info(f"\tNode : {node}")
 
@@ -357,12 +667,12 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             deployments_metadata=deployments_metadata,
             load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
             load_balancer=load_balancer,
-            aio_tracing_client_interceptors=[create_trace_interceptor()],
+            # aio_tracing_client_interceptors=[create_trace_interceptor()],
         )
+
         self.streamer = streamer
         self.distributor.streamer = streamer
-        request_models_map = streamer._endpoints_models_map
-        self.logger.info(f"request_models_map: {request_models_map}")
+        JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
 
     async def gateway_server_offline(self, service: str, ev_value):
         """
@@ -400,22 +710,22 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
             self.notifier(event, connection)
 
     def on_connection_released(self, connection):
-        print(f"on_connection_released: {connection}")
+        # print(f"on_connection_released: {connection}")
         self.active_connection = None
         self.notify("released", connection)
 
     def on_connection_failed(self, connection: _ConnectionStubs, exception):
-        print(f"on_connection_failed: {connection}, {exception}")
+        # print(f"on_connection_failed: {connection}, {exception}")
         self.active_connection = None
         self.notify("failed", connection)
 
     def on_connection_acquired(self, connection: _ConnectionStubs):
-        print(f"on_connection_acquired: {connection}")
+        # print(f"on_connection_acquired: {connection}")
         self.active_connection = connection
         self.notify("acquired", connection)
 
     def on_connections_updated(self, connections: list[_ConnectionStubs]):
-        print(f"on_connections_updated: {connections}")
+        # print(f"on_connections_updated: {connections}")
         self.notify("updated", connections)
 
     def get_active_connection(self):
@@ -424,33 +734,6 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
         :return:
         """
         return self.active_connection
-
-
-class CustomClientInterceptor(
-    grpc.aio.UnaryUnaryClientInterceptor,
-    grpc.aio.UnaryStreamClientInterceptor,
-    grpc.aio.StreamUnaryClientInterceptor,
-    grpc.aio.StreamStreamClientInterceptor,
-):
-    async def intercept_unary_unary(self, continuation, client_call_details, request):
-        print(f"intercept_unary_unary: {client_call_details}, {request}")
-        return await continuation(client_call_details, request)
-
-    async def intercept_unary_stream(self, continuation, client_call_details, request):
-        print(f"intercept_unary_stream: {client_call_details}, {request}")
-        return await continuation(client_call_details, request)
-
-    async def intercept_stream_unary(
-        self, continuation, client_call_details, request_iterator
-    ):
-        print(f"intercept_stream_unary: {client_call_details}, {request_iterator}")
-        return await continuation(client_call_details, request_iterator)
-
-    async def intercept_stream_stream(
-        self, continuation, client_call_details, request_iterator
-    ):
-        print(f"intercept_stream_stream: {client_call_details}, {request_iterator}")
-        return await continuation(client_call_details, request_iterator)
 
 
 # clear;for i in {0..10};do curl localhost:51000/endpoint?text=x_${i} ;done;

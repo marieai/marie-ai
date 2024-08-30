@@ -165,3 +165,6 @@ sahi:                         standard,core
 clip:                         standard,core
 efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
+textual:                      standard,core
+textual_textarea:             standard,core
+textual_fastdatatable:        standard,core

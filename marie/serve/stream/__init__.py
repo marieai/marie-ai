@@ -165,6 +165,7 @@ class RequestStreamer:
         results_in_order: bool = False,
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
+        send_callback: callable(None) = None,
         *args,
     ) -> AsyncIterator["Request"]:
         """
@@ -176,6 +177,7 @@ class RequestStreamer:
         :param prefetch: How many Requests are processed from the Client at the same time. If not provided then the prefetch value from the metadata will be utilized.
         :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
         :param args: positional arguments
+        :param send_callback: callback to send the response back to the client
         :yield: responses from Executors
         """
         prefetch = prefetch or self._prefetch
@@ -195,6 +197,7 @@ class RequestStreamer:
                 results_in_order=results_in_order,
                 prefetch=prefetch,
                 return_type=return_type,
+                send_callback=send_callback,
             )
             async for response in async_iter:
                 yield response
@@ -229,6 +232,7 @@ class RequestStreamer:
         results_in_order: bool = False,
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
+        send_callback: callable(None) = None,
     ) -> AsyncIterator:
         """Implements request and response handling without prefetching
         :param request_iterator: requests iterator from Client
@@ -291,7 +295,9 @@ class RequestStreamer:
                 num_reqs += 1
                 requests_to_handle.count += 1
                 future_responses, future_hanging = self._request_handler(
-                    request=request, return_type=return_type
+                    request=request,
+                    return_type=return_type,
+                    send_callback=send_callback,
                 )
                 future_queue.put_nowait(future_responses)
                 future_responses.add_done_callback(callback)
@@ -377,11 +383,14 @@ class RequestStreamer:
             await asyncio.sleep(0)
 
     async def process_single_data(
-        self, request: DataRequest, context=None
+        self, request: DataRequest, context=None, send_callback: Callable = None
     ) -> DataRequest:
         """Implements request and response handling of a single DataRequest
         :param request: DataRequest from Client
         :param context: grpc context
+        :param send_callback: callback to send the response back to the client
         :return: response DataRequest
         """
-        return await self.stream(iter([request]), context=context).__anext__()
+        return await self.stream(
+            iter([request]), context=context, send_callback=send_callback
+        ).__anext__()

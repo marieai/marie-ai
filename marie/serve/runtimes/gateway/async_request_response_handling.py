@@ -33,8 +33,8 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
 
     def __init__(
         self,
-        metrics_registry: Optional['CollectorRegistry'] = None,
-        meter: Optional['Meter'] = None,
+        metrics_registry: Optional["CollectorRegistry"] = None,
+        meter: Optional["Meter"] = None,
         runtime_name: Optional[str] = None,
         logger: Optional[MarieLogger] = None,
     ):
@@ -44,8 +44,8 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
         self.logger = logger or MarieLogger(self.__class__.__name__)
 
     def handle_request(
-        self, graph: 'TopologyGraph', connection_pool: 'GrpcConnectionPool'
-    ) -> Callable[['Request'], 'Tuple[Future, Optional[Future]]']:
+        self, graph: "TopologyGraph", connection_pool: "GrpcConnectionPool"
+    ) -> Callable[["Request"], "Tuple[Future, Optional[Future]]"]:
         """
         Function that handles the requests arriving to the gateway. This will be passed to the streamer.
 
@@ -64,19 +64,21 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                     if err_code == grpc.StatusCode.UNAVAILABLE:
                         err._details = (
                             err.details()
-                            + f' |Gateway: Communication error while gathering endpoints with deployment at address(es) {err.dest_addr}. Head or worker(s) may be down.'
+                            + f" |Gateway: Communication error while gathering endpoints with deployment at address(es) {err.dest_addr}. Head or worker(s) may be down."
                         )
                         raise err
                     else:
                         raise
                 except Exception as exc:
-                    self.logger.error(f' Error gathering endpoints: {exc}')
+                    self.logger.error(f" Error gathering endpoints: {exc}")
                     raise exc
                 self._endpoint_discovery_finished = True
 
         def _handle_request(
-            request: 'Request', return_type: Type[DocumentArray]
-        ) -> 'Tuple[Future, Optional[Future]]':
+            request: "Request",
+            return_type: Type[DocumentArray],
+            send_callback: Callable = None,
+        ) -> "Tuple[Future, Optional[Future]]":
             self._update_start_request_metrics(request)
             # important that the gateway needs to have an instance of the graph per request
             request_graph = copy.deepcopy(graph)
@@ -84,7 +86,7 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
             floating_tasks = []
             endpoint = request.header.exec_endpoint
             r = request.routes.add()
-            r.executor = 'gateway'
+            r.executor = "gateway"
             r.start_time.GetCurrentTime()
             # If the request is targeting a specific deployment, we can send directly to the deployment instead of
             # querying the graph
@@ -98,7 +100,7 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
 
             target_executor = request.header.target_executor
             # reset it in case we send to an external gateway
-            request.header.target_executor = ''
+            request.header.target_executor = ""
             exec_endpoint = request.header.exec_endpoint
             gather_endpoints_task = None
             if not self._endpoint_discovery_finished and not self._gathering_endpoints:
@@ -112,7 +114,7 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
             if graph.has_filter_conditions:
                 if not docarray_v2:
                     request_doc_ids = request.data.docs[
-                        :, 'id'
+                        :, "id"
                     ]  # used to maintain order of docs that are filtered by executors
                 else:
                     init_task = gather_endpoints_task
@@ -139,6 +141,7 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
                     copy_request_at_send=num_outgoing_nodes > 1 and has_specific_params,
                     init_task=init_task,
                     return_type=return_type,
+                    send_callback=send_callback,
                 )
                 # Every origin node returns a set of tasks that are the ones corresponding to the leafs of each of their
                 # subtrees that unwrap all the previous tasks. It starts like a chain of waiting for tasks from previous
@@ -211,8 +214,8 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
         return _handle_request
 
     def handle_single_document_request(
-        self, graph: 'TopologyGraph', connection_pool: 'GrpcConnectionPool'
-    ) -> Callable[['Request', Type[DocumentArray]], 'AsyncGenerator']:
+        self, graph: "TopologyGraph", connection_pool: "GrpcConnectionPool"
+    ) -> Callable[["Request", Type[DocumentArray]], "AsyncGenerator"]:
         """
         Function that handles the requests arriving to the gateway. This will be passed to the streamer.
 
@@ -222,13 +225,13 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
         """
 
         async def _handle_request(
-            request: 'Request', return_type: Type[DocumentArray] = DocumentArray
-        ) -> 'Tuple[Future, Optional[Future]]':
+            request: "Request", return_type: Type[DocumentArray] = DocumentArray
+        ) -> "Tuple[Future, Optional[Future]]":
             self._update_start_request_metrics(request)
             # important that the gateway needs to have an instance of the graph per request
             request_graph = copy.deepcopy(graph)
             r = request.routes.add()
-            r.executor = 'gateway'
+            r.executor = "gateway"
             r.start_time.GetCurrentTime()
             # If the request is targeting a specific deployment, we can send directly to the deployment instead of
             # querying the graph
@@ -248,14 +251,14 @@ class AsyncRequestResponseHandler(MonitoringRequestMixin):
 
         return _handle_request
 
-    def handle_result(self) -> Callable[['Request'], 'Request']:
+    def handle_result(self) -> Callable[["Request"], "Request"]:
         """
         Function that handles the result when extracted from the request future
 
         :return: Return a Function that returns a request to be returned to the client
         """
 
-        def _handle_result(result: 'Request'):
+        def _handle_result(result: "Request"):
             """
             Function that handles the result when extracted from the request future
 

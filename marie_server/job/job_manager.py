@@ -1,9 +1,10 @@
 import asyncio
 import os
 import time
+import traceback
 from typing import Any, Dict, Iterator, Optional
 
-from uuid_extensions import uuid7, uuid7str
+from uuid_extensions import uuid7str
 
 from marie._core.utils import run_background_task
 from marie.logging.logger import MarieLogger
@@ -13,7 +14,10 @@ from marie_server.job.common import (
     JobInfoStorageClient,
     JobStatus,
 )
+from marie_server.job.event_publisher import EventPublisher
 from marie_server.job.job_distributor import JobDistributor
+from marie_server.job.job_log_storage_client import JobLogStorageClient
+from marie_server.job.job_storage_client_proxy import JobInfoStorageClientProxy
 from marie_server.job.job_supervisor import JobSupervisor
 from marie_server.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
@@ -24,6 +28,8 @@ from marie_server.storage.storage_client import StorageArea
 # The max time to wait for the JobSupervisor to start before failing the job.
 DEFAULT_JOB_START_TIMEOUT_SECONDS = 60 * 15
 JOB_START_TIMEOUT_SECONDS_ENV_VAR = "JOB_START_TIMEOUT_SECONDS"
+
+ActorUnschedulableError = Exception
 
 
 def generate_job_id() -> str:
@@ -38,11 +44,15 @@ def get_event_logger():
 
 
 class JobManager:
-    """Provide python APIs for job submission and management.
+    """Provide APIs for job submission and management to the cluster.
 
     It does not provide persistence, all info will be lost if the cluster
     goes down.
     """
+
+    JOB_MONITOR_LOOP_PERIOD_S = 1
+    # number of slots available for job submission (This will be set via service discovery and will change as nodes become available)
+    SLOTS_AVAILABLE = 0
 
     def __init__(
         self,
@@ -51,15 +61,17 @@ class JobManager:
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
-        # self._log_client = JobLogStorageClient()
+        self.event_publisher = EventPublisher()
+        self._log_client = JobLogStorageClient()
         self.monitored_jobs = set()
-        self._job_info_client = JobInfoStorageClient(storage)
+        self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
 
         try:
             self.event_logger = get_event_logger()
         except Exception:
             self.event_logger = None
 
+        self._recover_running_jobs_event = asyncio.Event()
         run_background_task(self._recover_running_jobs())
 
     async def _recover_running_jobs(self):
@@ -69,10 +81,16 @@ class JobManager:
         Each will be added to self._running_jobs and reconciled.
         """
         self.logger.debug("Recovering running jobs.")
-        all_jobs = await self._job_info_client.get_all_jobs()
-        for job_id, job_info in all_jobs.items():
-            if not job_info.status.is_terminal():
-                run_background_task(self._monitor_job(job_id))
+        try:
+            all_jobs = await self._job_info_client.get_all_jobs()
+            for job_id, job_info in all_jobs.items():
+                if not job_info.status.is_terminal():
+                    run_background_task(self._monitor_job(job_id))
+        finally:
+            # This event is awaited in `submit_job` to avoid race conditions between
+            # recovery and new job submission, so it must always get set even if there
+            # are exceptions.
+            self._recover_running_jobs_event.set()
 
     async def _monitor_job(
         self, job_id: str, job_supervisor: Optional[ActorHandle] = None
@@ -98,17 +116,168 @@ class JobManager:
     ):
         """Monitors the specified job until it enters a terminal state.
         @param job_id: The id of the job to monitor.
-        @param job_supervisor:
+        @param job_supervisor: The actor handle for the job supervisor.
         """
+
         self.logger.info(f"Monitoring job internal : {job_id}.")
+
         timeout = float(
             os.environ.get(
                 JOB_START_TIMEOUT_SECONDS_ENV_VAR,
                 DEFAULT_JOB_START_TIMEOUT_SECONDS,
             )
         )
-
         is_alive = True
+
+        while is_alive:
+            try:
+                job_status = await self._job_info_client.get_status(job_id)
+                print(f"Job status: {job_id} : {job_status}")
+                # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
+                # print("has_available_slot: ", self.has_available_slot())
+                if job_status.is_terminal():
+                    if job_status == JobStatus.SUCCEEDED:
+                        is_alive = False
+                        self.logger.info(f"Job {job_id} succeeded.")
+                        break
+                    elif job_status == JobStatus.FAILED:
+                        is_alive = False
+                        self.logger.error(f"Job {job_id} failed.")
+                        break
+
+                if job_status == JobStatus.PENDING:
+                    # Compare the current time with the job start time.
+                    # If the job is still pending, we will set the status
+                    # to FAILED.
+                    job_info = await self._job_info_client.get_info(job_id)
+
+                    if time.time() - job_info.start_time / 1000 > timeout:
+                        err_msg = (
+                            "Job supervisor actor failed to start within "
+                            f"{timeout} seconds. This timeout can be "
+                            f"configured by setting the environment "
+                            f"variable {JOB_START_TIMEOUT_SECONDS_ENV_VAR}."
+                        )
+                        resources_specified = (
+                            (
+                                job_info.entrypoint_num_cpus is not None
+                                and job_info.entrypoint_num_cpus > 0
+                            )
+                            or (
+                                job_info.entrypoint_num_gpus is not None
+                                and job_info.entrypoint_num_gpus > 0
+                            )
+                            or (
+                                job_info.entrypoint_resources is not None
+                                and len(job_info.entrypoint_resources) > 0
+                            )
+                        )
+                        if resources_specified:
+                            err_msg += (
+                                " This may be because the job entrypoint's specified "
+                                "resources (entrypoint_num_cpus, entrypoint_num_gpus, "
+                                "entrypoint_resources, entrypoint_memory)"
+                                "aren't available on the cluster."
+                                " Try checking the cluster's available resources with "
+                                "`marie nodes status` and specifying fewer resources for the "
+                                "job entrypoint."
+                            )
+                        await self._job_info_client.put_status(
+                            job_id,
+                            JobStatus.FAILED,
+                            message=err_msg,
+                        )
+                        is_alive = False
+                        self.logger.error(err_msg)
+                        continue
+
+                if job_supervisor is None:
+                    raise NotImplementedError
+
+                if job_supervisor is None:
+                    if job_status == JobStatus.PENDING:
+                        # Maybe the job supervisor actor is not created yet.
+                        # We will wait for the next loop.
+                        continue
+                    else:
+                        # The job supervisor actor is not created, but the job
+                        # status is not PENDING. This means the job supervisor
+                        # actor is not created due to some unexpected errors.
+                        # We will set the job status to FAILED.
+                        self.logger.error(
+                            f"Failed to get job supervisor for job {job_id}."
+                        )
+                        await self._job_info_client.put_status(
+                            job_id,
+                            JobStatus.FAILED,
+                            message=(
+                                "Unexpected error occurred: "
+                                "failed to get job supervisor."
+                            ),
+                        )
+                        is_alive = False
+                        continue
+
+                await job_supervisor.ping()
+
+                await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
+            except Exception as e:
+                is_alive = False
+                job_status = await self._job_info_client.get_status(job_id)
+                job_error_message = None
+                if job_status == JobStatus.FAILED:
+                    job_error_message = (
+                        "See more details from the dashboard "
+                        "`Job` page or the state API `marie list jobs`."
+                    )
+
+                job_error_message = ""
+                if job_status.is_terminal():
+                    # If the job is already in a terminal state, then the actor
+                    # exiting is expected.
+                    pass
+                elif isinstance(e, ActorUnschedulableError):
+                    self.logger.info(
+                        f"Failed to schedule job {job_id} because the supervisor actor "
+                        f"could not be scheduled: {e}"
+                    )
+                    job_error_message = (
+                        f"Job supervisor actor could not be scheduled: {e}"
+                    )
+                    await self._job_info_client.put_status(
+                        job_id,
+                        JobStatus.FAILED,
+                        message=job_error_message,
+                    )
+                else:
+                    self.logger.warning(
+                        f"Job supervisor for job {job_id} failed unexpectedly: {e}."
+                    )
+                    job_error_message = f"Unexpected error occurred: {e}"
+                    job_status = JobStatus.FAILED
+                    await self._job_info_client.put_status(
+                        job_id,
+                        job_status,
+                        message=job_error_message,
+                    )
+
+                # Log error message to the job driver file for easy access.
+                if job_error_message:
+                    log_path = self._log_client.get_log_file_path(job_id)
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    with open(log_path, "a") as log_file:
+                        log_file.write(job_error_message)
+
+                # Log events
+                if self.event_logger:
+                    event_log = (
+                        f"Completed a ray job {job_id} with a status {job_status}."
+                    )
+                    if job_error_message:
+                        event_log += f" {job_error_message}"
+                        self.event_logger.error(event_log, submission_id=job_id)
+                    else:
+                        self.event_logger.info(event_log, submission_id=job_id)
 
     async def _get_scheduling_strategy(
         self, resources_specified: bool
@@ -138,10 +307,13 @@ class JobManager:
         if submission_id is None:
             submission_id = generate_job_id()
 
-        self.logger.info(f"Starting job with submission_id: {submission_id}")
         entrypoint_num_cpus = 1
         entrypoint_num_gpus = 1
         entrypoint_resources = None
+        # Wait for `_recover_running_jobs` to run before accepting submissions to
+        # avoid duplicate monitoring of the same job.
+        await self._recover_running_jobs_event.wait()
+        self.logger.info(f"Starting job with submission_id: {submission_id}")
 
         job_info = JobInfo(
             entrypoint=entrypoint,
@@ -178,7 +350,7 @@ class JobManager:
             )
             if self.event_logger:
                 self.event_logger.info(
-                    f"Started a  job {submission_id}.", submission_id=submission_id
+                    f"Started a job {submission_id}.", submission_id=submission_id
                 )
 
             supervisor = JobSupervisor(
@@ -194,6 +366,12 @@ class JobManager:
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
         except Exception as e:
+            tb_str = traceback.format_exc()
+
+            self.logger.warning(
+                f"Failed to start supervisor actor for job {submission_id}: '{e}'"
+                f". Full traceback:\n{tb_str}"
+            )
             await self._job_info_client.put_status(
                 submission_id,
                 JobStatus.FAILED,
@@ -261,3 +439,11 @@ class JobManager:
                 await asyncio.sleep(self.LOG_TAIL_SLEEP_S)
             else:
                 yield "".join(lines)
+
+    def has_available_slot(self) -> bool:
+        """
+        Check if there are available slots for submitting a jobs.
+
+        :return: True if there are available slots, False otherwise
+        """
+        return len(self.monitored_jobs) < self.SLOTS_AVAILABLE

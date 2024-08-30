@@ -243,7 +243,7 @@ def _setup(pod0_port, pod1_port):
 @pytest.mark.parametrize("results_in_order", [False, True])
 @pytest.mark.asyncio
 async def test_gateway_job_manager(
-    port_generator, parameters, target_executor, expected_text, results_in_order
+        port_generator, parameters, target_executor, expected_text, results_in_order
 ):
     pod0_port = port_generator()
     pod1_port = port_generator()
@@ -264,11 +264,11 @@ async def test_gateway_job_manager(
         resp = DocList([])
         num_resp = 0
         async for r in gateway_streamer.stream_docs(
-            docs=input_da,
-            request_size=10,
-            parameters=parameters,
-            target_executor=target_executor,
-            results_in_order=results_in_order,
+                docs=input_da,
+                request_size=10,
+                parameters=parameters,
+                target_executor=target_executor,
+                results_in_order=results_in_order,
         ):
             num_resp += 1
             resp.extend(r)
@@ -294,13 +294,13 @@ async def test_gateway_job_manager(
 
 
 def _create_regular_deployment(
-    port,
-    name="",
-    executor=None,
-    noblock_on_start=True,
-    polling=PollingType.ANY,
-    shards=None,
-    replicas=None,
+        port,
+        name="",
+        executor=None,
+        noblock_on_start=True,
+        polling=PollingType.ANY,
+        shards=None,
+        replicas=None,
 ):
     # return Deployment(uses=executor, include_gateway=False, noblock_on_start=noblock_on_start, replicas=replicas,
     #                   shards=shards)
@@ -343,7 +343,7 @@ class NoopJobDistributor(JobDistributor):
     async def submit_job(self, job_info: JobInfo) -> DataRequest:
         print(f"NoopJobDistributor: {job_info}")
         if job_info.status != JobStatus.PENDING:
-            raise Exception("Job status is not PENDING")
+            raise ValueError("Job status is not PENDING")
 
         r = DataRequest()
         r.status.code = jina_pb2.StatusProto.ERROR

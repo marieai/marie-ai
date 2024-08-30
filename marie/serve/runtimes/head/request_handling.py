@@ -45,9 +45,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
     def __init__(
         self,
-        args: 'argparse.Namespace',
-        logger: 'MarieLogger',
-        metrics_registry: Optional['CollectorRegistry'] = None,
+        args: "argparse.Namespace",
+        logger: "MarieLogger",
+        metrics_registry: Optional["CollectorRegistry"] = None,
         meter=None,
         runtime_name: Optional[str] = None,
         aio_tracing_client_interceptors=None,
@@ -55,13 +55,13 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         **kwargs,
     ):
         if args.name is None:
-            args.name = ''
+            args.name = ""
         self.logger = logger
         self.args = args
         self.meter = meter
         self.metrics_registry = metrics_registry
         self.name = args.name
-        self._deployment_name = os.getenv('JINA_DEPLOYMENT_NAME', 'worker')
+        self._deployment_name = os.getenv("JINA_DEPLOYMENT_NAME", "worker")
         self.aio_tracing_client_interceptors = aio_tracing_client_interceptors
         self.tracing_client_interceptor = tracing_client_interceptor
         self.connection_pool = GrpcConnectionPool(
@@ -76,14 +76,14 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         )
         self._retries = self.args.retries
 
-        polling = getattr(args, 'polling', self.DEFAULT_POLLING.name)
+        polling = getattr(args, "polling", self.DEFAULT_POLLING.name)
         try:
             # try loading the polling args as json
             endpoint_polling = json.loads(polling)
             # '*' is used a wildcard and will match all endpoints, except /index, /search and explicitly defined endpoins
             default_polling = (
-                PollingType.from_string(endpoint_polling['*'])
-                if '*' in endpoint_polling
+                PollingType.from_string(endpoint_polling["*"])
+                if "*" in endpoint_polling
                 else self.DEFAULT_POLLING
             )
             self._polling = self._default_polling_dict(default_polling)
@@ -102,7 +102,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             )
             self._polling = self._default_polling_dict(default_polling)
 
-        if hasattr(args, 'connection_list') and args.connection_list:
+        if hasattr(args, "connection_list") and args.connection_list:
             connection_list = json.loads(args.connection_list)
             for shard_id in connection_list:
                 shard_connections = connection_list[shard_id]
@@ -127,12 +127,12 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
         if self.uses_before_address:
             self.connection_pool.add_connection(
-                deployment='uses_before', address=self.uses_before_address
+                deployment="uses_before", address=self.uses_before_address
             )
         self.uses_after_address = args.uses_after_address
         if self.uses_after_address:
             self.connection_pool.add_connection(
-                deployment='uses_after', address=self.uses_after_address
+                deployment="uses_after", address=self.uses_after_address
             )
         self._reduce = not args.no_reduce
         super().__init__(metrics_registry, meter, runtime_name)
@@ -156,7 +156,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
     def _default_polling_dict(self, default_polling):
         return defaultdict(
             lambda: default_polling,
-            {'/search': PollingType.ALL, '/index': PollingType.ANY},
+            {"/search": PollingType.ALL, "/index": PollingType.ANY},
         )
 
     async def _gather_worker_tasks(
@@ -189,7 +189,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         total_shards = len(worker_send_tasks)
         failed_shards = len(exceptions)
         if failed_shards:
-            self.logger.warning(f'{failed_shards} shards out of {total_shards} failed.')
+            self.logger.warning(f"{failed_shards} shards out of {total_shards} failed.")
 
         return worker_results, exceptions, total_shards, failed_shards
 
@@ -212,8 +212,8 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             for key, value in uses_after_metadata:
                 merged_metadata[key] = value
 
-        merged_metadata['total_shards'] = str(total_shards)
-        merged_metadata['failed_shards'] = str(failed_shards)
+        merged_metadata["total_shards"] = str(total_shards)
+        merged_metadata["failed_shards"] = str(failed_shards)
         return merged_metadata
 
     async def _handle_data_request(
@@ -228,7 +228,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         polling_type,
         deployment_name,
         endpoint,
-    ) -> Tuple['DataRequest', Dict]:
+    ) -> Tuple["DataRequest", Dict]:
         for req in requests:
             if docarray_v2:
                 req.document_array_cls = DocList[AnyDoc]
@@ -246,7 +246,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         if uses_before_address:
             result = await connection_pool.send_requests_once(
                 requests,
-                deployment='uses_before',
+                deployment="uses_before",
                 timeout=timeout_send,
                 retries=retries,
             )
@@ -276,7 +276,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                 self._update_end_failed_requests_metrics()
                 raise exceptions[0]
             raise RuntimeError(
-                f'Head {self.runtime_name} did not receive a response when sending message to worker pods'
+                f"Head {self.runtime_name} did not receive a response when sending message to worker pods"
             )
 
         worker_results, metadata = zip(*worker_results)
@@ -287,7 +287,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
             check_endpoint = endpoint
             if endpoint not in self._pydantic_models_by_endpoint:
                 check_endpoint = __default_endpoint__
-            model = self._pydantic_models_by_endpoint[check_endpoint]['output']
+            model = self._pydantic_models_by_endpoint[check_endpoint]["output"]
         for i, worker_result in enumerate(worker_results):
             if docarray_v2:
                 worker_result.document_array_cls = DocList[model]
@@ -299,7 +299,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         if uses_after_address:
             result = await connection_pool.send_requests_once(
                 worker_results,
-                deployment='uses_after',
+                deployment="uses_after",
                 timeout=timeout_send,
                 retries=retries,
             )
@@ -339,7 +339,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
         async def task():
             self.logger.debug(
-                f'starting get endpoints from workers task for deployment {name}'
+                f"starting get endpoints from workers task for deployment {name}"
             )
             while not stop_event.is_set():
                 try:
@@ -352,10 +352,10 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                         self._pydantic_models_by_endpoint = {}
                         models_created_by_name = {}
                         for endpoint, inner_dict in schemas.items():
-                            input_model_name = inner_dict['input']['name']
-                            input_model_schema = inner_dict['input']['model']
-                            output_model_name = inner_dict['output']['name']
-                            output_model_schema = inner_dict['output']['model']
+                            input_model_name = inner_dict["input"]["name"]
+                            input_model_schema = inner_dict["input"]["model"]
+                            output_model_name = inner_dict["output"]["name"]
+                            output_model_schema = inner_dict["output"]["model"]
 
                             if input_model_schema == legacy_doc_schema:
                                 models_created_by_name[input_model_name] = (
@@ -378,8 +378,8 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                                 models_created_by_name[output_model_name] = output_model
 
                             self._pydantic_models_by_endpoint[endpoint] = {
-                                'input': models_created_by_name[input_model_name],
-                                'output': models_created_by_name[output_model_name],
+                                "input": models_created_by_name[input_model_name],
+                                "output": models_created_by_name[output_model_name],
                             }
                         stop_event.set()
                         return
@@ -387,7 +387,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                         await asyncio.sleep(0.1)
                 except Exception as exc:
                     self.logger.debug(
-                        f'Exception raised from sending discover endpoint {exc}'
+                        f"Exception raised from sending discover endpoint {exc}"
                     )
                     await asyncio.sleep(0.1)
 
@@ -400,21 +400,21 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         if self.endpoints_discovery_task:
             try:
                 if not self.endpoints_discovery_task.done():
-                    self.logger.debug(f'Cancelling endpoint discovery task.')
+                    self.logger.debug(f"Cancelling endpoint discovery task.")
                     self.endpoints_discovery_stop_event.set()  # this event is useless if simply cancel
                     self.endpoints_discovery_task.cancel()
             except Exception as ex:
                 self.logger.debug(
-                    f'exception during endpoint discovery task cancellation: {ex}'
+                    f"exception during endpoint discovery task cancellation: {ex}"
                 )
                 pass
 
     async def close(self):
         """Close the data request handler, by closing the executor and the batch queues."""
-        self.logger.debug(f'Closing Request Handler')
+        self.logger.debug(f"Closing Request Handler")
         self.cancel_endpoint_discovery_from_workers_task()
         await self.connection_pool.close()
-        self.logger.debug(f'Request Handler closed')
+        self.logger.debug(f"Request Handler closed")
 
     async def process_single_data(self, request: DataRequest, context) -> DataRequest:
         """
@@ -430,18 +430,18 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         err_code = err.code()
         if err_code == grpc.StatusCode.UNAVAILABLE:
             context.set_details(
-                f'|Head: Failed to connect to worker (Executor) pod at address {err.dest_addr}. It may be down.'
+                f"|Head: Failed to connect to worker (Executor) pod at address {err.dest_addr}. It may be down."
             )
         elif err_code == grpc.StatusCode.DEADLINE_EXCEEDED:
             context.set_details(
-                f'|Head: Connection to worker (Executor) pod at address {err.dest_addr} could be established, but timed out.'
+                f"|Head: Connection to worker (Executor) pod at address {err.dest_addr} could be established, but timed out."
             )
         elif err_code == grpc.StatusCode.NOT_FOUND:
             context.set_details(
-                f'|Head: Connection to worker (Executor) pod at address {err.dest_addr} could be established, but resource was not found.'
+                f"|Head: Connection to worker (Executor) pod at address {err.dest_addr} could be established, but resource was not found."
             )
         context.set_code(err.code())
-        self.logger.error(f'Error while getting responses from Pods: {err.details()}')
+        self.logger.error(f"Error while getting responses from Pods: {err.details()}")
         if err.request_id:
             response.header.request_id = err.request_id
         return response
@@ -455,8 +455,9 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         :returns: the response request
         """
         try:
-            endpoint = dict(context.invocation_metadata()).get('endpoint')
-            self.logger.debug(f'recv {len(requests)} DataRequest(s)')
+            print("context.invocation_metadata()", dict(context.invocation_metadata()))
+            endpoint = dict(context.invocation_metadata()).get("endpoint")
+            self.logger.debug(f"recv {len(requests)} DataRequest(s)")
             response, metadata = await self._handle_data_request(
                 requests=requests,
                 connection_pool=self.connection_pool,
@@ -483,15 +484,15 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         ) as ex:  # some other error, keep streaming going just add error info
             self.logger.error(
                 (
-                    f'{ex!r}'
+                    f"{ex!r}"
                     + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
-                    else ''
+                    else ""
                 ),
                 exc_info=not self.args.quiet_error,
             )
             requests[0].add_exception(ex, executor=None)
-            context.set_trailing_metadata((('is-error', 'true'),))
+            context.set_trailing_metadata((("is-error", "true"),))
             return requests[0]
 
     async def endpoint_discovery(self, empty, context) -> jina_pb2.EndpointsProto:
@@ -502,7 +503,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         :param context: grpc context
         :returns: the response request
         """
-        self.logger.debug('got an endpoint discovery request')
+        self.logger.debug("got an endpoint discovery request")
         response = jina_pb2.EndpointsProto()
         try:
             if self.uses_before_address:
@@ -510,7 +511,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                     uses_before_response,
                     _,
                 ) = await self.connection_pool.send_discover_endpoint(
-                    deployment='uses_before', head=False
+                    deployment="uses_before", head=False
                 )
                 response.endpoints.extend(uses_before_response.endpoints)
             if self.uses_after_address:
@@ -518,7 +519,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
                     uses_after_response,
                     _,
                 ) = await self.connection_pool.send_discover_endpoint(
-                    deployment='uses_after', head=False
+                    deployment="uses_after", head=False
                 )
                 response.endpoints.extend(uses_after_response.endpoints)
 
@@ -544,7 +545,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
         :param context: grpc context
         :returns: the response request
         """
-        self.logger.debug('recv _status request')
+        self.logger.debug("recv _status request")
         infoProto = jina_pb2.JinaInfoProto()
         version, env_info = get_full_version()
         for k, v in version.items():
@@ -555,7 +556,7 @@ class HeaderRequestHandler(MonitoringRequestMixin):
 
     async def stream(
         self, request_iterator, context=None, *args, **kwargs
-    ) -> AsyncIterator['Request']:
+    ) -> AsyncIterator["Request"]:
         """
         stream requests from client iterator and stream responses back.
 

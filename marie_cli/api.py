@@ -1,12 +1,13 @@
 from typing import TYPE_CHECKING
 
 from marie.parsers.helper import _update_gateway_args
+from marie_server.ctl.watch import watch_sever_deployments
 
 if TYPE_CHECKING:
     from argparse import Namespace
 
 
-def deployment(args: 'Namespace'):
+def deployment(args: "Namespace"):
     """
     Start a Deployment
 
@@ -19,10 +20,10 @@ def deployment(args: 'Namespace'):
         with dep:
             dep.block()
     else:
-        raise ValueError('starting a Deployment from CLI requires a valid `--uses`')
+        raise ValueError("starting a Deployment from CLI requires a valid `--uses`")
 
 
-def pod(args: 'Namespace'):
+def pod(args: "Namespace"):
     """
     Start a Pod
 
@@ -37,7 +38,7 @@ def pod(args: 'Namespace'):
         pass
 
 
-def executor_native(args: 'Namespace'):
+def executor_native(args: "Namespace"):
     """
     Starts an Executor in a WorkerRuntime
 
@@ -45,31 +46,31 @@ def executor_native(args: 'Namespace'):
     """
     from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 
-    if args.runtime_cls == 'WorkerRuntime':
+    if args.runtime_cls == "WorkerRuntime":
         from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
         req_handler_cls = WorkerRequestHandler
-    elif args.runtime_cls == 'HeadRuntime':
+    elif args.runtime_cls == "HeadRuntime":
         from marie.serve.runtimes.head.request_handling import HeaderRequestHandler
 
         req_handler_cls = HeaderRequestHandler
     else:
         raise RuntimeError(
-            f' runtime_cls {args.runtime_cls} is not supported with `--native` argument. `WorkerRuntime` is supported'
+            f" runtime_cls {args.runtime_cls} is not supported with `--native` argument. `WorkerRuntime` is supported"
         )
 
     with AsyncNewLoopRuntime(args, req_handler_cls=req_handler_cls) as rt:
         name = (
             rt.server._request_handler._executor.metas.name
-            if hasattr(rt.server, '_request_handler')
-            and hasattr(rt.server._request_handler, '_executor')
+            if hasattr(rt.server, "_request_handler")
+            and hasattr(rt.server._request_handler, "_executor")
             else args.runtime_cls
         )
-        rt.logger.info(f'Executor {name} started')
+        rt.logger.info(f"Executor {name} started")
         rt.run_forever()
 
 
-def executor(args: 'Namespace'):
+def executor(args: "Namespace"):
     """
     Starts an Executor in any Runtime
 
@@ -86,7 +87,7 @@ def executor(args: 'Namespace'):
         return pod(args)
 
 
-def gateway(args: 'Namespace'):
+def gateway(args: "Namespace"):
     """
     Start a Gateway Deployment
 
@@ -99,11 +100,11 @@ def gateway(args: 'Namespace'):
     _update_gateway_args(args)
 
     with AsyncNewLoopRuntime(args, req_handler_cls=GatewayRequestHandler) as runtime:
-        runtime.logger.info(f'Gateway started')
+        runtime.logger.info(f"Gateway started")
         runtime.run_forever()
 
 
-def ping(args: 'Namespace'):
+def ping(args: "Namespace"):
     """
     Check the connectivity of a Pod
 
@@ -114,7 +115,7 @@ def ping(args: 'Namespace'):
     NetworkChecker(args)
 
 
-def dryrun(args: 'Namespace'):
+def dryrun(args: "Namespace"):
     """
     Check the health of a Flow
 
@@ -125,7 +126,7 @@ def dryrun(args: 'Namespace'):
     dry_run_checker(args)
 
 
-def client(args: 'Namespace'):
+def client(args: "Namespace"):
     """
     Start a client connects to the gateway
 
@@ -136,7 +137,7 @@ def client(args: 'Namespace'):
     Client(args)
 
 
-def export(args: 'Namespace'):
+def export(args: "Namespace"):
     """
     Export the API
 
@@ -147,7 +148,7 @@ def export(args: 'Namespace'):
     getattr(exporter, f'export_{args.export.replace("-", "_")}')(args)
 
 
-def flow(args: 'Namespace'):
+def flow(args: "Namespace"):
     """
     Start a Flow from a YAML file or a docker image
 
@@ -160,10 +161,10 @@ def flow(args: 'Namespace'):
         with f:
             f.block()
     else:
-        raise ValueError('starting a Flow from CLI requires a valid `--uses`')
+        raise ValueError("starting a Flow from CLI requires a valid `--uses`")
 
 
-def hub(args: 'Namespace'):
+def hub(args: "Namespace"):
     """
     Start a hub builder for push, pull
     :param args: arguments coming from the CLI.
@@ -173,7 +174,7 @@ def hub(args: 'Namespace'):
     getattr(HubIO(args), args.hub_cli)()
 
 
-def new(args: 'Namespace'):
+def new(args: "Namespace"):
     """
     Create a new jina project
     :param args:  arguments coming from the CLI.
@@ -183,19 +184,19 @@ def new(args: 'Namespace'):
 
     from marie.constants import __resources_path__
 
-    if args.type == 'deployment':
+    if args.type == "deployment":
         shutil.copytree(
-            os.path.join(__resources_path__, 'project-template', 'deployment'),
+            os.path.join(__resources_path__, "project-template", "deployment"),
             os.path.abspath(args.name),
         )
     else:
         shutil.copytree(
-            os.path.join(__resources_path__, 'project-template', 'flow'),
+            os.path.join(__resources_path__, "project-template", "flow"),
             os.path.abspath(args.name),
         )
 
 
-def help(args: 'Namespace'):
+def help(args: "Namespace"):
     """
     Lookup the usage of certain argument in Marie API.
 
@@ -206,17 +207,17 @@ def help(args: 'Namespace'):
     lookup_and_print(args.query.lower())
 
 
-def auth(args: 'Namespace'):
+def auth(args: "Namespace"):
     """
     Authenticate a user
     :param args: arguments coming from the CLI.
     """
     from hubble import api
 
-    getattr(api, args.auth_cli.replace('-', '_'))(args)
+    getattr(api, args.auth_cli.replace("-", "_"))(args)
 
 
-def cloud(args: 'Namespace'):
+def cloud(args: "Namespace"):
     """
     Use jcloud (Jina Cloud) commands
     :param args: arguments coming from the CLI.
@@ -224,15 +225,20 @@ def cloud(args: 'Namespace'):
     raise NotImplementedError
 
 
-def server(args: 'Namespace'):
+def server(args: "Namespace"):
     """
-    Start Marie server
+    Marie server CLI
     :param args: arguments coming from the CLI.
     """
     import os
 
     from marie.constants import __config_dir__
     from marie_server import __main__ as srv
+
+    # marie server watch --etcd-host 127.0.0.1
+    if args.ctl_cli == "watch":
+        watch_sever_deployments(args)
+        return
 
     if args.uses:
         _input = args.uses

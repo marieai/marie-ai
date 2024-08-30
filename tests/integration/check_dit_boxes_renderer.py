@@ -3,10 +3,9 @@ import os
 import cv2
 import torch
 
-from marie.boxes import BoxProcessorCraft, BoxProcessorUlimDit, PSMode
+from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.utils.docs import frames_from_file
-from marie.utils.image_utils import crop_to_content
 from marie.utils.utils import ensure_exists
 
 
@@ -16,7 +15,6 @@ def process_image(image):
         cuda=True,
         refinement=True,
     )
-
     # box = BoxProcessorCraft(work_dir=work_dir_boxes, models_dir='../../model_zoo/craft', cuda=True)
 
     (boxes, fragments, lines, _, lines_bboxes,) = box.extract_bounding_boxes(

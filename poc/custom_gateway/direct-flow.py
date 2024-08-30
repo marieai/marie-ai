@@ -4,10 +4,10 @@ import time
 
 from docarray import DocList
 from docarray.documents import TextDoc
+from marie_executor import MarieExecutor
 
 from marie import Deployment, Executor, Flow, requests
 from marie.conf.helper import load_yaml
-from poc.custom_gateway.deployment_gateway import MariePodGateway
 
 
 class TestExecutorXYZ(Executor):
@@ -32,11 +32,11 @@ class TestExecutorXYZ(Executor):
 
         return {
             "parameters": parameters,
-            "data": "Data reply",
+            "data": f"Data reply at {time.time()}",
         }
 
 
-class TestExecutor(Executor):
+class TestExecutor(MarieExecutor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
@@ -44,16 +44,23 @@ class TestExecutor(Executor):
         time.sleep(1)
 
     @requests(on="/extract")
-    def func(
+    def funcXX(
         self,
         docs: DocList[TextDoc],
-        parameters: dict = {},
+        parameters=None,
         *args,
         **kwargs,
     ):
+        if parameters is None:
+            parameters = {}
+
         print(f"FirstExec func called : {len(docs)}, {parameters}")
         for doc in docs:
-            doc.text += " First"
+            doc.text += " First Exec"
+        print("Sleeping for 5 seconds : ", time.time())
+        time.sleep(5)
+
+        print("Sleeping for 5 seconds - done: ", time.time())
 
         return {
             "parameters": parameters,
@@ -103,9 +110,9 @@ def main():
             discovery=True,  # server gateway does not need discovery service
             discovery_host="127.0.0.1",
             discovery_port=2379,
-            discovery_watchdog_interval=5,
+            discovery_watchdog_interval=2,
         )
-        .add(uses=TestExecutor, name="executor0", replicas=3)
+        .add(uses=TestExecutor, name="executor0", replicas=1)
         .config_gateway(
             # uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
         ) as f

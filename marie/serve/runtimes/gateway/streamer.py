@@ -406,14 +406,15 @@ class GatewayStreamer:
     Call = rpc_stream
 
     async def process_single_data(
-        self, request: DataRequest, context=None
+        self, request: DataRequest, context=None, send_callback=None
     ) -> DataRequest:
         """Implements request and response handling of a single DataRequest
         :param request: DataRequest from Client
         :param context: grpc context
+        :param send_callback:
         :return: response DataRequest
         """
-        return await self._streamer.process_single_data(request, context)
+        return await self._streamer.process_single_data(request, context, send_callback)
 
     @staticmethod
     def get_streamer():

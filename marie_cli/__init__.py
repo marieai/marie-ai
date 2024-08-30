@@ -10,9 +10,9 @@ def _get_run_args(print_args: bool = True):
 
     console = get_rich_console()
 
-    silent_print = {'help', 'hub', 'export', 'auth', 'cloud', 'ping'}
-
+    silent_print = {"help", "hub", "export", "auth", "cloud", "ping"}
     parser = get_main_parser()
+
     if len(sys.argv) > 1:
         from argparse import _StoreAction, _StoreTrueAction
 
@@ -24,7 +24,7 @@ def _get_run_args(print_args: bool = True):
         if unknown:
             from marie.helper import warn_unknown_args
 
-            unknown = list(filter(lambda x: x.startswith('--'), unknown))
+            unknown = list(filter(lambda x: x.startswith("--"), unknown))
             warn_unknown_args(unknown)
 
         if args.cli not in silent_print and print_args:
@@ -38,30 +38,30 @@ def _get_run_args(print_args: bool = True):
             }
 
             with open(
-                os.path.join(__resources_path__, 'marie.logo'), encoding='utf-8'
+                os.path.join(__resources_path__, "marie.logo"), encoding="utf-8"
             ) as fp:
                 logo_str = fp.read()
 
             param_str = Table(
-                title=' '.join(sys.argv),
+                title=" ".join(sys.argv),
                 box=box.ROUNDED,
                 highlight=True,
-                title_justify='left',
+                title_justify="left",
             )
-            param_str.add_column('Argument', justify='right')
-            param_str.add_column('Value', justify='left')
+            param_str.add_column("Argument", justify="right")
+            param_str.add_column("Value", justify="left")
 
             for k, v in sorted(vars(args).items()):
-                param = k.replace('_', '-')
+                param = k.replace("_", "-")
                 value = str(v)
 
                 if not default_args.get(k, None) == v:
-                    value = f'[b]{value}[/]'
+                    value = f"[b]{value}[/]"
 
                 param_str.add_row(param, value)
 
-            if 'JINA_LOG_NO_COLOR' not in os.environ:
-                print(f'\n{logo_str}\n')
+            if "JINA_LOG_NO_COLOR" not in os.environ:
+                print(f"\n{logo_str}\n")
             console.print(param_str)
         return args
     else:
@@ -73,16 +73,16 @@ def _quick_ac_lookup():
     from marie_cli.autocomplete import ac_table
 
     if len(sys.argv) > 1:
-        if sys.argv[1] == 'commands':
-            for k in ac_table['commands']:
+        if sys.argv[1] == "commands":
+            for k in ac_table["commands"]:
                 print(k)
             exit()
-        elif sys.argv[1] == 'completions':
+        elif sys.argv[1] == "completions":
             # search with the longest shared prefix
             for j in range(len(sys.argv), 2, -1):
-                _input = ' '.join(sys.argv[2:j]).strip()
-                if _input in ac_table['completions']:
-                    compl = ac_table['completions'][_input]
+                _input = " ".join(sys.argv[2:j]).strip()
+                if _input in ac_table["completions"]:
+                    compl = ac_table["completions"][_input]
                     for k in compl:
                         if k not in sys.argv:
                             print(k)
@@ -101,14 +101,14 @@ def _try_plugin_command():
 
     from marie_cli.autocomplete import ac_table
 
-    if argv[1] in ac_table['commands']:  # native command can't be plugin command
+    if argv[1] in ac_table["commands"]:  # native command can't be plugin command
         return False
 
     def _cmd_exists(cmd):
         return shutil.which(cmd) is not None
 
     subcommand = argv[1]
-    cmd = 'marie-' + subcommand
+    cmd = "marie-" + subcommand
     if _cmd_exists(cmd):
         subprocess.run([cmd] + argv[2:])
         return True
@@ -119,7 +119,7 @@ def _try_plugin_command():
         from marie.helper import get_rich_console
 
         cmd_info = plugin_info[subcommand]
-        project, package = cmd_info['display-name'], cmd_info['pip-package']
+        project, package = cmd_info["display-name"], cmd_info["pip-package"]
         console = get_rich_console()
         console.print(
             f"It seems like [yellow]{project}[/yellow] is not installed in your environment."
@@ -142,4 +142,4 @@ def main():
 
         args = _get_run_args()
 
-        getattr(api, args.cli.replace('-', '_'))(args)
+        getattr(api, args.cli.replace("-", "_"))(args)

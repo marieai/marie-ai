@@ -104,6 +104,21 @@ def _handle_filter(x_object, obj, mode, size, data):
         os.remove(path)
 
 
+def is_pdf_page_rotated(pdf_file_path):
+    """Determine if the pages in a PDF are rotated"""
+    with open(pdf_file_path, "rb") as f:
+        pdf = PdfFileReader(f)
+        number_of_pages = pdf.getNumPages()
+        rotations = []
+
+        for page_index in range(number_of_pages):
+            page = pdf.getPage(page_index)
+            rotation = page.get('/Rotate', 0)
+            rotations.append(rotation)
+
+        return rotations
+
+
 def load_pdf_frames(pdf_file_path):
     """Load PDF as set of Numpy Images"""
     with open(pdf_file_path, "rb") as f:
@@ -112,15 +127,41 @@ def load_pdf_frames(pdf_file_path):
         number_of_pages = pdf.getNumPages()
 
         txt = f"""
-        Information about {pdf_file_path}: 
+        Information about {pdf_file_path}:
         Producer: {information.producer}
         Number of pages: {number_of_pages}
         """
-        print(txt)
         frames = []
         for page_index in range(number_of_pages):
             page = pdf.getPage(page_index)
-            x_object = page["/Resources"]["/XObject"].getObject()
+
+            # get text from page
+            text = page.extractText()
+
+            # rotation = page.get('/Rotate', 0)
+            # print(f"Rotation : {rotation}")
+            size = (int(page.mediaBox.getWidth()), int(page.mediaBox.getHeight()))
+            resources = page["/Resources"]
+            # determine if the page is rotated based on text orientation
+            # if the text is rotated we will rotate the image
+            if "/XObject" not in resources and "/ProcSet" not in resources:
+                print(f"No XObject or ProcSet found on page {page_index}")
+                continue
+
+            x_object = (
+                resources.get("/XObject", {}).getObject()
+                if "/XObject" in resources
+                else {}
+            )
+            proc_set = resources.get("/ProcSet", [])
+
+            if isinstance(proc_set, PyPDF4.generic.IndirectObject):
+                proc_set = proc_set.getObject()
+            # ['/PDF', '/Text', '/ImageB', '/ImageC', '/ImageI']
+            # for obj in proc_set:
+            #     print(f"ProcSet : {obj}")
+            #     if obj == "/ImageI":
+            #         print(f"Found ImageI : {obj}")
 
             for obj in x_object:
                 if x_object[obj]["/Subtype"] == "/Image":
@@ -137,7 +178,7 @@ def load_pdf_frames(pdf_file_path):
                     blank = np.ones((size[0], size[1], 3), dtype=np.uint8) * 255
                     frames.append(blank)
 
-        return True, frames
+    return True, frames
 
 
 def convert_frames(frames, img_format):

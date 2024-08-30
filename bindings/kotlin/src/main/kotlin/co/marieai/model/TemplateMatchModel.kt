@@ -1,6 +1,5 @@
 package co.marieai.model
 
-import sun.jvm.hotspot.debugger.cdbg.TemplateType
 
 /**
  * Represents a bounding box with its coordinates and dimensions.

@@ -80,7 +80,7 @@ def setup_scheduler(scheduler_config: Dict[str, Any]) -> None:
             from marie_server.scheduler import PostgreSQLJobScheduler
 
             scheduler = PostgreSQLJobScheduler(config=scheduler_config["psql"])
-            scheduler.start_schedule()
+            scheduler.start()
     else:
         logger.warning("No scheduler config found")
 

@@ -23,12 +23,12 @@ class _ConnectionStubs:
     """
 
     STUB_MAPPING = {
-        'jina.JinaDataRequestRPC': jina_pb2_grpc.JinaDataRequestRPCStub,
-        'jina.JinaSingleDataRequestRPC': jina_pb2_grpc.JinaSingleDataRequestRPCStub,
-        'jina.JinaSingleDocumentRequestRPC': jina_pb2_grpc.JinaSingleDocumentRequestRPCStub,
-        'jina.JinaDiscoverEndpointsRPC': jina_pb2_grpc.JinaDiscoverEndpointsRPCStub,
-        'jina.JinaRPC': jina_pb2_grpc.JinaRPCStub,
-        'jina.JinaInfoRPC': jina_pb2_grpc.JinaInfoRPCStub,
+        "jina.JinaDataRequestRPC": jina_pb2_grpc.JinaDataRequestRPCStub,
+        "jina.JinaSingleDataRequestRPC": jina_pb2_grpc.JinaSingleDataRequestRPCStub,
+        "jina.JinaSingleDocumentRequestRPC": jina_pb2_grpc.JinaSingleDocumentRequestRPCStub,
+        "jina.JinaDiscoverEndpointsRPC": jina_pb2_grpc.JinaDiscoverEndpointsRPCStub,
+        "jina.JinaRPC": jina_pb2_grpc.JinaRPCStub,
+        "jina.JinaInfoRPC": jina_pb2_grpc.JinaInfoRPCStub,
     }
 
     def __init__(
@@ -48,8 +48,8 @@ class _ConnectionStubs:
 
         if self._histograms:
             self.stub_specific_labels = {
-                'deployment': deployment_name,
-                'address': address,
+                "deployment": deployment_name,
+                "address": address,
             }
 
     # This has to be done lazily, because the target endpoint may not be available
@@ -61,12 +61,12 @@ class _ConnectionStubs:
             if service in self.STUB_MAPPING:
                 stubs[service] = self.STUB_MAPPING[service](self.channel)
 
-        self.data_list_stub = stubs['jina.JinaDataRequestRPC']
-        self.single_data_stub = stubs['jina.JinaSingleDataRequestRPC']
-        self.stream_doc_stub = stubs['jina.JinaSingleDocumentRequestRPC']
-        self.stream_stub = stubs['jina.JinaRPC']
-        self.endpoints_discovery_stub = stubs['jina.JinaDiscoverEndpointsRPC']
-        self.info_rpc_stub = stubs['jina.JinaInfoRPC']
+        self.data_list_stub = stubs["jina.JinaDataRequestRPC"]
+        self.single_data_stub = stubs["jina.JinaSingleDataRequestRPC"]
+        self.stream_doc_stub = stubs["jina.JinaSingleDocumentRequestRPC"]
+        self.stream_stub = stubs["jina.JinaRPC"]
+        self.endpoints_discovery_stub = stubs["jina.JinaDiscoverEndpointsRPC"]
+        self.info_rpc_stub = stubs["jina.JinaInfoRPC"]
         self._initialized = True
 
     async def send_discover_endpoint(
@@ -158,7 +158,7 @@ class _ConnectionStubs:
                     yield response, None
         else:
             raise ValueError(
-                'Can not send SingleDocumentRequest. gRPC endpoint not available.'
+                "Can not send SingleDocumentRequest. gRPC endpoint not available."
             )
 
     async def send_requests(
@@ -188,6 +188,7 @@ class _ConnectionStubs:
             request = requests[0]
             if self.single_data_stub:
                 self._record_request_bytes_metric(request.nbytes)
+
                 call_result = self.single_data_stub.process_single_data(
                     request,
                     metadata=metadata,
@@ -234,10 +235,10 @@ class _ConnectionStubs:
                 return response, metadata
             else:
                 raise ValueError(
-                    'Can not send list of DataRequests. gRPC endpoint not available.'
+                    "Can not send list of DataRequests. gRPC endpoint not available."
                 )
         else:
-            raise ValueError(f'Unsupported request type {type(requests[0])}')
+            raise ValueError(f"Unsupported request type {type(requests[0])}")
 
     async def send_info_rpc(self, timeout: Optional[float] = None):
         """
@@ -255,7 +256,7 @@ class _ConnectionStubs:
         return await call_result
 
     def __repr__(self):
-        return f'{self.__class__.__name__}({self.address})'
+        return f"{self.__class__.__name__}({self.address})"
 
 
 def create_async_channel_stub(
@@ -265,7 +266,7 @@ def create_async_channel_stub(
     histograms: _NetworkingHistograms,
     tls=False,
     root_certificates: Optional[str] = None,
-    aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
+    aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
     channel_options: Optional[Union[list, Dict[str, Any]]] = None,
 ) -> Tuple[_ConnectionStubs, grpc.aio.Channel]:
     """

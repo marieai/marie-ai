@@ -1,6 +1,10 @@
-from typing import Optional
+from typing import Callable, List, Optional
 
-from marie import Document, DocumentArray
+from django.views.debug import CallableSettingWrapper
+from docarray import BaseDoc, DocList
+from docarray.documents import TextDoc
+
+from marie import DocumentArray
 from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request.data import DataRequest
@@ -17,7 +21,11 @@ class GatewayJobDistributor(JobDistributor):
         self.streamer = gateway_streamer
         self.logger = logger or MarieLogger(self.__class__.__name__)
 
-    async def submit_job(self, job_info: JobInfo, doc: Document) -> DataRequest:
+    async def submit_job(
+        self,
+        job_info: JobInfo,
+        send_callback: Callable[[List[DataRequest]], DataRequest] = None,
+    ) -> DataRequest:
         self.logger.info(f"Publishing job {job_info} to gateway")
         curr_status = job_info.status
         curr_message = job_info.message
@@ -28,37 +36,31 @@ class GatewayJobDistributor(JobDistributor):
                 f"Current status is {curr_status} with message {curr_message}."
             )
 
-        # attempt to get gateDDDway streamer if not initialized
+        # attempt to get gateway streamer if not initialized
         if self.streamer is None:
             self.logger.warning(f"Gateway streamer is not initialized")
             raise RuntimeError("Gateway streamer is not initialized")
 
-        async for docs in self.streamer.stream_docs(
-            doc=doc,
-            # exec_endpoint="/extract",  # _jina_dry_run_
-            exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
-            # target_executor="executor0",
-            return_results=False,
-        ):
-            self.logger.info(f"Received {len(docs)} docs from gateway")
-            print(docs)
-            result = docs[0].text
+        doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
+        request = DataRequest()
+        request.document_array_cls = DocList[BaseDoc]()
+        request.header.exec_endpoint = "/extract"
+        request.header.target_executor = "executor0"  # job_info.entrypoint
+        request.parameters = {}  # job_info.metadata
+        request.data.docs = DocList([doc])
 
-        return result
+        response = await self.streamer.process_single_data(
+            request=request, send_callback=send_callback
+        )
 
-        if False:
-            # convert job_info to DataRequest
-            request = DataRequest()
-            # request.header.exec_endpoint = on
-            request.header.target_executor = job_info.entrypoint
-            request.parameters = job_info.metadata
-
-            request.data.docs = DocumentArray([Document(text="sample text")])
-            response = await self.streamer.process_single_data(request=request)
-
-            return response
+        return response
 
     async def close(self):
+        """
+        Closes the GatewayJobDistributor.
+
+        :return: None
+        """
         self.logger.debug(f"Closing GatewayJobDistributor")
         await self.streamer.close()
         self.logger.debug(f"GatewayJobDistributor closed")
