@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple, Union
 
 from marie.constants import KV_NAMESPACE_JOB
-from marie_server.storage.storage_client import StorageArea
+from marie.storage.kv.storage_client import StorageArea
 
 JOB_ID_METADATA_KEY = "job_submission_id"
 JOB_NAME_METADATA_KEY = "job_name"

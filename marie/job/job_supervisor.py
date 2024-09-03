@@ -4,30 +4,40 @@ from typing import Dict, List, Optional, Union
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
+from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
+from marie.job.event_publisher import EventPublisher
+from marie.job.job_distributor import JobDistributor
 from marie.logging.logger import MarieLogger
+from marie.proto import jina_pb2
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
+from marie.serve.networking.connection_stub import _ConnectionStubs
+from marie.serve.networking.utils import get_grpc_channel
 from marie.types.request.data import DataRequest
-from marie_server.job.common import ActorHandle, JobInfoStorageClient, JobStatus
-from marie_server.job.job_distributor import JobDistributor
 
 
 class JobSupervisor:
     """
     Supervise jobs and keep track of their status on the remote executor.
+
+    Executors are responsible for running the job and updating the status of the job, however, the Executor does not update the WorkState.
+    The JobSupervisor is responsible for updating the WorkState based on the status of the job.
     """
 
     DEFAULT_JOB_STOP_WAIT_TIME_S = 3
+    DEFAULT_JOB_TIMEOUT_S = 60  # 60 seconds, there should be no job that takes more than 60 seconds to process
 
     def __init__(
         self,
         job_id: str,
         job_info_client: JobInfoStorageClient,
         job_distributor: JobDistributor,
+        event_publisher: EventPublisher,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
         self._job_info_client = job_info_client
         self._job_distributor = job_distributor
+        self._event_publisher = event_publisher
         self.request_info = None
 
     async def ping(self):
@@ -44,9 +54,6 @@ class JobSupervisor:
             f"Sending ping to {address} for request {request_id} on deployment {deployment_name}"
         )
 
-        from marie.serve.networking.connection_stub import _ConnectionStubs
-        from marie.serve.networking.utils import get_grpc_channel
-
         channel = get_grpc_channel(address=address, asyncio=True)
         connection_stub = _ConnectionStubs(
             address=address,
@@ -60,13 +67,14 @@ class JobSupervisor:
             histograms=_NetworkingHistograms(),
         )
 
-        # print("DryRun - Response: ", response)
-        doc = TextDoc(text=f"Text : _jina_dry_run_")
+        doc = TextDoc(text=f"ping : _jina_dry_run_")
         request = DataRequest()
         request.document_array_cls = DocList[BaseDoc]()
         request.header.exec_endpoint = "_jina_dry_run_"
         request.header.target_executor = deployment_name
-        request.parameters = {}
+        request.parameters = {
+            "job_id": self._job_id,
+        }
         request.data.docs = DocList([doc])
 
         try:
@@ -74,7 +82,7 @@ class JobSupervisor:
                 requests=[request], metadata={}, compression=False
             )
             self.logger.debug(f"DryRun - Response: {response}")
-            if response.status.code == response.status.SUCCESS:
+            if response.status.code == jina_pb2.StatusProto.SUCCESS:
                 return True
             else:
                 raise RuntimeError(
@@ -117,21 +125,37 @@ class JobSupervisor:
             # Block in PENDING state until start signal received.
             await _start_signal_actor.wait.remote()
 
-        # this is our gateway address
-        driver_agent_http_address = "grpc://127.0.0.1"
-        driver_node_id = "CURRENT_NODE_ID"
+        #  moved to request_handling
+        # # this is our gateway address
+        # driver_agent_http_address = "grpc://127.0.0.1"
+        # driver_node_id = "CURRENT_NODE_ID"
+        #
+        # await self._job_info_client.put_status(
+        #     self._job_id,
+        #     JobStatus.RUNNING,
+        #     jobinfo_replace_kwargs={
+        #         "driver_agent_http_address": driver_agent_http_address,
+        #         "driver_node_id": driver_node_id,
+        #     },
+        # )
 
-        await self._job_info_client.put_status(
-            self._job_id,
-            JobStatus.RUNNING,
-            jobinfo_replace_kwargs={
-                "driver_agent_http_address": driver_agent_http_address,
-                "driver_node_id": driver_node_id,
-            },
-        )
         # Run the job submission in the background
-        task = asyncio.create_task(self._submit_job_in_background(curr_info))
-        print("Task: ", task)
+        if self.DEFAULT_JOB_TIMEOUT_S > 0:
+            try:
+                await asyncio.wait_for(
+                    self._submit_job_in_background(curr_info),
+                    timeout=self.DEFAULT_JOB_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                self.logger.error(
+                    f"Job {self._job_id} timed out after {self.DEFAULT_JOB_TIMEOUT_S} seconds."
+                )
+                await self._job_info_client.put_status(
+                    self._job_id, JobStatus.FAILED, message="Job submission timed out."
+                )
+        else:
+            task = asyncio.create_task(self._submit_job_in_background(curr_info))
+        self.logger.debug(f"Job {self._job_id} submitted in the background.")
 
     def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
@@ -151,7 +175,9 @@ class JobSupervisor:
     async def _submit_job_in_background(self, curr_info):
         try:
             response = await self._job_distributor.submit_job(
-                curr_info, self.send_callback
+                submission_id=self._job_id,
+                job_info=curr_info,
+                send_callback=self.send_callback,
             )
             # printing the whole response will trigger a bug in rich.print with stackoverflow
             # format the response
@@ -161,17 +187,37 @@ class JobSupervisor:
             print("Response docs: ", response.data.docs)
             print("Response status: ", response.status)
 
-            job_status = await self._job_info_client.get_status(self._job_id)
-
-            if job_status.is_terminal():
-                # If the job is already in a terminal state, then we don't need to update it. This can happen if the
-                # job was cancelled while the job was being submitted.
-                self.logger.warning(
-                    f"Job {self._job_id} is already in terminal state {job_status}."
-                )
+            if response.status.code == jina_pb2.StatusProto.SUCCESS:
+                job_status = await self._job_info_client.get_status(self._job_id)
+                # "STOPPED", "SUCCEEDED", "FAILED"
+                if job_status.is_terminal():
+                    # If the job is already in a terminal state, then we don't need to update it. This can happen if the
+                    # job was cancelled while the job was being submitted.
+                    # or while the job was marked from the executor side.
+                    self.logger.warning(
+                        f"Job {self._job_id} is already in terminal state {job_status}."
+                    )
+                    # triggers the event to update the WorkStatus
+                    await self._event_publisher.publish(
+                        job_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": job_status,
+                            "message": f"Job {self._job_id} is already in terminal state {job_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.SUCCEEDED
+                    )
             else:
+                # FIXME : Need to store the exception in the job info
+                e: jina_pb2.StatusProto.ExceptionProto = response.status.exception
+                name = str(e.name)
+                # stack = to_json(e.stacks)
                 await self._job_info_client.put_status(
-                    self._job_id, JobStatus.SUCCEEDED
+                    self._job_id, JobStatus.FAILED, message=f"{name}"
                 )
         except Exception as e:
             await self._job_info_client.put_status(

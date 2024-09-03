@@ -1,8 +1,8 @@
 from typing import Any, Dict, Optional
 
-from marie_server.job.common import JobInfo, JobInfoStorageClient, JobStatus
-from marie_server.job.event_publisher import EventPublisher
-from marie_server.storage.storage_client import StorageArea
+from marie.job.common import JobInfoStorageClient, JobStatus
+from marie.job.event_publisher import EventPublisher
+from marie.storage.kv.storage_client import StorageArea
 
 
 class JobInfoStorageClientProxy(JobInfoStorageClient):

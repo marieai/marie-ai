@@ -1,5 +1,6 @@
 import inspect
 import os
+import random
 import time
 
 from docarray import DocList
@@ -44,7 +45,7 @@ class TestExecutor(MarieExecutor):
         time.sleep(1)
 
     @requests(on="/extract")
-    def funcXX(
+    def func_extract(
         self,
         docs: DocList[TextDoc],
         parameters=None,
@@ -55,6 +56,11 @@ class TestExecutor(MarieExecutor):
             parameters = {}
 
         print(f"FirstExec func called : {len(docs)}, {parameters}")
+
+        # randomly throw an error to test the error handling
+        if random.random() > 0.5:
+            raise Exception("random error")
+
         for doc in docs:
             doc.text += " First Exec"
         print("Sleeping for 5 seconds : ", time.time())

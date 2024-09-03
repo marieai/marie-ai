@@ -7,11 +7,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import psycopg2
 
 from marie.helper import get_or_reuse_loop
+from marie.job.common import JobStatus
+from marie.job.job_manager import JobManager
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
-from marie_server.job.common import JobStatus
-from marie_server.job.job_manager import JobManager
 from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
@@ -262,7 +262,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param stop_event: an event to signal when to stop iterating over the records
         :return:
         """
-        print("elf._lock.locked():", self._lock.locked())
         async with self._lock:
             with self:
                 try:
@@ -277,9 +276,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     cursor = self.connection.cursor()
                     cursor.itersize = limit
                     cursor.execute(f"{query}")
-                    records = []
-                    for record in cursor:
-                        records.append(record)
+                    records = [record for record in cursor]
+
                     return records
                 except (Exception, psycopg2.Error) as error:
                     self.logger.error(f"Error fetching next job: {error}")

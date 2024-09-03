@@ -3,7 +3,7 @@ from collections import deque
 from datetime import datetime
 from typing import Iterator, List, Tuple
 
-from marie_server.job.utils import JOB_LOGS_PATH_TEMPLATE, file_tail_iterator
+from marie.job.utils import JOB_LOGS_PATH_TEMPLATE, file_tail_iterator
 
 
 class JobLogStorageClient:

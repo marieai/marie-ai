@@ -15,6 +15,9 @@ import marie.helper
 from marie import Gateway as BaseGateway
 from marie.excepts import RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
+from marie.job.common import JobInfo, JobStatus
+from marie.job.gateway_job_distributor import GatewayJobDistributor
+from marie.job.job_manager import JobManager
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
@@ -28,17 +31,14 @@ from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.storage.kv.in_memory import InMemoryKV
+from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
-from marie_server.job.common import JobInfo, JobStatus
-from marie_server.job.gateway_job_distributor import GatewayJobDistributor
-from marie_server.job.job_manager import JobManager
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
-from marie_server.storage.in_memory import InMemoryKV
-from marie_server.storage.psql import PostgreSQLKV
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -387,7 +387,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             response = Response()
             response.parameters = {
                 "status": "ok",
-                "msg": "job submitted",
+                "msg": f"job submitted with id {job_id}",
                 "job_id": job_id,
             }
 

@@ -5,7 +5,7 @@ from uuid_extensions import uuid7str
 
 from marie.logging.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
-from marie_server.storage.storage_client import StorageArea
+from marie.storage.kv.storage_client import StorageArea
 
 
 class PostgreSQLKV(PostgresqlMixin, StorageArea):

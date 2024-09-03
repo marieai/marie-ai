@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Optional, Union
 
-from marie_server.job.placement_group import PlacementGroup
+from marie.job.placement_group import PlacementGroup
 
 
 class PlacementGroupSchedulingStrategy:

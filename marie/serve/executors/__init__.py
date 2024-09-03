@@ -500,7 +500,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         ):
             with ImportExtensions(
                 required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Summary
 

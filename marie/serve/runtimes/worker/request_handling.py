@@ -25,10 +25,12 @@ from marie.constants import __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
+from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.executors import BaseExecutor
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
+from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request.data import DataRequest, SingleDocumentRequest
 
 if docarray_v2:
@@ -165,6 +167,7 @@ class WorkerRequestHandler:
         self._hot_reload_task = None
         if self.args.reload:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
+        self._init_job_info_client()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -193,7 +196,7 @@ class WorkerRequestHandler:
         return extend_rest_interface(app)
 
     def _http_fastapi_csp_app(self, **kwargs):
-        from jina.serve.runtimes.worker.http_csp_app import get_fastapi_app
+        from marie.serve.runtimes.worker.http_csp_app import get_fastapi_app
 
         request_models_map = self._executor._get_endpoint_models_dict()
 
@@ -383,16 +386,16 @@ class WorkerRequestHandler:
                 uses_requests=self.args.uses_requests,
                 uses_dynamic_batching=self.args.uses_dynamic_batching,
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
-                    'workspace': self.args.workspace,
-                    'shard_id': self.args.shard_id,
-                    'shards': self.args.shards,
-                    'replicas': self.args.replicas,
-                    'name': self.args.name,
-                    'provider': self.args.provider,
-                    'provider_endpoint': self.args.provider_endpoint,
-                    'metrics_registry': metrics_registry,
-                    'tracer_provider': tracer_provider,
-                    'meter_provider': meter_provider,
+                    "workspace": self.args.workspace,
+                    "shard_id": self.args.shard_id,
+                    "shards": self.args.shards,
+                    "replicas": self.args.replicas,
+                    "name": self.args.name,
+                    "provider": self.args.provider,
+                    "provider_endpoint": self.args.provider_endpoint,
+                    "metrics_registry": metrics_registry,
+                    "tracer_provider": tracer_provider,
+                    "meter_provider": meter_provider,
                 },
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
@@ -678,6 +681,14 @@ class WorkerRequestHandler:
                 return requests[0]
 
         requests, params = self._setup_requests(requests, exec_endpoint)
+
+        print("requests", requests)
+        print("params", params)
+        job_id = None
+        if params is not None:
+            job_id = params.get("job_id", None)
+        await self._record_started_job(job_id, exec_endpoint, requests, params)
+
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
         if exec_endpoint in self._batchqueue_config:
             assert len(requests) == 1, "dynamic batching does not support no_reduce"
@@ -709,15 +720,19 @@ class WorkerRequestHandler:
             docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(
                 requests
             )
-            return_data = await self._executor.__acall__(
-                req_endpoint=exec_endpoint,
-                docs=docs,
-                parameters=params,
-                docs_matrix=docs_matrix,
-                docs_map=docs_map,
-                tracing_context=tracing_context,
-            )
-            _ = self._set_result(requests, return_data, docs)
+            try:
+                return_data = await self._executor.__acall__(
+                    req_endpoint=exec_endpoint,
+                    docs=docs,
+                    parameters=params,
+                    docs_matrix=docs_matrix,
+                    docs_map=docs_map,
+                    tracing_context=tracing_context,
+                )
+                _ = self._set_result(requests, return_data, docs)
+            except Exception as e:
+                await self._record_failed_job(job_id, e)
+                raise e
 
         for req in requests:
             req.add_executor(self.deployment_name)
@@ -729,6 +744,7 @@ class WorkerRequestHandler:
             pass
         self._record_response_size_monitoring(requests)
 
+        await self._record_successful_job(job_id)
         return requests[0]
 
     @staticmethod
@@ -947,10 +963,10 @@ class WorkerRequestHandler:
             ex = ValueError("endpoint must be generator")
             self.logger.error(
                 (
-                    f'{ex!r}'
+                    f"{ex!r}"
                     + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
-                    else ''
+                    else ""
                 ),
                 exc_info=not self.args.quiet_error,
             )
@@ -984,10 +1000,10 @@ class WorkerRequestHandler:
                     )
                     self.logger.error(
                         (
-                            f'{ex!r}'
+                            f"{ex!r}"
                             + f'\n add "--quiet-error" to suppress the exception details'
                             if not self.args.quiet_error
-                            else ''
+                            else ""
                         ),
                         exc_info=not self.args.quiet_error,
                     )
@@ -1011,7 +1027,7 @@ class WorkerRequestHandler:
         """
         from google.protobuf import json_format
 
-        self.logger.debug('recv an endpoint discovery request')
+        self.logger.debug("recv an endpoint discovery request")
         endpoints_proto = jina_pb2.EndpointsProto()
         endpoints_proto.endpoints.extend(list(self._executor.requests.keys()))
         endpoints_proto.write_endpoints.extend(list(self._executor.write_endpoints))
@@ -1112,10 +1128,10 @@ class WorkerRequestHandler:
             except (RuntimeError, Exception) as ex:
                 self.logger.error(
                     (
-                        f'{ex!r}'
+                        f"{ex!r}"
                         + f'\n add "--quiet-error" to suppress the exception details'
                         if not self.args.quiet_error
-                        else ''
+                        else ""
                     ),
                     exc_info=not self.args.quiet_error,
                 )
@@ -1324,3 +1340,58 @@ class WorkerRequestHandler:
             id=jina_pb2.RestoreId(value=request.value),
             status=jina_pb2.RestoreSnapshotStatusProto.Status.NOT_FOUND,
         )
+
+    def _init_job_info_client(self):
+        # storage = self.runtime_args.storage
+        # FIXME : This should be coming from the runtime_args
+        kv_storage_config = {
+            "hostname": "127.0.0.1",
+            "port": 5432,
+            "username": "postgres",
+            "password": "123456",
+            "database": "postgres",
+            "default_table": "kv_store_a",
+            "max_pool_size": 5,
+            "max_connections": 5,
+        }
+
+        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
+        self._job_info_client = JobInfoStorageClient(storage)
+
+    async def _record_failed_job(self, job_id: str, e: Exception):
+        if job_id is not None and self._job_info_client is not None:
+            print(f"Monitoring JOB: {job_id} - {e}")
+            try:
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.FAILED,
+                    jobinfo_replace_kwargs={"error_message": str(e)},
+                )
+            except Exception as e:
+                self.logger.error(f"Error in recording job status: {e}")
+
+    async def _record_started_job(self, job_id: str, exec_endpoint, requests, params):
+        if job_id is not None and self._job_info_client is not None:
+            print(f"Monitoring JOB: {exec_endpoint} - {job_id}")
+            # this is our gateway address
+            driver_agent_http_address = "grpc://127.0.0.1"
+            driver_node_id = "CURRENT_NODE_ID"
+            try:
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.RUNNING,
+                    jobinfo_replace_kwargs={
+                        "driver_agent_http_address": driver_agent_http_address,
+                        "driver_node_id": driver_node_id,
+                    },
+                )
+            except Exception as e:
+                self.logger.error(f"Error in recording job status: {e}")
+
+    async def _record_successful_job(self, job_id):
+        if job_id is not None and self._job_info_client is not None:
+            print(f"Monitoring JOB: {job_id}")
+            try:
+                await self._job_info_client.put_status(job_id, JobStatus.SUCCEEDED)
+            except Exception as e:
+                self.logger.error(f"Error in recording job status: {e}")
