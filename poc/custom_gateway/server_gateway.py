@@ -18,6 +18,7 @@ from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
+from marie.job.sync_manager import SyncManager
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
@@ -88,6 +89,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "password": "123456",
         }
 
+        self.syncer = SyncManager(scheduler_config)
         self.distributor = GatewayJobDistributor(
             gateway_streamer=None, logger=self.logger
         )
@@ -121,7 +123,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             async def job_submit(text: str):
                 self.logger.info(f"Received request at {datetime.now}")
                 work_info = WorkInfo(
-                    name="WorkInfo-001",
+                    name="extract",
                     priority=0,
                     data={},
                     state=WorkState.CREATED,
@@ -368,7 +370,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         :return: The response with the submission result.
         """
         work_info = WorkInfo(
-            name="WorkInfo-001",
+            name="extract",
             priority=0,
             data={},
             state=WorkState.CREATED,

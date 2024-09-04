@@ -16,6 +16,7 @@ from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import (
+    create_queue,
     fetch_next_job,
     insert_job,
     to_timestamp_with_tz,
@@ -26,6 +27,7 @@ INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 DEFAULT_SCHEMA = "marie_scheduler"
+DEFAULT_JOB_TABLE = "job"
 COMPLETION_JOB_PREFIX = f"__state__{WorkState.COMPLETED.value}__"
 
 
@@ -116,8 +118,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         commands = [
             create_schema(schema),
             create_version_table(schema),
+            create_table_queue(schema),
             create_job_state_enum(schema),
             create_job_table(schema),
+            create_primary_key_job(schema),
             create_job_history_table(schema),
             create_job_update_trigger_function(schema),
             create_job_update_trigger(schema),
@@ -131,6 +135,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # create_index_singleton_key_on(schema),
             create_index_job_name(schema),
             create_index_job_fetch(schema),
+            create_queue_function(schema),
+            delete_queue_function(schema),
         ]
 
         query = ";\n".join(commands)
@@ -167,6 +173,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"Error clearing tables: {error}")
                 self.connection.rollback()
 
+    async def create_queue(self) -> None:
+        """Setup the queue for the scheduler."""
+
+        with self:
+            try:
+                self._execute_sql_gracefully(
+                    create_queue(DEFAULT_SCHEMA, "extract", {})
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error setting up queue: {error}")
+                self.connection.rollback()
+
     async def start(self) -> None:
         """
         Starts the job scheduling agent.
@@ -175,6 +193,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         logger.info("Starting job scheduling agent")
         self.create_tables(DEFAULT_SCHEMA)
+        await self.create_queue()
         self.running = True
         self.task = asyncio.create_task(self._poll())
 
@@ -267,7 +286,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 try:
                     fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
                     query = fetch_query_def(
-                        name="WorkInfo-001",
+                        name="extract",  # TODO this is a placeholder
                         batch_size=limit,
                         include_metadata=False,
                         priority=True,
@@ -291,7 +310,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param job_id:
         """
         schema = DEFAULT_SCHEMA
-        table = "job"
+        table = DEFAULT_JOB_TABLE
 
         with self:
             try:
@@ -309,8 +328,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                           data,
                           retry_delay,
                           retry_backoff,
-                          keep_until,
-                          on_complete
+                          keep_until
                     FROM {schema}.{table}
                     WHERE id = '{job_id}'
                     """
@@ -328,7 +346,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def list_jobs(self, state: Optional[str] = None) -> Dict[str, WorkInfo]:
         work_items = {}
         schema = DEFAULT_SCHEMA
-        table = "job"
+        table = DEFAULT_JOB_TABLE
         states = "','".join(WorkState.__members__.keys())
         if state is not None:
             if state.upper() not in WorkState.__members__:
@@ -378,6 +396,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         new_key_added = False
         submission_id = work_info.id
+
+        work_info.retry_limit = 2
 
         with self:
             try:
@@ -456,24 +476,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             finally:
                 self.connection.commit()
 
-    def reset_locked_items(self, schema: str):
-        query = f"""
-        UPDATE {schema}.job
-        SET state = '{WorkState.FAILED.value}',
-            started_on = NULL,
-            retry_count = retry_count - 1
-        WHERE state = '{WorkState.ACTIVE.value}'
-          AND started_on IS NOT NULL
-          AND started_on < now() - interval '1 hour'
-        """
-        with self:
-            try:
-                self._execute_sql_gracefully(query)
-            except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error resetting locked items: {error}")
-                self.connection.rollback()
-            self.connection.commit()
-
     async def maintenance(self):
         """
         Performs the maintenance process, including expiring, archiving, and purging.
@@ -527,5 +529,4 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_delay=record[8],
             retry_backoff=record[9],
             keep_until=record[10],
-            on_complete=record[11],
         )

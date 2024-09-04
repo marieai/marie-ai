@@ -21,7 +21,6 @@ class WorkInfo(BaseModel):
     start_after: datetime
     expire_in_seconds: int
     keep_until: datetime
-    on_complete: bool
 
 
 class ExistingWorkPolicy(Enum):
