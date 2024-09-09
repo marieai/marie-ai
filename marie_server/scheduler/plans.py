@@ -16,66 +16,6 @@ def to_timestamp_with_tz(dt: datetime):
     return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
 
 
-def insert_job_v1(schema: str, work_info: WorkInfo) -> str:
-    return f"""
-        INSERT INTO {schema}.job (
-          id,
-          name,
-          priority,
-          state,
-          retry_limit,
-          start_after,
-          expire_in,
-          data,
-          retry_delay,
-          retry_backoff,
-          keep_until          
-        )
-        SELECT
-          id,
-          name,
-          priority,
-          state,
-          retry_limit, 
-          start_after,
-          expire_in,
-          data,
-          retry_delay,
-          retry_backoff,
-          keep_until
-        FROM
-        ( SELECT *,
-            CASE
-              WHEN right(keepUntilValue, 1) = 'Z' THEN CAST(keepUntilValue as timestamp with time zone)
-              ELSE (start_after + CAST(COALESCE(keepUntilValue,'0') as interval))
-              END as keep_until
-          FROM
-          ( SELECT *,
-              CASE
-                WHEN right(startAfterValue, 1) = 'Z' THEN CAST(startAfterValue as timestamp with time zone)
-                ELSE now() + CAST(COALESCE(startAfterValue,'0') as interval)
-                END as start_after
-            FROM
-            ( SELECT
-                '{work_info.id}'::uuid as id,
-                '{work_info.name}'::text as name,
-                {work_info.priority}::int as priority,
-                '{WorkState.CREATED.value}'::{schema}.job_state as state,
-                {work_info.retry_limit}::int as retry_limit,
-                '{to_timestamp_with_tz(work_info.start_after)}'::text as startAfterValue,
-                CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
-                '{work_info.data}'::jsonb as data,
-                {work_info.retry_delay}::int as retry_delay,
-                {work_info.retry_backoff}::bool as retry_backoff,
-                '{to_timestamp_with_tz(work_info.keep_until)}'::text as keepUntilValue
-        ) j1
-      ) j2
-    ) j3
-    ON CONFLICT DO NOTHING
-    RETURNING id
-    """
-
-
 def insert_job(schema: str, work_info: WorkInfo) -> str:
     return f"""
         INSERT INTO {schema}.job (
@@ -108,7 +48,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           CASE
             WHEN right(keep_until, 1) = 'Z' THEN CAST(keep_until as timestamp with time zone)
             --ELSE start_after + CAST(COALESCE(keep_until, (q.retention_minutes * 60)::text, keep_until_default, '14 days') as interval)
-            ELSE start_after + COALESCE(keep_until::interval, (q.retention_minutes * 60) * interval '1 second', keep_until_default, interval '14 days')
+            -- ELSE start_after + COALESCE(keep_until::interval, (q.retention_minutes * 60) * interval '1 second', keep_until_default, interval '14 days')
           END as keep_until,
           
           COALESCE(j.retry_limit, q.retry_limit, retry_limit_default, 2) as retry_limit,
@@ -127,7 +67,12 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 {work_info.priority}::int as priority,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
-                '{to_timestamp_with_tz(work_info.start_after)}'::text as start_after,
+                --'{to_timestamp_with_tz(work_info.start_after)}'::text as start_after,
+                CASE
+                  WHEN right('{to_timestamp_with_tz(work_info.start_after)}', 1) = 'Z' THEN CAST('{to_timestamp_with_tz(work_info.start_after)}' as timestamp with time zone)
+                  ELSE now() + CAST(COALESCE('{to_timestamp_with_tz(work_info.start_after)}','0') as interval)
+                END as start_after,
+            
                 CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
                 '{work_info.data}'::jsonb as data,
                 {work_info.retry_delay}::int as retry_delay,
@@ -136,7 +81,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 
                 2::int as retry_limit_default,
                 2::int as retry_delay_default,
-                0::int as retry_backoff_default,
+                False::boolean as retry_backoff_default,
                 interval '60s'::interval as expire_in_default,
                 now() + interval '14 days'::interval as keep_until_default
         )  j JOIN {schema}.queue q ON j.name = q.name
@@ -146,11 +91,18 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
 
 
 def create_queue(schema: str, queue_name: str, options: Dict[str, str]) -> str:
-    return f"SELECT {schema}.create_queue('{queue_name}', '{to_json(options)}')"
+    # return f"SELECT {schema}.create_queue('{queue_name}', {to_json(options)})"
+    return f"""
+            SELECT {schema}.create_queue('{queue_name}', '{{"retry_limit":2}}'::json)
+           """
 
 
 def delete_queue(schema: str, queue_name: str) -> str:
     return f"SELECT {schema}.delete_queue({queue_name})"
+
+
+def version_table_exists(schema: str) -> str:
+    return f"SELECT to_regclass('{schema}.version') as name"
 
 
 def fetch_next_job(schema: str):

@@ -20,6 +20,7 @@ from marie_server.scheduler.plans import (
     fetch_next_job,
     insert_job,
     to_timestamp_with_tz,
+    version_table_exists,
 )
 from marie_server.scheduler.state import WorkState
 
@@ -173,13 +174,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"Error clearing tables: {error}")
                 self.connection.rollback()
 
-    async def create_queue(self) -> None:
+    async def is_installed(self) -> bool:
+        """check if the tables are installed"""
+        schema = DEFAULT_SCHEMA
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(version_table_exists(schema))
+                return cursor is not None and cursor.rowcount > 0
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error clearing tables: {error}")
+                self.connection.rollback()
+        return False
+
+    async def create_queue(self, queue_name: str) -> None:
         """Setup the queue for the scheduler."""
 
         with self:
             try:
                 self._execute_sql_gracefully(
-                    create_queue(DEFAULT_SCHEMA, "extract", {})
+                    create_queue(DEFAULT_SCHEMA, queue_name, {})
                 )
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error setting up queue: {error}")
@@ -191,10 +204,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         :return: None
         """
+
         logger.info("Starting job scheduling agent")
-        self.create_tables(DEFAULT_SCHEMA)
-        await self.create_queue()
-        self.running = True
+        installed = await self.is_installed()
+        logger.info(f"Tables installed: {installed}")
+
+        if not installed:
+            self.create_tables(DEFAULT_SCHEMA)
+
+        # TODO : This is a placeholder
+        queue = "extract"
+        await self.create_queue(queue)
+        await self.create_queue(f"${queue}_dlq")
+
         self.task = asyncio.create_task(self._poll())
 
     async def _poll(self):

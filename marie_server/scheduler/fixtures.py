@@ -54,6 +54,7 @@ def create_job_table(schema: str):
       output jsonb,
       dead_letter text,
       policy text
+     -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
     """
