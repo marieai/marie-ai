@@ -118,8 +118,8 @@ class PostgresqlMixin:
 
     def _execute_sql_gracefully(
         self,
-        statement,
-        data=tuple(),
+        statement: object,
+        data: object = tuple(),
         *,
         named_cursor_name: Optional[str] = None,
         itersize: Optional[int] = 10000,

@@ -16,6 +16,7 @@ from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import (
+    count_states,
     create_queue,
     fetch_next_job,
     insert_job,
@@ -26,6 +27,8 @@ from marie_server.scheduler.state import WorkState
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
+
+MONITORING_POLL_PERIOD = 5.0  # 5s
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
@@ -62,14 +65,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = False
         self.task = None
-        self.job_manager = job_manager
-        self._loop = get_or_reuse_loop()
-        self._setup_storage(config, connection_only=True)
-        self._setup_event_subscriptions()
+        self.monitoring_task = None
+
         lock_free = True
         self._lock = (
             asyncio.Lock() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
+
+        self.job_manager = job_manager
+        self._loop = get_or_reuse_loop()
+        self._setup_storage(config, connection_only=True)
+        self._setup_event_subscriptions()
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -204,11 +210,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         :return: None
         """
-
         logger.info("Starting job scheduling agent")
         installed = await self.is_installed()
         logger.info(f"Tables installed: {installed}")
-
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
@@ -217,13 +221,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.create_queue(queue)
         await self.create_queue(f"${queue}_dlq")
 
+        self.running = True
         self.task = asyncio.create_task(self._poll())
+        self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
         self.logger.info("Starting database scheduler")
         wait_time = INIT_POLL_PERIOD
         sleep_chunk = 0.250
-        self.running = True
 
         while self.running:
             self.logger.info(f"Polling for new jobs : {wait_time}")
@@ -267,8 +272,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def stop(self) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
+
         if self.task is not None:
             await self.task
+        if self.monitoring_task is not None:
+            await self.monitoring_task
 
     def debug_info(self) -> str:
         print("Debugging info")
@@ -494,9 +502,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self._execute_sql_gracefully(update_query)
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error handling job event: {error}")
-                self.connection.rollback()
-            finally:
-                self.connection.commit()
 
     async def maintenance(self):
         """
@@ -533,6 +538,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.handle_job_event,
         )
 
+    async def count_states(self):
+        state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
+
+        counts = []
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(count_states(DEFAULT_SCHEMA))
+                counts = cursor.fetchall()
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error handling job event: {error}")
+
+        states = {"queues": {}}
+        for item in counts:
+            name, state, size = item
+            if name:
+                if name not in states["queues"]:
+                    states["queues"][name] = state_count_default.copy()
+            queue = states["queues"].get(name, states)
+            state = state or "all"
+            queue[state] = int(size)
+
+        return states
+
     def record_to_work_info(self, record):
         """
         Convert a record to a WorkInfo object.
@@ -552,3 +580,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_backoff=record[9],
             keep_until=record[10],
         )
+
+    async def _monitor(self):
+        wait_time = MONITORING_POLL_PERIOD
+        while self.running:
+            self.logger.debug(f"Polling jobs status : {wait_time}")
+            await asyncio.sleep(wait_time)
+            try:
+                states = await self.count_states()
+                logger.info(f"job state: {states}")
+                # TODO: emit event
+            except Exception as e:
+                logger.error(f"Error monitoring jobs: {e}")
+                traceback.print_exc()
+                # TODO: emit error event

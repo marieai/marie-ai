@@ -105,6 +105,19 @@ def version_table_exists(schema: str) -> str:
     return f"SELECT to_regclass('{schema}.version') as name"
 
 
+def count_states(schema: str):
+    return f"""
+    SELECT name, state, count(*) size
+    FROM {schema}.job
+    GROUP BY ROLLUP(name), ROLLUP(state)
+    """
+
+
+# Example usage:
+# schema = 'public'
+# print(count_states(schema))
+
+
 def fetch_next_job(schema: str):
     def query(
         name: str,
