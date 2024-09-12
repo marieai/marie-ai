@@ -125,19 +125,18 @@ class JobSupervisor:
             # Block in PENDING state until start signal received.
             await _start_signal_actor.wait.remote()
 
-        #  moved to request_handling
-        # # this is our gateway address
-        # driver_agent_http_address = "grpc://127.0.0.1"
-        # driver_node_id = "CURRENT_NODE_ID"
-        #
-        # await self._job_info_client.put_status(
-        #     self._job_id,
-        #     JobStatus.RUNNING,
-        #     jobinfo_replace_kwargs={
-        #         "driver_agent_http_address": driver_agent_http_address,
-        #         "driver_node_id": driver_node_id,
-        #     },
-        # )
+        # TODO : This should be moved to the request_handling#_record_started_job
+        driver_agent_http_address = "grpc://127.0.0.1"
+        driver_node_id = "CURRENT_NODE_ID"
+
+        await self._job_info_client.put_status(
+            self._job_id,
+            JobStatus.RUNNING,
+            jobinfo_replace_kwargs={
+                "driver_agent_http_address": driver_agent_http_address,
+                "driver_node_id": driver_node_id,
+            },
+        )
 
         # Run the job submission in the background
         if self.DEFAULT_JOB_TIMEOUT_S > 0:

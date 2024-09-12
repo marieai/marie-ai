@@ -10,7 +10,8 @@ def create_version_table(schema: str):
     CREATE TABLE {schema}.version (
       version int primary key,
       maintained_on timestamp with time zone,
-      cron_on timestamp with time zone
+      cron_on timestamp with time zone,
+      monitored_on timestamp with time zone
     )
     """
 

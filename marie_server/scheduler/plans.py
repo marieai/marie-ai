@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Dict
 
-from marie.utils.json import to_json
+from psycopg2.extras import Json
+
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
 
@@ -14,6 +15,28 @@ def to_timestamp_with_tz(dt: datetime):
     """
     timestamp = dt.replace(tzinfo=timezone.utc).timestamp()
     return datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
+
+
+def try_set_maintenance_time(schema: str, maintenance_state_interval_seconds: int):
+    return try_set_timestamp(
+        schema, "maintained_on", maintenance_state_interval_seconds
+    )
+
+
+def try_set_monitor_time(schema: str, monitor_state_interval_seconds: int):
+    return try_set_timestamp(schema, "monitored_on", monitor_state_interval_seconds)
+
+
+def try_set_cron_time(schema: str, cron_state_interval_seconds: int):
+    return try_set_timestamp(schema, "cron_on", cron_state_interval_seconds)
+
+
+def try_set_timestamp(schema: str, column: str, interval: int) -> str:
+    return f"""
+    UPDATE {schema}.version SET {column} = now()
+    WHERE EXTRACT(EPOCH FROM (now() - COALESCE({column}, now() - interval '1 week'))) > {interval}
+    RETURNING true
+    """
 
 
 def insert_job(schema: str, work_info: WorkInfo) -> str:
@@ -74,7 +97,7 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
                 END as start_after,
             
                 CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
-                '{work_info.data}'::jsonb as data,
+                {Json(work_info.data)}::jsonb as data,
                 {work_info.retry_delay}::int as retry_delay,
                 {work_info.retry_backoff}::bool as retry_backoff,
                 '{to_timestamp_with_tz(work_info.keep_until)}'::text as keep_until,
@@ -105,7 +128,21 @@ def version_table_exists(schema: str) -> str:
     return f"SELECT to_regclass('{schema}.version') as name"
 
 
+def insert_version(schema: str, version: str) -> str:
+    query = f"INSERT INTO {schema}.version(version) VALUES ('{version}')"
+    return query
+
+
 def count_states(schema: str):
+    """
+    Count the number of jobs in each state.
+
+    Example usage:
+    schema = 'public'
+    print(count_states(schema))
+    :param schema:
+    :return:
+    """
     return f"""
     SELECT name, state, count(*) size
     FROM {schema}.job
@@ -113,9 +150,38 @@ def count_states(schema: str):
     """
 
 
-# Example usage:
-# schema = 'public'
-# print(count_states(schema))
+def cancel_jobs(schema, name: str, ids: list):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+
+    return f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = now(),
+          state = '{WorkState.CANCELLED.value}'
+      WHERE name = {name}
+        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        AND state < '{WorkState.COMPLETED.value}'
+      RETURNING 1
+    )
+    SELECT COUNT(*) FROM results
+    """
+
+
+def resume_jobs(schema, name: str, ids: list):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+
+    return f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = NULL,
+          state = '{WorkState.CREATED.value}'
+      WHERE name = {name}
+        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        AND state = '{WorkState.CANCELLED.value}'
+      RETURNING 1
+    )
+    SELECT COUNT(*) FROM results
+    """
 
 
 def fetch_next_job(schema: str):
@@ -146,4 +212,76 @@ def fetch_next_job(schema: str):
         RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
         """
 
+    return query
+
+
+def complete_jobs(schema: str, name: str, ids: list, output: dict):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    query = f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = now(),
+          state = '{WorkState.COMPLETED.value}',
+          output = {Json(output)}::jsonb
+      WHERE name = '{name}'
+        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        AND state = '{WorkState.ACTIVE.value}'
+      RETURNING *
+    )
+    SELECT COUNT(*) FROM results
+    """
+    return query
+
+
+def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    where = f"name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[])) AND state < '{WorkState.COMPLETED.value}'"
+    return fail_jobs(schema, where, output)
+
+
+def fail_jobs_by_timeout(schema: str):
+    where = f"state = '{WorkState.ACTIVE.value}' AND (started_on + expire_in) < now()"
+    return fail_jobs(
+        schema, where, {"value": {"message": "job failed by timeout in active state"}}
+    )
+
+
+def fail_jobs(schema: str, where: str, output: dict):
+    query = f"""
+    WITH results AS (
+      UPDATE {schema}.job SET
+        state = CASE
+          WHEN retry_count < retry_limit THEN '{WorkState.RETRY.value}'::{schema}.job_state
+          ELSE '{WorkState.FAILED.value}'::{schema}.job_state
+          END,
+        completed_on = CASE
+          WHEN retry_count < retry_limit THEN NULL
+          ELSE now()
+          END,
+        start_after = CASE
+          WHEN retry_count = retry_limit THEN start_after
+          WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
+          ELSE now() + (
+                retry_delay * 2 ^ LEAST(16, retry_count + 1) / 2 +
+                retry_delay * 2 ^ LEAST(16, retry_count + 1) / 2 * random()
+            ) * interval '1'
+          END,
+        output = {output}
+      WHERE {where}
+      RETURNING *
+    ), dlq_jobs AS (
+      INSERT INTO {schema}.job (name, data, output, retry_limit, keep_until)
+      SELECT
+        dead_letter,
+        data,
+        output,
+        retry_limit,
+        keep_until + (keep_until - start_after)
+      FROM results
+      WHERE state = '{WorkState.FAILED.value}'
+        AND dead_letter IS NOT NULL
+        AND NOT name = dead_letter
+    )
+    SELECT COUNT(*) FROM results
+    """
     return query

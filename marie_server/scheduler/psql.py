@@ -16,11 +16,17 @@ from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import (
+    cancel_jobs,
+    complete_jobs,
     count_states,
     create_queue,
+    fail_jobs_by_id,
     fetch_next_job,
     insert_job,
+    insert_version,
+    resume_jobs,
     to_timestamp_with_tz,
+    try_set_monitor_time,
     version_table_exists,
 )
 from marie_server.scheduler.state import WorkState
@@ -74,8 +80,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
-        self._setup_storage(config, connection_only=True)
         self._setup_event_subscriptions()
+        self._setup_storage(config, connection_only=True)
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -89,29 +95,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.info(f"received message: {event_type} > {message}")
             job_id = message.get("job_id")
             status = JobStatus(event_type)
-            work_item = await self.get_job(job_id)
+            work_item: WorkInfo = await self.get_job(job_id)
             if work_item is None:
                 self.logger.error(f"WorkItem not found: {job_id}")
                 return
-
-            completed_on = None
-            started_on = None
-
+            work_state = convert_job_status_to_work_state(status)
             if status == JobStatus.PENDING:
                 self.logger.info(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
                 self.logger.info(f"Job succeeded : {job_id}")
-                completed_on = datetime.now()
+                await self.complete(job_id, work_item)
             elif status == JobStatus.FAILED:
                 self.logger.info(f"Job failed : {job_id}")
+                await self.fail(job_id, work_item)
             elif status == JobStatus.RUNNING:
                 self.logger.info(f"Job running : {job_id}")
-                started_on = datetime.now()
+                await self.put_status(job_id, work_state, datetime.now(), None)
             else:
                 self.logger.error(f"Unhandled status : {status}")
-
-            work_state = convert_job_status_to_work_state(status)
-            await self.put_status(job_id, work_state, started_on, completed_on)
 
             if status.is_terminal():
                 self.logger.info(f"Job {job_id} is in terminal state {status}")
@@ -122,6 +123,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param schema: The name of the schema where the tables will be created.
         :return: None
         """
+        version = 1
         commands = [
             create_schema(schema),
             create_version_table(schema),
@@ -144,6 +146,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_index_job_fetch(schema),
             create_queue_function(schema),
             delete_queue_function(schema),
+            insert_version(schema, version),
         ]
 
         query = ";\n".join(commands)
@@ -186,10 +189,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         with self:
             try:
                 cursor = self._execute_sql_gracefully(version_table_exists(schema))
-                return cursor is not None and cursor.rowcount > 0
+                if cursor and cursor.rowcount > 0:
+                    result = cursor.fetchone()
+                    if result and result[0] is not None:
+                        return True
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error clearing tables: {error}")
-                self.connection.rollback()
         return False
 
     async def create_queue(self, queue_name: str) -> None:
@@ -223,7 +228,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = True
         self.task = asyncio.create_task(self._poll())
-        self.monitoring_task = asyncio.create_task(self._monitor())
+        # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
         self.logger.info("Starting database scheduler")
@@ -464,6 +469,36 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         raise NotImplementedError
 
+    async def cancel_job(self, job_id: str) -> None:
+        """
+        Cancel a job by its ID.
+        :param job_id:
+        """
+        name = "extract"  # TODO this is a placeholder
+        with self:
+            try:
+                self.logger.info(f"Cancelling job: {job_id}")
+                self._execute_sql_gracefully(
+                    cancel_jobs(DEFAULT_SCHEMA, name, [job_id])
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error handling job event: {error}")
+
+    async def resume_job(self, job_id: str) -> None:
+        """
+        Resume a job by its ID.
+        :param job_id:
+        """
+        name = "extract"  # TODO this is a placeholder
+        with self:
+            try:
+                self.logger.info(f"Resuming job: {job_id}")
+                self._execute_sql_gracefully(
+                    resume_jobs(DEFAULT_SCHEMA, name, [job_id])
+                )
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error handling job event: {error}")
+
     async def put_status(
         self,
         job_id: str,
@@ -540,8 +575,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     async def count_states(self):
         state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
-
         counts = []
+
         with self:
             try:
                 cursor = self._execute_sql_gracefully(count_states(DEFAULT_SCHEMA))
@@ -556,8 +591,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if name not in states["queues"]:
                     states["queues"][name] = state_count_default.copy()
             queue = states["queues"].get(name, states)
-            state = state or "all"
-            queue[state] = int(size)
+            queue[state or "all"] = int(size)
 
         return states
 
@@ -587,6 +621,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.debug(f"Polling jobs status : {wait_time}")
             await asyncio.sleep(wait_time)
             try:
+                monitored_on = None
+                try:
+                    cursor = self._execute_sql_gracefully(
+                        try_set_monitor_time(
+                            DEFAULT_SCHEMA,
+                            monitor_state_interval_seconds=MONITORING_POLL_PERIOD,
+                        )
+                    )
+                    monitored_on = cursor.fetchone()
+                except (Exception, psycopg2.Error) as error:
+                    self.logger.error(f"Error handling job event: {error}")
+
+                if monitored_on is None:
+                    self.logger.error("Error setting monitor time")
+                    continue
+
                 states = await self.count_states()
                 logger.info(f"job state: {states}")
                 # TODO: emit event
@@ -594,3 +644,43 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 logger.error(f"Error monitoring jobs: {e}")
                 traceback.print_exc()
                 # TODO: emit error event
+
+    async def complete(self, job_id: str, work_item: WorkInfo):
+        self.logger.info(f"Job completed : {job_id}, {work_item}")
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(
+                    complete_jobs(
+                        DEFAULT_SCHEMA,
+                        work_item.name,
+                        [job_id],
+                        {"on_complete": "done"},
+                    )
+                )
+                counts = cursor.fetchone()[0]
+                if counts > 0:
+                    self.logger.info(f"Completed job: {job_id} : {counts}")
+                else:
+                    self.logger.error(f"Error completing job: {job_id}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing job: {error}")
+
+    async def fail(self, job_id: str, work_item: WorkInfo):
+        self.logger.info(f"Job failed : {job_id}, {work_item}")
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(
+                    fail_jobs_by_id(
+                        DEFAULT_SCHEMA,
+                        work_item.name,
+                        [job_id],
+                        {"on_complete": "failed"},
+                    )
+                )
+                counts = cursor.fetchone()[0]
+                if counts > 0:
+                    self.logger.info(f"Completed failed job: {job_id}")
+                else:
+                    self.logger.error(f"Error completing failed job: {job_id}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error completing job: {error}")

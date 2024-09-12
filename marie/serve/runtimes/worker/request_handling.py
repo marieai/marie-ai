@@ -1359,8 +1359,9 @@ class WorkerRequestHandler:
         self._job_info_client = JobInfoStorageClient(storage)
 
     async def _record_failed_job(self, job_id: str, e: Exception):
+        return
         if job_id is not None and self._job_info_client is not None:
-            print(f"Monitoring JOB: {job_id} - {e}")
+            self.logger.info(f"Monitoring JOB: {job_id} - {e}")
             try:
                 await self._job_info_client.put_status(
                     job_id,
@@ -1371,8 +1372,9 @@ class WorkerRequestHandler:
                 self.logger.error(f"Error in recording job status: {e}")
 
     async def _record_started_job(self, job_id: str, exec_endpoint, requests, params):
+        return
         if job_id is not None and self._job_info_client is not None:
-            print(f"Monitoring JOB: {exec_endpoint} - {job_id}")
+            self.logger.info(f"Monitoring JOB: {exec_endpoint} - {job_id}")
             # this is our gateway address
             driver_agent_http_address = "grpc://127.0.0.1"
             driver_node_id = "CURRENT_NODE_ID"
@@ -1389,8 +1391,9 @@ class WorkerRequestHandler:
                 self.logger.error(f"Error in recording job status: {e}")
 
     async def _record_successful_job(self, job_id):
+        return
         if job_id is not None and self._job_info_client is not None:
-            print(f"Monitoring JOB: {job_id}")
+            self.logger.info(f"Monitoring JOB: {job_id}")
             try:
                 await self._job_info_client.put_status(job_id, JobStatus.SUCCEEDED)
             except Exception as e:

@@ -40,7 +40,6 @@ class GatewayJobDistributor(JobDistributor):
             self.logger.warning(f"Gateway streamer is not initialized")
             raise RuntimeError("Gateway streamer is not initialized")
 
-        print("job_info.metadata", job_info.metadata)
         parameters = {"job_id": submission_id}  # "#job_info.job_id,
         if job_info.metadata:
             parameters.update(job_info.metadata)
