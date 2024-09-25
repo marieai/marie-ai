@@ -410,7 +410,7 @@ def setup_template_matching(
 
     if key not in pipeline_config:
         logger.warning(f"Missing {key} in pipeline config, using default config")
-        return NoopDocumentBoundaryRegistration()
+        return None, None
 
     config = pipeline_config[key] if key in pipeline_config else {}
 

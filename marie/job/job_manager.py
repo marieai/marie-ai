@@ -133,11 +133,11 @@ class JobManager:
                 if job_status.is_terminal():
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
-                        self.logger.info(f"Job {job_id} succeeded.")
+                        self.logger.info(f"Job succeeded : {job_id}")
                         break
                     elif job_status == JobStatus.FAILED:
                         is_alive = False
-                        self.logger.error(f"Job {job_id} failed.")
+                        self.logger.error(f"Job failed : {job_id}")
                         break
 
                 if job_status == JobStatus.PENDING:

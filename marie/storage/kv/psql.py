@@ -111,7 +111,18 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         namespace: Optional[bytes],
         timeout: Optional[float] = None,
     ) -> int:
-        raise NotImplementedError
+        self.logger.debug(f"internal_kv_del: {key!r}, {namespace!r}, {del_by_prefix}")
+        if namespace is None:
+            namespace = b"DEFAULT"
+
+        if del_by_prefix:
+            raise NotImplementedError
+        else:
+            query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
+            cursor = self._execute_sql_gracefully(query, data=())
+            if cursor is not None:
+                return 1
+        return 0
 
     async def internal_kv_exists(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None

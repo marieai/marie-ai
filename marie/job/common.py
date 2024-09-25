@@ -169,7 +169,7 @@ class JobInfoStorageClient:
 
     # Please keep this format in sync with JobDataKey()
     # in src/ray/gcs/gcs_server/gcs_job_manager.h.
-    JOB_DATA_KEY_PREFIX = f"{INTERNAL_NAMESPACE_PREFIX}job_info_"
+    JOB_DATA_KEY_PREFIX = f"{INTERNAL_NAMESPACE_PREFIX}/job_info_"
     JOB_DATA_KEY = f"{JOB_DATA_KEY_PREFIX}{{job_id}}"
 
     def __init__(self, storage: StorageArea):

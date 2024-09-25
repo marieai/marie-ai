@@ -58,16 +58,16 @@ class TestExecutor(MarieExecutor):
         print(f"FirstExec func called : {len(docs)}, {parameters}")
 
         # randomly throw an error to test the error handling
-        if random.random() > 0.5:
+        if random.random() > 0:
             raise Exception("random error")
 
         for doc in docs:
             doc.text += " First Exec"
-        print("Sleeping for 5 seconds : ", time.time())
-        time.sleep(5)
 
-        print("Sleeping for 5 seconds - done: ", time.time())
-
+        sec = 1
+        print(f"Sleeping for {sec} seconds : ", time.time())
+        time.sleep(1)
+        print(f"Sleeping for {sec} seconds - done : ", time.time())
         return {
             "parameters": parameters,
             "data": "Data reply",

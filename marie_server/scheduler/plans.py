@@ -266,7 +266,7 @@ def fail_jobs(schema: str, where: str, output: dict):
                 retry_delay * 2 ^ LEAST(16, retry_count + 1) / 2 * random()
             ) * interval '1'
           END,
-        output = {output}
+        output = {Json(output)}::jsonb
       WHERE {where}
       RETURNING *
     ), dlq_jobs AS (

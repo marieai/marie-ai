@@ -213,7 +213,7 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
             if candidates:
                 sorted_candidates = sorted(
                     candidates,
-                    key=lambda x: (x['ngram']),
+                    key=lambda x: (x["ngram"]),
                     reverse=False,
                 )
                 for sc in sorted_candidates:
@@ -308,5 +308,4 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         total_sim = (sim_val + cos_sim_val + embedding_sim) / 3
         sout = f"similarity : {sim_val:<10} - {cos_sim_val:<10} > {embedding_sim:<10} ---- {total_sim:<10} --- {ngram_words}"
         self.logger.info(sout)
-        print(sout)
         return total_sim

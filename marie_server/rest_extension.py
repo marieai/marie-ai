@@ -12,13 +12,13 @@ from marie import Client, Flow
 from marie._core.utils import run_background_task
 from marie.api import extract_payload_to_uri, value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc
+from marie.job.job_manager import generate_job_id
 from marie.logging.mdc import MDC
 from marie.logging.predefined import default_logger as logger
 from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
 from marie.messaging.publisher import mark_as_scheduled
 from marie.types.request.data import DataRequest
 from marie.utils.types import strtobool
-from marie_server.job.job_manager import generate_job_id
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI, Request
@@ -308,7 +308,7 @@ async def process_document_request(
             parameters=parameters,
             request_size=-1,
             return_responses=True,
-            prefetch=4
+            prefetch=4,
             # return_type=OutputDoc,
         ):
             payload = parse_response_to_payload(resp, expect_return_value=False)

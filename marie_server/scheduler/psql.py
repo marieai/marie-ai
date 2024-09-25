@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import traceback
 from contextlib import AsyncExitStack
 from datetime import datetime
@@ -75,7 +76,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         lock_free = True
         self._lock = (
-            asyncio.Lock() if lock_free else asyncio.Lock()
+            contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
         self.job_manager = job_manager
@@ -263,9 +264,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     for record in records:
                         has_records = True
                         work_item = self.record_to_work_info(record)
-                        has_available_slots, job_id = await self.enqueue(work_item)
-                        self.logger.info(f"Work item scheduled with ID: {job_id}")
-                        if not has_available_slots:
+                        job_id = await self.enqueue(work_item)
+                        if job_id is None:
+                            self.logger.error(
+                                f"Error scheduling work item: {work_item.id}"
+                            )
+                        else:
+                            self.logger.info(f"Work item scheduled with ID: {job_id}")
+                        if not self.job_manager.has_available_slot():
                             self.logger.info(
                                 f"No more available slots for work, waiting for slots :{wait_time}"
                             )
@@ -286,7 +292,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def debug_info(self) -> str:
         print("Debugging info")
 
-    async def enqueue(self, work_info: WorkInfo) -> tuple[bool, str]:
+    async def enqueue(self, work_info: WorkInfo) -> str:
         """
         Enqueues a work item for processing on the next available executor.
 
@@ -297,13 +303,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.logger.info(
                 f"No available slots for work, scheduling : {work_info.id}"
             )
-            return False, None
+            return None
 
         submission_id = work_info.id
-        returned_id = await self.job_manager.submit_job(
-            entrypoint="echo hello", submission_id=submission_id
-        )
-        return True, returned_id
+        # FIXME : This is a hack to allow the job to be re-submitted after a failure
+        await self.job_manager.job_info_client().delete_info(submission_id)
+
+        try:
+            returned_id = await self.job_manager.submit_job(
+                entrypoint="echo hello", submission_id=submission_id
+            )
+        except ValueError as e:
+            self.logger.error(f"Error submitting job: {e}")
+            return None
+        return returned_id
 
     async def get_work_items(
         self,
