@@ -129,16 +129,27 @@ class JobSupervisor:
         driver_agent_http_address = "grpc://127.0.0.1"
         driver_node_id = "CURRENT_NODE_ID"
 
-        await self._job_info_client.put_status(
-            self._job_id,
-            JobStatus.RUNNING,
-            jobinfo_replace_kwargs={
-                "driver_agent_http_address": driver_agent_http_address,
-                "driver_node_id": driver_node_id,
-            },
-        )
+        # check if we a calling floating executor if so then we need to update the job status to RUNNING
+        # as floating executors are not part of the main deployment and they don't update the job status.
+        # TODO : need to get this from the request_info
 
-        # Run the job submission in the background
+        floating_executor = False
+
+        if floating_executor:
+            self.logger.info(
+                f"Job {self._job_id} is running on a floating executor. "
+                f"Updating the job status to RUNNING."
+            )
+            await self._job_info_client.put_status(
+                self._job_id,
+                JobStatus.RUNNING,
+                jobinfo_replace_kwargs={
+                    "driver_agent_http_address": driver_agent_http_address,
+                    "driver_node_id": driver_node_id,
+                },
+            )
+
+        # invoke the job submission in the background
         if self.DEFAULT_JOB_TIMEOUT_S > 0:
             try:
                 await asyncio.wait_for(
@@ -186,13 +197,24 @@ class JobSupervisor:
             print("Response docs: ", response.data.docs)
             print("Response status: ", response.status)
 
+            # This monitoring strategy allows us to have Floating Executors that can be used to run jobs outside of the main
+            # deployment. This is useful for running jobs that are not part of the main deployment, but are still part of the
+            # same deployment workflow.
+            # Example would be calling a custom API that we don't control.
+
+            # If the job is already in a terminal state, then we don't need to update it. This can happen if the
+            # job was cancelled while the job was being submitted.
+            # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
+
+            job_status = await self._job_info_client.get_status(self._job_id)
+            print(
+                "Job status from  _submit_job_in_background: ",
+                job_status,
+                job_status.is_terminal(),
+            )
+
             if response.status.code == jina_pb2.StatusProto.SUCCESS:
-                job_status = await self._job_info_client.get_status(self._job_id)
-                # "STOPPED", "SUCCEEDED", "FAILED"
                 if job_status.is_terminal():
-                    # If the job is already in a terminal state, then we don't need to update it. This can happen if the
-                    # job was cancelled while the job was being submitted.
-                    # or while the job was marked from the executor side.
                     self.logger.warning(
                         f"Job {self._job_id} is already in terminal state {job_status}."
                     )
@@ -213,11 +235,26 @@ class JobSupervisor:
             else:
                 # FIXME : Need to store the exception in the job info
                 e: jina_pb2.StatusProto.ExceptionProto = response.status.exception
-                name = str(e.name)
-                # stack = to_json(e.stacks)
-                await self._job_info_client.put_status(
-                    self._job_id, JobStatus.FAILED, message=f"{name}"
-                )
+                if job_status.is_terminal():
+                    self.logger.warning(
+                        f"Job {self._job_id} is already in terminal state {job_status}."
+                    )
+                    # triggers the event to update the WorkStatus
+                    await self._event_publisher.publish(
+                        job_status,
+                        {
+                            "job_id": self._job_id,
+                            "status": job_status,
+                            "message": f"Job {self._job_id} is already in terminal state {job_status}.",
+                            "jobinfo_replace_kwargs": False,
+                        },
+                    )
+                else:
+                    name = str(e.name)
+                    # stack = to_json(e.stacks)
+                    await self._job_info_client.put_status(
+                        self._job_id, JobStatus.FAILED, message=f"{name}"
+                    )
         except Exception as e:
             await self._job_info_client.put_status(
                 self._job_id, JobStatus.FAILED, message=str(e)

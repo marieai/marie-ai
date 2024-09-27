@@ -75,7 +75,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "username": "postgres",
             "password": "123456",
             "database": "postgres",
-            "default_table": "kv_store_a",
+            "default_table": "kv_store_worker",
             "max_pool_size": 5,
             "max_connections": 5,
         }
@@ -89,7 +89,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "password": "123456",
         }
 
-        self.syncer = SyncManager(scheduler_config)
         self.distributor = GatewayJobDistributor(
             gateway_streamer=None, logger=self.logger
         )

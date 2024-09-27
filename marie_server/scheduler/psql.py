@@ -1,9 +1,8 @@
 import asyncio
 import contextlib
 import traceback
-from contextlib import AsyncExitStack
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 
@@ -36,6 +35,7 @@ INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
+SYNC_POLL_PERIOD = 5.0  # 5s
 
 DEFAULT_SCHEMA = "marie_scheduler"
 DEFAULT_JOB_TABLE = "job"
@@ -97,6 +97,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             job_id = message.get("job_id")
             status = JobStatus(event_type)
             work_item: WorkInfo = await self.get_job(job_id)
+
             if work_item is None:
                 self.logger.error(f"WorkItem not found: {job_id}")
                 return
@@ -229,7 +230,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.create_queue(f"${queue}_dlq")
 
         self.running = True
-        self.task = asyncio.create_task(self._poll())
+        self.sync_task = asyncio.create_task(self._sync())
+        # self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
@@ -392,7 +394,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             finally:
                 self.connection.commit()
 
-    async def list_jobs(self, state: Optional[str] = None) -> Dict[str, WorkInfo]:
+    async def list_jobs(
+        self, state: Optional[str] = None, batch_size: int = 0
+    ) -> Dict[str, WorkInfo]:
         work_items = {}
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
@@ -409,23 +413,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor.itersize = 10000
                 cursor.execute(
                     f"""
-                    SELECT
-                          id,
-                          name,
-                          priority,
-                          state,
-                          retry_limit,
-                          start_after,
-                          expire_in,
-                          data,
-                          retry_delay,
-                          retry_backoff,
-                          keep_until,
-                          on_complete
+                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until
                     FROM {schema}.{table} 
                     WHERE state IN ('{states}')
+                    {f"LIMIT {batch_size}" if batch_size > 0 else ""}
                     """
-                    # + (f" limit = {limit}" if limit > 0 else "")
                 )
                 for record in cursor:
                     work_items[record[0]] = self.record_to_work_info(record)
@@ -698,3 +690,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     self.logger.error(f"Error completing failed job: {job_id}")
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
+
+    async def _sync(self):
+        wait_time = SYNC_POLL_PERIOD
+        while self.running:
+            self.logger.info(f"Syncing jobs status : {wait_time}")
+            await asyncio.sleep(wait_time)
+
+            try:
+                active_jobs = await self.list_jobs(state=WorkState.ACTIVE.value)
+                if active_jobs:
+                    self.logger.info(f"Active jobs: {active_jobs}")
+                    for job_id, work_item in active_jobs.items():
+                        self.logger.info(f"Syncing job: {job_id}, {work_item}")
+
+            except Exception as e:
+                logger.error(f"Error syncing jobs: {e}")
+                traceback.print_exc()

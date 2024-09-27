@@ -114,7 +114,6 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
 
 
 def create_queue(schema: str, queue_name: str, options: Dict[str, str]) -> str:
-    # return f"SELECT {schema}.create_queue('{queue_name}', {to_json(options)})"
     return f"""
             SELECT {schema}.create_queue('{queue_name}', '{{"retry_limit":2}}'::json)
            """
@@ -282,3 +281,15 @@ def fail_jobs(schema: str, where: str, output: dict):
     SELECT COUNT(*) FROM results
     """
     return query
+
+
+def get_active_jobs(schema: str) -> str:
+    """
+    Get all items in the active state.
+    :param schema: The schema name.
+    """
+    return f"""
+    SELECT *
+    FROM {schema}.job
+    WHERE state = '{WorkState.ACTIVE.value}'
+    """

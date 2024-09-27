@@ -3,8 +3,10 @@ import asyncio
 import functools
 import json
 import os
+import sys
 import tempfile
 import threading
+import traceback
 import uuid
 import warnings
 from typing import (
@@ -32,6 +34,8 @@ from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.utils.network import get_ip_address
+from marie.utils.types import strtobool
 
 if docarray_v2:
     from docarray import DocList
@@ -84,6 +88,7 @@ class WorkerRequestHandler:
         self.args = args
         self.logger = logger
         self._is_closed = False
+
         if self.metrics_registry:
             with ImportExtensions(
                 required=True,
@@ -682,12 +687,11 @@ class WorkerRequestHandler:
 
         requests, params = self._setup_requests(requests, exec_endpoint)
 
-        print("requests", requests)
-        print("params", params)
+        self.logger.info(f"requests TO MONITOR : {requests}")
         job_id = None
         if params is not None:
             job_id = params.get("job_id", None)
-        await self._record_started_job(job_id, exec_endpoint, requests, params)
+        await self._record_started_job(job_id, requests, params)
 
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
         if exec_endpoint in self._batchqueue_config:
@@ -730,9 +734,19 @@ class WorkerRequestHandler:
                     tracing_context=tracing_context,
                 )
                 _ = self._set_result(requests, return_data, docs)
-            except Exception as e:
-                await self._record_failed_job(job_id, e)
+                await self._record_successful_job(job_id, requests)
+            except asyncio.CancelledError:
+                print("Task was cancelled due to client disconnect")
+                raise
+            except BaseException as e:
+                self.logger.error(f"Error during __acall__: {e}")
+                await self._record_failed_job(job_id, requests, e)
                 raise e
+            finally:
+                pass
+                # we do this here to make sure that we record the successful job even if the response fails back to the gateway
+                # if not failed:
+                #     await self._record_successful_job(job_id, requests)
 
         for req in requests:
             req.add_executor(self.deployment_name)
@@ -743,8 +757,6 @@ class WorkerRequestHandler:
         except AttributeError:
             pass
         self._record_response_size_monitoring(requests)
-
-        await self._record_successful_job(job_id)
         return requests[0]
 
     @staticmethod
@@ -1350,7 +1362,7 @@ class WorkerRequestHandler:
             "username": "postgres",
             "password": "123456",
             "database": "postgres",
-            "default_table": "kv_store_a",
+            "default_table": "kv_store_worker",
             "max_pool_size": 5,
             "max_connections": 5,
         }
@@ -1358,43 +1370,97 @@ class WorkerRequestHandler:
         storage = PostgreSQLKV(config=kv_storage_config, reset=False)
         self._job_info_client = JobInfoStorageClient(storage)
 
-    async def _record_failed_job(self, job_id: str, e: Exception):
-        return
+    async def _record_failed_job(
+        self,
+        job_id: str,
+        requests: List["DataRequest"],
+        e: Exception,
+    ):
+        print(f"Record job failed: {job_id} - {e}")
         if job_id is not None and self._job_info_client is not None:
-            self.logger.info(f"Monitoring JOB: {job_id} - {e}")
             try:
+                # Extract the traceback information from the exception
+                tb = e.__traceback__
+                while tb.tb_next:
+                    tb = tb.tb_next
+
+                filename = tb.tb_frame.f_code.co_filename
+                name = tb.tb_frame.f_code.co_name
+                line_no = tb.tb_lineno
+                # Clear the frames after extracting the information to avoid memory leaks
+                traceback.clear_frames(tb)
+
+                detail = "Internal Server Error"
+                silence_exceptions = strtobool(
+                    os.environ.get("MARIE_SILENCE_EXCEPTIONS", "false")
+                )
+
+                if not silence_exceptions:
+                    detail = str(e)
+
+                exc = {
+                    "type": type(e).__name__,
+                    "message": detail,
+                    "filename": filename.split("/")[-1],
+                    "name": name,
+                    "line_no": line_no,
+                }
+
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.FAILED,
-                    jobinfo_replace_kwargs={"error_message": str(e)},
-                )
-            except Exception as e:
-                self.logger.error(f"Error in recording job status: {e}")
-
-    async def _record_started_job(self, job_id: str, exec_endpoint, requests, params):
-        return
-        if job_id is not None and self._job_info_client is not None:
-            self.logger.info(f"Monitoring JOB: {exec_endpoint} - {job_id}")
-            # this is our gateway address
-            driver_agent_http_address = "grpc://127.0.0.1"
-            driver_node_id = "CURRENT_NODE_ID"
-            try:
-                await self._job_info_client.put_status(
-                    job_id,
-                    JobStatus.RUNNING,
                     jobinfo_replace_kwargs={
-                        "driver_agent_http_address": driver_agent_http_address,
-                        "driver_node_id": driver_node_id,
+                        "metadata": {
+                            "attributes": self._request_attributes(requests),
+                            "error": exc,
+                        }
                     },
                 )
             except Exception as e:
                 self.logger.error(f"Error in recording job status: {e}")
 
-    async def _record_successful_job(self, job_id):
-        return
+    async def _record_started_job(
+        self, job_id: str, requests: List["DataRequest"], params
+    ):
+        print(f"Record job started: {job_id}")
         if job_id is not None and self._job_info_client is not None:
-            self.logger.info(f"Monitoring JOB: {job_id}")
             try:
-                await self._job_info_client.put_status(job_id, JobStatus.SUCCEEDED)
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.RUNNING,
+                    jobinfo_replace_kwargs={
+                        "metadata": {
+                            "params": params,
+                            "attributes": self._request_attributes(requests),
+                        }
+                    },
+                )
             except Exception as e:
-                self.logger.error(f"Error in recording job status: {e}")
+                self.logger.error(f"Error recording job status: {e}")
+
+    async def _record_successful_job(self, job_id: str, requests: List["DataRequest"]):
+        print(f"Record job success: {job_id}")
+        if job_id is not None and self._job_info_client is not None:
+            try:
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.SUCCEEDED,
+                    jobinfo_replace_kwargs={
+                        "metadata": {"attributes": self._request_attributes(requests)}
+                    },
+                )
+            except Exception as e:
+                self.logger.error(f"Error recording job status: {e}")
+
+    def _request_attributes(self, requests: List["DataRequest"]) -> Dict:
+        exec_endpoint: str = requests[0].header.exec_endpoint
+        if exec_endpoint not in self._executor.requests:
+            if __default_endpoint__ in self._executor.requests:
+                exec_endpoint = __default_endpoint__
+
+        return {
+            "executor_endpoint": exec_endpoint,
+            "executor": self._executor.__class__.__name__,
+            "runtime_name": self.args.name,
+            "host": get_ip_address(flush_cache=False),
+        }

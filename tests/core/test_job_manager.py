@@ -12,6 +12,9 @@ from docarray.documents import TextDoc
 
 from marie import Deployment, Document, DocumentArray, Executor, requests
 from marie.enums import PollingType
+from marie.job.common import JobInfo, JobStatus
+from marie.job.job_distributor import JobDistributor
+from marie.job.job_manager import JobManager
 from marie.parsers import set_deployment_parser
 from marie.proto import jina_pb2
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
@@ -19,12 +22,9 @@ from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+from marie.storage.kv.in_memory import InMemoryKV
+from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request.data import DataRequest
-from marie_server.job.common import JobInfo, JobStatus
-from marie_server.job.job_distributor import JobDistributor
-from marie_server.job.job_manager import JobManager
-from marie_server.storage.in_memory import InMemoryKV
-from marie_server.storage.psql import PostgreSQLKV
 from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 from tests.helper import _generate_pod_args
 
@@ -243,7 +243,7 @@ def _setup(pod0_port, pod1_port):
 @pytest.mark.parametrize("results_in_order", [False, True])
 @pytest.mark.asyncio
 async def test_gateway_job_manager(
-        port_generator, parameters, target_executor, expected_text, results_in_order
+    port_generator, parameters, target_executor, expected_text, results_in_order
 ):
     pod0_port = port_generator()
     pod1_port = port_generator()
@@ -264,11 +264,11 @@ async def test_gateway_job_manager(
         resp = DocList([])
         num_resp = 0
         async for r in gateway_streamer.stream_docs(
-                docs=input_da,
-                request_size=10,
-                parameters=parameters,
-                target_executor=target_executor,
-                results_in_order=results_in_order,
+            docs=input_da,
+            request_size=10,
+            parameters=parameters,
+            target_executor=target_executor,
+            results_in_order=results_in_order,
         ):
             num_resp += 1
             resp.extend(r)
@@ -294,13 +294,13 @@ async def test_gateway_job_manager(
 
 
 def _create_regular_deployment(
-        port,
-        name="",
-        executor=None,
-        noblock_on_start=True,
-        polling=PollingType.ANY,
-        shards=None,
-        replicas=None,
+    port,
+    name="",
+    executor=None,
+    noblock_on_start=True,
+    polling=PollingType.ANY,
+    shards=None,
+    replicas=None,
 ):
     # return Deployment(uses=executor, include_gateway=False, noblock_on_start=noblock_on_start, replicas=replicas,
     #                   shards=shards)

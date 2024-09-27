@@ -834,17 +834,26 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         async def exec_func(
             summary, histogram, histogram_metric_labels, tracing_context
         ):
-            with MetricsTimer(summary, histogram, histogram_metric_labels):
-                if iscoroutinefunction(func):
-                    return await func(self, tracing_context=tracing_context, **kwargs)
-                else:
-                    async with self._lock:
-                        return await get_or_reuse_loop().run_in_executor(
-                            None,
-                            functools.partial(
-                                func, self, tracing_context=tracing_context, **kwargs
-                            ),
+            try:
+                with MetricsTimer(summary, histogram, histogram_metric_labels):
+                    if iscoroutinefunction(func):
+                        return await func(
+                            self, tracing_context=tracing_context, **kwargs
                         )
+                    else:
+                        async with self._lock:
+                            return await get_or_reuse_loop().run_in_executor(
+                                None,
+                                functools.partial(
+                                    func,
+                                    self,
+                                    tracing_context=tracing_context,
+                                    **kwargs,
+                                ),
+                            )
+            except Exception as e:
+                self.logger.error(f"Error while executing {req_endpoint} endpoint: {e}")
+                raise e
 
         runtime_name = (
             self.runtime_args.name if hasattr(self.runtime_args, "name") else None
