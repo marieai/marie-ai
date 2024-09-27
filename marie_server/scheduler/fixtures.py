@@ -267,13 +267,15 @@ def add_id_index_to_archive(schema):
 
 def create_index_singleton_on(schema):
     return f"""
-    CREATE UNIQUE INDEX job_singleton_on ON {schema}.job (name, singleton_on) WHERE state < '{WorkState.EXPIRED.value}' AND singleton_key IS NULL
+    CREATE UNIQUE INDEX job_singleton_on ON {schema}.job (name, singleton_on) 
+    WHERE state < '{WorkState.EXPIRED.value}' AND singleton_key IS NULL
     """
 
 
 def create_index_singleton_key_on(schema):
     return f"""
-    CREATE UNIQUE INDEX job_singleton_key_on ON {schema}.job (name, singleton_on, singleton_key) WHERE state < '{WorkState.EXPIRED.value}'
+    CREATE UNIQUE INDEX job_singleton_key_on ON {schema}.job (name, singleton_on, singleton_key) 
+    WHERE state < '{WorkState.EXPIRED.value}'
     """
 
 
@@ -285,5 +287,18 @@ def create_index_job_name(schema):
 
 def create_index_job_fetch(schema):
     return f"""
-    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after) WHERE state < '{WorkState.ACTIVE.value}'
+    CREATE INDEX job_fetch ON {schema}.job (name text_pattern_ops, start_after) 
+    WHERE state < '{WorkState.ACTIVE.value}'
+    """
+
+
+def create_exponential_backoff_function(schema):
+    return f"""
+    CREATE OR REPLACE FUNCTION exponential_backoff(retry_delay INT, retry_count INT)
+    RETURNS TIMESTAMP WITH TIME ZONE AS $$
+    BEGIN
+        RETURN now() + (retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) +
+                        retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) * random()) * INTERVAL '1 second';
+    END;
+    $$ LANGUAGE plpgsql;
     """

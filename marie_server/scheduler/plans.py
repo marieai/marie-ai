@@ -261,10 +261,7 @@ def fail_jobs(schema: str, where: str, output: dict):
         start_after = CASE
           WHEN retry_count = retry_limit THEN start_after
           WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
-          ELSE now() + (
-                retry_delay * 2 ^ LEAST(16, retry_count + 1) / 2 +
-                retry_delay * 2 ^ LEAST(16, retry_count + 1) / 2 * random()
-            ) * interval '1'
+          ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
         output = {Json(output)}::jsonb
       WHERE {where}

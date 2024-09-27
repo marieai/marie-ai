@@ -148,6 +148,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_queue_function(schema),
             delete_queue_function(schema),
             insert_version(schema, version),
+            create_exponential_backoff_function(schema),
         ]
 
         query = ";\n".join(commands)
