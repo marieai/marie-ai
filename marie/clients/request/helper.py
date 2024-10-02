@@ -1,4 +1,5 @@
 """Module for helper functions for clients."""
+
 from typing import Optional, Tuple
 
 from marie._docarray import Document, DocumentArray, docarray_v2
