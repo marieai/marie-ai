@@ -7,23 +7,18 @@ from typing import Any, Dict, Iterator, Optional
 from uuid_extensions import uuid7str
 
 from marie._core.utils import run_background_task
-from marie.logging.logger import MarieLogger
-from marie_server.job.common import (
-    ActorHandle,
-    JobInfo,
-    JobInfoStorageClient,
-    JobStatus,
-)
-from marie_server.job.event_publisher import EventPublisher
-from marie_server.job.job_distributor import JobDistributor
-from marie_server.job.job_log_storage_client import JobLogStorageClient
-from marie_server.job.job_storage_client_proxy import JobInfoStorageClientProxy
-from marie_server.job.job_supervisor import JobSupervisor
-from marie_server.job.scheduling_strategies import (
+from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
+from marie.job.event_publisher import EventPublisher
+from marie.job.job_distributor import JobDistributor
+from marie.job.job_log_storage_client import JobLogStorageClient
+from marie.job.job_storage_client_proxy import JobInfoStorageClientProxy
+from marie.job.job_supervisor import JobSupervisor
+from marie.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
     SchedulingStrategyT,
 )
-from marie_server.storage.storage_client import StorageArea
+from marie.logging.logger import MarieLogger
+from marie.storage.kv.storage_client import StorageArea
 
 # The max time to wait for the JobSupervisor to start before failing the job.
 DEFAULT_JOB_START_TIMEOUT_SECONDS = 60 * 15
@@ -138,11 +133,11 @@ class JobManager:
                 if job_status.is_terminal():
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
-                        self.logger.info(f"Job {job_id} succeeded.")
+                        self.logger.info(f"Job succeeded : {job_id}")
                         break
                     elif job_status == JobStatus.FAILED:
                         is_alive = False
-                        self.logger.error(f"Job {job_id} failed.")
+                        self.logger.error(f"Job failed : {job_id}")
                         break
 
                 if job_status == JobStatus.PENDING:
@@ -357,6 +352,7 @@ class JobManager:
                 job_id=submission_id,
                 job_info_client=self._job_info_client,
                 job_distributor=self._job_distributor,
+                event_publisher=self.event_publisher,
             )
             await supervisor.run(_start_signal_actor=_start_signal_actor)
 

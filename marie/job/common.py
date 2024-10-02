@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple, Union
 
 from marie.constants import KV_NAMESPACE_JOB
-from marie_server.storage.storage_client import StorageArea
+from marie.storage.kv.storage_client import StorageArea
 
 JOB_ID_METADATA_KEY = "job_submission_id"
 JOB_NAME_METADATA_KEY = "job_name"
@@ -169,7 +169,7 @@ class JobInfoStorageClient:
 
     # Please keep this format in sync with JobDataKey()
     # in src/ray/gcs/gcs_server/gcs_job_manager.h.
-    JOB_DATA_KEY_PREFIX = f"{INTERNAL_NAMESPACE_PREFIX}job_info_"
+    JOB_DATA_KEY_PREFIX = f"{INTERNAL_NAMESPACE_PREFIX}/job_info_"
     JOB_DATA_KEY = f"{JOB_DATA_KEY_PREFIX}{{job_id}}"
 
     def __init__(self, storage: StorageArea):

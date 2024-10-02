@@ -3,12 +3,15 @@ import asyncio
 import functools
 import json
 import os
+import sys
 import tempfile
 import threading
+import traceback
 import uuid
 import warnings
 from typing import (
     TYPE_CHECKING,
+    Any,
     AsyncIterator,
     Dict,
     Generator,
@@ -25,11 +28,15 @@ from marie.constants import __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
+from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.executors import BaseExecutor
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
+from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.utils.network import get_ip_address
+from marie.utils.types import strtobool
 
 if docarray_v2:
     from docarray import DocList
@@ -82,6 +89,7 @@ class WorkerRequestHandler:
         self.args = args
         self.logger = logger
         self._is_closed = False
+
         if self.metrics_registry:
             with ImportExtensions(
                 required=True,
@@ -165,6 +173,7 @@ class WorkerRequestHandler:
         self._hot_reload_task = None
         if self.args.reload:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
+        self._init_job_info_client()
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -178,7 +187,9 @@ class WorkerRequestHandler:
                 "is_generator"
             ]
 
-            return self.process_single_data(request, None, is_generator=is_generator)
+            return self.process_single_data(
+                request, None, http=True, is_generator=is_generator
+            )
 
         app = get_fastapi_app(
             request_models_map=request_models_map, caller=call_handle, **kwargs
@@ -193,7 +204,7 @@ class WorkerRequestHandler:
         return extend_rest_interface(app)
 
     def _http_fastapi_csp_app(self, **kwargs):
-        from jina.serve.runtimes.worker.http_csp_app import get_fastapi_app
+        from marie.serve.runtimes.worker.http_csp_app import get_fastapi_app
 
         request_models_map = self._executor._get_endpoint_models_dict()
 
@@ -202,7 +213,9 @@ class WorkerRequestHandler:
                 "is_generator"
             ]
 
-            return self.process_single_data(request, None, is_generator=is_generator)
+            return self.process_single_data(
+                request, None, http=True, is_generator=is_generator
+            )
 
         app = get_fastapi_app(
             request_models_map=request_models_map, caller=call_handle, **kwargs
@@ -264,9 +277,24 @@ class WorkerRequestHandler:
         if getattr(self._executor, "dynamic_batching", None) is not None:
             # We need to sort the keys into endpoints and functions
             # Endpoints allow specific configurations while functions allow configs to be applied to all endpoints of the function
+            self.logger.debug(
+                f"Executor Dynamic Batching configs: {self._executor.dynamic_batching}"
+            )
             dbatch_endpoints = []
             dbatch_functions = []
+            request_models_map = self._executor._get_endpoint_models_dict()
+
             for key, dbatch_config in self._executor.dynamic_batching.items():
+                if (
+                    request_models_map.get(key, {})
+                    .get("parameters", {})
+                    .get("model", None)
+                    is not None
+                ):
+                    error_msg = f"Executor Dynamic Batching cannot be used for endpoint {key} because it depends on parameters."
+                    self.logger.error(error_msg)
+                    raise Exception(error_msg)
+
                 if key.startswith("/"):
                     dbatch_endpoints.append((key, dbatch_config))
                 else:
@@ -286,10 +314,21 @@ class WorkerRequestHandler:
                 for endpoint in func_endpoints[func_name]:
                     if endpoint not in self._batchqueue_config:
                         self._batchqueue_config[endpoint] = dbatch_config
+                    else:
+                        # we need to eventually copy the `custom_metric`
+                        if dbatch_config.get("custom_metric", None) is not None:
+                            self._batchqueue_config[endpoint]["custom_metric"] = (
+                                dbatch_config.get("custom_metric")
+                            )
 
-            self.logger.debug(
-                f"Executor Dynamic Batching configs: {self._executor.dynamic_batching}"
-            )
+            keys_to_remove = []
+            for k, batch_config in self._batchqueue_config.items():
+                if not batch_config.get("use_dynamic_batching", True):
+                    keys_to_remove.append(k)
+
+            for k in keys_to_remove:
+                self._batchqueue_config.pop(k)
+
             self.logger.debug(
                 f"Endpoint Batch Queue Configs: {self._batchqueue_config}"
             )
@@ -383,16 +422,17 @@ class WorkerRequestHandler:
                 uses_requests=self.args.uses_requests,
                 uses_dynamic_batching=self.args.uses_dynamic_batching,
                 runtime_args={  # these are not parsed to the yaml config file but are pass directly during init
-                    'workspace': self.args.workspace,
-                    'shard_id': self.args.shard_id,
-                    'shards': self.args.shards,
-                    'replicas': self.args.replicas,
-                    'name': self.args.name,
-                    'provider': self.args.provider,
-                    'provider_endpoint': self.args.provider_endpoint,
-                    'metrics_registry': metrics_registry,
-                    'tracer_provider': tracer_provider,
-                    'meter_provider': meter_provider,
+                    "workspace": self.args.workspace,
+                    "shard_id": self.args.shard_id,
+                    "shards": self.args.shards,
+                    "replicas": self.args.replicas,
+                    "name": self.args.name,
+                    "provider": self.args.provider,
+                    "provider_endpoint": self.args.provider_endpoint,
+                    "metrics_registry": metrics_registry,
+                    "tracer_provider": tracer_provider,
+                    "meter_provider": meter_provider,
+                    "allow_concurrent": self.args.allow_concurrent,
                 },
                 py_modules=self.args.py_modules,
                 extra_search_paths=self.args.extra_search_paths,
@@ -542,7 +582,7 @@ class WorkerRequestHandler:
                 requests[0].nbytes, attributes=attributes
             )
 
-    def _set_result(self, requests, return_data, docs):
+    def _set_result(self, requests, return_data, docs, http=False):
         # assigning result back to request
         if return_data is not None:
             if isinstance(return_data, DocumentArray):
@@ -563,10 +603,12 @@ class WorkerRequestHandler:
                     f"The return type must be DocList / Dict / `None`, "
                     f"but getting {return_data!r}"
                 )
-
-        WorkerRequestHandler.replace_docs(
-            requests[0], docs, self.args.output_array_type
-        )
+        if not http:
+            WorkerRequestHandler.replace_docs(
+                requests[0], docs, self.args.output_array_type
+            )
+        else:
+            requests[0].direct_docs = docs
         return docs
 
     def _setup_req_doc_array_cls(self, requests, exec_endpoint, is_response=False):
@@ -654,11 +696,15 @@ class WorkerRequestHandler:
         )
 
     async def handle(
-        self, requests: List["DataRequest"], tracing_context: Optional["Context"] = None
+        self,
+        requests: List["DataRequest"],
+        http=False,
+        tracing_context: Optional["Context"] = None,
     ) -> DataRequest:
         """Initialize private parameters and execute private loading functions.
 
         :param requests: The messages to handle containing a DataRequest
+        :param http: Flag indicating if it is used by the HTTP server for some optims
         :param tracing_context: Optional OpenTelemetry tracing context from the originating request.
         :returns: the processed message
         """
@@ -678,6 +724,13 @@ class WorkerRequestHandler:
                 return requests[0]
 
         requests, params = self._setup_requests(requests, exec_endpoint)
+
+        self.logger.info(f"requests TO MONITOR : {requests}")
+        job_id = None
+        if params is not None:
+            job_id = params.get("job_id", None)
+        await self._record_started_job(job_id, requests, params)
+
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
         if exec_endpoint in self._batchqueue_config:
             assert len(requests) == 1, "dynamic batching does not support no_reduce"
@@ -698,7 +751,7 @@ class WorkerRequestHandler:
                 )
             # This is necessary because push might need to await for the queue to be emptied
             queue = await self._batchqueue_instances[exec_endpoint][param_key].push(
-                requests[0]
+                requests[0], http=http
             )
             item = await queue.get()
             queue.task_done()
@@ -709,15 +762,61 @@ class WorkerRequestHandler:
             docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(
                 requests
             )
-            return_data = await self._executor.__acall__(
-                req_endpoint=exec_endpoint,
-                docs=docs,
-                parameters=params,
-                docs_matrix=docs_matrix,
-                docs_map=docs_map,
-                tracing_context=tracing_context,
-            )
-            _ = self._set_result(requests, return_data, docs)
+
+            client_disconnected = False
+
+            async def executor_completion_callback(
+                job_id: str,
+                requests: List["DataRequest"],
+                return_data: Any,
+                raised_exception: Exception,
+            ):
+                self.logger.info(f"executor_completion_callback : {job_id}")
+                # TODO : add support for handling client disconnect rejects
+                additional_metadata = {"client_disconnected": client_disconnected}
+
+                if raised_exception:
+                    val = "".join(
+                        traceback.format_exception(
+                            raised_exception, limit=None, chain=True
+                        )
+                    )
+                    self.logger.error(
+                        f"{raised_exception!r} during  executor handling"
+                        + f'\n add "--quiet-error" to suppress the exception details'
+                        + f"\n {val}"
+                    )
+
+                    await self._record_failed_job(
+                        job_id, requests, raised_exception, additional_metadata
+                    )
+                else:
+                    await self._record_successful_job(
+                        job_id, requests, additional_metadata
+                    )
+
+            try:
+                # we adding a callback to track when the executor have finished as the client disconnect will trigger
+                # `asyncio.CancelledError` however the Task is still running in the background with success or exception
+                return_data = await self._executor.__acall__(
+                    req_endpoint=exec_endpoint,
+                    docs=docs,
+                    parameters=params,
+                    docs_matrix=docs_matrix,
+                    docs_map=docs_map,
+                    tracing_context=tracing_context,
+                    completion_callback=functools.partial(
+                        executor_completion_callback, job_id, requests
+                    ),
+                )
+                _ = self._set_result(requests, return_data, docs, http=http)
+            except asyncio.CancelledError:
+                self.logger.warning("Task was cancelled due to client disconnect")
+                client_disconnected = True
+                raise
+            except Exception as e:
+                self.logger.error(f"Error during __acall__ {client_disconnected}: {e}")
+                raise e
 
         for req in requests:
             req.add_executor(self.deployment_name)
@@ -728,7 +827,6 @@ class WorkerRequestHandler:
         except AttributeError:
             pass
         self._record_response_size_monitoring(requests)
-
         return requests[0]
 
     @staticmethod
@@ -905,18 +1003,25 @@ class WorkerRequestHandler:
 
     # serving part
     async def process_single_data(
-        self, request: DataRequest, context, is_generator: bool = False
+        self,
+        request: DataRequest,
+        context,
+        http: bool = False,
+        is_generator: bool = False,
     ) -> DataRequest:
         """
         Process the received requests and return the result as a new request
 
         :param request: the data request to process
         :param context: grpc context
+        :param http: Flag indicating if it is used by the HTTP server for some optims
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
         self.logger.debug("recv a process_single_data request")
-        return await self.process_data([request], context, is_generator=is_generator)
+        return await self.process_data(
+            [request], context, http=http, is_generator=is_generator
+        )
 
     async def stream_doc(
         self, request: SingleDocumentRequest, context: "grpc.aio.ServicerContext"
@@ -947,10 +1052,10 @@ class WorkerRequestHandler:
             ex = ValueError("endpoint must be generator")
             self.logger.error(
                 (
-                    f'{ex!r}'
+                    f"{ex!r}"
                     + f'\n add "--quiet-error" to suppress the exception details'
                     if not self.args.quiet_error
-                    else ''
+                    else ""
                 ),
                 exc_info=not self.args.quiet_error,
             )
@@ -984,10 +1089,10 @@ class WorkerRequestHandler:
                     )
                     self.logger.error(
                         (
-                            f'{ex!r}'
+                            f"{ex!r}"
                             + f'\n add "--quiet-error" to suppress the exception details'
                             if not self.args.quiet_error
-                            else ''
+                            else ""
                         ),
                         exc_info=not self.args.quiet_error,
                     )
@@ -1011,7 +1116,7 @@ class WorkerRequestHandler:
         """
         from google.protobuf import json_format
 
-        self.logger.debug('recv an endpoint discovery request')
+        self.logger.debug("recv an endpoint discovery request")
         endpoints_proto = jina_pb2.EndpointsProto()
         endpoints_proto.endpoints.extend(list(self._executor.requests.keys()))
         endpoints_proto.write_endpoints.extend(list(self._executor.write_endpoints))
@@ -1061,13 +1166,18 @@ class WorkerRequestHandler:
         return None
 
     async def process_data(
-        self, requests: List[DataRequest], context, is_generator: bool = False
+        self,
+        requests: List[DataRequest],
+        context,
+        http=False,
+        is_generator: bool = False,
     ) -> DataRequest:
         """
         Process the received requests and return the result as a new request
 
         :param requests: the data requests to process
         :param context: grpc context
+        :param http: Flag indicating if it is used by the HTTP server for some optims
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
@@ -1094,7 +1204,7 @@ class WorkerRequestHandler:
                     )
                 else:
                     result = await self.handle(
-                        requests=requests, tracing_context=tracing_context
+                        requests=requests, http=http, tracing_context=tracing_context
                     )
 
                 if self._successful_requests_metrics:
@@ -1112,10 +1222,10 @@ class WorkerRequestHandler:
             except (RuntimeError, Exception) as ex:
                 self.logger.error(
                     (
-                        f'{ex!r}'
+                        f"{ex!r}"
                         + f'\n add "--quiet-error" to suppress the exception details'
                         if not self.args.quiet_error
-                        else ''
+                        else ""
                     ),
                     exc_info=not self.args.quiet_error,
                 )
@@ -1167,7 +1277,7 @@ class WorkerRequestHandler:
         :param kwargs: keyword arguments
         :yield: responses to the request
         """
-        self.logger.debug("recv a stream request from client")
+        self.logger.debug("recv a stream request")
         async for request in request_iterator:
             yield await self.process_data([request], context)
 
@@ -1324,3 +1434,130 @@ class WorkerRequestHandler:
             id=jina_pb2.RestoreId(value=request.value),
             status=jina_pb2.RestoreSnapshotStatusProto.Status.NOT_FOUND,
         )
+
+    def _init_job_info_client(self):
+        # storage = self.runtime_args.storage
+        # FIXME : This should be coming from the runtime_args
+        kv_storage_config = {
+            "hostname": "127.0.0.1",
+            "port": 5432,
+            "username": "postgres",
+            "password": "123456",
+            "database": "postgres",
+            "default_table": "kv_store_worker",
+            "max_pool_size": 5,
+            "max_connections": 5,
+        }
+
+        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
+        self._job_info_client = JobInfoStorageClient(storage)
+
+    async def _record_failed_job(
+        self,
+        job_id: str,
+        requests: List["DataRequest"],
+        e: Exception,
+        metadata_attributes: Optional[Dict],
+    ):
+        print(f"Record job failed: {job_id} - {e}")
+        if job_id is not None and self._job_info_client is not None:
+            try:
+                # Extract the traceback information from the exception
+                tb = e.__traceback__
+                while tb.tb_next:
+                    tb = tb.tb_next
+
+                filename = tb.tb_frame.f_code.co_filename
+                name = tb.tb_frame.f_code.co_name
+                line_no = tb.tb_lineno
+                # Clear the frames after extracting the information to avoid memory leaks
+                traceback.clear_frames(tb)
+
+                detail = "Internal Server Error"
+                silence_exceptions = strtobool(
+                    os.environ.get("MARIE_SILENCE_EXCEPTIONS", "false")
+                )
+
+                if not silence_exceptions:
+                    detail = str(e)
+
+                exc = {
+                    "type": type(e).__name__,
+                    "message": detail,
+                    "filename": filename.split("/")[-1],
+                    "name": name,
+                    "line_no": line_no,
+                }
+
+                request_attributes = self._request_attributes(requests)
+                if metadata_attributes:
+                    request_attributes.update(metadata_attributes)
+
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.FAILED,
+                    jobinfo_replace_kwargs={
+                        "metadata": {
+                            "attributes": request_attributes,
+                            "error": exc,
+                        }
+                    },
+                )
+            except Exception as e:
+                self.logger.error(f"Error in recording job status: {e}")
+
+    async def _record_started_job(
+        self, job_id: str, requests: List["DataRequest"], params
+    ):
+        print(f"Record job started: {job_id}")
+        if job_id is not None and self._job_info_client is not None:
+            try:
+
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.RUNNING,
+                    jobinfo_replace_kwargs={
+                        "metadata": {
+                            "params": params,
+                            "attributes": self._request_attributes(requests),
+                        }
+                    },
+                )
+            except Exception as e:
+                self.logger.error(f"Error recording job status: {e}")
+
+    async def _record_successful_job(
+        self,
+        job_id: str,
+        requests: List["DataRequest"],
+        metadata_attributes: Optional[Dict],
+    ):
+        print(f"Record job success: {job_id}")
+        if job_id is not None and self._job_info_client is not None:
+            try:
+                request_attributes = self._request_attributes(requests)
+                if metadata_attributes:
+                    request_attributes.update(metadata_attributes)
+
+                await self._job_info_client.put_status(
+                    job_id,
+                    JobStatus.SUCCEEDED,
+                    jobinfo_replace_kwargs={
+                        "metadata": {"attributes": request_attributes}
+                    },
+                )
+            except Exception as e:
+                self.logger.error(f"Error recording job status: {e}")
+
+    def _request_attributes(self, requests: List["DataRequest"]) -> Dict:
+        exec_endpoint: str = requests[0].header.exec_endpoint
+        if exec_endpoint not in self._executor.requests:
+            if __default_endpoint__ in self._executor.requests:
+                exec_endpoint = __default_endpoint__
+
+        return {
+            "executor_endpoint": exec_endpoint,
+            "executor": self._executor.__class__.__name__,
+            "runtime_name": self.args.name,
+            "host": get_ip_address(flush_cache=False),
+        }

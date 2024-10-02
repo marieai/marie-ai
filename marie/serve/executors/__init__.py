@@ -500,7 +500,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         ):
             with ImportExtensions(
                 required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Summary
 
@@ -658,9 +658,22 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             return
 
     def _add_dynamic_batching(self, _dynamic_batching: Optional[Dict]):
+        from collections.abc import Mapping
+
+        def deep_update(source, overrides):
+            for key, value in overrides.items():
+                if isinstance(value, Mapping) and value:
+                    returned = deep_update(source.get(key, {}), value)
+                    source[key] = returned
+                else:
+                    source[key] = overrides[key]
+            return source
+
         if _dynamic_batching:
-            self.dynamic_batching = getattr(self, "dynamic_batching", {})
-            self.dynamic_batching.update(_dynamic_batching)
+            self.dynamic_batching = getattr(self, 'dynamic_batching', {})
+            self.dynamic_batching = deep_update(
+                self.dynamic_batching, _dynamic_batching
+            )
 
     def _add_metas(self, _metas: Optional[Dict]):
         from marie.serve.executors.metas import get_default_metas
@@ -747,7 +760,6 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         # noqa: DAR102
         # noqa: DAR201
         """
-
         if req_endpoint in self.requests:
             return await self.__acall_endpoint__(req_endpoint, **kwargs)
         elif __default_endpoint__ in self.requests:
@@ -831,20 +843,74 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         if is_parameters_pydantic_model:
             func = parameters_as_pydantic_models_decorator(func, parameters_model)
 
+        completion_callback = kwargs.pop("completion_callback")
+
         async def exec_func(
             summary, histogram, histogram_metric_labels, tracing_context
         ):
-            with MetricsTimer(summary, histogram, histogram_metric_labels):
-                if iscoroutinefunction(func):
-                    return await func(self, tracing_context=tracing_context, **kwargs)
-                else:
-                    async with self._lock:
-                        return await get_or_reuse_loop().run_in_executor(
-                            None,
-                            functools.partial(
-                                func, self, tracing_context=tracing_context, **kwargs
-                            ),
+            try:
+                # wrap the func to allow for capturing a return value and calling our completion
+                # callback to indicate that the job has completed
+                def completion_function_wrapper(fn):
+                    if iscoroutinefunction(fn):
+
+                        @functools.wraps(fn)
+                        async def arg_wrapper(*args, **kwargs):
+                            ex: Exception = None
+                            retval: Any = None
+                            try:
+                                retval = await fn(*args, **kwargs)
+                                return retval
+                            except Exception as exc:
+                                ex = exc
+                            finally:
+                                await completion_callback(retval, ex)
+
+                        return arg_wrapper
+                    else:
+
+                        @functools.wraps(fn)
+                        def arg_wrapper(*args, **kwargs):
+                            ex: Exception = None
+                            retval: Any = None
+                            try:
+                                retval = fn(*args, **kwargs)
+                                return retval
+                            except Exception as exc:
+                                ex = exc
+                            finally:
+                                loop = get_or_reuse_loop()
+                                task = loop.create_task(completion_callback(retval, ex))
+                                loop.run_until_complete(task)
+
+                        return arg_wrapper
+
+                with MetricsTimer(summary, histogram, histogram_metric_labels):
+                    if iscoroutinefunction(func):
+                        wrapped_func = completion_function_wrapper(func)
+                        return await wrapped_func(
+                            self, tracing_context=tracing_context, **kwargs
                         )
+                    else:
+                        async with self._lock:
+                            try:
+                                return await get_or_reuse_loop().run_in_executor(
+                                    None,
+                                    functools.partial(
+                                        completion_function_wrapper(func),
+                                        self,
+                                        tracing_context=tracing_context,
+                                        **kwargs,
+                                    ),
+                                )
+                            except asyncio.CancelledError as e:
+                                self.logger.error(
+                                    f"Task was cancelled due to client request, for {req_endpoint} endpoint: {e}"
+                                )
+                                raise e
+            except Exception as e:
+                self.logger.error(f"Error while executing {req_endpoint} endpoint: {e}")
+                raise e
 
         runtime_name = (
             self.runtime_args.name if hasattr(self.runtime_args, "name") else None

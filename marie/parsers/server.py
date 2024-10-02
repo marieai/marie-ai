@@ -15,7 +15,7 @@ def set_server_parser(parser=None):
 
     sp = parser.add_subparsers(
         dest='ctl_cli',
-        required=True,
+        required=False,
     )
 
     watch_parser = sp.add_parser(

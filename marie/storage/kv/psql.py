@@ -5,7 +5,7 @@ from uuid_extensions import uuid7str
 
 from marie.logging.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
-from marie_server.storage.storage_client import StorageArea
+from marie.storage.kv.storage_client import StorageArea
 
 
 class PostgreSQLKV(PostgresqlMixin, StorageArea):
@@ -15,7 +15,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
     JSONB data type.
     """
 
-    def __init__(self, config: Dict[str, Any], reset=True):
+    def __init__(self, config: Dict[str, Any], reset=False):
         super().__init__()
         self.logger = MarieLogger(self.__class__.__name__)
         self.running = False
@@ -26,22 +26,63 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         )
 
     def create_table_callback(self, table_name: str):
+        """
+        :param table_name: Name of the table to be created.
+        :return: None
+        """
         self.logger.info(f"Creating table : {table_name}")
 
         self._execute_sql_gracefully(
             f"""
-             CREATE TABLE IF NOT EXISTS {self.table} (
-                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                 namespace VARCHAR(1024) NULL,
-                 key VARCHAR(1024) NOT NULL,                 
-                 value JSONB NULL,
-                 shard int DEFAULT 0,
-                 created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-                 updated_at timestamp with time zone DEFAULT NULL,
-                 is_deleted BOOL DEFAULT FALSE
-             );
-             CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
-             """,
+            CREATE TABLE IF NOT EXISTS {self.table} (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                namespace VARCHAR(1024) NULL,
+                key VARCHAR(1024) NOT NULL,
+                value JSONB NULL,
+                shard int DEFAULT 0,
+                created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+                updated_at timestamp with time zone DEFAULT NULL,
+                is_deleted BOOL DEFAULT FALSE
+            );
+            CREATE UNIQUE INDEX idx_{self.table}_ns_key ON {self.table} (namespace, key);
+
+            CREATE TABLE IF NOT EXISTS {self.table}_history (
+                history_id SERIAL PRIMARY KEY,
+                id UUID,
+                namespace VARCHAR(1024),
+                key VARCHAR(1024),
+                value JSONB,
+                shard int,
+                created_at timestamp with time zone,
+                updated_at timestamp with time zone,
+                is_deleted BOOL,
+                change_time timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+                operation CHAR(1) CHECK (operation IN ('I', 'U', 'D'))
+            );
+
+            CREATE OR REPLACE FUNCTION log_changes_{self.table}() RETURNS TRIGGER AS $$
+            BEGIN
+                IF (TG_OP = 'INSERT') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'I');
+                    RETURN NEW;
+                ELSIF (TG_OP = 'UPDATE') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (NEW.id, NEW.namespace, NEW.key, NEW.value, NEW.shard, NEW.created_at, NEW.updated_at, NEW.is_deleted, 'U');
+                    RETURN NEW;
+                ELSIF (TG_OP = 'DELETE') THEN
+                    INSERT INTO {self.table}_history (id, namespace, key, value, shard, created_at, updated_at, is_deleted, operation)
+                    VALUES (OLD.id, OLD.namespace, OLD.key, OLD.value, OLD.shard, OLD.created_at, OLD.updated_at, OLD.is_deleted, 'D');
+                    RETURN OLD;
+                END IF;
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            CREATE TRIGGER log_changes_{self.table}_trigger
+            AFTER INSERT OR UPDATE OR DELETE ON {self.table}
+            FOR EACH ROW EXECUTE FUNCTION log_changes_{self.table}();
+            """
         )
 
     async def internal_kv_get(
@@ -111,7 +152,18 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         namespace: Optional[bytes],
         timeout: Optional[float] = None,
     ) -> int:
-        raise NotImplementedError
+        self.logger.debug(f"internal_kv_del: {key!r}, {namespace!r}, {del_by_prefix}")
+        if namespace is None:
+            namespace = b"DEFAULT"
+
+        if del_by_prefix:
+            raise NotImplementedError
+        else:
+            query = f"DELETE FROM {self.table} WHERE key = '{key.decode()}' AND namespace = '{namespace.decode()}'"
+            cursor = self._execute_sql_gracefully(query, data=())
+            if cursor is not None:
+                return 1
+        return 0
 
     async def internal_kv_exists(
         self, key: bytes, namespace: Optional[bytes], timeout: Optional[float] = None
@@ -128,7 +180,6 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
             try:
                 query = f"SELECT key  FROM {self.table} WHERE  namespace = '{namespace.decode()}' AND is_deleted = FALSE"
                 for record in self._execute_sql_gracefully(query, data=()):
-                    print(result)
                     result.append(record[0])
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error executing sql statement: {error}")
@@ -136,8 +187,12 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
 
     def internal_kv_reset(self) -> None:
         self.logger.info(f"internal_kv_reset : {self.table}")
-        query = f"DROP TABLE IF EXISTS {self.table}"
-        self._execute_sql_gracefully(query)
+
+        self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}")
+        self._execute_sql_gracefully(f"DROP TABLE IF EXISTS {self.table}_history")
+        self._execute_sql_gracefully(
+            f"DROP FUNCTION IF EXISTS log_changes_{self.table} CASCADE"
+        )
 
     def debug_info(self) -> str:
         return "PostgreSQLKV"

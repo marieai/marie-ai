@@ -1,8 +1,8 @@
 from typing import Any, Dict, Optional
 
-from marie_server.job.common import JobInfo, JobInfoStorageClient, JobStatus
-from marie_server.job.event_publisher import EventPublisher
-from marie_server.storage.storage_client import StorageArea
+from marie.job.common import JobInfoStorageClient, JobStatus
+from marie.job.event_publisher import EventPublisher
+from marie.storage.kv.storage_client import StorageArea
 
 
 class JobInfoStorageClientProxy(JobInfoStorageClient):
@@ -34,6 +34,7 @@ class JobInfoStorageClientProxy(JobInfoStorageClient):
         message: Optional[str] = None,
         jobinfo_replace_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        print("put_status called : ", job_id, status)
         await super().put_status(job_id, status, message, jobinfo_replace_kwargs)
         await self._event_publisher.publish(
             status,

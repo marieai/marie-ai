@@ -15,6 +15,10 @@ import marie.helper
 from marie import Gateway as BaseGateway
 from marie.excepts import RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
+from marie.job.common import JobInfo, JobStatus
+from marie.job.gateway_job_distributor import GatewayJobDistributor
+from marie.job.job_manager import JobManager
+from marie.job.sync_manager import SyncManager
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
@@ -28,17 +32,14 @@ from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.storage.kv.in_memory import InMemoryKV
+from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
-from marie_server.job.common import JobInfo, JobStatus
-from marie_server.job.gateway_job_distributor import GatewayJobDistributor
-from marie_server.job.job_manager import JobManager
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.state import WorkState
-from marie_server.storage.in_memory import InMemoryKV
-from marie_server.storage.psql import PostgreSQLKV
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -74,7 +75,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             "username": "postgres",
             "password": "123456",
             "database": "postgres",
-            "default_table": "kv_store_a",
+            "default_table": "kv_store_worker",
             "max_pool_size": 5,
             "max_connections": 5,
         }
@@ -92,7 +93,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             gateway_streamer=None, logger=self.logger
         )
 
-        storage = PostgreSQLKV(config=kv_storage_config, reset=True)
+        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
         job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
             config=scheduler_config, job_manager=job_manager
@@ -121,7 +122,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             async def job_submit(text: str):
                 self.logger.info(f"Received request at {datetime.now}")
                 work_info = WorkInfo(
-                    name="WorkInfo-001",
+                    name="extract",
                     priority=0,
                     data={},
                     state=WorkState.CREATED,
@@ -368,7 +369,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         :return: The response with the submission result.
         """
         work_info = WorkInfo(
-            name="WorkInfo-001",
+            name="extract",
             priority=0,
             data={},
             state=WorkState.CREATED,
@@ -387,7 +388,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             response = Response()
             response.parameters = {
                 "status": "ok",
-                "msg": "job submitted",
+                "msg": f"job submitted with id {job_id}",
                 "job_id": job_id,
             }
 

@@ -1,3 +1,5 @@
+import asyncio
+
 from marie.clients.base.http import HTTPBaseClient
 from marie.clients.mixin import (
     AsyncHealthCheckMixin,
@@ -81,3 +83,8 @@ class AsyncHTTPClient(
             print(resp)
 
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = asyncio.Lock()
+        self.reuse_session = self.args.reuse_session

@@ -118,8 +118,8 @@ class PostgresqlMixin:
 
     def _execute_sql_gracefully(
         self,
-        statement,
-        data=tuple(),
+        statement: object,
+        data: object = tuple(),
         *,
         named_cursor_name: Optional[str] = None,
         itersize: Optional[int] = 10000,
@@ -134,7 +134,7 @@ class PostgresqlMixin:
                 cursor.execute(statement, data)
             else:
                 cursor.execute(statement)
-        except psycopg2.Error as error:
+        except (Exception, psycopg2.Error) as error:
             # except psycopg2.errors.UniqueViolation as error:
             print(statement)
             self.logger.debug(f"Error while executing {statement}: {error}.")

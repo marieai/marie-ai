@@ -1,5 +1,6 @@
 import inspect
 import os
+import random
 import time
 
 from docarray import DocList
@@ -41,10 +42,10 @@ class TestExecutor(MarieExecutor):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
         # emulate the long loading time
-        time.sleep(1)
+        # time.sleep(1
 
     @requests(on="/extract")
-    def funcXX(
+    async def func_extract(
         self,
         docs: DocList[TextDoc],
         parameters=None,
@@ -55,13 +56,19 @@ class TestExecutor(MarieExecutor):
             parameters = {}
 
         print(f"FirstExec func called : {len(docs)}, {parameters}")
+
+        # randomly throw an error to test the error handling
+        if random.random() > 0.999:
+            raise Exception("random error in FirstExec")
+
         for doc in docs:
             doc.text += " First Exec"
-        print("Sleeping for 5 seconds : ", time.time())
-        time.sleep(5)
+        sec = 10
+        print(f"Sleeping for {sec} seconds : ", time.time())
+        time.sleep(sec)
+        raise Exception("random error in FirstExec")
 
-        print("Sleeping for 5 seconds - done: ", time.time())
-
+        print(f"Sleeping for {sec} seconds - done : ", time.time())
         return {
             "parameters": parameters,
             "data": "Data reply",

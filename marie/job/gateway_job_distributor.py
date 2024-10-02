@@ -1,15 +1,13 @@
 from typing import Callable, List, Optional
 
-from django.views.debug import CallableSettingWrapper
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
-from marie import DocumentArray
+from marie.job.common import JobInfo, JobStatus
+from marie.job.job_distributor import JobDistributor
 from marie.logging.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types.request.data import DataRequest
-from marie_server.job.common import JobInfo, JobStatus
-from marie_server.job.job_distributor import JobDistributor
 
 
 class GatewayJobDistributor(JobDistributor):
@@ -23,6 +21,7 @@ class GatewayJobDistributor(JobDistributor):
 
     async def submit_job(
         self,
+        submission_id: str,
         job_info: JobInfo,
         send_callback: Callable[[List[DataRequest]], DataRequest] = None,
     ) -> DataRequest:
@@ -32,7 +31,7 @@ class GatewayJobDistributor(JobDistributor):
 
         if curr_status != JobStatus.PENDING:
             raise RuntimeError(
-                f"Job {job_info._job_id} is not in PENDING state. "
+                f"Job {submission_id} is not in PENDING state. "
                 f"Current status is {curr_status} with message {curr_message}."
             )
 
@@ -41,12 +40,17 @@ class GatewayJobDistributor(JobDistributor):
             self.logger.warning(f"Gateway streamer is not initialized")
             raise RuntimeError("Gateway streamer is not initialized")
 
+        parameters = {"job_id": submission_id}  # "#job_info.job_id,
+        if job_info.metadata:
+            parameters.update(job_info.metadata)
+
         doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
+
         request = DataRequest()
         request.document_array_cls = DocList[BaseDoc]()
         request.header.exec_endpoint = "/extract"
         request.header.target_executor = "executor0"  # job_info.entrypoint
-        request.parameters = {}  # job_info.metadata
+        request.parameters = parameters
         request.data.docs = DocList([doc])
 
         response = await self.streamer.process_single_data(
