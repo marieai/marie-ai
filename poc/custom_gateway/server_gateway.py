@@ -93,7 +93,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             gateway_streamer=None, logger=self.logger
         )
 
-        storage = PostgreSQLKV(config=kv_storage_config, reset=True)
+        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
         job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
             config=scheduler_config, job_manager=job_manager

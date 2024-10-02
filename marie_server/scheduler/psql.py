@@ -56,6 +56,8 @@ def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
         return WorkState.COMPLETED
     elif job_status == JobStatus.FAILED:
         return WorkState.FAILED
+    elif job_status == JobStatus.STOPPED:
+        return WorkState.CANCELLED
     else:
         raise ValueError(f"Unknown JobStatus: {job_status}")
 
@@ -395,17 +397,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.connection.commit()
 
     async def list_jobs(
-        self, state: Optional[str] = None, batch_size: int = 0
+        self, state: Optional[str | list[str]] = None, batch_size: int = 0
     ) -> Dict[str, WorkInfo]:
         work_items = {}
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
-        states = "','".join(WorkState.__members__.keys())
+
         if state is not None:
-            if state.upper() not in WorkState.__members__:
-                raise ValueError(f"Invalid state: {state}")
-            states = state
-        states = states.lower()
+            if isinstance(state, str):
+                state = [state]
+            invalid_states = [
+                s for s in state if s.upper() not in WorkState.__members__
+            ]
+            if invalid_states:
+                raise ValueError(f"Invalid state(s): {', '.join(invalid_states)}")
+            states = "','".join(s.lower() for s in state)
+        else:
+            states = "','".join(WorkState.__members__.keys()).lower()
 
         with self:
             try:
@@ -438,7 +446,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         new_key_added = False
         submission_id = work_info.id
 
-        work_info.retry_limit = 2
+        work_info.retry_limit = 0
 
         with self:
             try:
@@ -475,17 +483,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         raise NotImplementedError
 
-    async def cancel_job(self, job_id: str) -> None:
+    async def cancel_job(self, job_id: str, work_item: WorkInfo) -> None:
         """
         Cancel a job by its ID.
         :param job_id:
         """
-        name = "extract"  # TODO this is a placeholder
         with self:
             try:
                 self.logger.info(f"Cancelling job: {job_id}")
                 self._execute_sql_gracefully(
-                    cancel_jobs(DEFAULT_SCHEMA, name, [job_id])
+                    cancel_jobs(DEFAULT_SCHEMA, work_item.name, [job_id])
                 )
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error handling job event: {error}")
@@ -651,7 +658,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 traceback.print_exc()
                 # TODO: emit error event
 
-    async def complete(self, job_id: str, work_item: WorkInfo):
+    async def complete(
+        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+    ):
         self.logger.info(f"Job completed : {job_id}, {work_item}")
         with self:
             try:
@@ -660,7 +669,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         DEFAULT_SCHEMA,
                         work_item.name,
                         [job_id],
-                        {"on_complete": "done"},
+                        {"on_complete": "done", **(output_metadata or {})},
                     )
                 )
                 counts = cursor.fetchone()[0]
@@ -671,7 +680,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error completing job: {error}")
 
-    async def fail(self, job_id: str, work_item: WorkInfo):
+    async def fail(
+        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+    ):
         self.logger.info(f"Job failed : {job_id}, {work_item}")
         with self:
             try:
@@ -680,7 +691,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         DEFAULT_SCHEMA,
                         work_item.name,
                         [job_id],
-                        {"on_complete": "failed"},
+                        {"on_complete": "failed", **(output_metadata or {})},
                     )
                 )
                 counts = cursor.fetchone()[0]
@@ -696,13 +707,45 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         while self.running:
             self.logger.info(f"Syncing jobs status : {wait_time}")
             await asyncio.sleep(wait_time)
+            job_info_client = self.job_manager.job_info_client()
 
             try:
-                active_jobs = await self.list_jobs(state=WorkState.ACTIVE.value)
+                active_jobs = await self.list_jobs(
+                    state=[WorkState.ACTIVE.value, WorkState.CREATED.value]
+                )
                 if active_jobs:
-                    self.logger.info(f"Active jobs: {active_jobs}")
                     for job_id, work_item in active_jobs.items():
                         self.logger.info(f"Syncing job: {job_id}, {work_item}")
+                        job_info = await job_info_client.get_info(job_id)
+                        if job_info is None:
+                            self.logger.error(f"Job not found: {job_id}")
+                            continue
+
+                        job_info_state = convert_job_status_to_work_state(
+                            job_info.status
+                        )
+                        if work_item.state != job_info_state:
+                            self.logger.info(
+                                f"State mismatch for job {job_id}: "
+                                f"WorkState={work_item.state}, JobInfoState={job_info_state}. "
+                                f"Updating to JobInfoState."
+                            )
+                        # check if terminal status
+                        if job_info.status.is_terminal():
+                            self.logger.info(
+                                f"Job {job_id} is in terminal state, synchronizing."
+                            )
+                            meta = {"synced": True}
+                            if job_info.status == JobStatus.SUCCEEDED:
+                                await self.complete(job_id, work_item, meta)
+                            elif job_info.status == JobStatus.FAILED:
+                                await self.fail(job_id, work_item, meta)
+                            elif job_info.status == JobStatus.STOPPED:
+                                await self.cancel_job(job_id, work_item)
+                            else:
+                                self.logger.error(
+                                    f"Unhandled terminal status: {job_info.status}"
+                                )
 
             except Exception as e:
                 logger.error(f"Error syncing jobs: {e}")

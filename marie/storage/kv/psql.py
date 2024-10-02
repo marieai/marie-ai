@@ -15,7 +15,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
     JSONB data type.
     """
 
-    def __init__(self, config: Dict[str, Any], reset=True):
+    def __init__(self, config: Dict[str, Any], reset=False):
         super().__init__()
         self.logger = MarieLogger(self.__class__.__name__)
         self.running = False

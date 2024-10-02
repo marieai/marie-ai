@@ -11,6 +11,7 @@ import uuid
 import warnings
 from typing import (
     TYPE_CHECKING,
+    Any,
     AsyncIterator,
     Dict,
     Generator,
@@ -21,6 +22,8 @@ from typing import (
 )
 
 from google.protobuf.struct_pb2 import Struct
+from IPython.terminal.shortcuts.auto_suggest import discard
+from tvm.relay.backend.interpreter import Executor
 
 from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import __default_endpoint__
@@ -724,7 +727,42 @@ class WorkerRequestHandler:
             docs_matrix, docs_map = WorkerRequestHandler._get_docs_matrix_from_request(
                 requests
             )
+
+            client_disconnected = False
+
+            async def executor_completion_callback(
+                job_id: str,
+                requests: List["DataRequest"],
+                return_data: Any,
+                raised_exception: Exception,
+            ):
+                self.logger.info(f"executor_completion_callback : {job_id}")
+                # TODO : add support for handling client disconnect rejects
+                additional_metadata = {"client_disconnected": client_disconnected}
+
+                if raised_exception:
+                    val = "".join(
+                        traceback.format_exception(
+                            raised_exception, limit=None, chain=True
+                        )
+                    )
+                    self.logger.error(
+                        f"{raised_exception!r} during  executor handling"
+                        + f'\n add "--quiet-error" to suppress the exception details'
+                        + f"\n {val}"
+                    )
+
+                    await self._record_failed_job(
+                        job_id, requests, raised_exception, additional_metadata
+                    )
+                else:
+                    await self._record_successful_job(
+                        job_id, requests, additional_metadata
+                    )
+
             try:
+                # we adding a callback to track when the executor have finished as the client disconnect will trigger
+                # `asyncio.CancelledError` however the Task is still running in the background with success or exception
                 return_data = await self._executor.__acall__(
                     req_endpoint=exec_endpoint,
                     docs=docs,
@@ -732,21 +770,18 @@ class WorkerRequestHandler:
                     docs_matrix=docs_matrix,
                     docs_map=docs_map,
                     tracing_context=tracing_context,
+                    completion_callback=functools.partial(
+                        executor_completion_callback, job_id, requests
+                    ),
                 )
                 _ = self._set_result(requests, return_data, docs)
-                await self._record_successful_job(job_id, requests)
             except asyncio.CancelledError:
-                print("Task was cancelled due to client disconnect")
+                self.logger.warning("Task was cancelled due to client disconnect")
+                client_disconnected = True
                 raise
-            except BaseException as e:
-                self.logger.error(f"Error during __acall__: {e}")
-                await self._record_failed_job(job_id, requests, e)
+            except Exception as e:
+                self.logger.error(f"Error during __acall__ {client_disconnected}: {e}")
                 raise e
-            finally:
-                pass
-                # we do this here to make sure that we record the successful job even if the response fails back to the gateway
-                # if not failed:
-                #     await self._record_successful_job(job_id, requests)
 
         for req in requests:
             req.add_executor(self.deployment_name)
@@ -1375,6 +1410,7 @@ class WorkerRequestHandler:
         job_id: str,
         requests: List["DataRequest"],
         e: Exception,
+        metadata_attributes: Optional[Dict],
     ):
         print(f"Record job failed: {job_id} - {e}")
         if job_id is not None and self._job_info_client is not None:
@@ -1406,12 +1442,16 @@ class WorkerRequestHandler:
                     "line_no": line_no,
                 }
 
+                request_attributes = self._request_attributes(requests)
+                if metadata_attributes:
+                    request_attributes.update(metadata_attributes)
+
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.FAILED,
                     jobinfo_replace_kwargs={
                         "metadata": {
-                            "attributes": self._request_attributes(requests),
+                            "attributes": request_attributes,
                             "error": exc,
                         }
                     },
@@ -1425,6 +1465,7 @@ class WorkerRequestHandler:
         print(f"Record job started: {job_id}")
         if job_id is not None and self._job_info_client is not None:
             try:
+
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.RUNNING,
@@ -1438,15 +1479,24 @@ class WorkerRequestHandler:
             except Exception as e:
                 self.logger.error(f"Error recording job status: {e}")
 
-    async def _record_successful_job(self, job_id: str, requests: List["DataRequest"]):
+    async def _record_successful_job(
+        self,
+        job_id: str,
+        requests: List["DataRequest"],
+        metadata_attributes: Optional[Dict],
+    ):
         print(f"Record job success: {job_id}")
         if job_id is not None and self._job_info_client is not None:
             try:
+                request_attributes = self._request_attributes(requests)
+                if metadata_attributes:
+                    request_attributes.update(metadata_attributes)
+
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.SUCCEEDED,
                     jobinfo_replace_kwargs={
-                        "metadata": {"attributes": self._request_attributes(requests)}
+                        "metadata": {"attributes": request_attributes}
                     },
                 )
             except Exception as e:

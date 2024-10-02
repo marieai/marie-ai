@@ -42,10 +42,10 @@ class TestExecutor(MarieExecutor):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
         # emulate the long loading time
-        time.sleep(1)
+        # time.sleep(1
 
     @requests(on="/extract")
-    def func_extract(
+    async def func_extract(
         self,
         docs: DocList[TextDoc],
         parameters=None,
@@ -63,10 +63,11 @@ class TestExecutor(MarieExecutor):
 
         for doc in docs:
             doc.text += " First Exec"
-
         sec = 10
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
+        raise Exception("random error in FirstExec")
+
         print(f"Sleeping for {sec} seconds - done : ", time.time())
         return {
             "parameters": parameters,

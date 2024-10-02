@@ -747,7 +747,6 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         # noqa: DAR102
         # noqa: DAR201
         """
-
         if req_endpoint in self.requests:
             return await self.__acall_endpoint__(req_endpoint, **kwargs)
         elif __default_endpoint__ in self.requests:
@@ -831,26 +830,71 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         if is_parameters_pydantic_model:
             func = parameters_as_pydantic_models_decorator(func, parameters_model)
 
+        completion_callback = kwargs.pop("completion_callback")
+
         async def exec_func(
             summary, histogram, histogram_metric_labels, tracing_context
         ):
             try:
+                # wrap the func to allow for capturing a return value and calling our completion
+                # callback to indicate that the job has completed
+                def completion_function_wrapper(fn):
+                    if iscoroutinefunction(fn):
+
+                        @functools.wraps(fn)
+                        async def arg_wrapper(*args, **kwargs):
+                            ex: Exception = None
+                            retval: Any = None
+                            try:
+                                retval = await fn(*args, **kwargs)
+                                return retval
+                            except Exception as exc:
+                                ex = exc
+                            finally:
+                                await completion_callback(retval, ex)
+
+                        return arg_wrapper
+                    else:
+
+                        @functools.wraps(fn)
+                        def arg_wrapper(*args, **kwargs):
+                            ex: Exception = None
+                            retval: Any = None
+                            try:
+                                retval = fn(*args, **kwargs)
+                                return retval
+                            except Exception as exc:
+                                ex = exc
+                            finally:
+                                loop = get_or_reuse_loop()
+                                task = loop.create_task(completion_callback(retval, ex))
+                                loop.run_until_complete(task)
+
+                        return arg_wrapper
+
                 with MetricsTimer(summary, histogram, histogram_metric_labels):
                     if iscoroutinefunction(func):
-                        return await func(
+                        wrapped_func = completion_function_wrapper(func)
+                        return await wrapped_func(
                             self, tracing_context=tracing_context, **kwargs
                         )
                     else:
                         async with self._lock:
-                            return await get_or_reuse_loop().run_in_executor(
-                                None,
-                                functools.partial(
-                                    func,
-                                    self,
-                                    tracing_context=tracing_context,
-                                    **kwargs,
-                                ),
-                            )
+                            try:
+                                return await get_or_reuse_loop().run_in_executor(
+                                    None,
+                                    functools.partial(
+                                        completion_function_wrapper(func),
+                                        self,
+                                        tracing_context=tracing_context,
+                                        **kwargs,
+                                    ),
+                                )
+                            except asyncio.CancelledError as e:
+                                self.logger.error(
+                                    f"Task was cancelled due to client request, for {req_endpoint} endpoint: {e}"
+                                )
+                                raise e
             except Exception as e:
                 self.logger.error(f"Error while executing {req_endpoint} endpoint: {e}")
                 raise e
