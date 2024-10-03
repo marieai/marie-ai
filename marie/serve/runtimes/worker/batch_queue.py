@@ -3,7 +3,7 @@ import copy
 from asyncio import Event, Task
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from jina._docarray import docarray_v2
+from marie._docarray import docarray_v2
 
 if not docarray_v2:
     from docarray import DocumentArray
