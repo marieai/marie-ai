@@ -92,7 +92,7 @@ COPY requirements.txt extra-requirements.txt setup.py /tmp/
 RUN python3.10 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 RUN python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
-RUN python3 -m pip install --no-cache-dir install --upgrade setuptools
+RUN python3 -m pip install --no-cache-dir --upgrade setuptools
 RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
 
 RUN python3 -m pip install intel-openmp
