@@ -93,12 +93,11 @@ class DiscoveryServiceMixin:
         scheme = "grpc"
         ctrl_address = f"{scheme}://{host}:{port}"
         ctrl_address = f"{host}:{port}"
-
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
 
         etcd_registry = EtcdServiceRegistry(
-            "0.0.0.0",
-            2379,
+            self.discovery_host,
+            self.discovery_port,
             heartbeat_time=5,
         )
         lease = etcd_registry.register(

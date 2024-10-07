@@ -24,7 +24,7 @@ class JobSupervisor:
     """
 
     DEFAULT_JOB_STOP_WAIT_TIME_S = 3
-    DEFAULT_JOB_TIMEOUT_S = 60  # 60 seconds * 60 minutes
+    DEFAULT_JOB_TIMEOUT_S = 0  # 60 seconds * 60 minutes
 
     def __init__(
         self,
@@ -54,43 +54,45 @@ class JobSupervisor:
             f"Sending ping to {address} for request {request_id} on deployment {deployment_name}"
         )
 
-        channel = get_grpc_channel(address=address, asyncio=True)
-        connection_stub = _ConnectionStubs(
-            address=address,
-            channel=channel,
-            deployment_name=deployment_name,
-            metrics=_NetworkingMetrics(
-                sending_requests_time_metrics=None,
-                received_response_bytes=None,
-                send_requests_bytes_metrics=None,
-            ),
-            histograms=_NetworkingHistograms(),
-        )
-
-        doc = TextDoc(text=f"ping : _jina_dry_run_")
-        request = DataRequest()
-        request.document_array_cls = DocList[BaseDoc]()
-        request.header.exec_endpoint = "_jina_dry_run_"
-        request.header.target_executor = deployment_name
-        request.parameters = {
-            "job_id": self._job_id,
-        }
-        request.data.docs = DocList([doc])
-
-        try:
-            response, _ = await connection_stub.send_requests(
-                requests=[request], metadata={}, compression=False
+        async with get_grpc_channel(address=address, asyncio=True) as channel:
+            connection_stub = _ConnectionStubs(
+                address=address,
+                channel=channel,
+                deployment_name=deployment_name,
+                metrics=_NetworkingMetrics(
+                    sending_requests_time_metrics=None,
+                    received_response_bytes=None,
+                    send_requests_bytes_metrics=None,
+                ),
+                histograms=_NetworkingHistograms(),
             )
-            self.logger.debug(f"DryRun - Response: {response}")
-            if response.status.code == jina_pb2.StatusProto.SUCCESS:
-                return True
-            else:
-                raise RuntimeError(
-                    f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
+
+            doc = TextDoc(text=f"ping : _jina_dry_run_")
+            request = DataRequest()
+            request.document_array_cls = DocList[BaseDoc]()
+            request.header.exec_endpoint = "_jina_dry_run_"
+            request.header.target_executor = deployment_name
+            request.parameters = {
+                "job_id": self._job_id,
+            }
+            request.data.docs = DocList([doc])
+
+            try:
+                response, _ = await connection_stub.send_requests(
+                    requests=[request], metadata={}, compression=False
                 )
-        except Exception as e:
-            self.logger.error(f"Error during ping to {self.request_info} : {e}")
-            raise RuntimeError(f"Error during ping to {str(self.request_info)} : {e}")
+                self.logger.debug(f"DryRun - Response: {response}")
+                if response.status.code == jina_pb2.StatusProto.SUCCESS:
+                    return True
+                else:
+                    raise RuntimeError(
+                        f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
+                    )
+            except Exception as e:
+                self.logger.error(f"Error during ping to {self.request_info} : {e}")
+                raise RuntimeError(
+                    f"Error during ping to {str(self.request_info)} : {e}"
+                )
 
     async def run(
         self,
@@ -182,6 +184,10 @@ class JobSupervisor:
         :param requests: The requests that were sent.
         :param request_info: The request info.
         """
+
+        print("JobSupervisor.send_callback")
+        print("requests: ", requests)
+        print("request_info: ", request_info)
         if isinstance(requests, list):
             request = requests[0]
         else:

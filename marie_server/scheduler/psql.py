@@ -25,6 +25,7 @@ from marie_server.scheduler.plans import (
     fetch_next_job,
     insert_job,
     insert_version,
+    mark_as_active_jobs,
     resume_jobs,
     to_timestamp_with_tz,
     try_set_monitor_time,
@@ -234,7 +235,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
-        # self.task = asyncio.create_task(self._poll())
+        self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
@@ -298,7 +299,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def debug_info(self) -> str:
         print("Debugging info")
 
-    async def enqueue(self, work_info: WorkInfo) -> str:
+    async def enqueue(self, work_info: WorkInfo) -> str | None:
         """
         Enqueues a work item for processing on the next available executor.
 
@@ -447,6 +448,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         new_key_added = False
         submission_id = work_info.id
 
+        # FIXME : This is a hack to allow the job to be re-submitted after a failure
         work_info.retry_limit = 0
 
         with self:
@@ -469,7 +471,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        await self.enqueue(work_info)
+        # this is not needed when the scheduler is polling for jobs, as the job will be picked up by the scheduler
+        # and marked as active in the fetch_next_job query
+        job_id = await self.enqueue(work_info)
+        if job_id is None:
+            self.logger.error(f"Delaying scheduling work item: {work_info.id}")
+        else:
+            self.logger.info(f"Work item scheduled with ID: {job_id}")
+            with self:
+                try:
+                    cursor = self._execute_sql_gracefully(
+                        mark_as_active_jobs(
+                            DEFAULT_SCHEMA, work_info.name, [work_info.id]
+                        )
+                    )
+                    key_updated = cursor is not None and cursor.rowcount > 0
+                except (Exception, psycopg2.Error) as error:
+                    self.logger.error(f"Error updating job: {error}")
+                    self.connection.rollback()
+                    raise ValueError(
+                        f"Job update for submission_id {submission_id} failed. "
+                        f"Please check the logs for more information. {error}"
+                    )
+
         return submission_id
 
     def stop_job(self, job_id: str) -> bool:
@@ -640,7 +664,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     cursor = self._execute_sql_gracefully(
                         try_set_monitor_time(
                             DEFAULT_SCHEMA,
-                            monitor_state_interval_seconds=MONITORING_POLL_PERIOD,
+                            monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
                         )
                     )
                     monitored_on = cursor.fetchone()

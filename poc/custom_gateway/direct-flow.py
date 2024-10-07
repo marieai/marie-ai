@@ -36,7 +36,7 @@ class TestExecutor(MarieExecutor):
 
         for doc in docs:
             doc.text += " First Exec"
-        sec = 3
+        sec = 5
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
         # raise Exception("random error in FirstExec")

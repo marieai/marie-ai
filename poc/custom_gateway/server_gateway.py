@@ -60,7 +60,6 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
-        print("kwargs: ", kwargs)
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
@@ -439,7 +438,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        # task for processing events
+        # # task for processing events
         run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
         await asyncio.gather(*run_server_tasks)
 
@@ -459,8 +458,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         :return: None
 
         """
-        self.logger.info("Setting up service discovery ")
-        self.logger.info(f"Service name : {service_name}")
+        self.logger.info(f"Setting up service discovery : {service_name}")
         self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
 
         async def _start_watcher():
@@ -472,7 +470,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 listen_timeout=5,
             )
 
-            self.logger.info(f"checking : {resolver.resolve(service_name)}")
+            self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
             resolver.watch_service(service_name, self.handle_discovery_event)
 
         task = asyncio.create_task(_start_watcher())
@@ -561,7 +559,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         while tries < max_tries:
             self.logger.info(f"checking is ready at {ctrl_address}")
-            is_ready = GRPCServer.is_ready(ctrl_address)
+            is_ready = await GRPCServer.async_is_ready(ctrl_address)
             self.logger.info(f"gateway status: {is_ready}")
             if is_ready:
                 break
