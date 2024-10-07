@@ -1,30 +1,11 @@
-import time
-
 from request_handling_custom import GatewayRequestHandler
 from server_gateway import MarieServerGateway
 
 from marie import Flow
-from marie.serve.runtimes.servers.grpc import GRPCServer
 
 
 def main():
     print("Bootstrapping server gateway")
-
-    if False:
-        ctrl_address = "0.0.0.0:61000"
-        print("waiting for all servers to be ready at : ", ctrl_address)
-        while True:
-            print(f"checking is ready at {ctrl_address}")
-            res = GRPCServer.is_ready(ctrl_address)
-
-            print(f"res: {res}")
-            if res:
-                print(f"Gateway is ready at {ctrl_address}")
-
-                break
-            time.sleep(1)
-        return
-
     # gateway --protocol http --discovery --discovery-host 127.0.0.1 --discovery-port 8500 --host 192.168.102.65 --port 5555
 
     # we could override the default GatewayRequestHandler with our custom GatewayRequestHandler
@@ -35,17 +16,43 @@ def main():
         request_handling.GatewayRequestHandler = GatewayRequestHandler
 
     with (
-        Flow(
-            # server gateway does not need discovery service this will be available as runtime_args.discovery: bool
-            discovery=False,
-        ).config_gateway(
+        Flow().config_gateway(
             uses=MarieServerGateway,
             protocols=["GRPC", "HTTP"],
             ports=[52000, 51000],
+            kv_store_kwargs={
+                "provider": "postgresql",
+                "hostname": "127.0.0.1",
+                "port": 5432,
+                "username": "postgres",
+                "password": "123456",
+                "database": "postgres",
+                "default_table": "kv_store_worker",
+                "max_pool_size": 5,
+                "max_connections": 5,
+            },
+            job_scheduler_kwargs={
+                "provider": "postgresql",
+                "hostname": "127.0.0.1",
+                "port": 5432,
+                "database": "postgres",
+                "username": "postgres",
+                "password": "123456",
+                "default_table": "job_scheduler",  # Unused as it will be provided by the gateway
+                "max_pool_size": 5,
+                "max_connections": 5,
+            },
+            # ETCD discovery service
+            discovery=True,
+            discovery_host="0.0.0.0",
+            discovery_port=2379,
+            discovery_watchdog_interval=2,
+            discovery_service_name="gateway/marie",
         )
         # .add(tls=False, host="0.0.0.0", external=True, port=61000)
         as flow
     ):
+        flow.save_config("/mnt/data/marie-ai/config/service/direct-flow-gateway.yml")
         flow.block()
 
 

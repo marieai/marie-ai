@@ -214,7 +214,36 @@ def fetch_next_job(schema: str):
     return query
 
 
+def _complete_jobs_query(
+    schema: str, name: str, ids: list, output: dict, state_condition: str
+):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    return f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = now(),
+          state = '{WorkState.COMPLETED.value}',
+          output = {Json(output)}::jsonb
+      WHERE name = '{name}'
+        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        AND {state_condition}
+      RETURNING *
+    )
+    SELECT COUNT(*) FROM results
+    """
+
+
 def complete_jobs(schema: str, name: str, ids: list, output: dict):
+    state_condition = f"state = '{WorkState.ACTIVE.value}'"
+    return _complete_jobs_query(schema, name, ids, output, state_condition)
+
+
+def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
+    state_condition = "TRUE"  # No state condition for complete_jobs_by_id
+    return _complete_jobs_query(schema, name, ids, output, state_condition)
+
+
+def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
     query = f"""
     WITH results AS (
@@ -224,7 +253,6 @@ def complete_jobs(schema: str, name: str, ids: list, output: dict):
           output = {Json(output)}::jsonb
       WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-        AND state = '{WorkState.ACTIVE.value}'
       RETURNING *
     )
     SELECT COUNT(*) FROM results

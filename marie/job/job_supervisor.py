@@ -24,7 +24,7 @@ class JobSupervisor:
     """
 
     DEFAULT_JOB_STOP_WAIT_TIME_S = 3
-    DEFAULT_JOB_TIMEOUT_S = 60  # 60 seconds, there should be no job that takes more than 60 seconds to process
+    DEFAULT_JOB_TIMEOUT_S = 60  # 60 seconds * 60 minutes
 
     def __init__(
         self,
@@ -160,9 +160,15 @@ class JobSupervisor:
                 self.logger.error(
                     f"Job {self._job_id} timed out after {self.DEFAULT_JOB_TIMEOUT_S} seconds."
                 )
-                await self._job_info_client.put_status(
-                    self._job_id, JobStatus.FAILED, message="Job submission timed out."
-                )
+                # If the job is still in PENDING state, then mark it as FAILED
+                old_info = await self._job_info_client.get_info(self._job_id)
+                if old_info is not None:
+                    if old_info.status.is_terminal() is False:
+                        await self._job_info_client.put_status(
+                            self._job_id,
+                            JobStatus.FAILED,
+                            message="Job submission timed out.",
+                        )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
         self.logger.debug(f"Job {self._job_id} submitted in the background.")

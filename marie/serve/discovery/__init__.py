@@ -30,6 +30,7 @@ class DiscoveryServiceMixin:
         discovery_port: Optional[int] = 8500,
         discovery_scheme: Optional[str] = "http",
         discovery_watchdog_interval: Optional[int] = 60,
+        discovery_service_name: str = "gateway/marie",
         runtime_args: Optional[Dict] = None,
     ) -> None:
         if self.logger is None:
@@ -46,6 +47,7 @@ class DiscoveryServiceMixin:
                 discovery_port=discovery_port,
                 discovery_scheme=discovery_scheme,
                 discovery_watchdog_interval=discovery_watchdog_interval,
+                discovery_service_name=discovery_service_name,
                 runtime_args=runtime_args,
             )
         elif protocol == ProtocolType.HTTP:  # DEPRECATED : HTTP is deprecated
@@ -74,6 +76,7 @@ class DiscoveryServiceMixin:
         discovery_port: Optional[int] = 8500,
         discovery_scheme: Optional[str] = "http",
         discovery_watchdog_interval: Optional[int] = 60,
+        discovery_service_name: str = "gateway/marie",
         runtime_args: Optional[Dict] = None,
     ) -> None:
         if self.logger is None:
@@ -90,7 +93,6 @@ class DiscoveryServiceMixin:
         scheme = "grpc"
         ctrl_address = f"{scheme}://{host}:{port}"
         ctrl_address = f"{host}:{port}"
-        service_name = "gateway/service_test"
 
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
 
@@ -100,7 +102,7 @@ class DiscoveryServiceMixin:
             heartbeat_time=5,
         )
         lease = etcd_registry.register(
-            [service_name],
+            [discovery_service_name],
             ctrl_address,
             6,
             addr_cls=JsonAddress,

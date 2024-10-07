@@ -8,17 +8,15 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from fastapi import Depends
 
 import marie
 import marie.helper
 from marie import Gateway as BaseGateway
-from marie.excepts import RuntimeFailToStart
+from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
-from marie.job.sync_manager import SyncManager
 from marie.logging.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
@@ -32,7 +30,6 @@ from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
-from marie.storage.kv.in_memory import InMemoryKV
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
@@ -51,10 +48,10 @@ def create_balancer_interceptor() -> LoadBalancerInterceptor:
 
 
 class MarieServerGateway(BaseGateway, CompositeServer):
-    """A custom Gateway for Marie server.
-    Effectively we are providing a custom implementation of the Gateway class that providers communication between individual executors and the server.
+    """A custom Gateway for Marie server. Effectively we are providing a custom implementation of the Gateway class
+    that providers communication between individual executors and the server.
 
-    This utilizes service discovery to find deployed Executors from discovered gateways that could have spawned them(Flow/Deployment).
+    This utilizes service discovery(ETCD) to find deployed Executors from discovered gateways that could have spawned them(Flow/Deployment).
 
     """
 
@@ -63,40 +60,45 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         self.logger = MarieLogger(self.__class__.__name__)
         self.logger.info(f"Setting up MarieServerGateway")
+        print("kwargs: ", kwargs)
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
 
-        storage = InMemoryKV()
-        # TODO: Externalize the storage configuration
-        kv_storage_config = {
-            "hostname": "127.0.0.1",
-            "port": 5432,
-            "username": "postgres",
-            "password": "123456",
-            "database": "postgres",
-            "default_table": "kv_store_worker",
-            "max_pool_size": 5,
-            "max_connections": 5,
-        }
+        if "kv_store_kwargs" not in kwargs:
+            raise BadConfigSource("Missing kv_store_kwargs in config")
 
-        # TODO : This is a temporary solution to test the service discovery
-        scheduler_config = {
-            "hostname": "localhost",
-            "port": 5432,
-            "database": "postgres",
-            "username": "postgres",
-            "password": "123456",
-        }
+        kv_store_kwargs = kwargs["kv_store_kwargs"]
+        expected_keys = [
+            "provider",
+            "hostname",
+            "port",
+            "username",
+            "password",
+            "database",
+        ]
+        if not all(key in kv_store_kwargs for key in expected_keys):
+            raise ValueError(
+                f"kv_store_kwargs must contain the following keys: {expected_keys}"
+            )
+
+        if "job_scheduler_kwargs" not in kwargs:
+            raise BadConfigSource("Missing job_scheduler_kwargs in config")
+
+        job_scheduler_kwargs = kwargs["job_scheduler_kwargs"]
+        if not all(key in job_scheduler_kwargs for key in expected_keys):
+            raise ValueError(
+                f"job_scheduler_kwargs must contain the following keys: {expected_keys}"
+            )
 
         self.distributor = GatewayJobDistributor(
             gateway_streamer=None, logger=self.logger
         )
 
-        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
+        storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
-            config=scheduler_config, job_manager=job_manager
+            config=job_scheduler_kwargs, job_manager=job_manager
         )
 
         # perform monkey patching
@@ -425,7 +427,11 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
         await self.job_scheduler.start()
-        await self.setup_service_discovery()
+        await self.setup_service_discovery(
+            etcd_host=self.runtime_args.discovery_host,
+            etcd_port=self.runtime_args.discovery_port,
+            service_name=self.runtime_args.discovery_service_name,
+        )
 
     async def run_server(self):
         """Run servers inside CompositeServer forever"""
@@ -439,8 +445,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     async def setup_service_discovery(
         self,
-        etcd_host: str = "0.0.0.0",
-        etcd_port: int = 2379,
+        etcd_host: str,
+        etcd_port: int,
+        service_name: str,
         watchdog_interval: int = 2,
     ):
         """
@@ -453,8 +460,8 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
         """
         self.logger.info("Setting up service discovery ")
-        # FIXME : This is a temporary solution to test the service discovery
-        service_name = "gateway/service_test"
+        self.logger.info(f"Service name : {service_name}")
+        self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
 
         async def _start_watcher():
             resolver = EtcdServiceResolver(

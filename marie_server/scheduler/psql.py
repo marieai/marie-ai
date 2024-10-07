@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -18,6 +18,7 @@ from marie_server.scheduler.models import WorkInfo
 from marie_server.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
+    complete_jobs_by_id,
     count_states,
     create_queue,
     fail_jobs_by_id,
@@ -232,7 +233,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.create_queue(f"${queue}_dlq")
 
         self.running = True
-        self.sync_task = asyncio.create_task(self._sync())
+        # self.sync_task = asyncio.create_task(self._sync())
         # self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
@@ -659,17 +660,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 # TODO: emit error event
 
     async def complete(
-        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        output_metadata: dict = None,
+        force=False,
     ):
         self.logger.info(f"Job completed : {job_id}, {work_item}")
         with self:
+
+            def complete_jobs_wrapper(
+                schema: str, name: str, ids: list, output: dict, _force: bool
+            ):
+                if _force:
+                    return complete_jobs_by_id(schema, name, ids, output)
+                else:
+                    return complete_jobs(schema, name, ids, output)
+
             try:
                 cursor = self._execute_sql_gracefully(
-                    complete_jobs(
+                    complete_jobs_wrapper(
                         DEFAULT_SCHEMA,
                         work_item.name,
                         [job_id],
                         {"on_complete": "done", **(output_metadata or {})},
+                        force,
                     )
                 )
                 counts = cursor.fetchone()[0]
@@ -700,7 +715,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     self.logger.error(f"Error completing failed job: {job_id}")
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing job: {error}")
+                self.logger.error(f"Error completing failed job: {error}")
 
     async def _sync(self):
         wait_time = SYNC_POLL_PERIOD
@@ -724,20 +739,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         job_info_state = convert_job_status_to_work_state(
                             job_info.status
                         )
-                        if work_item.state != job_info_state:
+                        if (
+                            job_info.status.is_terminal()
+                            and work_item.state != job_info_state
+                        ):
                             self.logger.info(
                                 f"State mismatch for job {job_id}: "
                                 f"WorkState={work_item.state}, JobInfoState={job_info_state}. "
                                 f"Updating to JobInfoState."
                             )
-                        # check if terminal status
-                        if job_info.status.is_terminal():
-                            self.logger.info(
-                                f"Job {job_id} is in terminal state, synchronizing."
-                            )
+                            # check that the job can be synced by checking the end time have been at least 60min
+                            synchronize = False
+                            remaining_time = None
+                            min_sync_interval = 5
+                            if job_info.end_time is not None:
+                                timestamp_ms = (
+                                    job_info.end_time
+                                )  # Unix timestamp in milliseconds
+                                timestamp_s = timestamp_ms / 1000
+                                end_time = datetime.fromtimestamp(timestamp_s)
+                                remaining_time = end_time - datetime.now()
+                                if end_time < datetime.now() - timedelta(
+                                    minutes=min_sync_interval
+                                ):
+                                    synchronize = True
+
+                            if not synchronize:
+                                self.logger.info(
+                                    f"Job has not ended more than {min_sync_interval} minutes ago, skipping "
+                                    f"synchronization.  {job_id}: {remaining_time.total_seconds()}"
+                                )
+                                continue
+
                             meta = {"synced": True}
                             if job_info.status == JobStatus.SUCCEEDED:
-                                await self.complete(job_id, work_item, meta)
+                                await self.complete(job_id, work_item, meta, force=True)
                             elif job_info.status == JobStatus.FAILED:
                                 await self.fail(job_id, work_item, meta)
                             elif job_info.status == JobStatus.STOPPED:

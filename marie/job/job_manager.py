@@ -137,7 +137,7 @@ class JobManager:
                         break
                     elif job_status == JobStatus.FAILED:
                         is_alive = False
-                        self.logger.error(f"Job failed : {job_id}")
+                        self.logger.warning(f"Job failed : {job_id}")
                         break
 
                 if job_status == JobStatus.PENDING:

@@ -173,7 +173,7 @@ class WorkerRequestHandler:
         self._hot_reload_task = None
         if self.args.reload:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
-        self._init_job_info_client()
+        self._init_job_info_client(self.args.kv_store_kwargs)
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1435,21 +1435,25 @@ class WorkerRequestHandler:
             status=jina_pb2.RestoreSnapshotStatusProto.Status.NOT_FOUND,
         )
 
-    def _init_job_info_client(self):
-        # storage = self.runtime_args.storage
-        # FIXME : This should be coming from the runtime_args
-        kv_storage_config = {
-            "hostname": "127.0.0.1",
-            "port": 5432,
-            "username": "postgres",
-            "password": "123456",
-            "database": "postgres",
-            "default_table": "kv_store_worker",
-            "max_pool_size": 5,
-            "max_connections": 5,
-        }
-
-        storage = PostgreSQLKV(config=kv_storage_config, reset=False)
+    def _init_job_info_client(self, kv_store_kwargs: Dict):
+        if kv_store_kwargs is None:
+            self.logger.warning(
+                "kv_store_kwargs is not provided, job info client will not be initialized"
+            )
+            return None
+        expected_keys = [
+            "provider",
+            "hostname",
+            "port",
+            "username",
+            "password",
+            "database",
+        ]
+        if not all(key in kv_store_kwargs for key in expected_keys):
+            raise ValueError(
+                f"kv_store_kwargs must contain the following keys: {expected_keys}"
+            )
+        storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         self._job_info_client = JobInfoStorageClient(storage)
 
     async def _record_failed_job(
