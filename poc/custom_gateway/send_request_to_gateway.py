@@ -1,10 +1,13 @@
 import argparse
 import asyncio
+import os
+import time
 
 from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Client
+from marie.utils.json import deserialize_value
 
 
 def create_job_submit_request(args: argparse.Namespace):
@@ -13,7 +16,8 @@ def create_job_submit_request(args: argparse.Namespace):
             "action_type": "command",
             "command": args.command,
             "action": args.action,
-            # "job_id": args.job_id,
+            "name": args.name,
+            "metadata": deserialize_value(args.metadata_json),
         }
     }
     docs = DocList[TextDoc]([TextDoc(text=f"Text : {_}") for _ in range(10)])
@@ -119,14 +123,32 @@ def parse_args():
     )
 
     # Submit command
+    # ---------------------
     parser_submit = job_subparsers.add_parser("submit", help="Submit a new job")
+    parser_submit.add_argument(
+        "name", type=str, help="Name of the project this job belongs to"
+    )
+
+    parser_submit.add_argument(
+        "--address",
+        type=str,
+        default=os.getenv("MARIE_ADDRESS", "127.0.0.1:52000"),
+        help="Address of the Marie cluster to connect to. Can also be specified using the MARIE_ADDRESS environment variable.",
+    )
+    parser_submit.add_argument(
+        "--metadata-json",
+        type=str,
+        help="JSON-serialized dictionary of metadata to attach to the job.",
+    )
+
     parser_submit.add_argument(
         "--no-wait", action="store_true", help="Do not wait for job completion"
     )
-    parser_submit.add_argument("script", type=str, help="Script to execute")
-    parser_submit.add_argument(
-        "script_args", nargs=argparse.REMAINDER, help="Arguments for the script"
-    )
+
+    # parser_submit.add_argument("script", type=str, help="Script to execute")
+    # parser_submit.add_argument(
+    #     "script_args", nargs=argparse.REMAINDER, help="Arguments for the script"
+    # )
 
     # Logs command
     parser_logs = job_subparsers.add_parser("logs", help="Get logs for a job")
@@ -159,7 +181,7 @@ async def main():
     """
     args = parse_args()
     print(args)
-
+    parameters = None
     if args.command == "job":
         if args.action == "submit":
             parameters, docs = create_job_submit_request(args)
@@ -189,30 +211,42 @@ async def main():
     #  python ./send_request_to_gateway.py logs marie_23433
     #  python ./send_request_to_gateway.py job submit hello world
 
+    address = args.address
+    print(f"Connecting to {address}")
+    host, port = address.split(":")
     client = Client(
-        host="127.0.0.1", port=52000, protocol="grpc", request_size=-1, asyncio=True
+        host=host, port=int(port), protocol="grpc", request_size=-1, asyncio=True
     )
 
     ready = await client.is_flow_ready()
     print(f"Flow is ready: {ready}")
 
-    async for resp in client.post(
-        on="/",
-        inputs=[],  # most request does not need inputs
-        parameters=parameters,
-        request_size=-1,
-        return_responses=True,  # return DocList instead of Response
-        return_exceptions=True,
-    ):
-        print("Response: ")
-        print(resp)
-        print(resp.parameters)
-        print(resp.data)
+    for i in range(0, 1):
+        print(f"Sending request : {i}")
+        start = time.perf_counter()
+        async for resp in client.post(
+            on="/",
+            inputs=[],  # most request does not need inputs
+            parameters=parameters,
+            request_size=-1,
+            return_responses=True,  # return DocList instead of Response
+            return_exceptions=True,
+        ):
 
-        ret_docs = resp.data.docs
-        for doc in ret_docs:
-            print(doc.text)
-    print("DONE")
+            print("Response: ")
+            print(resp)
+            print(resp.parameters)
+            print(resp.data)
+
+            ret_docs = resp.data.docs
+            for doc in ret_docs:
+                print(doc.text)
+            # format
+        end = time.perf_counter()
+        diff = end - start
+        print(f"Time taken: {diff:.6f} seconds")
+        print("DONE")
+
     asyncio.get_event_loop().stop()
 
 

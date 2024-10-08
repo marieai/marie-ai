@@ -2,12 +2,14 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import AsyncIterator, Callable, Optional
+from enum import Enum
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
+from pydantic import BaseModel
 
 import marie
 import marie.helper
@@ -35,7 +37,7 @@ from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.scheduler import PostgreSQLJobScheduler
-from marie_server.scheduler.models import WorkInfo
+from marie_server.scheduler.models import JobSubmissionModel, RetryPolicy, WorkInfo
 from marie_server.scheduler.state import WorkState
 
 
@@ -362,21 +364,26 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         else:
             yield self.error_response(f"Action not recognized : {action}")
 
-    async def handle_job_submit_command(self, message: dict) -> Request:
+    async def handle_job_submit_command(self, message: Dict[str, Any]) -> Request:
         """
         Handle job submission command.
 
         :param message: The message containing the job information.
         :return: The response with the submission result.
         """
+        self.logger.info(f"Handling job submit command : {message}")
+        submission_model = JobSubmissionModel(**message)
+        self.logger.info(f"Submission model : {submission_model}")
+        retry = RetryPolicy.DEFAULT_RETRY_POLICY
+
         work_info = WorkInfo(
-            name="extract",
+            name=submission_model.name,
             priority=0,
-            data={},
+            data=message,
             state=WorkState.CREATED,
-            retry_limit=0,
-            retry_delay=0,
-            retry_backoff=False,
+            retry_limit=retry.retry_limit,
+            retry_delay=retry.retry_delay,
+            retry_backoff=retry.retry_backoff,
             start_after=datetime.now(),
             expire_in_seconds=0,
             keep_until=datetime.now(),

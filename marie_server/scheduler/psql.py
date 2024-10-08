@@ -14,7 +14,7 @@ from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler
-from marie_server.scheduler.models import WorkInfo
+from marie_server.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie_server.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
@@ -398,6 +398,48 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             finally:
                 self.connection.commit()
 
+    async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
+        """
+        Find a job by its name and data.
+        :param work_info:
+        """
+        schema = DEFAULT_SCHEMA
+        table = DEFAULT_JOB_TABLE
+        doc_type = work_info.data.get("metadata", {}).get("doc_type", "")
+        doc_id = work_info.data.get("metadata", {}).get("doc_id", "")
+
+        with self:
+            try:
+                cursor = self.connection.cursor()
+                cursor.execute(
+                    f"""
+                        SELECT
+                        id,
+                        name,
+                        priority,
+                        state,
+                        retry_limit,
+                        start_after,
+                        expire_in,
+                        data,
+                        retry_delay,
+                        retry_backoff,
+                        keep_until
+                    FROM {schema}.{table}
+                    WHERE data->'metadata'->>'doc_type' = '{doc_type}'
+                    AND data->'metadata'->>'doc_id' = '{doc_id}'
+                    """
+                )
+                record = cursor.fetchone()
+                if record:
+                    return self.record_to_work_info(record)
+                return None
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting job: {error}")
+                self.connection.rollback()
+            finally:
+                self.connection.commit()
+
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
     ) -> Dict[str, WorkInfo]:
@@ -451,6 +493,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         work_info.retry_limit = 0
 
+        is_valid = await self.is_valid(work_info, ExistingWorkPolicy.REJECT_DUPLICATE)
+        if is_valid:
+            raise ValueError(
+                f"Job with submission_id {submission_id} already exists. "
+                f"For work item : {work_info}."
+            )
+
         with self:
             try:
                 cursor = self._execute_sql_gracefully(
@@ -495,6 +544,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
         return submission_id
+
+    async def is_valid(self, work_info: WorkInfo, policy: ExistingWorkPolicy) -> bool:
+        if policy == ExistingWorkPolicy.ALLOW_ALL:
+            return True
+        if policy == ExistingWorkPolicy.REJECT_ALL:
+            return False
+        if policy == ExistingWorkPolicy.ALLOW_DUPLICATE:
+            return True
+        if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
+            existing_job = await self.get_job_for_policy(work_info)
+            return existing_job is not None
+        if policy == ExistingWorkPolicy.REPLACE:
+            existing_job = await self.get_job_for_policy(work_info)
+            if existing_job and existing_job.state and existing_job.state.is_terminal():
+                return True
+            else:
+                return False
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.
