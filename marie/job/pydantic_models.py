@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-from marie_server.job.common import JobStatus
+from marie.job.common import JobStatus
 
 
 class DriverInfo(BaseModel):
@@ -95,3 +95,9 @@ class JobDetails(BaseModel):
         None,
         description="The node ID of the node the job entrypoint command is running on.",
     )
+
+
+class JobPartition(BaseModel):
+    chunk_index: int
+    start_index: int
+    end_index: int

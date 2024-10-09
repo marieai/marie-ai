@@ -292,7 +292,7 @@ class JobManager:
         *,
         entrypoint: str,
         submission_id: Optional[str] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         runtime_env: Optional[Dict[str, Any]] = None,
         _start_signal_actor: Optional[ActorHandle] = None,
     ) -> str:

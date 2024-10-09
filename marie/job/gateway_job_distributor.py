@@ -1,8 +1,8 @@
 from typing import Callable, List, Optional
 
-from docarray import BaseDoc, DocList
-from docarray.documents import TextDoc
+from docarray import DocList
 
+from marie.api import AssetKeyDoc, parse_payload_to_docs
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_distributor import JobDistributor
 from marie.logging.logger import MarieLogger
@@ -44,14 +44,34 @@ class GatewayJobDistributor(JobDistributor):
         if job_info.metadata:
             parameters.update(job_info.metadata)
 
-        doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
+        print(f"entrypoint = {job_info.entrypoint}")
+        # metadata for payload is nested in metadata
+        metadata = job_info.metadata.get("metadata", {})
+        print(f"metadata: {metadata}")
+        parameters, asset_doc = await parse_payload_to_docs(metadata)
+        job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
+        parameters["job_id"] = submission_id
+        # payload data attribute should be stripped at this time
+        parameters["payload"] = metadata  # THIS IS TEMPORARY HERE
+        input_docs = DocList[AssetKeyDoc]([asset_doc])
 
         request = DataRequest()
-        request.document_array_cls = DocList[BaseDoc]()
-        request.header.exec_endpoint = "/extract"
-        request.header.target_executor = "executor0"  # job_info.entrypoint
+        request.document_array_cls = DocList[AssetKeyDoc]()
+        request.header.exec_endpoint = job_info.entrypoint
         request.parameters = parameters
-        request.data.docs = DocList([doc])
+        request.data.docs = input_docs
+
+        # doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
+        #
+        # metadata = job_info.metadata
+        # print(f"metadata: {metadata}")
+        #
+        # request = DataRequest()
+        # request.document_array_cls = DocList[BaseDoc]()
+        # request.header.exec_endpoint = "/extract"
+        # # request.header.target_executor = "executor0"  # job_info.entrypoint
+        # request.parameters = parameters
+        # request.data.docs = DocList([doc])
 
         response = await self.streamer.process_single_data(
             request=request, send_callback=send_callback

@@ -39,7 +39,7 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
     """
 
 
-def insert_job(schema: str, work_info: WorkInfo) -> str:
+def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> str:
     return f"""
         INSERT INTO {schema}.job (
           id,
@@ -53,7 +53,8 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           retry_limit,
           retry_delay,
           retry_backoff,
-          policy          
+          policy,
+          parent_job_id     
         )
         SELECT
           id,
@@ -82,7 +83,8 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           END as retry_delay,
           
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
-          q.policy
+          q.policy,
+          {'NULL' if parent_job_id is None else f"'{parent_job_id}'::uuid"} as parent_job_id
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,

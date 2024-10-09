@@ -2,14 +2,12 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from enum import Enum
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
-from pydantic import BaseModel
 
 import marie
 import marie.helper
@@ -37,7 +35,11 @@ from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
 from marie.types.request.status import StatusMessage
 from marie_server.scheduler import PostgreSQLJobScheduler
-from marie_server.scheduler.models import JobSubmissionModel, RetryPolicy, WorkInfo
+from marie_server.scheduler.models import (
+    DEFAULT_RETRY_POLICY,
+    JobSubmissionModel,
+    WorkInfo,
+)
 from marie_server.scheduler.state import WorkState
 
 
@@ -280,7 +282,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             return self.handle_nodes_command(invoke_action)
         else:
             return self.error_response(
-                f"Command not recognized or not implemented : {command}"
+                f"Command not recognized or not implemented : {command}", None
             )
 
     async def handle_nodes_command(self, message: dict) -> AsyncIterator[Request]:
@@ -374,7 +376,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger.info(f"Handling job submit command : {message}")
         submission_model = JobSubmissionModel(**message)
         self.logger.info(f"Submission model : {submission_model}")
-        retry = RetryPolicy.DEFAULT_RETRY_POLICY
+        retry = DEFAULT_RETRY_POLICY
 
         work_info = WorkInfo(
             name=submission_model.name,
@@ -402,7 +404,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
             return response
         except ValueError as ex:
-            return self.error_response(f"Failed to submit job. {ex}")
+            return self.error_response(f"Failed to submit job. {ex}", ex)
 
     def error_response(self, msg: str, exception: Optional[Exception]) -> Response:
         """
@@ -412,11 +414,12 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         :return: The response object with the error parameters set.
         """
         response = Response()
-        response.parameters = {
-            "status": "error",
-            "msg": msg,
-            "exception": exception,
-        }
+
+        exc_msg = ""
+        if exception:
+            exc_msg = str(exception)
+
+        response.parameters = {"status": "error", "msg": msg, "exception": exc_msg}
         return response
 
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:

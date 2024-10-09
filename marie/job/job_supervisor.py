@@ -184,10 +184,6 @@ class JobSupervisor:
         :param requests: The requests that were sent.
         :param request_info: The request info.
         """
-
-        print("JobSupervisor.send_callback")
-        print("requests: ", requests)
-        print("request_info: ", request_info)
         if isinstance(requests, list):
             request = requests[0]
         else:

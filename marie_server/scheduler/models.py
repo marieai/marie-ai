@@ -61,12 +61,9 @@ class RetryPolicy:
         self.retry_delay = retry_delay
         self.retry_backoff = retry_backoff
 
-    @classmethod
-    def default_retry_policy(cls):
-        return cls(
-            retry_limit=cls.DEFAULT_USER_RETRY_LIMIT,
-            retry_delay=cls.DEFAULT_USER_RETRY_DELAY,
-            retry_backoff=cls.DEFAULT_RETRY_BACKOFF,
-        )
 
-    DEFAULT_RETRY_POLICY = default_retry_policy()
+DEFAULT_RETRY_POLICY = RetryPolicy(
+    retry_limit=RetryPolicy.DEFAULT_USER_RETRY_LIMIT,
+    retry_delay=RetryPolicy.DEFAULT_USER_RETRY_DELAY,
+    retry_backoff=RetryPolicy.DEFAULT_RETRY_BACKOFF,
+)

@@ -9,6 +9,7 @@ import psycopg2
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
+from marie.job.pydantic_models import JobPartition
 from marie.logging.logger import MarieLogger
 from marie.logging.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
@@ -316,9 +317,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
 
+        # FIXME : This is a hack for now
+        # extract entrypoint from work_info
+        # this need to be configurable from db as projects can have different entrypoints
+        name = work_info.name
+        entrypoint = "/extract"
+        if name == "extract":
+            entrypoint = "/extract"
+        elif name == "template-matching":
+            entrypoint = "/template-matching"
+        elif name == "classify":
+            entrypoint = "/classify"
+
         try:
             returned_id = await self.job_manager.submit_job(
-                entrypoint="echo hello", submission_id=submission_id
+                entrypoint=entrypoint,
+                submission_id=submission_id,
+                metadata=work_info.data,
             )
         except ValueError as e:
             self.logger.error(f"Error submitting job: {e}")
@@ -486,19 +501,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
         :return: The ID of the inserted work item.
+        :raises ValueError: If the job submission fails or if the job already exists.
         """
         new_key_added = False
         submission_id = work_info.id
 
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         work_info.retry_limit = 0
-
-        is_valid = await self.is_valid(work_info, ExistingWorkPolicy.REJECT_DUPLICATE)
-        if is_valid:
+        is_valid = await self.is_valid_submission(
+            work_info, ExistingWorkPolicy.REJECT_DUPLICATE
+        )
+        if not is_valid:
             raise ValueError(
-                f"Job with submission_id {submission_id} already exists. "
+                f"Job with submission_id {submission_id} already exists."
                 f"For work item : {work_info}."
             )
+
+        splits = self.calculate_splits(work_info)
 
         with self:
             try:
@@ -545,7 +564,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return submission_id
 
-    async def is_valid(self, work_info: WorkInfo, policy: ExistingWorkPolicy) -> bool:
+    async def is_valid_submission(
+        self, work_info: WorkInfo, policy: ExistingWorkPolicy
+    ) -> bool:
         if policy == ExistingWorkPolicy.ALLOW_ALL:
             return True
         if policy == ExistingWorkPolicy.REJECT_ALL:
@@ -554,7 +575,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return True
         if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
             existing_job = await self.get_job_for_policy(work_info)
-            return existing_job is not None
+            return existing_job is None
         if policy == ExistingWorkPolicy.REPLACE:
             existing_job = await self.get_job_for_policy(work_info)
             if existing_job and existing_job.state and existing_job.state.is_terminal():
@@ -876,3 +897,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except Exception as e:
                 logger.error(f"Error syncing jobs: {e}")
                 traceback.print_exc()
+
+    def calculate_splits(self, work_info: WorkInfo) -> list[JobPartition]:
+        """
+        Calculate the splits for a work item.
+        This is used to split the work item into smaller parts for parallel processing.
+        :param work_info:
+        :return:
+        """
+
+        return []

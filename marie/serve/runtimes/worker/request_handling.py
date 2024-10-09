@@ -3,7 +3,6 @@ import asyncio
 import functools
 import json
 import os
-import sys
 import tempfile
 import threading
 import traceback
@@ -1501,7 +1500,7 @@ class WorkerRequestHandler:
                     job_id,
                     JobStatus.FAILED,
                     jobinfo_replace_kwargs={
-                        "metadata": {
+                        "runtime_env": {
                             "attributes": request_attributes,
                             "error": exc,
                         }
@@ -1521,8 +1520,8 @@ class WorkerRequestHandler:
                     job_id,
                     JobStatus.RUNNING,
                     jobinfo_replace_kwargs={
-                        "metadata": {
-                            "params": params,
+                        "runtime_env": {
+                            # "params": params,
                             "attributes": self._request_attributes(requests),
                         }
                     },
@@ -1547,7 +1546,7 @@ class WorkerRequestHandler:
                     job_id,
                     JobStatus.SUCCEEDED,
                     jobinfo_replace_kwargs={
-                        "metadata": {"attributes": request_attributes}
+                        "runtime_env": {"attributes": request_attributes}
                     },
                 )
             except Exception as e:

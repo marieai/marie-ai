@@ -3,11 +3,12 @@ import imghdr
 import io
 import os
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
 
+from marie.api.docs import AssetKeyDoc
 from marie.logging.predefined import default_logger
 from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
@@ -225,3 +226,59 @@ def value_from_payload_or_args(payload, key, default=None):
     elif "args" in payload and key in payload["args"]:
         ret_type = payload["args"][key]
     return ret_type
+
+
+async def parse_payload_to_docs(
+    payload: Any, clear_payload: Optional[bool] = True
+) -> tuple:
+    return parse_payload_to_docs_sync(payload, clear_payload)
+
+
+def parse_payload_to_docs_sync(
+    payload: Any, clear_payload: Optional[bool] = True
+) -> tuple:
+    """
+    Parse payload request, extract file and return list of Document objects
+
+    :param payload:
+    :param clear_payload:
+    :return:
+    """
+    # every request should contain queue_id if not present it will default to '0000-0000-0000-0000'
+    queue_id = value_from_payload_or_args(
+        payload, "queue_id", default="0000-0000-0000-0000"
+    )
+
+    asset_uri = extract_payload_to_uri(payload, queue_id)
+    pages = []
+
+    try:
+        pages_parameter = value_from_payload_or_args(payload, "pages", default="")
+        if len(pages_parameter) > 0:
+            pages = [int(page) for page in pages_parameter.split(",")]
+    except:
+        pass
+
+    # this is a hack to remove the data attribute from the payload and for backward compatibility
+    if clear_payload:
+        key = "data"
+        if "data" in payload:
+            key = "data"
+        elif "srcData" in payload:
+            key = "srcData"
+        elif "srcBase64" in payload:
+            key = "srcBase64"
+        elif "srcFile" in payload:
+            key = "srcFile"
+        elif "srcUrl" in payload:
+            key = "srcUrl"
+        elif "uri" in payload:
+            key = "uri"
+        del payload[key]
+
+    doc_id = value_from_payload_or_args(payload, "doc_id", default="")
+    doc_type = value_from_payload_or_args(payload, "doc_type", default="")
+    asset_doc = AssetKeyDoc(asset_key=asset_uri, pages=pages)
+    parameters = {"queue_id": queue_id, "ref_id": doc_id, "ref_type": doc_type}
+
+    return parameters, asset_doc

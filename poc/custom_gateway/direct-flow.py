@@ -8,6 +8,7 @@ from docarray.documents import TextDoc
 from marie_executor import MarieExecutor
 
 from marie import Deployment, Executor, Flow, requests
+from marie.api import AssetKeyDoc
 from marie.conf.helper import load_yaml
 
 
@@ -21,21 +22,20 @@ class TestExecutor(MarieExecutor):
     @requests(on="/extract")
     async def func_extract(
         self,
-        docs: DocList[TextDoc],
+        docs: DocList[AssetKeyDoc],
         parameters=None,
         *args,
         **kwargs,
     ):
         if parameters is None:
             parameters = {}
-
         print(f"FirstExec func called : {len(docs)}, {parameters}")
         # randomly throw an error to test the error handling
         # if random.random() > 0.5:
         #     raise Exception("random error in FirstExec")
-
-        for doc in docs:
-            doc.text += " First Exec"
+        #
+        # for doc in docs:
+        #     doc.text += " First Exec"
         sec = 5
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
