@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 import grpc
@@ -25,11 +25,13 @@ from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
 from marie.serve.networking.connection_stub import _ConnectionStubs
+from marie.serve.networking.sse import EventSourceResponse
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
+from marie.serve.runtimes.worker.http_fastapi_app import _gen_dict_documents
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types.request import Request
 from marie.types.request.data import DataRequest, Response
@@ -230,6 +232,41 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 self.logger.info(f"Received request at {datetime.now()}")
                 return {"status": "OK", "result": "Job deleted"}
 
+            @app.api_route(
+                path="/api/v1/invoke",
+                methods=["POST"],
+                summary="Invoke a new command /api/v1/invoke",
+            )
+            async def invoke_command(request: Request):
+                self.logger.info(f"Received request at {datetime.now()}")
+                payload = await request.json()
+                header = payload.get("header", {})
+                message = payload.get("parameters", {})
+
+                req = DataRequest()
+                req.parameters = message
+
+                async def caller(req: DataRequest):
+                    print(f"Received request: {req}")
+                    decoded = await self.decode_request(req)
+
+                    print("Decoded request: ", decoded)
+                    if isinstance(decoded, AsyncIterator):
+                        async for response in decoded:
+                            yield response
+                    else:
+                        yield decoded
+
+                event_generator = caller(req)
+                response = await event_generator.__anext__()
+                return {"header": {}, "parameters": response.parameters, "data": None}
+
+                # event_generator = _gen_dict_documents(caller(req))
+                # return EventSourceResponse(event_generator)
+
+                # # ['header', 'parameters', 'routes', 'data'
+                # return {"header": {}, "parameters": {}, "data": None}
+
             return app
 
         marie.helper.extend_rest_interface = _extend_rest_function
@@ -250,6 +287,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger.info(f"intercepting stream")
         async for request in request_iterator:
             decoded = await self.decode_request(request)
+            print(f"Decoded request GRPC: {decoded}")
             if isinstance(decoded, AsyncIterator):
                 async for response in decoded:
                     yield response
@@ -258,7 +296,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
 
     async def decode_request(
         self, request: Request
-    ) -> Response | AsyncIterator[Request]:
+    ) -> Response | AsyncGenerator[Request, None]:
         """
         Decode the request and return a response.
         :param request: The request to decode.
@@ -285,7 +323,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
                 f"Command not recognized or not implemented : {command}", None
             )
 
-    async def handle_nodes_command(self, message: dict) -> AsyncIterator[Request]:
+    async def handle_nodes_command(
+        self, message: dict
+    ) -> AsyncGenerator[Request, None]:
         """
         Handle nodes command based on the action provided in the message.
 
@@ -317,9 +357,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
             }
             yield req
         else:
-            yield self.error_response(f"Action not recognized : {action}")
+            yield self.error_response(f"Action not recognized : {action}", None)
 
-    async def handle_job_command(self, message: dict) -> AsyncIterator[Request]:
+    async def handle_job_command(self, message: dict) -> AsyncGenerator[Request, None]:
         """
         Handle job command based on the action provided in the message.
 

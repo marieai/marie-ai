@@ -11,13 +11,14 @@ from marie.utils.json import deserialize_value
 
 
 def create_job_submit_request(args: argparse.Namespace):
+    metadata = deserialize_value(args.metadata_json) if args.metadata_json else {}
     param = {
         "invoke_action": {
             "action_type": "command",
             "command": args.command,
             "action": args.action,
             "name": args.name,
-            "metadata": deserialize_value(args.metadata_json),
+            "metadata": metadata,
         }
     }
     docs = DocList[TextDoc]([TextDoc(text=f"Text : {_}") for _ in range(10)])
@@ -136,6 +137,14 @@ def parse_args():
         help="Address of the Marie cluster to connect to. Can also be specified using the MARIE_ADDRESS environment variable.",
     )
     parser_submit.add_argument(
+        "--protocol",
+        type=str,
+        default=os.getenv("MARIE_PROTOCOL", "grpc"),
+        help="Protocol to use for communication with the Marie cluster (grpc, http). Can also be specified using the "
+        "MARIE_PROTOCOL environment variable.",
+    )
+
+    parser_submit.add_argument(
         "--metadata-json",
         type=str,
         help="JSON-serialized dictionary of metadata to attach to the job.",
@@ -212,10 +221,11 @@ async def main():
     #  python ./send_request_to_gateway.py job submit hello world
 
     address = args.address
-    print(f"Connecting to {address}")
+    protocol = args.protocol
+    print(f"Connecting to {address} using {protocol} protocol")
     host, port = address.split(":")
     client = Client(
-        host=host, port=int(port), protocol="grpc", request_size=-1, asyncio=True
+        host=host, port=int(port), protocol=protocol, request_size=-1, asyncio=True
     )
 
     ready = await client.is_flow_ready()
@@ -225,7 +235,7 @@ async def main():
         print(f"Sending request : {i}")
         start = time.perf_counter()
         async for resp in client.post(
-            on="/",
+            on="/api/v1/invoke",
             inputs=[],  # most request does not need inputs
             parameters=parameters,
             request_size=-1,
