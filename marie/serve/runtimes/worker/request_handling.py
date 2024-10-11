@@ -172,7 +172,8 @@ class WorkerRequestHandler:
         self._hot_reload_task = None
         if self.args.reload:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
-        self._init_job_info_client(self.args.kv_store_kwargs)
+
+        self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1453,7 +1454,7 @@ class WorkerRequestHandler:
                 f"kv_store_kwargs must contain the following keys: {expected_keys}"
             )
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
-        self._job_info_client = JobInfoStorageClient(storage)
+        return JobInfoStorageClient(storage)
 
     async def _record_failed_job(
         self,

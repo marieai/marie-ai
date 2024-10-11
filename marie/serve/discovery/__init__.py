@@ -37,19 +37,20 @@ class DiscoveryServiceMixin:
             raise Exception("Expected logger to be configured")
 
         if protocol == ProtocolType.GRPC:
-            self._setup_service_discovery_etcd(
-                name=name,
-                host=host,
-                port=port,
-                scheme=scheme,
-                discovery=discovery,
-                discovery_host=discovery_host,
-                discovery_port=discovery_port,
-                discovery_scheme=discovery_scheme,
-                discovery_watchdog_interval=discovery_watchdog_interval,
-                discovery_service_name=discovery_service_name,
-                runtime_args=runtime_args,
-            )
+            if False:
+                self._setup_service_discovery_etcd(
+                    name=name,
+                    host=host,
+                    port=port,
+                    scheme=scheme,
+                    discovery=discovery,
+                    discovery_host=discovery_host,
+                    discovery_port=discovery_port,
+                    discovery_scheme=discovery_scheme,
+                    discovery_watchdog_interval=discovery_watchdog_interval,
+                    discovery_service_name=discovery_service_name,
+                    runtime_args=runtime_args,
+                )
         elif protocol == ProtocolType.HTTP:  # DEPRECATED : HTTP is deprecated
             self._setup_service_discovery_consul(
                 name=name,
