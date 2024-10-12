@@ -3,10 +3,10 @@ from google.protobuf.json_format import MessageToDict, MessageToJson
 
 from marie.excepts import BadRequestType
 from marie.proto import jina_pb2
-from marie.types.request.status import StatusMessage
+from marie.types_core.request.status import StatusMessage
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def status_pb():
     return jina_pb2.StatusProto()
 
@@ -24,7 +24,7 @@ def test_init_fail():
 
 
 @pytest.mark.parametrize(
-    'status_code', [jina_pb2.StatusProto.SUCCESS, jina_pb2.StatusProto.ERROR]
+    "status_code", [jina_pb2.StatusProto.SUCCESS, jina_pb2.StatusProto.ERROR]
 )
 def test_set_code(status_code):
     status = StatusMessage()
@@ -34,7 +34,7 @@ def test_set_code(status_code):
 
 def test_set_exception():
     status = StatusMessage()
-    exc = Exception('exception code')
+    exc = Exception("exception code")
     status.set_exception(exc)
     assert status.proto.code == jina_pb2.StatusProto.ERROR
     assert status.proto.description == repr(exc)

@@ -4,9 +4,9 @@ import numpy as np
 import sahi.annotation as BoundingBox
 from sahi.prediction import ObjectPrediction, PredictionScore
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
-from ...logging.profile import TimeContext
+from ...logging_core.profile import TimeContext
 from .base import BaseTemplateMatcher
 from .model import TemplateMatchResult
 

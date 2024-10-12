@@ -5,9 +5,9 @@ from docarray import DocList
 from marie.api import AssetKeyDoc, parse_payload_to_docs
 from marie.job.common import JobInfo, JobStatus
 from marie.job.job_distributor import JobDistributor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 
 class GatewayJobDistributor(JobDistributor):

@@ -14,20 +14,20 @@ from marie.importer import ImportExtensions
 if TYPE_CHECKING:  # pragma: no cover
     from pydantic import BaseModel
     from marie.clients.base import CallbackFnType, InputType
-    from marie.types.request.data import Response
+    from marie.types_core.request.data import Response
 from marie._docarray import Document, DocumentArray, docarray_v2
 
 
-def _include_results_field_in_param(parameters: Optional['Dict']) -> 'Dict':
-    key_result = '__results__'
+def _include_results_field_in_param(parameters: Optional["Dict"]) -> "Dict":
+    key_result = "__results__"
 
     if parameters:
 
         if key_result in parameters:
             if not isinstance(parameters[key_result], dict):
                 warnings.warn(
-                    f'It looks like you passed a dictionary with the key `{key_result}` to `parameters`.'
-                    'This key is reserved, so the associated value will be deleted.'
+                    f"It looks like you passed a dictionary with the key `{key_result}` to `parameters`."
+                    "This key is reserved, so the associated value will be deleted."
                 )
                 parameters.update({key_result: dict()})
     else:
@@ -57,16 +57,16 @@ class MutateMixin:
         with ImportExtensions(required=True):
             from sgqlc.endpoint.http import HTTPEndpoint as SgqlcHTTPEndpoint
 
-            proto = 'https' if self.args.tls else 'http'
-            graphql_url = f'{proto}://{self.args.host}:{self.args.port}/graphql'
+            proto = "https" if self.args.tls else "http"
+            graphql_url = f"{proto}://{self.args.host}:{self.args.port}/graphql"
             endpoint = SgqlcHTTPEndpoint(graphql_url)
             res = endpoint(
                 mutation, variables=variables, timeout=timeout, extra_headers=headers
             )
-            if 'errors' in res and res['errors']:
-                msg = 'GraphQL mutation returned the following errors: '
-                for err in res['errors']:
-                    msg += err['message'] + '. '
+            if "errors" in res and res["errors"]:
+                msg = "GraphQL mutation returned the following errors: "
+                for err in res["errors"]:
+                    msg += err["message"] + ". "
                 raise ConnectionError(msg)
             return res
 
@@ -144,18 +144,18 @@ def _render_response_table(r, st, ed, show_table: bool = True):
     def make_table(_title, _time, _percent):
         table = Table(show_header=False, box=None)
         table.add_row(
-            _title, f'[b]{_time:.0f}[/b]ms', f'[dim]{_percent * 100:.0f}%[/dim]'
+            _title, f"[b]{_time:.0f}[/b]ms", f"[dim]{_percent * 100:.0f}%[/dim]"
         )
         return table
 
     from rich.tree import Tree
 
-    t = Tree(make_table('Roundtrip', elapsed, 1))
-    t.add(make_table('Client-server network', network_time, network_time / elapsed))
-    t2 = t.add(make_table('Server', gateway_time, gateway_time / elapsed))
+    t = Tree(make_table("Roundtrip", elapsed, 1))
+    t.add(make_table("Client-server network", network_time, network_time / elapsed))
+    t2 = t.add(make_table("Server", gateway_time, gateway_time / elapsed))
     t2.add(
         make_table(
-            'Gateway-executors network', server_network, server_network / gateway_time
+            "Gateway-executors network", server_network, server_network / gateway_time
         )
     )
     for _name, _time in exec_time.items():
@@ -164,10 +164,10 @@ def _render_response_table(r, st, ed, show_table: bool = True):
     if show_table:
         print(t)
     return {
-        'Roundtrip': elapsed,
-        'Client-server network': network_time,
-        'Server': gateway_time,
-        'Gateway-executors network': server_network,
+        "Roundtrip": elapsed,
+        "Client-server network": network_time,
+        "Server": gateway_time,
+        "Gateway-executors network": server_network,
         **exec_time,
     }
 
@@ -184,7 +184,7 @@ class ProfileMixin:
         from docarray import Document
 
         st = time.perf_counter()
-        r = self.client.post(on='/', inputs=Document(), return_responses=True)
+        r = self.client.post(on="/", inputs=Document(), return_responses=True)
         ed = time.perf_counter()
         return _render_response_table(r[0], st, ed, show_table=show_table)
 
@@ -202,7 +202,7 @@ class AsyncProfileMixin:
 
         st = time.perf_counter()
         async for r in self.client.post(
-            on='/', inputs=Document(), return_responses=True
+            on="/", inputs=Document(), return_responses=True
         ):
             ed = time.perf_counter()
             return _render_response_table(r, st, ed, show_table=show_table)
@@ -339,11 +339,11 @@ class PostMixin:
     def post(
         self,
         on: str,
-        inputs: Optional['InputType'] = None,
-        on_done: Optional['CallbackFnType'] = None,
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
-        parameters: Union[Dict, 'BaseModel', None] = None,
+        inputs: Optional["InputType"] = None,
+        on_done: Optional["CallbackFnType"] = None,
+        on_error: Optional["CallbackFnType"] = None,
+        on_always: Optional["CallbackFnType"] = None,
+        parameters: Union[Dict, "BaseModel", None] = None,
         target_executor: Optional[str] = None,
         request_size: int = 100,
         show_progress: bool = False,
@@ -358,7 +358,7 @@ class PostMixin:
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
         **kwargs,
-    ) -> Optional[Union['DocumentArray', List['Response']]]:
+    ) -> Optional[Union["DocumentArray", List["Response"]]]:
         """Post a general data request to the Flow.
 
         :param inputs: input data which can be a DocList, a BaseDoc, an Iterable, a function which returns an Iterable.
@@ -443,10 +443,10 @@ class PostMixin:
         )
 
     # ONLY CRUD, for other request please use `.post`
-    index = partialmethod(post, '/index')
-    search = partialmethod(post, '/search')
-    update = partialmethod(post, '/update')
-    delete = partialmethod(post, '/delete')
+    index = partialmethod(post, "/index")
+    search = partialmethod(post, "/search")
+    update = partialmethod(post, "/update")
+    delete = partialmethod(post, "/delete")
 
 
 class AsyncPostMixin:
@@ -455,11 +455,11 @@ class AsyncPostMixin:
     async def post(
         self,
         on: str,
-        inputs: Optional['InputType'] = None,
-        on_done: Optional['CallbackFnType'] = None,
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
-        parameters: Union[Dict, 'BaseModel', None] = None,
+        inputs: Optional["InputType"] = None,
+        on_done: Optional["CallbackFnType"] = None,
+        on_error: Optional["CallbackFnType"] = None,
+        on_always: Optional["CallbackFnType"] = None,
+        parameters: Union[Dict, "BaseModel", None] = None,
         target_executor: Optional[str] = None,
         request_size: int = 100,
         show_progress: bool = False,
@@ -474,7 +474,7 @@ class AsyncPostMixin:
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
         **kwargs,
-    ) -> AsyncGenerator[None, Union['DocumentArray', 'Response']]:
+    ) -> AsyncGenerator[None, Union["DocumentArray", "Response"]]:
         """Async Post a general data request to the Flow.
 
         :param inputs: input data which can be a DocList, a BaseDoc, an Iterable, a function which returns an Iterable.
@@ -553,7 +553,7 @@ class AsyncPostMixin:
         return_type: Type[Document] = Document,
         timeout: Optional[int] = None,
         **kwargs,
-    ) -> AsyncGenerator[None, 'Document']:
+    ) -> AsyncGenerator[None, "Document"]:
         """Send one document to a streaming endpoint and receive results asynchronisly, one Document at a time.
 
         :param inputs: input data which can be an Iterable, a function which returns an Iterable, or a single Document.
@@ -579,7 +579,7 @@ class AsyncPostMixin:
             yield doc
 
     # ONLY CRUD, for other request please use `.post`
-    index = partialmethod(post, '/index')
-    search = partialmethod(post, '/search')
-    update = partialmethod(post, '/update')
-    delete = partialmethod(post, '/delete')
+    index = partialmethod(post, "/index")
+    search = partialmethod(post, "/search")
+    update = partialmethod(post, "/update")
+    delete = partialmethod(post, "/delete")

@@ -12,7 +12,7 @@ from numpy import ndarray
 from PIL import Image, ImageDraw
 
 from marie.base_handler import BaseHandler
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 # Add parent to the search path, so we can reference the modules(craft, pix2pix) here without throwing and exception
 from marie.utils.draw_truetype import determine_font_size, get_default_font

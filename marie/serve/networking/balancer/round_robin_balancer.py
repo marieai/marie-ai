@@ -1,7 +1,7 @@
 from typing import Optional, Sequence
 
 from marie.excepts import EstablishGrpcConnectionError
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 

@@ -6,7 +6,7 @@ from docarray import Document, DocumentArray
 
 from marie.helper import Namespace, random_identity
 from marie.serve.stream import RequestStreamer
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 
 class RequestStreamerWrapper:
@@ -23,8 +23,8 @@ class RequestStreamerWrapper:
             request_handler=self.request_handler_fn,
             result_handler=self.result_handle_fn,
             end_of_iter_handler=self.end_of_iter_fn,
-            prefetch=getattr(args, 'prefetch', 0),
-            iterate_sync_in_thread=iterate_sync_in_thread
+            prefetch=getattr(args, "prefetch", 0),
+            iterate_sync_in_thread=iterate_sync_in_thread,
         )
 
     def request_handler_fn(self, request):
@@ -34,7 +34,7 @@ class RequestStreamerWrapper:
             rand_sleep = random.uniform(0.1, 0.6)
             await asyncio.sleep(rand_sleep)
             docs = request.docs
-            docs[0].tags['request_handled'] = True
+            docs[0].tags["request_handled"] = True
             request.data.docs = docs
             return request
 
@@ -45,7 +45,7 @@ class RequestStreamerWrapper:
         self.results_handled.append(result)
         assert isinstance(result, DataRequest)
         docs = result.docs
-        docs[0].tags['result_handled'] = True
+        docs[0].tags["result_handled"] = True
         result.data.docs = docs
         return result
 
@@ -73,16 +73,18 @@ class RequestStreamerWrapper:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('prefetch', [0, 5])
-@pytest.mark.parametrize('num_requests', [1, 5, 13])
-@pytest.mark.parametrize('async_iterator', [False, True])
-@pytest.mark.parametrize('results_in_order', [False, True])
-@pytest.mark.parametrize('iterate_sync_in_thread', [False, True])
+@pytest.mark.parametrize("prefetch", [0, 5])
+@pytest.mark.parametrize("num_requests", [1, 5, 13])
+@pytest.mark.parametrize("async_iterator", [False, True])
+@pytest.mark.parametrize("results_in_order", [False, True])
+@pytest.mark.parametrize("iterate_sync_in_thread", [False, True])
 async def test_request_streamer(
     prefetch, num_requests, async_iterator, results_in_order, iterate_sync_in_thread
 ):
 
-    test_streamer = RequestStreamerWrapper(num_requests, prefetch, iterate_sync_in_thread)
+    test_streamer = RequestStreamerWrapper(
+        num_requests, prefetch, iterate_sync_in_thread
+    )
     streamer = test_streamer.streamer
 
     it = (
@@ -97,8 +99,8 @@ async def test_request_streamer(
     async for r in response:
         test_streamer.response_ids.append(r.header.request_id)
         num_responses += 1
-        assert r.docs[0].tags['request_handled']
-        assert r.docs[0].tags['result_handled']
+        assert r.docs[0].tags["request_handled"]
+        assert r.docs[0].tags["result_handled"]
 
     assert num_responses == num_requests
     assert len(test_streamer.request_ids) == len(test_streamer.response_ids)
@@ -111,9 +113,11 @@ async def test_request_streamer(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('num_requests', [1, 5, 13])
-@pytest.mark.parametrize('iterate_sync_in_thread', [False, True])
-async def test_request_streamer_process_single_data(monkeypatch, num_requests, iterate_sync_in_thread):
+@pytest.mark.parametrize("num_requests", [1, 5, 13])
+@pytest.mark.parametrize("iterate_sync_in_thread", [False, True])
+async def test_request_streamer_process_single_data(
+    monkeypatch, num_requests, iterate_sync_in_thread
+):
     test_streamer = RequestStreamerWrapper(num_requests, 0, iterate_sync_in_thread)
     streamer = test_streamer.streamer
 
@@ -121,7 +125,7 @@ async def test_request_streamer_process_single_data(monkeypatch, num_requests, i
         # bypass some assertions in RequestStreamerWrapper.end_of_iter_fn
         pass
 
-    monkeypatch.setattr(streamer, '_end_of_iter_handler', end_of_iter_fn)
+    monkeypatch.setattr(streamer, "_end_of_iter_handler", end_of_iter_fn)
 
     it = test_streamer._get_sync_requests_iterator()
 
@@ -131,8 +135,8 @@ async def test_request_streamer_process_single_data(monkeypatch, num_requests, i
         r = await streamer.process_single_data(request=req)
         test_streamer.response_ids.append(r.header.request_id)
         num_responses += 1
-        assert r.docs[0].tags['request_handled']
-        assert r.docs[0].tags['result_handled']
+        assert r.docs[0].tags["request_handled"]
+        assert r.docs[0].tags["result_handled"]
 
     assert num_responses == num_requests
     assert len(test_streamer.request_ids) == len(test_streamer.response_ids)

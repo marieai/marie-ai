@@ -20,8 +20,8 @@ from marie.constants import (
     __model_path__,
 )
 from marie.importer import ImportExtensions
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import (
     NativeToastHandler,
     PsqlToastHandler,

@@ -8,7 +8,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry
 
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class MonitoringMixin:

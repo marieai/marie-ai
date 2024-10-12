@@ -1,13 +1,13 @@
 import argparse
 
 from marie.helper import parse_host_scheme
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 
 class NetworkChecker:
     """Check if a Deployment is running or not."""
 
-    def __init__(self, args: 'argparse.Namespace'):
+    def __init__(self, args: "argparse.Namespace"):
         """
         Create a new :class:`NetworkChecker`.
 
@@ -17,7 +17,7 @@ class NetworkChecker:
         import time
 
         from marie.clients import Client
-        from marie.logging.profile import TimeContext
+        from marie.logging_core.profile import TimeContext
         from marie.serve.runtimes.servers import BaseServer
 
         try:
@@ -26,20 +26,20 @@ class NetworkChecker:
             timeout = args.timeout / 1000 if args.timeout != -1 else None
             for j in range(args.attempts):
                 with TimeContext(
-                    f'ping {args.target} on {args.host} at {j} round', default_logger
+                    f"ping {args.target} on {args.host} at {j} round", default_logger
                 ) as tc:
-                    if args.target == 'flow':
+                    if args.target == "flow":
                         r = Client(host=args.host).is_flow_ready(timeout=timeout)
                     else:
                         hostname, port, protocol, _ = parse_host_scheme(args.host)
                         r = BaseServer.is_ready(
-                            ctrl_address=f'{hostname}:{port}',
+                            ctrl_address=f"{hostname}:{port}",
                             timeout=timeout,
                             protocol=protocol,
                         )
                     if not r:
                         default_logger.warning(
-                            'not responding, attempt (%d/%d) in 1s'
+                            "not responding, attempt (%d/%d) in 1s"
                             % (j + 1, args.attempts)
                         )
                     else:
@@ -49,7 +49,7 @@ class NetworkChecker:
                     time.sleep(1)
             if total_success < args.attempts:
                 default_logger.debug(
-                    'message lost %.0f%% (%d/%d) '
+                    "message lost %.0f%% (%d/%d) "
                     % (
                         (1 - total_success / args.attempts) * 100,
                         args.attempts - total_success,
@@ -58,17 +58,17 @@ class NetworkChecker:
                 )
             if total_success > 0:
                 default_logger.debug(
-                    'avg. latency: %.0f ms' % (total_time / total_success * 1000)
+                    "avg. latency: %.0f ms" % (total_time / total_success * 1000)
                 )
 
             if total_success >= args.min_successful_attempts:
                 default_logger.debug(
-                    f'readiness check succeeded {total_success} times!!!'
+                    f"readiness check succeeded {total_success} times!!!"
                 )
                 exit(0)
             else:
                 default_logger.debug(
-                    f'readiness check succeeded {total_success} times, less than {args.min_successful_attempts}'
+                    f"readiness check succeeded {total_success} times, less than {args.min_successful_attempts}"
                 )
         except KeyboardInterrupt:
             pass

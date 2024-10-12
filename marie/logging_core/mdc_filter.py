@@ -1,12 +1,12 @@
 import logging
 
-from marie.logging.mdc import MDC
+from marie.logging_core.mdc import MDC
 
 
 class MDCContextFilter(logging.Filter):
     """This filter adds the MDC to the log record."""
 
-    def __init__(self, name: str = '', **kwargs):
+    def __init__(self, name: str = "", **kwargs):
         super(MDCContextFilter, self).__init__(name)
         self.context = kwargs
 

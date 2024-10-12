@@ -7,7 +7,7 @@ from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.excepts import BadRequestType
 from marie.helper import random_identity, typename
 from marie.proto import jina_pb2
-from marie.types.request import Request
+from marie.types_core.request import Request
 
 RequestSourceType = TypeVar(
     "RequestSourceType", jina_pb2.DataRequestProto, str, Dict, bytes

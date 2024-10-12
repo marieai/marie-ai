@@ -44,7 +44,7 @@ from marie.helper import (
 )
 from marie.importer import ImportExtensions
 from marie.jaml import JAMLCompatible
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.orchestrate.deployments.install_requirements_helper import (
     _get_package_path_from_uses,
     install_package_dependencies,
@@ -73,34 +73,34 @@ def _call_add_voters(leader, voters, replica_ids, logger):
     # makes it impossible to do tests sequentially
     from marie.serve.consensus.add_voter.call_add_voter import call_add_voter
 
-    logger.debug(f'Trying to add {len(replica_ids)} voters to leader {leader}')
+    logger.debug(f"Trying to add {len(replica_ids)} voters to leader {leader}")
     success_lists = []
     for voter_address, replica_id in zip(voters, replica_ids):
         logger.debug(
-            f'Trying to add replica-{str(replica_id)} as voter with address {voter_address} to leader at {leader}'
+            f"Trying to add replica-{str(replica_id)} as voter with address {voter_address} to leader at {leader}"
         )
         success = False
         for i in range(5):
-            logger.debug(f'Trying {i}th time')
+            logger.debug(f"Trying {i}th time")
             success = call_add_voter(leader, str(replica_id), voter_address)
             if success:
-                logger.debug(f'Trying {i}th time succeeded')
+                logger.debug(f"Trying {i}th time succeeded")
                 break
             else:
-                logger.debug(f'Trying {i}th failed. Wait 2 seconds for next try')
+                logger.debug(f"Trying {i}th failed. Wait 2 seconds for next try")
                 time.sleep(2.0)
 
         success_lists.append(success)
         if not success:
             logger.warning(
-                f'Failed to add {str(replica_id)} as voter with address {voter_address} to leader at {leader}. This could be because {leader} is not the leader, '
-                f'and maybe the cluster is restoring from a previous cluster state'
+                f"Failed to add {str(replica_id)} as voter with address {voter_address} to leader at {leader}. This could be because {leader} is not the leader, "
+                f"and maybe the cluster is restoring from a previous cluster state"
             )
         else:
             logger.success(
-                f'Replica-{str(replica_id)} successfully added as voter with address {voter_address} to leader at {leader}'
+                f"Replica-{str(replica_id)} successfully added as voter with address {voter_address} to leader at {leader}"
             )
-    logger.debug('Adding voters to leader finished')
+    logger.debug("Adding voters to leader finished")
     return all(success_lists)
 
 
@@ -109,33 +109,33 @@ async def _async_call_add_voters(leader, voters, replica_ids, logger):
     # makes it impossible to do tests sequentially
     from marie.serve.consensus.add_voter.call_add_voter import async_call_add_voter
 
-    logger.debug(f'Trying to add {len(replica_ids)} voters to leader {leader}')
+    logger.debug(f"Trying to add {len(replica_ids)} voters to leader {leader}")
     success_lists = []
     for voter_address, replica_id in zip(voters, replica_ids):
         logger.debug(
-            f'Trying to add replica-{str(replica_id)} as voter with address {voter_address} to leader at {leader}'
+            f"Trying to add replica-{str(replica_id)} as voter with address {voter_address} to leader at {leader}"
         )
         success = False
         for i in range(5):
-            logger.debug(f'Trying {i}th time')
+            logger.debug(f"Trying {i}th time")
             success = await async_call_add_voter(leader, str(replica_id), voter_address)
             if success:
-                logger.debug(f'Trying {i}th time succeeded')
+                logger.debug(f"Trying {i}th time succeeded")
                 break
             else:
-                logger.debug(f'Trying {i}th failed. Wait 2 seconds for next try')
+                logger.debug(f"Trying {i}th failed. Wait 2 seconds for next try")
                 time.sleep(2.0)
         success_lists.append(success)
         if not success:
             logger.warning(
-                f'Failed to add {str(replica_id)} as voter with address {voter_address} to leader at {leader}. This could be because {leader} is not the leader, '
-                f'and maybe the cluster is restoring from a previous cluster state'
+                f"Failed to add {str(replica_id)} as voter with address {voter_address} to leader at {leader}. This could be because {leader} is not the leader, "
+                f"and maybe the cluster is restoring from a previous cluster state"
             )
         else:
             logger.success(
-                f'Replica-{str(replica_id)} successfully added as voter with address {voter_address} to leader at {leader}'
+                f"Replica-{str(replica_id)} successfully added as voter with address {voter_address} to leader at {leader}"
             )
-    logger.debug('Adding voters to leader finished')
+    logger.debug("Adding voters to leader finished")
     return all(success_lists)
 
 
@@ -161,16 +161,16 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
             self.head_pod = head_pod
             self.name = name
             logger_kwargs = vars(self.deployment_args)
-            logger_kwargs.pop('name')
+            logger_kwargs.pop("name")
             self.logger = MarieLogger(
                 context=self.name, name=self.name, **logger_kwargs
             )
 
         def _add_voter_to_leader(self):
-            leader_address = f'{self._pods[0].runtime_ctrl_address}'
+            leader_address = f"{self._pods[0].runtime_ctrl_address}"
             voter_addresses = [pod.runtime_ctrl_address for pod in self._pods[1:]]
             replica_ids = [pod.args.replica_id for pod in self._pods[1:]]
-            self.logger.debug('Starting process to call Add Voters')
+            self.logger.debug("Starting process to call Add Voters")
             res = _call_add_voters(
                 leader=leader_address,
                 voters=voter_addresses,
@@ -178,15 +178,15 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
                 logger=self.logger,
             )
             if res:
-                self.logger.debug('Finished adding voters')
+                self.logger.debug("Finished adding voters")
             else:
-                self.logger.error('Adding Voters did not finish successfully')
+                self.logger.error("Adding Voters did not finish successfully")
 
         async def _async_add_voter_to_leader(self):
-            leader_address = f'{self._pods[0].runtime_ctrl_address}'
+            leader_address = f"{self._pods[0].runtime_ctrl_address}"
             voter_addresses = [pod.runtime_ctrl_address for pod in self._pods[1:]]
             replica_ids = [pod.args.replica_id for pod in self._pods[1:]]
-            self.logger.debug('Starting process to call Add Voters')
+            self.logger.debug("Starting process to call Add Voters")
             res = await _async_call_add_voters(
                 leader=leader_address,
                 voters=voter_addresses,
@@ -194,9 +194,9 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
                 logger=self.logger,
             )
             if res:
-                self.logger.debug('Finished adding voters')
+                self.logger.debug("Finished adding voters")
             else:
-                self.logger.error('Adding Voters did not finish successfully')
+                self.logger.error("Adding Voters did not finish successfully")
 
         @property
         def is_ready(self):
@@ -287,8 +287,8 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
         port: Optional[int] = None,
         port_monitoring: Optional[int] = None,
         prefer_platform: Optional[str] = None,
-        protocol: Optional[Union[str, List[str]]] = ['GRPC'],
-        provider: Optional[str] = ['NONE'],
+        protocol: Optional[Union[str, List[str]]] = ["GRPC"],
+        provider: Optional[str] = ["NONE"],
         provider_endpoint: Optional[str] = None,
         py_modules: Optional[List[str]] = None,
         quiet: Optional[bool] = False,
@@ -1140,9 +1140,9 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
                 args=self.pod_args["pods"][shard_id],
                 head_pod=self.head_pod,
                 name=(
-                    f'{self.name}-replica-set-{shard_id}'
+                    f"{self.name}-replica-set-{shard_id}"
                     if num_shards > 1
-                    else f'{self.name}-replica-set'
+                    else f"{self.name}-replica-set"
                 ),
             )
             self.enter_context(self.shards[shard_id])
@@ -1218,7 +1218,7 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
                 coros.append(self.shards[shard_id].async_wait_start_success())
 
             await asyncio.gather(*coros)
-            self.logger.debug('Deployment started successfully')
+            self.logger.debug("Deployment started successfully")
         except:
             self.close()
             raise

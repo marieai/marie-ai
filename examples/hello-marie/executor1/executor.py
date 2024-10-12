@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from marie import DocumentArray, Executor, requests
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 
 class MyExecutorAA(Executor):
@@ -10,9 +10,9 @@ class MyExecutorAA(Executor):
     def foo(self, docs: DocumentArray, **kwargs):
         default_logger.info("Executing extract")
         default_logger.info(kwargs)
-        docs[0].text = 'AA - hello, world!'
-        docs[1].text = 'AA - goodbye, world!'
+        docs[0].text = "AA - hello, world!"
+        docs[1].text = "AA - goodbye, world!"
 
-    @requests(on='/crunch-numbers-aa')
+    @requests(on="/crunch-numbers-aa")
     def bar(self, docs: DocumentArray, **kwargs):
-        docs[0].text = 'crunch, aa'
+        docs[0].text = "crunch, aa"

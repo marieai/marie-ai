@@ -16,8 +16,8 @@ from marie.components.template_matching.model import (
     TemplateMatchResult,
     TemplateMatchResultDoc,
 )
-from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import setup_torch_optimizations
 from marie.utils.docs import docs_from_asset, docs_from_file, frames_from_docs
 from marie.utils.network import get_ip_address

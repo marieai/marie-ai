@@ -7,7 +7,7 @@ import numpy as np
 from marie.boxes import BoxProcessorUlimDit
 from marie.document import TrOcrProcessor
 from marie.executor.util import setup_cache
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import DefaultOcrEngine, MockOcrEngine, OcrEngine, VotingOcrEngine
 from marie.renderer import TextRenderer
 from marie.utils.json import load_json_file

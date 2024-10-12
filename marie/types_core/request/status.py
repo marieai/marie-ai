@@ -5,9 +5,9 @@ from google.protobuf import json_format
 from marie.excepts import BadRequestType
 from marie.helper import typename
 from marie.proto import jina_pb2
-from marie.types.mixin import ProtoTypeMixin
+from marie.types_core.mixin import ProtoTypeMixin
 
-StatusSourceType = TypeVar('StatusSourceType', jina_pb2.StatusProto, str, Dict, bytes)
+StatusSourceType = TypeVar("StatusSourceType", jina_pb2.StatusProto, str, Dict, bytes)
 
 
 class StatusMessage(ProtoTypeMixin):
@@ -29,12 +29,12 @@ class StatusMessage(ProtoTypeMixin):
                 self._pb_body.ParseFromString(status_object)
             elif status_object is not None:
                 # note ``None`` is not considered as a bad type
-                raise ValueError(f'{typename(status_object)} is not recognizable')
+                raise ValueError(f"{typename(status_object)} is not recognizable")
             else:
                 self._pb_body = jina_pb2.StatusProto()
         except Exception as ex:
             raise BadRequestType(
-                f'fail to construct a {self.__class__} object from {status_object}'
+                f"fail to construct a {self.__class__} object from {status_object}"
             ) from ex
 
     def set_exception(self, ex: Exception):

@@ -15,7 +15,7 @@ from marie._docarray import Document
 from marie.clients.request.helper import _new_data_request, _new_data_request_from_batch
 from marie.enums import DataInputType
 from marie.helper import batch_iterator
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 if TYPE_CHECKING:  # pragma: no cover
     from docarray import BaseDoc, DocList
@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from marie._docarray import Document
     from marie._docarray.document import DocumentSourceType
     from marie._docarray.document.mixins.content import DocumentContentType
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
     SingletonDataType = Union[
         DocumentContentType,

@@ -2,7 +2,7 @@ import os
 from typing import Iterable, List, Union
 
 from marie.proto import jina_pb2
-from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 
 
 class DataRequestProto:
@@ -13,7 +13,7 @@ class DataRequestProto:
     """
 
     @staticmethod
-    def SerializeToString(x: 'DataRequest'):
+    def SerializeToString(x: "DataRequest"):
         """
         # noqa: DAR101
         # noqa: DAR102
@@ -23,8 +23,8 @@ class DataRequestProto:
             r = x.buffer
         else:
             r = x.proto.SerializePartialToString()
-        os.environ['JINA_GRPC_SEND_BYTES'] = str(
-            len(r) + int(os.environ.get('JINA_GRPC_SEND_BYTES', 0))
+        os.environ["JINA_GRPC_SEND_BYTES"] = str(
+            len(r) + int(os.environ.get("JINA_GRPC_SEND_BYTES", 0))
         )
         return r
 
@@ -35,8 +35,8 @@ class DataRequestProto:
         # noqa: DAR102
         # noqa: DAR201
         """
-        os.environ['JINA_GRPC_RECV_BYTES'] = str(
-            len(x) + int(os.environ.get('JINA_GRPC_RECV_BYTES', 0))
+        os.environ["JINA_GRPC_RECV_BYTES"] = str(
+            len(x) + int(os.environ.get("JINA_GRPC_RECV_BYTES", 0))
         )
         return DataRequest(x)
 
@@ -49,7 +49,7 @@ class DataRequestListProto:
     """
 
     @staticmethod
-    def SerializeToString(x: 'Union[List[DataRequest], DataRequest]'):
+    def SerializeToString(x: "Union[List[DataRequest], DataRequest]"):
         """
         # noqa: DAR101
         # noqa: DAR102
@@ -285,7 +285,7 @@ class SingleDocumentRequestProto:
     """Placeholder that delegates the serialization and deserialization to the internal protobuf"""
 
     @staticmethod
-    def SerializeToString(x: 'SingleDocumentRequest'):
+    def SerializeToString(x: "SingleDocumentRequest"):
         """
         # noqa: DAR101
         # noqa: DAR102
@@ -295,8 +295,8 @@ class SingleDocumentRequestProto:
             r = x.buffer
         else:
             r = x.proto.SerializePartialToString()
-        os.environ['JINA_GRPC_SEND_BYTES'] = str(
-            len(r) + int(os.environ.get('JINA_GRPC_SEND_BYTES', 0))
+        os.environ["JINA_GRPC_SEND_BYTES"] = str(
+            len(r) + int(os.environ.get("JINA_GRPC_SEND_BYTES", 0))
         )
         return r
 
@@ -310,8 +310,8 @@ class SingleDocumentRequestProto:
         import os
 
         if x:
-            os.environ['JINA_GRPC_RECV_BYTES'] = str(
-                len(x) + int(os.environ.get('JINA_GRPC_RECV_BYTES', 0))
+            os.environ["JINA_GRPC_RECV_BYTES"] = str(
+                len(x) + int(os.environ.get("JINA_GRPC_RECV_BYTES", 0))
             )
             return SingleDocumentRequest(x)
         else:

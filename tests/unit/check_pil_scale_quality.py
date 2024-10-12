@@ -1,6 +1,6 @@
 import PIL.Image as Image
 
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 
 if __name__ == "__main__":
 

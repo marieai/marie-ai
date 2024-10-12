@@ -5,7 +5,7 @@ from docarray import DocList
 
 from marie.api.docs import MarieDoc
 from marie.base_handler import BaseHandler
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class BaseDocumentBoundaryRegistration(BaseHandler):
@@ -67,7 +67,7 @@ class BaseDocumentBoundaryRegistration(BaseHandler):
         :return: the registered documents as a DocList[MarieDoc]
         """
 
-        if registration_method not in ['absolute', 'fit_to_page']:
+        if registration_method not in ["absolute", "fit_to_page"]:
             raise ValueError(f"Invalid registration method: {registration_method}")
         if registration_point is None:
             raise ValueError("Registration point must be provided")

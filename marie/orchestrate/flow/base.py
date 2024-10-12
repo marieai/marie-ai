@@ -69,7 +69,7 @@ from marie.helper import (
 )
 from marie.importer import ImportExtensions
 from marie.jaml import JAMLCompatible
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.flow.builder import _hanging_deployments, allowed_levels
 from marie.orchestrate.orchestrator import BaseOrchestrator

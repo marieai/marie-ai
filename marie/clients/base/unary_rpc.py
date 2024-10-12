@@ -10,7 +10,7 @@ from marie.proto import jina_pb2_grpc
 from marie.serve.stream import RequestStreamer
 
 if TYPE_CHECKING:
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class UnaryRpc:
@@ -67,17 +67,17 @@ class UnaryRpc:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(self.channel)
 
         def _request_handler(
-            request: 'Request', **kwargs
-        ) -> 'Tuple[asyncio.Future, Optional[asyncio.Future]]':
-            async def _with_retry(req: 'Request'):
+            request: "Request", **kwargs
+        ) -> "Tuple[asyncio.Future, Optional[asyncio.Future]]":
+            async def _with_retry(req: "Request"):
                 for attempt in range(1, self.max_attempts + 1):
                     try:
                         return await stub.process_single_data(
                             req,
                             compression=self.compression,
                             metadata=self.metadata,
-                            credentials=self.kwargs.get('credentials', None),
-                            timeout=self.kwargs.get('timeout', None),
+                            credentials=self.kwargs.get("credentials", None),
+                            timeout=self.kwargs.get("timeout", None),
                         )
                     except (
                         grpc.aio.AioRpcError,
@@ -110,7 +110,7 @@ class UnaryRpc:
 
         streamer_args = vars(self.client_args)
         if self.prefetch:
-            streamer_args['prefetch'] = self.prefetch
+            streamer_args["prefetch"] = self.prefetch
         streamer = RequestStreamer(
             request_handler=_request_handler,
             result_handler=_result_handler,

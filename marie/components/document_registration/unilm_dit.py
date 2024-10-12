@@ -14,7 +14,7 @@ from torchvision.ops.boxes import batched_nms
 from tqdm import tqdm
 
 from marie.constants import __config_dir__, __model_path__
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.utils.utils import ensure_exists
 

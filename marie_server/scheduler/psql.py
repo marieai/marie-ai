@@ -10,8 +10,8 @@ from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
 from marie.job.pydantic_models import JobPartition
-from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
 from marie.storage.database.postgres import PostgresqlMixin
 from marie_server.scheduler.fixtures import *
 from marie_server.scheduler.job_scheduler import JobScheduler

@@ -10,7 +10,7 @@ if not docarray_v2:
 else:
     from docarray import DocList
 
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
     from marie._docarray import DocumentArray

@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 from marie.renderer.renderer import ResultRenderer
 
 logger = default_logger

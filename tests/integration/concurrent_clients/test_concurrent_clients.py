@@ -6,27 +6,30 @@ from functools import partial
 import pytest
 
 from marie import Client, Document, DocumentArray, Executor, Flow, requests
-from marie.types.request.data import Response
+from marie.types_core.request.data import Response
 
 NUM_REQUESTS = 5
 
 
 class MyExecutor(Executor):
-    @requests(on='/ping')
+    @requests(on="/ping")
     def ping(self, **kwargs):
         time.sleep(0.1 * random.random())
 
 
-@pytest.mark.parametrize('protocol', ['http', 'grpc'])
-@pytest.mark.parametrize('shards', [10])
-@pytest.mark.parametrize('polling', ['ANY', 'ALL'])
-@pytest.mark.parametrize('prefetch', [1, 10])
-@pytest.mark.parametrize('concurrent', [15])
-@pytest.mark.parametrize('use_stream', [False, True])
-def test_concurrent_clients(concurrent, protocol, shards, polling, prefetch, reraise, use_stream):
+@pytest.mark.parametrize("protocol", ["http", "grpc"])
+@pytest.mark.parametrize("shards", [10])
+@pytest.mark.parametrize("polling", ["ANY", "ALL"])
+@pytest.mark.parametrize("prefetch", [1, 10])
+@pytest.mark.parametrize("concurrent", [15])
+@pytest.mark.parametrize("use_stream", [False, True])
+def test_concurrent_clients(
+    concurrent, protocol, shards, polling, prefetch, reraise, use_stream
+):
 
-    if not use_stream and protocol != 'grpc':
+    if not use_stream and protocol != "grpc":
         return
+
     def pong(peer_hash, queue, resp: Response):
         for d in resp.docs:
             queue.put((peer_hash, d.text))
@@ -35,11 +38,11 @@ def test_concurrent_clients(concurrent, protocol, shards, polling, prefetch, rer
         c = Client(protocol=protocol, port=port)
         for _ in range(NUM_REQUESTS):
             c.post(
-                '/ping',
+                "/ping",
                 Document(text=peer_hash),
                 on_done=lambda r: pong(peer_hash, queue, r),
                 return_responses=True,
-                stream=use_stream
+                stream=use_stream,
             )
 
     f = Flow(protocol=protocol, prefetch=prefetch).add(

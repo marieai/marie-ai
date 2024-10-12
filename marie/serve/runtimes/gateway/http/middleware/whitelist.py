@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request, status
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class WhitelistMiddleware:

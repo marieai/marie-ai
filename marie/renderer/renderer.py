@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class ResultRenderer(ABC):

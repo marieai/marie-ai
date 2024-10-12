@@ -1,7 +1,7 @@
 import json
 
 from marie.jaml import JAML
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 from marie.orchestrate.deployments import Deployment
 from marie.orchestrate.flow.base import Flow
 from marie.schemas import get_full_schema
@@ -23,7 +23,7 @@ def export_kubernetes(args):
         )
     else:
         raise NotImplementedError(
-            f'Object of class {obj.__class__.__name__} cannot be exported to Kubernetes'
+            f"Object of class {obj.__class__.__name__} cannot be exported to Kubernetes"
         )
 
 
@@ -43,7 +43,7 @@ def export_docker_compose(args):
         )
     else:
         raise NotImplementedError(
-            f'Object of class {obj.__class__.__name__} cannot be exported to Docker Compose'
+            f"Object of class {obj.__class__.__name__} cannot be exported to Docker Compose"
         )
 
 
@@ -67,23 +67,23 @@ def export_schema(args):
     if args.yaml_path:
         dump_api = api_to_dict()
         for yp in args.yaml_path:
-            f_name = (yp % __version__) if '%s' in yp else yp
-            with open(f_name, 'w', encoding='utf-8') as fp:
+            f_name = (yp % __version__) if "%s" in yp else yp
+            with open(f_name, "w", encoding="utf-8") as fp:
                 JAML.dump(dump_api, fp)
-            default_logger.info(f'API is exported to {f_name}')
+            default_logger.info(f"API is exported to {f_name}")
 
     if args.json_path:
         dump_api = api_to_dict()
         for jp in args.json_path:
-            f_name = (jp % __version__) if '%s' in jp else jp
-            with open(f_name, 'w', encoding='utf-8') as fp:
+            f_name = (jp % __version__) if "%s" in jp else jp
+            with open(f_name, "w", encoding="utf-8") as fp:
                 json.dump(dump_api, fp, sort_keys=True)
-            default_logger.info(f'API is exported to {f_name}')
+            default_logger.info(f"API is exported to {f_name}")
 
     if args.schema_path:
         dump_api = get_full_schema()
         for jp in args.schema_path:
-            f_name = (jp % __version__) if '%s' in jp else jp
-            with open(f_name, 'w', encoding='utf-8') as fp:
+            f_name = (jp % __version__) if "%s" in jp else jp
+            with open(f_name, "w", encoding="utf-8") as fp:
                 json.dump(dump_api, fp, sort_keys=True)
-            default_logger.info(f'API is exported to {f_name}')
+            default_logger.info(f"API is exported to {f_name}")

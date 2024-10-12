@@ -1,10 +1,11 @@
 """Module for helper functions in the parser"""
+
 import argparse
 import os
 from typing import Tuple
 
 from marie.enums import ProtocolType
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 _SHOW_ALL_ARGS = 'MARIE_FULL_CLI' in os.environ
 

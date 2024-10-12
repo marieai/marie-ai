@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast
 from marie.messaging.events import EventMessage, MarieEventType
 from marie.utils.json import to_json

@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.docs import load_image
 from marie.utils.image_utils import imwrite
@@ -128,8 +128,8 @@ def score(src_dir, dst_dir):
                 filename, prefix, suffix = split_filename(_path)
                 src_img_path = os.path.join(src_dir, filename)
                 dst_img_path = os.path.join(dst_dir, filename)
-                src_img = Image.open(src_img_path).convert('RGB')
-                dst_img = Image.open(dst_img_path).convert('RGB')
+                src_img = Image.open(src_img_path).convert("RGB")
+                dst_img = Image.open(dst_img_path).convert("RGB")
 
                 ssim = ssim_score(src_img, dst_img)
                 ssim_total += ssim

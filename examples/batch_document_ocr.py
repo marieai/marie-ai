@@ -4,6 +4,11 @@ import base64
 import json
 import logging
 import os
+import sys
+
+# Add the parent directory of examples to the sys.path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import threading
 import time
 import uuid
@@ -15,10 +20,7 @@ from typing import Any
 import requests
 from pydantic.tools import parse_obj_as
 
-from marie.pipe.components import s3_asset_path
-from marie.storage import StorageManager
-from marie.utils.json import load_json_file, store_json_object
-from utils import (
+from examples.utils import (
     ServiceConfig,
     load_config,
     online,
@@ -26,6 +28,9 @@ from utils import (
     setup_queue,
     setup_s3_storage,
 )
+from marie.pipe.components import s3_asset_path
+from marie.storage import StorageManager
+from marie.utils.json import load_json_file, store_json_object
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

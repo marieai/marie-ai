@@ -11,13 +11,13 @@ from marie.clients.base.helper import WebsocketClientlet
 from marie.clients.helper import callback_exec
 from marie.helper import get_or_reuse_loop
 from marie.importer import ImportExtensions
-from marie.logging.profile import ProgressBar
+from marie.logging_core.profile import ProgressBar
 from marie.proto import jina_pb2
 from marie.serve.stream import RequestStreamer
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.base import CallbackFnType, InputType
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class WebSocketBaseClient(BaseClient):
@@ -31,8 +31,8 @@ class WebSocketBaseClient(BaseClient):
         """
         async with AsyncExitStack() as stack:
             try:
-                proto = 'wss' if self.args.tls else 'ws'
-                url = f'{proto}://{self.args.host}:{self.args.port}/dry_run'
+                proto = "wss" if self.args.tls else "ws"
+                url = f"{proto}://{self.args.host}:{self.args.port}/dry_run"
                 iolet = await stack.enter_async_context(
                     WebsocketClientlet(
                         url=url,
@@ -48,7 +48,7 @@ class WebSocketBaseClient(BaseClient):
                             return response
                     except Exception as exc:
                         self.logger.error(
-                            f'Error while fetching response from Websocket server {exc!r}'
+                            f"Error while fetching response from Websocket server {exc!r}"
                         )
                         raise
 
@@ -59,7 +59,7 @@ class WebSocketBaseClient(BaseClient):
 
                 if receive_task.done():
                     raise RuntimeError(
-                        'receive task not running, can not send messages'
+                        "receive task not running, can not send messages"
                     )
                 try:
                     send_task = asyncio.create_task(_send())
@@ -73,16 +73,16 @@ class WebSocketBaseClient(BaseClient):
 
             except Exception as e:
                 self.logger.error(
-                    f'Error while getting response from websocket server {e!r}'
+                    f"Error while getting response from websocket server {e!r}"
                 )
             return False
 
     async def _get_results(
         self,
-        inputs: 'InputType',
-        on_done: 'CallbackFnType',
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
+        inputs: "InputType",
+        on_done: "CallbackFnType",
+        on_error: Optional["CallbackFnType"] = None,
+        on_always: Optional["CallbackFnType"] = None,
         max_attempts: int = 1,
         initial_backoff: float = 0.5,
         max_backoff: float = 0.1,
@@ -116,8 +116,8 @@ class WebSocketBaseClient(BaseClient):
             )
             p_bar = stack.enter_context(cm1)
 
-            proto = 'wss' if self.args.tls else 'ws'
-            url = f'{proto}://{self.args.host}:{self.args.port}/'
+            proto = "wss" if self.args.tls else "ws"
+            url = f"{proto}://{self.args.host}:{self.args.port}/"
             iolet = await stack.enter_async_context(
                 WebsocketClientlet(
                     url=url,
@@ -145,7 +145,7 @@ class WebSocketBaseClient(BaseClient):
                         future.set_result(response)
                     else:
                         self.logger.warning(
-                            f'discarding unexpected response with request id {response.header.request_id}'
+                            f"discarding unexpected response with request id {response.header.request_id}"
                         )
 
                 """Await messages from WebsocketGateway and process them in the request buffer"""
@@ -155,7 +155,7 @@ class WebSocketBaseClient(BaseClient):
                 finally:
                     if request_buffer:
                         self.logger.warning(
-                            f'{self.__class__.__name__} closed, cancelling all outstanding requests'
+                            f"{self.__class__.__name__} closed, cancelling all outstanding requests"
                         )
                         for future in request_buffer.values():
                             future.cancel()
@@ -166,8 +166,8 @@ class WebSocketBaseClient(BaseClient):
                 asyncio.create_task(iolet.send_eoi())
 
             def _request_handler(
-                request: 'Request', **kwargs
-            ) -> 'Tuple[asyncio.Future, Optional[asyncio.Future]]':
+                request: "Request", **kwargs
+            ) -> "Tuple[asyncio.Future, Optional[asyncio.Future]]":
                 """
                 For each request in the iterator, we send the `Message` using `iolet.send_message()`.
                 For websocket requests from client, for each request in the iterator, we send the request in `bytes`
@@ -185,7 +185,7 @@ class WebSocketBaseClient(BaseClient):
 
             streamer_args = vars(self.args)
             if prefetch:
-                streamer_args['prefetch'] = prefetch
+                streamer_args["prefetch"] = prefetch
             streamer = RequestStreamer(
                 request_handler=_request_handler,
                 result_handler=_result_handler,
@@ -199,7 +199,7 @@ class WebSocketBaseClient(BaseClient):
             exception_raised = None
 
             if receive_task.done():
-                raise RuntimeError('receive task not running, can not send messages')
+                raise RuntimeError("receive task not running, can not send messages")
             try:
                 async for response in streamer.stream(
                     request_iterator=request_iterator,

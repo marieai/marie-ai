@@ -201,7 +201,6 @@ class ExtractPipeline(BasePipeline):
         documents = docs_from_image(frames)
         registered_frames = []
         metadata = []
-
         if enabled:
             try:
                 output_dir = ensure_exists(os.path.join(root_asset_dir, "boundary"))

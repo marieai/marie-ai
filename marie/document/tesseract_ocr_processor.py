@@ -8,7 +8,7 @@ from pytesseract import image_to_data
 
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class TesseractOcrProcessor(OcrProcessor):
@@ -80,25 +80,25 @@ class TesseractOcrProcessor(OcrProcessor):
         try:
             config = f"--psm 8 --tessdata-dir {self.models_dir}"
             data = image_to_data(image, config=config, lang="eng", output_type="dict")
-            n_boxes = len(data['text'])
+            n_boxes = len(data["text"])
 
             words = [
                 {
-                    'text': data['text'][i],
-                    'conf': data['conf'][i],
-                    'left': data['left'][i],
-                    'top': data['top'][i],
-                    'right': data['left'][i] + data['width'][i],
-                    'bottom': data['top'][i] + data['height'][i],
+                    "text": data["text"][i],
+                    "conf": data["conf"][i],
+                    "left": data["left"][i],
+                    "top": data["top"][i],
+                    "right": data["left"][i] + data["width"][i],
+                    "bottom": data["top"][i] + data["height"][i],
                 }
                 for i in range(n_boxes)
-                if data['text'][i]
+                if data["text"][i]
             ]
 
-            text = " ".join([w['text'] for w in words])
+            text = " ".join([w["text"] for w in words])
             text = text.upper().strip() if text is not None else ""
             confidence = (
-                sum([w['conf'] for w in words]) / len(words) if len(words) > 0 else 0
+                sum([w["conf"] for w in words]) / len(words) if len(words) > 0 else 0
             )
             # scale confidence to 0-1
             confidence = round(confidence / 100.0, 4)

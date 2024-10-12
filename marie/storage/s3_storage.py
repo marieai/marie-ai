@@ -17,8 +17,8 @@ except ImportError:
 
 StrOrBytesPath = Union[str, Path, os.PathLike]
 
-from marie.logging.predefined import default_logger as logger
-from marie.logging.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
+from marie.logging_core.logger import MarieLogger
 
 
 def is_file_like(obj) -> bool:

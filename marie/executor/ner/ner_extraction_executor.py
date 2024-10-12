@@ -31,8 +31,8 @@ from marie.executor.ner.utils import (
     visualize_icr,
     visualize_prediction,
 )
-from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import CoordinateFormat, DefaultOcrEngine
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import convert_frames, frames_from_docs

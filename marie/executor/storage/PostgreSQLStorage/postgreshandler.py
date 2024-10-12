@@ -13,7 +13,7 @@ import psycopg2.extras
 from psycopg2 import pool  # noqa: F401
 
 from marie import Document, DocumentArray
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.numpyencoder import NumpyEncoder
 from marie.storage.pgvector.psycopg2 import register_vector
 from marie.utils.json import to_json
@@ -234,15 +234,22 @@ class PostgreSQLHandler:
                             store_mode,
                             to_json(doc.tags) if doc.tags is not None else None,
                             # doc.embedding.astype(self.dump_dtype).tobytes()
-                            doc.embedding
-                            if store_mode == "embedding" and doc.embedding is not None
-                            else None,
-                            doc.blob
-                            if store_mode == "blob" and doc.blob is not None
-                            else None,
-                            to_json(doc.content)
-                            if store_mode == "content" and doc.content is not None
-                            else None,
+                            (
+                                doc.embedding
+                                if store_mode == "embedding"
+                                and doc.embedding is not None
+                                else None
+                            ),
+                            (
+                                doc.blob
+                                if store_mode == "blob" and doc.blob is not None
+                                else None
+                            ),
+                            (
+                                to_json(doc.content)
+                                if store_mode == "content" and doc.content is not None
+                                else None
+                            ),
                             None,
                             # TODO : Need to make serialization much faster than what JSON serializer can provider
                             # doc_without_embedding(doc),
@@ -551,11 +558,11 @@ class PostgreSQLHandler:
                 )
 
             for record in cursor:
-                yield record[0], np.frombuffer(
-                    record[1], dtype=self.dump_dtype
-                ) if record[1] is not None else None, record[
-                    2
-                ] if include_metas else None
+                yield record[0], (
+                    np.frombuffer(record[1], dtype=self.dump_dtype)
+                    if record[1] is not None
+                    else None
+                ), (record[2] if include_metas else None)
         except (Exception, psycopg2.Error) as error:
             self.logger.error(f"Error executing sql statement: {error}")
 

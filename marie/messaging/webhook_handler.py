@@ -1,7 +1,7 @@
 from typing import Any, List
 
 from marie.excepts import BadConfigSource
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.messaging.events import EventMessage
 from marie.messaging.toast_handler import ToastHandler
 

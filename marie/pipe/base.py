@@ -5,7 +5,7 @@ from typing import Optional
 from docarray import DocList
 
 from marie.api.docs import MarieDoc
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class PipelineContext(MutableMapping):

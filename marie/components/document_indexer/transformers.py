@@ -25,14 +25,14 @@ from marie.executor.ner.utils import (
     visualize_extract_kv,
     visualize_prediction,
 )
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...boxes import PSMode
 from ...boxes.line_processor import find_line_number, line_merge
-from ...logging.profile import TimeContext
+from ...logging_core.profile import TimeContext
 from ...ocr import CoordinateFormat, OcrEngine
 from ...ocr.ocr_engine import reset_bbox_cache
 from ...ocr.util import get_known_ocr_engines
@@ -839,7 +839,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         expected_pair = self.init_configuration["expected_pair"]
         entities_to_group = self.init_configuration["entities_to_group"]
         entities_to_group_by_name = {
-            entity['name']: entity for entity in entities_to_group
+            entity["name"]: entity for entity in entities_to_group
         }
 
         for i, (_boxes, _words, annotation, frame) in enumerate(

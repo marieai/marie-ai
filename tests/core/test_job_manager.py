@@ -24,7 +24,7 @@ from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.storage.kv.in_memory import InMemoryKV
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 from tests.helper import _generate_pod_args
 

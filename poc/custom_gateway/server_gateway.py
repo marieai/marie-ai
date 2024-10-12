@@ -17,7 +17,7 @@ from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.resolver import EtcdServiceResolver
@@ -33,9 +33,9 @@ from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 from marie.serve.runtimes.worker.http_fastapi_app import _gen_dict_documents
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types.request import Request
-from marie.types.request.data import DataRequest, Response
-from marie.types.request.status import StatusMessage
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest, Response
+from marie.types_core.request.status import StatusMessage
 from marie_server.scheduler import PostgreSQLJobScheduler
 from marie_server.scheduler.models import (
     DEFAULT_RETRY_POLICY,

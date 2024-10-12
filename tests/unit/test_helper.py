@@ -25,10 +25,10 @@ from marie.helper import (
     run_async,
 )
 from marie.jaml.helper import complete_path
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 from marie.proto import jina_pb2
 from marie.serve.executors.decorators import requests
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from tests import random_docs
 
 

@@ -7,7 +7,7 @@ from sentence_transformers import SentenceTransformer
 from marie.constants import __model_path__
 from marie.embeddings.base import EmbeddingsBase
 from marie.embeddings.embeddings_object import EmbeddingsObject
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.registry.model_registry import ModelRegistry
 

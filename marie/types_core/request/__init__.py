@@ -3,7 +3,7 @@ from typing import Optional
 
 from marie.proto import jina_pb2
 from marie.serve.executors import BaseExecutor
-from marie.types.mixin import ProtoTypeMixin
+from marie.types_core.mixin import ProtoTypeMixin
 
 
 class Request(ProtoTypeMixin):
@@ -26,7 +26,7 @@ class Request(ProtoTypeMixin):
         return getattr(self.proto, name)
 
     def add_exception(
-        self, ex: Optional['Exception'] = None, executor: 'BaseExecutor' = None
+        self, ex: Optional["Exception"] = None, executor: "BaseExecutor" = None
     ) -> None:
         """Add exception to the last route in the envelope
         :param ex: Exception to be added
