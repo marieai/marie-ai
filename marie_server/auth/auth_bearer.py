@@ -4,7 +4,7 @@ from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_403_FORBIDDEN
 
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie_server.auth.api_key_manager import APIKeyManager
 
 

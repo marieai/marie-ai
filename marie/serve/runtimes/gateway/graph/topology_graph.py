@@ -10,11 +10,11 @@ import grpc.aio
 from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import __default_endpoint__
 from marie.excepts import InternalNetworkError
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.helper import _parse_specific_params
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 
 if docarray_v2:
     from docarray import DocList

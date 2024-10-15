@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.utils.overlap import find_overlap_vertical
 
 

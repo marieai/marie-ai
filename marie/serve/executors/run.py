@@ -5,7 +5,7 @@ import os
 from typing import TYPE_CHECKING, Dict, Optional, Type, Union
 
 from marie.constants import RAFT_TO_EXECUTOR_PORT
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.helper import _get_workspace_from_name_and_shards
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 
@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 
 
 def run_raft(
-    args: 'argparse.Namespace',
-    is_ready: Union['multiprocessing.Event', 'threading.Event'],
+    args: "argparse.Namespace",
+    is_ready: Union["multiprocessing.Event", "threading.Event"],
 ):
     """Method to run the RAFT
 
@@ -31,8 +31,8 @@ def run_raft(
         new_d = {}
         for key, value in d.items():
             new_key = key
-            if '_' in key:
-                new_key = ''.join(word.capitalize() for word in key.split('_'))
+            if "_" in key:
+                new_key = "".join(word.capitalize() for word in key.split("_"))
             new_d[new_key] = value
         return new_d
 
@@ -40,27 +40,27 @@ def run_raft(
     shard_id = args.shard_id if args.shards > 1 else -1
 
     raft_dir = _get_workspace_from_name_and_shards(
-        workspace=args.workspace, name='raft', shard_id=shard_id
+        workspace=args.workspace, name="raft", shard_id=shard_id
     )
 
     port = args.port[0] if isinstance(args.port, list) else args.port
-    address = f'{args.host}:{port}'
-    executor_target = f'{args.host}:{port + RAFT_TO_EXECUTOR_PORT}'
+    address = f"{args.host}:{port}"
+    executor_target = f"{args.host}:{port + RAFT_TO_EXECUTOR_PORT}"
 
     # if the Executor was already persisted, retrieve its port and host configuration
-    logger = MarieLogger(context=f'RAFT-{args.name}', **vars(args))
+    logger = MarieLogger(context=f"RAFT-{args.name}", **vars(args))
     persisted_address = jraft.get_configuration(raft_id, raft_dir)
     if persisted_address:
-        logger.debug(f'Configuration found on the node: Address {persisted_address}')
+        logger.debug(f"Configuration found on the node: Address {persisted_address}")
         address = persisted_address
-        executor_host, port = persisted_address.split(':')
-        executor_target = f'{executor_host}:{int(port) + 1}'
+        executor_host, port = persisted_address.split(":")
+        executor_target = f"{executor_host}:{int(port) + 1}"
 
     raft_configuration = pascal_case_dict(args.raft_configuration or {})
-    log_level = raft_configuration.get('LogLevel', os.getenv('JINA_LOG_LEVEL', 'INFO'))
-    raft_configuration['LogLevel'] = log_level
+    log_level = raft_configuration.get("LogLevel", os.getenv("JINA_LOG_LEVEL", "INFO"))
+    raft_configuration["LogLevel"] = log_level
     is_ready.wait()
-    logger.debug(f'Will run the RAFT node with RAFT configuration {raft_configuration}')
+    logger.debug(f"Will run the RAFT node with RAFT configuration {raft_configuration}")
     jraft.run(
         address,
         raft_id,
@@ -72,14 +72,14 @@ def run_raft(
 
 
 def run(
-    args: 'argparse.Namespace',
+    args: "argparse.Namespace",
     name: str,
     runtime_cls: Type[AsyncNewLoopRuntime],
     envs: Dict[str, str],
-    is_started: Union['multiprocessing.Event', 'threading.Event'],
-    is_shutdown: Union['multiprocessing.Event', 'threading.Event'],
-    is_ready: Union['multiprocessing.Event', 'threading.Event'],
-    is_signal_handlers_installed: Union['multiprocessing.Event', 'threading.Event'],
+    is_started: Union["multiprocessing.Event", "threading.Event"],
+    is_shutdown: Union["multiprocessing.Event", "threading.Event"],
+    is_ready: Union["multiprocessing.Event", "threading.Event"],
+    is_signal_handlers_installed: Union["multiprocessing.Event", "threading.Event"],
     jaml_classes: Optional[Dict] = None,
 ):
     """Method representing the :class:`BaseRuntime` activity.
@@ -114,15 +114,15 @@ def run(
     :param jaml_classes: all the `JAMLCompatible` classes imported in main process
     """
     req_handler_cls = None
-    if runtime_cls == 'GatewayRuntime':
+    if runtime_cls == "GatewayRuntime":
         from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 
         req_handler_cls = GatewayRequestHandler
-    elif runtime_cls == 'WorkerRuntime':
+    elif runtime_cls == "WorkerRuntime":
         from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
         req_handler_cls = WorkerRequestHandler
-    elif runtime_cls == 'HeadRuntime':
+    elif runtime_cls == "HeadRuntime":
         from marie.serve.runtimes.head.request_handling import HeaderRequestHandler
 
         req_handler_cls = HeaderRequestHandler
@@ -144,16 +144,16 @@ def run(
         runtime = AsyncNewLoopRuntime(
             args=args,
             req_handler_cls=req_handler_cls,
-            gateway_load_balancer=getattr(args, 'gateway_load_balancer', False),
+            gateway_load_balancer=getattr(args, "gateway_load_balancer", False),
             signal_handlers_installed_event=is_signal_handlers_installed,
         )
     except Exception as ex:
         logger.error(
             (
-                f'{ex!r} during {runtime_cls!r} initialization'
+                f"{ex!r} during {runtime_cls!r} initialization"
                 + f'\n add "--quiet-error" to suppress the exception details'
                 if not args.quiet_error
-                else ''
+                else ""
             ),
             exc_info=not args.quiet_error,
         )
@@ -167,11 +167,11 @@ def run(
     finally:
         _unset_envs()
         is_shutdown.set()
-        logger.debug('process terminated')
+        logger.debug("process terminated")
 
 
 def run_stateful(
-    args: 'argparse.Namespace',
+    args: "argparse.Namespace",
     name: str,
     runtime_cls: Type[AsyncNewLoopRuntime],
     envs: Dict[str, str],
@@ -195,8 +195,8 @@ def run_stateful(
     raft_worker = multiprocessing.Process(
         target=run_raft,
         kwargs={
-            'args': args,
-            'is_ready': is_ready,
+            "args": args,
+            "is_ready": is_ready,
         },
         name=name,
         daemon=True,
@@ -212,15 +212,15 @@ def run_stateful(
     worker = multiprocessing.Process(
         target=run,
         kwargs={
-            'args': cargs,
-            'name': name,
-            'envs': envs,
-            'is_started': is_started,
-            'is_shutdown': is_shutdown,
-            'is_ready': is_ready,
-            'is_signal_handlers_installed': is_signal_handlers_installed,
-            'runtime_cls': runtime_cls,
-            'jaml_classes': JAML.registered_classes(),
+            "args": cargs,
+            "name": name,
+            "envs": envs,
+            "is_started": is_started,
+            "is_shutdown": is_shutdown,
+            "is_ready": is_ready,
+            "is_signal_handlers_installed": is_signal_handlers_installed,
+            "runtime_cls": runtime_cls,
+            "jaml_classes": JAML.registered_classes(),
         },
         name=name,
         daemon=False,

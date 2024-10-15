@@ -13,7 +13,7 @@ from marie.serve.networking.instrumentation import (
     _aio_channel_with_tracing_interceptor,
     _channel_with_tracing_interceptor,
 )
-from marie.types.request import Request
+from marie.types_core.request import Request
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor
@@ -28,8 +28,8 @@ def get_grpc_channel(
     asyncio: bool = False,
     tls: bool = False,
     root_certificates: Optional[str] = None,
-    aio_tracing_client_interceptors: Optional[Sequence['ClientInterceptor']] = None,
-    tracing_client_interceptor: Optional['OpenTelemetryClientInterceptor'] = None,
+    aio_tracing_client_interceptors: Optional[Sequence["ClientInterceptor"]] = None,
+    tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
 ) -> grpc.Channel:
     """
     Creates a grpc channel to the given address
@@ -90,7 +90,7 @@ def send_request_sync(
                 root_certificates=root_certificates,
                 options=channel_options,
             ) as channel:
-                metadata = (('endpoint', endpoint),) if endpoint else None
+                metadata = (("endpoint", endpoint),) if endpoint else None
                 stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
                 response, call = stub.process_single_data.with_call(
                     request,
@@ -128,7 +128,7 @@ def send_health_check_sync(
                 root_certificates=root_certificates,
             ) as channel:
                 health_check_req = health_pb2.HealthCheckRequest()
-                health_check_req.service = ''
+                health_check_req.service = ""
                 stub = health_pb2_grpc.HealthStub(channel)
                 return stub.Check(health_check_req, timeout=timeout)
         except grpc.RpcError as e:
@@ -160,7 +160,7 @@ async def send_health_check_async(
                 root_certificates=root_certificates,
             ) as channel:
                 health_check_req = health_pb2.HealthCheckRequest()
-                health_check_req.service = ''
+                health_check_req.service = ""
                 stub = health_pb2_grpc.HealthStub(channel)
                 return await stub.Check(health_check_req, timeout=timeout)
         except grpc.RpcError as e:
@@ -200,7 +200,7 @@ def send_requests_sync(
                 root_certificates=root_certificates,
                 options=channel_options,
             ) as channel:
-                metadata = (('endpoint', endpoint),) if endpoint else None
+                metadata = (("endpoint", endpoint),) if endpoint else None
                 stub = jina_pb2_grpc.JinaDataRequestRPCStub(channel)
                 response, call = stub.process_data.with_call(
                     requests,
@@ -264,15 +264,15 @@ async def get_available_services(channel) -> List[str]:
                 for service in res.list_services_response.service
                 if service.name
                 not in {
-                    'grpc.reflection.v1alpha.ServerReflection',
-                    'jina.JinaGatewayDryRunRPC',
+                    "grpc.reflection.v1alpha.ServerReflection",
+                    "jina.JinaGatewayDryRunRPC",
                 }
             ]
         )
     return service_names[-1]
 
 
-TLS_PROTOCOL_SCHEMES = ['grpcs', 'https', 'wss']
+TLS_PROTOCOL_SCHEMES = ["grpcs", "https", "wss"]
 DEFAULT_MINIMUM_RETRIES = 3
 
 
@@ -281,12 +281,12 @@ def in_docker():
     Checks if the current process is running inside Docker
     :return: True if the current process is running inside Docker
     """
-    path = '/proc/self/cgroup'
-    if os.path.exists('/.dockerenv'):
+    path = "/proc/self/cgroup"
+    if os.path.exists("/.dockerenv"):
         return True
     if os.path.isfile(path):
-        with open(path, encoding='utf-8') as file:
-            return any('docker' in line for line in file)
+        with open(path, encoding="utf-8") as file:
+            return any("docker" in line for line in file)
     return False
 
 
@@ -299,7 +299,7 @@ def host_is_local(hostname):
     import socket
 
     fqn = socket.getfqdn(hostname)
-    if fqn in ('localhost', '0.0.0.0') or hostname == '0.0.0.0':
+    if fqn in ("localhost", "0.0.0.0") or hostname == "0.0.0.0":
         return True
 
     try:

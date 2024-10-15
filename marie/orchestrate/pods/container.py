@@ -13,7 +13,7 @@ from marie.enums import DockerNetworkMode, PodRoleType
 from marie.excepts import BadImageNameError, DockerVersionError
 from marie.helper import random_name, slugify
 from marie.importer import ImportExtensions
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.orchestrate.helper import generate_default_volume_and_workspace
 from marie.orchestrate.pods import BasePod
 from marie.orchestrate.pods.container_helper import (
@@ -29,12 +29,12 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def _docker_run(
-    client: 'DockerClient',
-    args: 'argparse.Namespace',
+    client: "DockerClient",
+    args: "argparse.Namespace",
     container_name: str,
     envs: Dict,
     net_mode: Optional[str],
-    logger: 'MarieLogger',
+    logger: "MarieLogger",
 ):
     # important to notice, that client is not assigned as instance member to avoid potential
     # heavy copy into new process memory space
@@ -42,24 +42,24 @@ def _docker_run(
 
     import docker
 
-    docker_version = client.version().get('Version')
+    docker_version = client.version().get("Version")
     if not docker_version:
-        raise DockerVersionError('docker version can not be resolved')
+        raise DockerVersionError("docker version can not be resolved")
 
-    docker_version = tuple(docker_version.split('.'))
+    docker_version = tuple(docker_version.split("."))
     # docker daemon versions below 20.0x do not support "host.docker.internal:host-gateway"
-    if docker_version < ('20',):
+    if docker_version < ("20",):
         raise DockerVersionError(
             f'docker version {".".join(docker_version)} is below 20.0.0 and does not '
             f'support "host.docker.internal:host-gateway" : https://github.com/docker/cli/issues/2664'
         )
 
-    if args.uses.startswith('docker://'):
-        uses_img = args.uses.replace('docker://', '')
-        logger.debug(f'will use Docker image: {uses_img}')
+    if args.uses.startswith("docker://"):
+        uses_img = args.uses.replace("docker://", "")
+        logger.debug(f"will use Docker image: {uses_img}")
     else:
         warnings.warn(
-            f'you are using legacy image format {args.uses}, this may create some ambiguity. '
+            f"you are using legacy image format {args.uses}, this may create some ambiguity. "
             f'please use the new format: "--uses docker://{args.uses}"'
         )
         uses_img = args.uses
@@ -84,12 +84,12 @@ def _docker_run(
         args,
         parser,
         taboo={
-            'uses',
-            'entrypoint',
-            'volumes',
-            'pull_latest',
-            'docker_kwargs',
-            'gpus',
+            "uses",
+            "entrypoint",
+            "volumes",
+            "pull_latest",
+            "docker_kwargs",
+            "gpus",
         },
     )
     img_not_found = False
@@ -97,26 +97,26 @@ def _docker_run(
     try:
         client.images.get(uses_img)
     except docker.errors.ImageNotFound:
-        logger.error(f'can not find local image: {uses_img}')
+        logger.error(f"can not find local image: {uses_img}")
         # try to pull the image
         try:
-            logger.debug(f'pulling image: {uses_img}')
+            logger.debug(f"pulling image: {uses_img}")
             client.images.pull(uses_img)
-            logger.debug(f'pulled image: {uses_img}')
-            logger.debug(f'getting image: {uses_img}')
+            logger.debug(f"pulled image: {uses_img}")
+            logger.debug(f"getting image: {uses_img}")
             client.images.get(uses_img)
-            logger.debug(f'successfully got image: {uses_img}')
+            logger.debug(f"successfully got image: {uses_img}")
             img_not_found = False
         except docker.errors.ImageNotFound:
-            logger.error(f'can not find remote image: {uses_img}')
+            logger.error(f"can not find remote image: {uses_img}")
             img_not_found = True
 
     if img_not_found:
-        raise BadImageNameError(f'image: {uses_img} can not be found local & remote.')
+        raise BadImageNameError(f"image: {uses_img} can not be found local & remote.")
 
     _volumes = {}
-    if not getattr(args, 'disable_auto_volume', None) and not getattr(
-        args, 'volumes', None
+    if not getattr(args, "disable_auto_volume", None) and not getattr(
+        args, "volumes", None
     ):
         (
             generated_volumes,
@@ -127,35 +127,35 @@ def _docker_run(
             workspace_in_container if not args.workspace else args.workspace
         )
 
-    if getattr(args, 'volumes', None):
+    if getattr(args, "volumes", None):
         for p in args.volumes:
-            paths = p.split(':')
+            paths = p.split(":")
             local_path = paths[0]
             Path(os.path.abspath(local_path)).mkdir(parents=True, exist_ok=True)
             if len(paths) == 2:
                 container_path = paths[1]
             else:
-                container_path = '/' + os.path.basename(p)
+                container_path = "/" + os.path.basename(p)
             _volumes[os.path.abspath(local_path)] = {
-                'bind': container_path,
-                'mode': 'rw',
+                "bind": container_path,
+                "mode": "rw",
             }
 
     device_requests = []
-    if getattr(args, 'gpus', None):
+    if getattr(args, "gpus", None):
         device_requests = get_gpu_device_requests(args.gpus)
         del args.gpus
 
     _args = ArgNamespace.kwargs2list(non_defaults)
 
-    ports = {f'{_port}/tcp': _port for _port in args.port} if not net_mode else None
+    ports = {f"{_port}/tcp": _port for _port in args.port} if not net_mode else None
 
-    if platform.system() == 'Darwin':
-        image_architecture = client.images.get(uses_img).attrs.get('Architecture', '')
-        if not image_architecture.startswith('arm'):
+    if platform.system() == "Darwin":
+        image_architecture = client.images.get(uses_img).attrs.get("Architecture", "")
+        if not image_architecture.startswith("arm"):
             logger.warning(
-                'The pulled image container does not support ARM architecture while the host machine relies on MacOS (Darwin).'
-                'The image may run with poor performance or fail if run via emulation.'
+                "The pulled image container does not support ARM architecture while the host machine relies on MacOS (Darwin)."
+                "The image may run with poor performance or fail if run via emulation."
             )
     docker_kwargs = args.docker_kwargs or {}
     container = client.containers.run(uses_img, _args, **docker_kwargs)
@@ -163,16 +163,16 @@ def _docker_run(
 
 
 def run(
-    args: 'argparse.Namespace',
+    args: "argparse.Namespace",
     name: str,
     container_name: str,
     net_mode: Optional[str],
     runtime_ctrl_address: str,
     envs: Dict,
-    is_started: Union['multiprocessing.Event', 'threading.Event'],
-    is_shutdown: Union['multiprocessing.Event', 'threading.Event'],
-    is_ready: Union['multiprocessing.Event', 'threading.Event'],
-    is_signal_handlers_installed: Union['multiprocessing.Event', 'threading.Event'],
+    is_started: Union["multiprocessing.Event", "threading.Event"],
+    is_shutdown: Union["multiprocessing.Event", "threading.Event"],
+    is_ready: Union["multiprocessing.Event", "threading.Event"],
+    is_signal_handlers_installed: Union["multiprocessing.Event", "threading.Event"],
 ):
     """Method to be run in a process that stream logs from a Container
 
@@ -203,7 +203,7 @@ def run(
     import docker
 
     log_kwargs = copy.deepcopy(vars(args))
-    log_kwargs['log_config'] = 'docker'
+    log_kwargs["log_config"] = "docker"
     logger = MarieLogger(name, **log_kwargs)
 
     cancel = False
@@ -218,15 +218,15 @@ def run(
                 signal.signal(signame, _set_cancel)
         except (ValueError, RuntimeError) as exc:
             logger.warning(
-                f'The process starting the container for {name} will not be able to handle termination signals. '
-                f' {repr(exc)}'
+                f"The process starting the container for {name} will not be able to handle termination signals. "
+                f" {repr(exc)}"
             )
     else:
         with ImportExtensions(
             required=True,
             logger=logger,
-            help_text='''If you see a 'DLL load failed' error, please reinstall `pywin32`.
-                If you're using conda, please use the command `conda install -c anaconda pywin32`''',
+            help_text="""If you see a 'DLL load failed' error, please reinstall `pywin32`.
+                If you're using conda, please use the command `conda install -c anaconda pywin32`""",
         ):
             import win32api
 
@@ -251,7 +251,7 @@ def run(
 
             return BaseServer.is_ready(
                 ctrl_address=runtime_ctrl_address,
-                protocol=getattr(args, 'protocol', ["grpc"])[0],
+                protocol=getattr(args, "protocol", ["grpc"])[0],
             )
 
         def _is_container_alive(container) -> bool:
@@ -277,7 +277,7 @@ def run(
                 if not is_started.is_set() and not fail_to_start and not cancel:
                     await asyncio.sleep(0.01)
                 msg = line.decode().rstrip()  # type: str
-                logger.debug(re.sub(r'\u001b\[.*?[@-~]', '', msg))
+                logger.debug(re.sub(r"\u001b\[.*?[@-~]", "", msg))
 
         async def _run_async(container):
             await asyncio.gather(
@@ -289,10 +289,10 @@ def run(
         client.close()
         if not is_started.is_set():
             logger.error(
-                f'Process terminated, the container fails to start, check the arguments or entrypoint'
+                f"Process terminated, the container fails to start, check the arguments or entrypoint"
             )
         is_shutdown.set()
-        logger.debug(f'process terminated')
+        logger.debug(f"process terminated")
 
 
 class ContainerPod(BasePod):
@@ -300,17 +300,17 @@ class ContainerPod(BasePod):
     :class:`ContainerPod` starts a runtime of :class:`BaseRuntime` inside a container. It leverages :class:`multiprocessing.Process` to manage the logs and the lifecycle of docker container object in a robust way.
     """
 
-    def __init__(self, args: 'argparse.Namespace'):
+    def __init__(self, args: "argparse.Namespace"):
         super().__init__(args)
         if (
             self.args.docker_kwargs
-            and 'extra_hosts' in self.args.docker_kwargs
-            and __docker_host__ in self.args.docker_kwargs['extra_hosts']
+            and "extra_hosts" in self.args.docker_kwargs
+            and __docker_host__ in self.args.docker_kwargs["extra_hosts"]
         ):
-            self.args.docker_kwargs.pop('extra_hosts')
+            self.args.docker_kwargs.pop("extra_hosts")
         self._net_mode = None
         self.worker = None
-        self.container_name = slugify(f'{self.name}/{random_name()}')
+        self.container_name = slugify(f"{self.name}/{random_name()}")
         self.net_mode, self.runtime_ctrl_address = self._get_control_address()
 
     def _get_control_address(self):
@@ -322,22 +322,22 @@ class ContainerPod(BasePod):
 
             if (
                 self.args.docker_kwargs
-                and 'extra_hosts' in self.args.docker_kwargs
-                and __docker_host__ in self.args.docker_kwargs['extra_hosts']
+                and "extra_hosts" in self.args.docker_kwargs
+                and __docker_host__ in self.args.docker_kwargs["extra_hosts"]
             ):
                 ctrl_host = __docker_host__
             elif network:
                 # If the caller is already in a docker network, replace ctrl-host with network gateway
                 try:
-                    ctrl_host = client.networks.get(network).attrs['IPAM']['Config'][0][
-                        'Gateway'
+                    ctrl_host = client.networks.get(network).attrs["IPAM"]["Config"][0][
+                        "Gateway"
                     ]
                 except:
                     ctrl_host = __docker_host__
             else:
                 ctrl_host = self.args.host
 
-            ctrl_address = f'{ctrl_host}:{self.args.port[0]}'
+            ctrl_address = f"{ctrl_host}:{self.args.port[0]}"
 
             net_mode, runtime_ctrl_address = self._get_network_for_dind_linux(
                 client, ctrl_address
@@ -347,7 +347,7 @@ class ContainerPod(BasePod):
 
         return net_mode, runtime_ctrl_address
 
-    def _get_network_for_dind_linux(self, client: 'DockerClient', ctrl_address: str):
+    def _get_network_for_dind_linux(self, client: "DockerClient", ctrl_address: str):
         import sys
         from platform import uname
 
@@ -355,21 +355,21 @@ class ContainerPod(BasePod):
         # it will need to communicate using the `bridge` network.
         # In WSL, we need to set ports explicitly
         net_mode, runtime_ctrl_address = (
-            getattr(self.args, 'force_network_mode', DockerNetworkMode.AUTO),
+            getattr(self.args, "force_network_mode", DockerNetworkMode.AUTO),
             ctrl_address,
         )
-        if sys.platform in ('linux', 'linux2') and 'microsoft' not in uname().release:
+        if sys.platform in ("linux", "linux2") and "microsoft" not in uname().release:
             if net_mode == DockerNetworkMode.AUTO:
                 net_mode = DockerNetworkMode.HOST
             if net_mode != DockerNetworkMode.NONE:
                 try:
-                    bridge_network = client.networks.get('bridge')
+                    bridge_network = client.networks.get("bridge")
                     if bridge_network:
                         runtime_ctrl_address = f'{bridge_network.attrs["IPAM"]["Config"][0]["Gateway"]}:{self.args.port[0]}'
                 except Exception as ex:
                     self.logger.warning(
                         f'Unable to set control address from "bridge" network: {ex!r}'
-                        f' Control address set to {runtime_ctrl_address}'
+                        f" Control address set to {runtime_ctrl_address}"
                     )
 
         if net_mode in {DockerNetworkMode.AUTO, DockerNetworkMode.NONE}:
@@ -398,16 +398,16 @@ class ContainerPod(BasePod):
         self.worker = multiprocessing.Process(
             target=run,
             kwargs={
-                'args': self.args,
-                'name': self.name,
-                'container_name': self.container_name,
-                'net_mode': self.net_mode,
-                'runtime_ctrl_address': self.runtime_ctrl_address,
-                'envs': self._envs,
-                'is_started': self.is_started,
-                'is_signal_handlers_installed': self.is_signal_handlers_installed,
-                'is_shutdown': self.is_shutdown,
-                'is_ready': self.is_ready,
+                "args": self.args,
+                "name": self.name,
+                "container_name": self.container_name,
+                "net_mode": self.net_mode,
+                "runtime_ctrl_address": self.runtime_ctrl_address,
+                "envs": self._envs,
+                "is_started": self.is_started,
+                "is_signal_handlers_installed": self.is_signal_handlers_installed,
+                "is_shutdown": self.is_shutdown,
+                "is_ready": self.is_ready,
             },
             daemon=True,
         )
@@ -425,9 +425,9 @@ class ContainerPod(BasePod):
             self._container.stop()
         finally:
             self.is_shutdown.wait(self.args.timeout_ctrl)
-            self.logger.debug(f'terminating the runtime process')
+            self.logger.debug(f"terminating the runtime process")
             self.worker.terminate()
-            self.logger.debug(f'runtime process properly terminated')
+            self.logger.debug(f"runtime process properly terminated")
 
     def join(self, *args, **kwargs):
         """Joins the Pod.
@@ -447,6 +447,6 @@ class ContainerPod(BasePod):
                 containers = client.containers.list()
         except docker.errors.NotFound:
             pass
-        self.logger.debug(f'joining the process')
+        self.logger.debug(f"joining the process")
         self.worker.join(timeout=10, *args, **kwargs)
-        self.logger.debug(f'successfully joined the process')
+        self.logger.debug(f"successfully joined the process")

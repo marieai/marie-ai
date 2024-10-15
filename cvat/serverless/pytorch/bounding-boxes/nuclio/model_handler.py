@@ -1,8 +1,6 @@
 import torch
-from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
-from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 
 
 class ModelHandler:

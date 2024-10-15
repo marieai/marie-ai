@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.enums import DataInputType
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if docarray_v2:
     from docarray import BaseDoc, DocList

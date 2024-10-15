@@ -8,41 +8,41 @@ if TYPE_CHECKING:  # pragma: no cover
     from pathlib import Path
 
 VCS_SCHEMES = [
-    'git',
-    'git+https',
-    'git+ssh',
-    'git+git',
-    'hg+http',
-    'hg+https',
-    'hg+static-http',
-    'hg+ssh',
-    'svn',
-    'svn+svn',
-    'svn+http',
-    'svn+https',
-    'svn+ssh',
-    'bzr+http',
-    'bzr+https',
-    'bzr+ssh',
-    'bzr+sftp',
-    'bzr+ftp',
-    'bzr+lp',
+    "git",
+    "git+https",
+    "git+ssh",
+    "git+git",
+    "hg+http",
+    "hg+https",
+    "hg+static-http",
+    "hg+ssh",
+    "svn",
+    "svn+svn",
+    "svn+http",
+    "svn+https",
+    "svn+ssh",
+    "bzr+http",
+    "bzr+https",
+    "bzr+ssh",
+    "bzr+sftp",
+    "bzr+ftp",
+    "bzr+lp",
 ]
 
 URI_REGEX = re.compile(
-    r'^(?P<scheme>https?|file|ftps?)://(?P<path>[^#]+)' r'(#(?P<fragment>\S+))?'
+    r"^(?P<scheme>https?|file|ftps?)://(?P<path>[^#]+)" r"(#(?P<fragment>\S+))?"
 )
 
-VCS_SCHEMES_REGEX = r'|'.join([scheme.replace('+', r'\+') for scheme in VCS_SCHEMES])
+VCS_SCHEMES_REGEX = r"|".join([scheme.replace("+", r"\+") for scheme in VCS_SCHEMES])
 VCS_REGEX = re.compile(
-    rf'^(?P<scheme>{VCS_SCHEMES_REGEX})://((?P<login>[^/@]+)@)?'
-    r'(?P<path>[^#@]+)(@(?P<revision>[^#]+))?(#(?P<fragment>\S+))?'
+    rf"^(?P<scheme>{VCS_SCHEMES_REGEX})://((?P<login>[^/@]+)@)?"
+    r"(?P<path>[^#@]+)(@(?P<revision>[^#]+))?(#(?P<fragment>\S+))?"
 )
 ENV_VAR_RE = re.compile(r"(?P<var>\$\{(?P<name>[A-Z0-9_]+)\})")
 
 ENV_VAR_RE_ONLY_MATCH_UPPERCASE_UNDERLINE = re.compile(r"^[A-Z0-9_]+$")
 
-extras_require_search = re.compile(r'(?P<name>.+)\[(?P<extras>[^\]]+)\]')
+extras_require_search = re.compile(r"(?P<name>.+)\[(?P<extras>[^\]]+)\]")
 
 
 def _parse_fragment(fragment_string: str) -> Dict[str, str]:
@@ -51,18 +51,18 @@ def _parse_fragment(fragment_string: str) -> Dict[str, str]:
     :param fragment_string: a fragment string
     :return: a dict of components
     """
-    fragment_string = fragment_string.lstrip('#')
+    fragment_string = fragment_string.lstrip("#")
 
     try:
         return dict(
-            cast(Tuple[str, str], tuple(key_value_string.split('=')))
-            for key_value_string in fragment_string.split('&')
+            cast(Tuple[str, str], tuple(key_value_string.split("=")))
+            for key_value_string in fragment_string.split("&")
         )
     except ValueError:
-        raise ValueError(f'Invalid fragment string {fragment_string}')
+        raise ValueError(f"Invalid fragment string {fragment_string}")
 
 
-def _parse_requirement(line: str) -> 'Requirement':
+def _parse_requirement(line: str) -> "Requirement":
     """Parses a Requirement from a line of a requirement file.
 
     :param line: a line of a requirement file
@@ -73,22 +73,22 @@ def _parse_requirement(line: str) -> 'Requirement':
 
     if vcs_match is not None:
         groups = vcs_match.groupdict()
-        name = os.path.basename(groups['path']).split('.')[0]
+        name = os.path.basename(groups["path"]).split(".")[0]
         egg = None
-        if groups['fragment']:
-            fragment = _parse_fragment(groups['fragment'])
-            egg = fragment.get('egg')
+        if groups["fragment"]:
+            fragment = _parse_fragment(groups["fragment"])
+            egg = fragment.get("egg")
 
-        line = f'{egg or name} @ {line}'
+        line = f"{egg or name} @ {line}"
     elif uri_match is not None:
         groups = uri_match.groupdict()
-        name = os.path.basename(groups['path']).split('.')[0]
+        name = os.path.basename(groups["path"]).split(".")[0]
         egg = None
-        if groups['fragment']:
-            fragment = _parse_fragment(groups['fragment'])
-            egg = fragment.get('egg')
+        if groups["fragment"]:
+            fragment = _parse_fragment(groups["fragment"])
+            egg = fragment.get("egg")
 
-        line = f'{egg or name} @ {line}'
+        line = f"{egg or name} @ {line}"
 
     return Requirement.parse(line)
 
@@ -111,22 +111,22 @@ def _expand_env_variables(line: str) -> str:
         value = os.getenv(var_name)
         if not value:
             raise Exception(
-                f'The given requirements.txt require environment variables `{var_name}` does not exist!'
+                f"The given requirements.txt require environment variables `{var_name}` does not exist!"
             )
         line = line.replace(env_var, value)
     return line
 
 
-def _get_install_options(requirements_file: 'Path', excludes: Tuple[str] = ('jina',)):
+def _get_install_options(requirements_file: "Path", excludes: Tuple[str] = ("jina",)):
     with requirements_file.open() as requirements:
         install_options = []
         install_reqs = []
         for req in requirements:
             req = req.strip()
-            if (not req) or req.startswith('#'):
+            if (not req) or req.startswith("#"):
                 continue
-            elif req.startswith('-'):
-                for index, item in enumerate(req.split(' ')):
+            elif req.startswith("-"):
+                for index, item in enumerate(req.split(" ")):
                     install_options.append(_expand_env_variables(item))
             else:
                 expand_req = _expand_env_variables(req)
@@ -137,7 +137,7 @@ def _get_install_options(requirements_file: 'Path', excludes: Tuple[str] = ('jin
     return install_reqs, install_options
 
 
-def _is_requirements_installed(requirements_file: 'Path') -> bool:
+def _is_requirements_installed(requirements_file: "Path") -> bool:
     """Return True if requirements.txt is installed locally
     :param requirements_file: the requirements.txt file
     :return: True or False if not satisfied
@@ -155,7 +155,7 @@ def _is_requirements_installed(requirements_file: 'Path') -> bool:
         return True
 
     try:
-        pkg_resources.require('\n'.join(install_reqs))
+        pkg_resources.require("\n".join(install_reqs))
     except (DistributionNotFound, VersionConflict, RequirementParseError) as ex:
         import warnings
 
@@ -164,7 +164,7 @@ def _is_requirements_installed(requirements_file: 'Path') -> bool:
     return True
 
 
-def _install_requirements(requirements_file: 'Path', timeout: int = 1000):
+def _install_requirements(requirements_file: "Path", timeout: int = 1000):
     """Install modules included in requirements file
     :param requirements_file: the requirements.txt file
     :param timeout: the socket timeout (default = 1000s)
@@ -180,31 +180,31 @@ def _install_requirements(requirements_file: 'Path', timeout: int = 1000):
     subprocess.check_call(
         [
             sys.executable,
-            '-m',
-            'pip',
-            'install',
-            '--compile',
-            f'--default-timeout={timeout}',
+            "-m",
+            "pip",
+            "install",
+            "--compile",
+            f"--default-timeout={timeout}",
         ]
         + install_reqs
         + install_options
     )
 
 
-def install_package_dependencies(pkg_path: Optional['Path']) -> None:
+def install_package_dependencies(pkg_path: Optional["Path"]) -> None:
     """
 
     :param pkg_path: package path
     """
     # install the dependencies included in requirements.txt
     if pkg_path:
-        requirements_file = pkg_path / 'requirements.txt'
+        requirements_file = pkg_path / "requirements.txt"
 
         if requirements_file.exists():
             _install_requirements(requirements_file)
 
 
-def _get_package_path_from_uses(uses: str) -> Optional['Path']:
+def _get_package_path_from_uses(uses: str) -> Optional["Path"]:
     if isinstance(uses, str) and os.path.exists(uses):
         from pathlib import Path
 
@@ -213,9 +213,9 @@ def _get_package_path_from_uses(uses: str) -> Optional['Path']:
         from hubble.executor.helper import is_valid_huburi
 
         if not is_valid_huburi(uses):
-            from marie.logging.predefined import default_logger
+            from marie.logging_core.predefined import default_logger
 
             default_logger.warning(
-                f'Error getting the directory name from {uses}. `--install-requirements` option is only valid when `uses` is a configuration file.'
+                f"Error getting the directory name from {uses}. `--install-requirements` option is only valid when `uses` is a configuration file."
             )
         return None

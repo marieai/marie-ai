@@ -16,7 +16,7 @@ from marie.proto import jina_pb2
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.monitoring import MonitoringRequestMixin
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.types.request.data import DataRequest, Response
+from marie.types_core.request.data import DataRequest, Response
 
 if docarray_v2:
     from docarray import DocList
@@ -28,9 +28,9 @@ if docarray_v2:
 if TYPE_CHECKING:  # pragma: no cover
     from prometheus_client import CollectorRegistry
 
-    from marie.logging.logger import MarieLogger
-    from marie.types.request import Request
-    from marie.types.request.data import DataRequest
+    from marie.logging_core.logger import MarieLogger
+    from marie.types_core.request import Request
+    from marie.types_core.request.data import DataRequest
 
 
 class HeaderRequestHandler(MonitoringRequestMixin):

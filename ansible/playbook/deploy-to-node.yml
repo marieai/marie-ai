@@ -50,18 +50,18 @@
   - debug: var=out.stdout_lines
 
 
-#  # setup application directory
-#  - name: Creates directory
-#    file:
-#      path: /opt/marie-ai
-#      state: directory
-#      owner: app-svc
-#      group: app-svc
-#      mode: 0775
-#      recurse: yes # create parent directories if needed
-#    register: out
-#    become_user: root # we need to be gpu-svc to create the directory
-#    become: yes
-#    become_method: sudo
-#  - debug: var=out.stdout_lines
-#
+  # setup application directory
+  - name: Creates directory
+    file:
+      path: /opt/marie-ai
+      state: directory
+      owner: app-svc
+      group: app-svc
+      mode: 0775
+      recurse: yes # create parent directories if needed
+    register: out
+    become_user: root # we need to be gpu-svc to create the directory
+    become: yes
+    become_method: sudo
+  - debug: var=out.stdout_lines
+

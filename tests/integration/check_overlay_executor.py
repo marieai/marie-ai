@@ -7,7 +7,7 @@ from marie.conf.helper import load_yaml, storage_provider_config
 from marie.constants import __config_dir__, __model_path__
 from marie.executor.overlay.overlay_executor import OverlayExecutor
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
 from marie.utils.image_utils import hash_file

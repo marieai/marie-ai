@@ -10,7 +10,7 @@ from PyPDF4.pdf import PageObject
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 from marie.renderer.renderer import ResultRenderer
 from marie.utils.draw_truetype import determine_font_size
 

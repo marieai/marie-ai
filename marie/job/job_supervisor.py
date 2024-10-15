@@ -7,12 +7,12 @@ from docarray.documents import TextDoc
 from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 
 class JobSupervisor:

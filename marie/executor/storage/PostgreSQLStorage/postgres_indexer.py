@@ -5,7 +5,7 @@ from docarray import DocList
 
 from marie import DocumentArray, Executor
 from marie.api.docs import StorageDoc
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 from .postgreshandler import PostgreSQLHandler
 

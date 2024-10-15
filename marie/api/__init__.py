@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from marie.api.docs import AssetKeyDoc
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 from marie.storage import StorageManager
 from marie.utils.base64 import base64StringToBytes
 from marie.utils.utils import FileSystem, ensure_exists

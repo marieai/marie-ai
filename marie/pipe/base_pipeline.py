@@ -4,8 +4,8 @@ from typing import List
 from docarray import DocList
 
 from marie.excepts import BadConfigSource
-from marie.logging.logger import MarieLogger
-from marie.logging.profile import TimeContext
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.profile import TimeContext
 from marie.ocr.util import get_words_and_boxes
 from marie.pipe import (
     ClassifierPipelineComponent,
@@ -19,7 +19,6 @@ from marie.utils.docs import docs_from_image
 
 
 class BasePipeline(ABC):
-
     def __init__(
         self,
         silence_exceptions: bool = False,

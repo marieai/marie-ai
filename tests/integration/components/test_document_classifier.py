@@ -4,7 +4,7 @@ import os
 import psutil
 
 from marie.components import TransformersDocumentClassifier
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 from marie.ocr.util import get_words_and_boxes
 from marie.registry.model_registry import ModelRegistry
 from marie.utils.docs import docs_from_file
@@ -56,9 +56,7 @@ def test_sequence_classifier():
         words, boxes = get_words_and_boxes(ocr_results, 0)
 
         with TimeContext(f"Eval # {i}"):
-            results = classifier.run(
-                documents=documents, words=[words], boxes=[boxes]
-            )
+            results = classifier.run(documents=documents, words=[words], boxes=[boxes])
 
             for document in results:
                 assert "classification" in document.tags

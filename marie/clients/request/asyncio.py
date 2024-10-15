@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
 from marie.clients.request.helper import _new_data_request, _new_data_request_from_batch
 from marie.enums import DataInputType
 from marie.importer import ImportExtensions
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 if TYPE_CHECKING:
     from marie.clients.request import GeneratorSourceType
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 async def request_generator(

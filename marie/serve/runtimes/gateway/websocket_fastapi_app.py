@@ -6,9 +6,9 @@ from marie.enums import DataInputType, WebsocketSubProtocols
 from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
-from marie.logging.logger import MarieLogger
-from marie.types.request.data import DataRequest
-from marie.types.request.status import StatusMessage
+from marie.logging_core.logger import MarieLogger
+from marie.types_core.request.data import DataRequest
+from marie.types_core.request.status import StatusMessage
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
@@ -20,14 +20,14 @@ def _fits_ws_close_msg(msg: str):
     # Websocket close messages ('reasons') can't exceed 123 bytes:
     # https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close
     ws_closing_msg_max_len = 123
-    return len(msg.encode('utf-8')) <= ws_closing_msg_max_len
+    return len(msg.encode("utf-8")) <= ws_closing_msg_max_len
 
 
 def get_fastapi_app(
-    streamer: 'GatewayStreamer',
-    logger: 'MarieLogger',
+    streamer: "GatewayStreamer",
+    logger: "MarieLogger",
     tracing: Optional[bool] = None,
-    tracer_provider: Optional['trace.TracerProvider'] = None,
+    tracer_provider: Optional["trace.TracerProvider"] = None,
 ):
     """
     Get the app from FastAPI as the Websocket interface.
@@ -52,36 +52,36 @@ def get_fastapi_app(
             self.protocol_dict: Dict[str, WebsocketSubProtocols] = {}
 
         def get_client(self, websocket: WebSocket) -> str:
-            return f'{websocket.client.host}:{websocket.client.port}'
+            return f"{websocket.client.host}:{websocket.client.port}"
 
         def get_subprotocol(self, headers: Dict):
             try:
-                if 'sec-websocket-protocol' in headers:
+                if "sec-websocket-protocol" in headers:
                     subprotocol = WebsocketSubProtocols(
-                        headers['sec-websocket-protocol']
+                        headers["sec-websocket-protocol"]
                     )
-                elif b'sec-websocket-protocol' in headers:
+                elif b"sec-websocket-protocol" in headers:
                     subprotocol = WebsocketSubProtocols(
-                        headers[b'sec-websocket-protocol'].decode()
+                        headers[b"sec-websocket-protocol"].decode()
                     )
                 else:
                     subprotocol = WebsocketSubProtocols.JSON
                     logger.debug(
-                        f'no protocol headers passed. Choosing default subprotocol {WebsocketSubProtocols.JSON}'
+                        f"no protocol headers passed. Choosing default subprotocol {WebsocketSubProtocols.JSON}"
                     )
             except Exception as e:
                 logger.debug(
-                    f'got an exception while setting user\'s subprotocol, defaulting to JSON {e}'
+                    f"got an exception while setting user's subprotocol, defaulting to JSON {e}"
                 )
                 subprotocol = WebsocketSubProtocols.JSON
             return subprotocol
 
         async def connect(self, websocket: WebSocket):
             await websocket.accept()
-            subprotocol = self.get_subprotocol(dict(websocket.scope['headers']))
+            subprotocol = self.get_subprotocol(dict(websocket.scope["headers"]))
             logger.info(
-                f'client {websocket.client.host}:{websocket.client.port} connected '
-                f'with subprotocol {subprotocol}'
+                f"client {websocket.client.host}:{websocket.client.port} connected "
+                f"with subprotocol {subprotocol}"
             )
             self.active_connections.append(websocket)
             self.protocol_dict[self.get_client(websocket)] = subprotocol
@@ -93,7 +93,7 @@ def get_fastapi_app(
         async def receive(self, websocket: WebSocket) -> Any:
             subprotocol = self.protocol_dict[self.get_client(websocket)]
             if subprotocol == WebsocketSubProtocols.JSON:
-                return await websocket.receive_json(mode='text')
+                return await websocket.receive_json(mode="text")
             elif subprotocol == WebsocketSubProtocols.BYTES:
                 return await websocket.receive_bytes()
 
@@ -109,7 +109,7 @@ def get_fastapi_app(
         ) -> None:
             subprotocol = self.protocol_dict[self.get_client(websocket)]
             if subprotocol == WebsocketSubProtocols.JSON:
-                return await websocket.send_json(data.to_dict(), mode='text')
+                return await websocket.send_json(data.to_dict(), mode="text")
             elif subprotocol == WebsocketSubProtocols.BYTES:
                 return await websocket.send_bytes(data.to_bytes())
 
@@ -123,8 +123,8 @@ def get_fastapi_app(
         FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 
     @app.get(
-        path='/',
-        summary='Get the health of Jina service',
+        path="/",
+        summary="Get the health of Jina service",
     )
     async def _health():
         """
@@ -135,8 +135,8 @@ def get_fastapi_app(
         return {}
 
     @app.get(
-        path='/status',
-        summary='Get the status of Jina service',
+        path="/status",
+        summary="Get the status of Jina service",
     )
     async def _status():
         """
@@ -151,13 +151,13 @@ def get_fastapi_app(
             version[k] = str(v)
         for k, v in env_info.items():
             env_info[k] = str(v)
-        return {'jina': version, 'envs': env_info}
+        return {"jina": version, "envs": env_info}
 
-    @app.on_event('shutdown')
+    @app.on_event("shutdown")
     async def _shutdown():
         await streamer.close()
 
-    @app.websocket('/')
+    @app.websocket("/")
     async def websocket_endpoint(
         websocket: WebSocket, response: Response
     ):  # 'response' is a FastAPI response, not a Jina response
@@ -175,21 +175,21 @@ def get_fastapi_app(
                             req_generator_input = JinaEndpointRequestModel(
                                 **request
                             ).dict()
-                            req_generator_input['data_type'] = DataInputType.DICT
+                            req_generator_input["data_type"] = DataInputType.DICT
                             if (
-                                request['data'] is not None
-                                and 'docs' in request['data']
+                                request["data"] is not None
+                                and "docs" in request["data"]
                             ):
-                                req_generator_input['data'] = req_generator_input[
-                                    'data'
-                                ]['docs']
+                                req_generator_input["data"] = req_generator_input[
+                                    "data"
+                                ]["docs"]
                             for data_request in request_generator(
                                 **req_generator_input
                             ):
                                 yield data_request
                         else:
                             raise RuntimeError(
-                                f' DocArray v2 is not compatible with {WebsocketSubProtocols.JSON} subprotocol'
+                                f" DocArray v2 is not compatible with {WebsocketSubProtocols.JSON} subprotocol"
                             )
                 elif isinstance(request, bytes):
                     if request == bytes(True):
@@ -201,20 +201,20 @@ def get_fastapi_app(
             async for msg in streamer.rpc_stream(request_iterator=req_iter()):
                 if not docarray_v2:
                     for i in range(len(msg.data._content.docs.docs)):
-                        if msg.data._content.docs.docs[i].HasField('embedding'):
-                            msg.data._content.docs.docs[i].embedding.cls_name = 'numpy'
+                        if msg.data._content.docs.docs[i].HasField("embedding"):
+                            msg.data._content.docs.docs[i].embedding.cls_name = "numpy"
 
-                        if msg.data._content.docs.docs[i].HasField('tensor'):
-                            msg.data._content.docs.docs[i].tensor.cls_name = 'numpy'
+                        if msg.data._content.docs.docs[i].HasField("tensor"):
+                            msg.data._content.docs.docs[i].tensor.cls_name = "numpy"
                 await manager.send(websocket, msg)
         except InternalNetworkError as err:
             import grpc
 
             manager.disconnect(websocket)
             fallback_msg = (
-                f'Connection to deployment at {err.dest_addr} timed out. You can adjust `timeout_send` attribute.'
+                f"Connection to deployment at {err.dest_addr} timed out. You can adjust `timeout_send` attribute."
                 if err.code() == grpc.StatusCode.DEADLINE_EXCEEDED
-                else f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
+                else f"Network error while connecting to deployment at {err.dest_addr}. It may be down."
             )
             msg = (
                 err.details()
@@ -225,7 +225,7 @@ def get_fastapi_app(
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
         except WebSocketDisconnect:
-            logger.info('Client successfully disconnected from server')
+            logger.info("Client successfully disconnected from server")
             manager.disconnect(websocket)
 
     async def _get_singleton_result(request_iterator) -> Dict:
@@ -245,9 +245,9 @@ def get_fastapi_app(
     from marie.serve.runtimes.gateway.models import PROTO_TO_PYDANTIC_MODELS
 
     @app.get(
-        path='/dry_run',
-        summary='Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to '
-        'validate connectivity',
+        path="/dry_run",
+        summary="Get the readiness of Jina Flow service, sends an empty DocumentArray to the complete Flow to "
+        "validate connectivity",
         response_model=PROTO_TO_PYDANTIC_MODELS.StatusProto,
     )
     async def _dry_run_http():
@@ -277,7 +277,7 @@ def get_fastapi_app(
             status_message.set_exception(ex)
             return status_message.to_dict(use_integers_for_enums=True)
 
-    @app.websocket('/dry_run')
+    @app.websocket("/dry_run")
     async def websocket_endpoint(
         websocket: WebSocket, response: Response
     ):  # 'response' is a FastAPI response, not a Jina response
@@ -307,11 +307,11 @@ def get_fastapi_app(
             msg = (
                 err.details()
                 if _fits_ws_close_msg(err.details())  # some messages are too long
-                else f'Network error while connecting to deployment at {err.dest_addr}. It may be down.'
+                else f"Network error while connecting to deployment at {err.dest_addr}. It may be down."
             )
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=msg)
         except WebSocketDisconnect:
-            logger.info('Client successfully disconnected from server')
+            logger.info("Client successfully disconnected from server")
             manager.disconnect(websocket)
         except Exception as ex:
             manager.disconnect(websocket)

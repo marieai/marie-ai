@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from marie.logging.profile import ProgressBar
+from marie.logging_core.profile import ProgressBar
 
 
 @pytest.mark.parametrize('total_steps', [0, 1, 100])

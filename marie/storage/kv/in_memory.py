@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.storage.kv.storage_client import StorageArea
 
 

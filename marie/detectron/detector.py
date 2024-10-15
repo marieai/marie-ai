@@ -4,16 +4,19 @@ from typing import Callable
 import detectron2.data.transforms as T
 import numpy as np
 import torch
+import torch.nn as nn
+
+# Define custom quantization routines
+import torch.quantization
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.data import MetadataCatalog
 from detectron2.modeling import build_model
-from torch import nn
 from torch._C._profiler import ProfilerActivity
 from torch.nn import Module
 from torch.profiler import profile
 
-from marie.logging.logger import MarieLogger
-from marie.logging.profile import TimeContext
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.profile import TimeContext
 from marie.models.utils import torch_gc
 from marie.utils.types import strtobool
 
@@ -167,7 +170,7 @@ class OptimizedDetectronPredictor:
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
                 # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
-                # model = torch.compile(model )
+                # model = torch.compile(model, dynamic=True)
                 model = torch.compile(model, mode="reduce-overhead", dynamic=True)
                 return model
         except Exception as err:

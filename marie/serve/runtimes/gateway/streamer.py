@@ -15,7 +15,7 @@ from typing import (
 
 from marie._docarray import Document, DocumentArray, docarray_v2
 from marie.excepts import ExecutorError
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
@@ -24,8 +24,8 @@ from marie.serve.runtimes.gateway.async_request_response_handling import (
 )
 from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.serve.stream import RequestStreamer
-from marie.types.request import Request
-from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 
 if docarray_v2:
     from docarray import DocList

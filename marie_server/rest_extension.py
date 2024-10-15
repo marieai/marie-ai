@@ -17,11 +17,11 @@ from marie.api import (
 )
 from marie.api.docs import AssetKeyDoc
 from marie.job.job_manager import generate_job_id
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
 from marie.messaging.publisher import mark_as_scheduled
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from marie.utils.types import strtobool
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -111,7 +111,7 @@ def parse_response_to_payload(
     resp: DataRequest, expect_return_value: Optional[bool] = True
 ):
     """
-    We get raw response `marie.types.request.data.DataRequest` and we will extract the returned payload (Dictionary object)
+    We get raw response `marie.types_core.request.data.DataRequest` and we will extract the returned payload (Dictionary object)
     If the executor is not returning any value, we will return empty dictionary object. This is perfectly valid response
     as we are not expecting any value from the executor.
 

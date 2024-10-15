@@ -16,7 +16,7 @@ from sahi.prediction import ObjectPrediction, PredictionScore
 from sahi.slicing import slice_image
 
 from marie.components.template_matching.model import TemplateMatchResult
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.resize_image import resize_image_progressive

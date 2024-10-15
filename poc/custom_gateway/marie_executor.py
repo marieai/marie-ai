@@ -4,7 +4,7 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Executor, requests
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.executors import __dry_run_endpoint__
 
 try:

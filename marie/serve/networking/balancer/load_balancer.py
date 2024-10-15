@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Optional, Sequence, Union
 
 from marie.excepts import EstablishGrpcConnectionError
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 
 

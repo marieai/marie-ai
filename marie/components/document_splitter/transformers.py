@@ -17,7 +17,7 @@ from transformers import (
 
 from marie import DocumentArray
 from marie.constants import __model_path__
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...helper import batch_iterator

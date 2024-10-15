@@ -10,8 +10,8 @@ from marie.serve.networking.instrumentation import (
     _NetworkingMetrics,
 )
 from marie.serve.networking.utils import get_available_services, get_grpc_channel
-from marie.types.request import Request
-from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor

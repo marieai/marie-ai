@@ -17,7 +17,7 @@ from marie.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
     SchedulingStrategyT,
 )
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.storage.kv.storage_client import StorageArea
 
 # The max time to wait for the JobSupervisor to start before failing the job.

@@ -5,10 +5,10 @@ from marie import Document, DocumentArray
 from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
 from marie.serve.networking.sse import EventSourceResponse
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
-    from marie.logging.logger import MarieLogger
+    from marie.logging_core.logger import MarieLogger
 
 if docarray_v2:
     from docarray import BaseDoc, DocList
@@ -17,7 +17,7 @@ if docarray_v2:
 def get_fastapi_app(
     request_models_map: Dict,
     caller: Callable,
-    logger: 'MarieLogger',
+    logger: "MarieLogger",
     cors: bool = False,
     **kwargs,
 ):
@@ -45,7 +45,7 @@ def get_fastapi_app(
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
-            description='Request ID', example=os.urandom(16).hex()
+            description="Request ID", example=os.urandom(16).hex()
         )
 
         class Config(BaseConfig):
@@ -61,12 +61,12 @@ def get_fastapi_app(
     if cors:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=['*'],
+            allow_origins=["*"],
             allow_credentials=True,
-            allow_methods=['*'],
-            allow_headers=['*'],
+            allow_methods=["*"],
+            allow_headers=["*"],
         )
-        logger.warning('CORS is enabled. This service is accessible from any website!')
+        logger.warning("CORS is enabled. This service is accessible from any website!")
 
     def add_post_route(
         endpoint_path,
@@ -77,14 +77,14 @@ def get_fastapi_app(
     ):
         app_kwargs = dict(
             path=f'/{endpoint_path.strip("/")}',
-            methods=['POST'],
-            summary=f'Endpoint {endpoint_path}',
+            methods=["POST"],
+            summary=f"Endpoint {endpoint_path}",
             response_model=output_model,
         )
         if docarray_v2:
             from docarray.base_doc.docarray_response import DocArrayResponse
 
-            app_kwargs['response_class'] = DocArrayResponse
+            app_kwargs["response_class"] = DocArrayResponse
 
         @app.api_route(**app_kwargs)
         async def post(body: input_model, response: Response):
@@ -134,8 +134,8 @@ def get_fastapi_app(
 
         @app.api_route(
             path=f'/{endpoint_path.strip("/")}',
-            methods=['GET'],
-            summary=f'Streaming Endpoint {endpoint_path}',
+            methods=["GET"],
+            summary=f"Streaming Endpoint {endpoint_path}",
         )
         async def streaming_get(request: Request = None, body: input_doc_model = None):
             if not body:
@@ -159,11 +159,11 @@ def get_fastapi_app(
             return EventSourceResponse(event_generator)
 
     for endpoint, input_output_map in request_models_map.items():
-        if endpoint != '_jina_dry_run_':
-            input_doc_model = input_output_map['input']['model']
-            output_doc_model = input_output_map['output']['model']
-            is_generator = input_output_map['is_generator']
-            parameters_model = input_output_map['parameters']['model']
+        if endpoint != "_jina_dry_run_":
+            input_doc_model = input_output_map["input"]["model"]
+            output_doc_model = input_output_map["output"]["model"]
+            is_generator = input_output_map["is_generator"]
+            parameters_model = input_output_map["parameters"]["model"]
             parameters_model_needed = parameters_model is not None
             if parameters_model_needed:
                 try:
@@ -218,8 +218,8 @@ def get_fastapi_app(
     from marie.serve.runtimes.gateway.health_model import JinaHealthModel
 
     @app.get(
-        path='/',
-        summary='Get the health of Jina Executor service',
+        path="/",
+        summary="Get the health of Jina Executor service",
         response_model=JinaHealthModel,
     )
     async def _executor_health():
@@ -240,11 +240,11 @@ async def _gen_dict_documents(gen):
     else:
         for document in gen:
             yield _doc_to_event(document)
-    yield {'event': 'end'}
+    yield {"event": "end"}
 
 
 def _doc_to_event(doc):
     if not docarray_v2:
-        return {'event': 'update', 'data': doc.to_dict()}
+        return {"event": "update", "data": doc.to_dict()}
     else:
-        return {'event': 'update', 'data': doc.dict()}
+        return {"event": "update", "data": doc.dict()}

@@ -7,7 +7,7 @@ import grpc.aio
 from marie._docarray import DocumentArray, docarray_v2
 from marie.excepts import InternalNetworkError
 from marie.helper import GATEWAY_NAME
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.gateway.graph.topology_graph import TopologyGraph
 from marie.serve.runtimes.helper import _is_param_for_specific_executor
@@ -20,7 +20,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.metrics import Meter
     from prometheus_client import CollectorRegistry
 
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class AsyncRequestResponseHandler(MonitoringRequestMixin):

@@ -2,7 +2,7 @@ import albumentations as aug
 import torch
 from torch import nn
 
-from marie.logging.profile import TimeContext, TimeContextCuda
+from marie.logging_core.profile import TimeContext, TimeContextCuda
 
 from ..models.efficientnet import EfficientNetHyperColumn
 from ..models.resnet import ResNetHyperColumn

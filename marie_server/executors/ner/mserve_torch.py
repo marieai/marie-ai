@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from marie import Client
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie_server.auth.auth_bearer import TokenBearer
 from marie_server.rest_extension import handle_request, process_document_request
 
@@ -22,8 +22,8 @@ def extend_rest_interface_ner(app: FastAPI, client: Client) -> None:
     """
 
     @app.post(
-        '/api/ner/extract',
-        tags=['ner', 'rest-api'],
+        "/api/ner/extract",
+        tags=["ner", "rest-api"],
         dependencies=[Depends(TokenBearer())],
     )
     async def text_ner_post(request: Request, token: str = Depends(TokenBearer())):

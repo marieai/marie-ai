@@ -3,9 +3,9 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Union
 from marie.excepts import InternalNetworkError
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking.sse import EventSourceResponse
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
@@ -87,7 +87,7 @@ def get_fastapi_app(
         PROTO_TO_PYDANTIC_MODELS,
         _to_camel_case,
     )
-    from marie.types.request.status import StatusMessage
+    from marie.types_core.request.status import StatusMessage
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
@@ -249,8 +249,8 @@ def get_fastapi_app(
 
         @app.api_route(
             path=f'/{endpoint_path.strip("/")}',
-            methods=['GET'],
-            summary=f'Streaming Endpoint {endpoint_path}',
+            methods=["GET"],
+            summary=f"Streaming Endpoint {endpoint_path}",
         )
         async def streaming_get(request: Request, body: input_doc_model = None):
             body = body or dict(request.query_params)
@@ -262,17 +262,17 @@ def get_fastapi_app(
                 ):
                     if error:
                         raise HTTPException(status_code=499, detail=str(error))
-                    yield {'event': 'update', 'data': doc.dict()}
-                yield {'event': 'end'}
+                    yield {"event": "update", "data": doc.dict()}
+                yield {"event": "end"}
 
             return EventSourceResponse(event_generator())
 
     for endpoint, input_output_map in request_models_map.items():
-        if endpoint != '_jina_dry_run_':
-            input_doc_model = input_output_map['input']
-            output_doc_model = input_output_map['output']
-            is_generator = input_output_map['is_generator']
-            parameters_model = input_output_map['parameters']
+        if endpoint != "_jina_dry_run_":
+            input_doc_model = input_output_map["input"]
+            output_doc_model = input_output_map["output"]
+            is_generator = input_output_map["is_generator"]
+            parameters_model = input_output_map["parameters"]
             parameters_model_needed = parameters_model is not None
             if parameters_model_needed:
                 try:

@@ -4,21 +4,21 @@ from marie import Document, DocumentArray, Flow
 from marie.serve.networking import _NetworkingHistograms
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from tests.integration.networking import DummyExecutor
 
 
 @pytest.mark.asyncio
 async def test_init_stubs(metrics, port_generator):
     executor_port = port_generator()
-    flow = Flow().add(name='executor0', port=executor_port, uses=DummyExecutor)
+    flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
-        address = f'0.0.0.0:{executor_port}'
+        address = f"0.0.0.0:{executor_port}"
         channel = get_grpc_channel(address=address, asyncio=True)
         connection_stub = _ConnectionStubs(
             address=address,
             channel=channel,
-            deployment_name='executor0',
+            deployment_name="executor0",
             metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
@@ -30,33 +30,33 @@ async def test_init_stubs(metrics, port_generator):
 @pytest.mark.asyncio
 async def test_send_discover_endpoint(metrics, port_generator):
     executor_port = port_generator()
-    flow = Flow().add(name='executor0', port=executor_port, uses=DummyExecutor)
+    flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
-        address = f'0.0.0.0:{executor_port}'
+        address = f"0.0.0.0:{executor_port}"
         channel = get_grpc_channel(address=address, asyncio=True)
         connection_stub = _ConnectionStubs(
-            address='executor0',
+            address="executor0",
             channel=channel,
-            deployment_name='executor-0',
+            deployment_name="executor-0",
             metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
 
         response, _ = await connection_stub.send_discover_endpoint()
-        assert set(response.endpoints) == {'/default', '_jina_dry_run_'}
+        assert set(response.endpoints) == {"/default", "_jina_dry_run_"}
 
 
 @pytest.mark.asyncio
 async def test_send_info_rpc(metrics, port_generator):
     executor_port = port_generator()
-    flow = Flow().add(name='executor0', port=executor_port, uses=DummyExecutor)
+    flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
-        address = f'0.0.0.0:{executor_port}'
+        address = f"0.0.0.0:{executor_port}"
         channel = get_grpc_channel(address=address, asyncio=True)
         connection_stub = _ConnectionStubs(
-            address='executor0',
+            address="executor0",
             channel=channel,
-            deployment_name='executor-0',
+            deployment_name="executor-0",
             metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
@@ -69,14 +69,14 @@ async def test_send_info_rpc(metrics, port_generator):
 @pytest.mark.asyncio
 async def test_send_requests(metrics, port_generator):
     executor_port = port_generator()
-    flow = Flow().add(name='executor0', port=executor_port, uses=DummyExecutor)
+    flow = Flow().add(name="executor0", port=executor_port, uses=DummyExecutor)
     with flow:
-        address = f'0.0.0.0:{executor_port}'
+        address = f"0.0.0.0:{executor_port}"
         channel = get_grpc_channel(address=address, asyncio=True)
         connection_stub = _ConnectionStubs(
-            address='executor0',
+            address="executor0",
             channel=channel,
-            deployment_name='executor-0',
+            deployment_name="executor-0",
             metrics=metrics,
             histograms=_NetworkingHistograms(),
         )
@@ -86,4 +86,4 @@ async def test_send_requests(metrics, port_generator):
         response, _ = await connection_stub.send_requests(
             requests=[request], metadata={}, compression=False
         )
-        assert response.data.docs[0].text == 'dummy'
+        assert response.data.docs[0].text == "dummy"

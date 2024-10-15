@@ -4,11 +4,11 @@ import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.instrumentation import InstrumentationMixin
 from marie.serve.runtimes.monitoring import MonitoringMixin
 
-__all__ = ['BaseServer']
+__all__ = ["BaseServer"]
 
 if TYPE_CHECKING:
     import multiprocessing
@@ -25,14 +25,14 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
 
     def __init__(
         self,
-        name: Optional[str] = 'gateway',
+        name: Optional[str] = "gateway",
         runtime_args: Optional[Dict] = None,
         req_handler_cls=None,
         req_handler=None,
         is_cancel=None,
         **kwargs,
     ):
-        self.name = name or ''
+        self.name = name or ""
         self.runtime_args = runtime_args
         self.works_as_load_balancer = False
         try:
@@ -44,7 +44,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             self.is_cancel = threading.Event()
         if isinstance(runtime_args, Dict):
             self.works_as_load_balancer = runtime_args.get(
-                'gateway_load_balancer', False
+                "gateway_load_balancer", False
             )
         if isinstance(self.runtime_args, dict):
             self.logger = MarieLogger(self.name, **self.runtime_args)
@@ -66,26 +66,26 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             metrics_exporter_port=self.runtime_args.metrics_exporter_port,
         )
         self._request_handler: Union[
-            'GatewayRequestHandler', 'WorkerRequestHandler'
+            "GatewayRequestHandler", "WorkerRequestHandler"
         ] = (req_handler or self._get_request_handler())
-        if hasattr(self._request_handler, 'streamer'):
+        if hasattr(self._request_handler, "streamer"):
             self.streamer = self._request_handler.streamer  # backward compatibility
             self.executor = self._request_handler.executor  # backward compatibility
 
     def _teardown_instrumentation(self):
         try:
             if self.tracing and self.tracer_provider:
-                if hasattr(self.tracer_provider, 'force_flush'):
+                if hasattr(self.tracer_provider, "force_flush"):
                     self.tracer_provider.force_flush()
-                if hasattr(self.tracer_provider, 'shutdown'):
+                if hasattr(self.tracer_provider, "shutdown"):
                     self.tracer_provider.shutdown()
             if self.metrics and self.meter_provider:
-                if hasattr(self.meter_provider, 'force_flush'):
+                if hasattr(self.meter_provider, "force_flush"):
                     self.meter_provider.force_flush()
-                if hasattr(self.meter_provider, 'shutdown'):
+                if hasattr(self.meter_provider, "shutdown"):
                     self.meter_provider.shutdown()
         except Exception as ex:
-            self.logger.warning(f'Exception during instrumentation teardown, {str(ex)}')
+            self.logger.warning(f"Exception during instrumentation teardown, {str(ex)}")
 
     def _get_request_handler(self):
         self._setup_monitoring(
@@ -103,7 +103,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             runtime_name=self.name,
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors(),
             tracing_client_interceptor=self.tracing_client_interceptor(),
-            deployment_name=self.name.split('/')[0],
+            deployment_name=self.name.split("/")[0],
         )
 
     def _add_gateway_args(self):
@@ -119,13 +119,13 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             else vars(self.runtime_args or {})
         )
         runtime_set_args = {
-            'tracer_provider': None,
-            'grpc_tracing_server_interceptors': None,
-            'runtime_name': _runtime_args.get('name', 'test'),
-            'metrics_registry': None,
-            'meter': None,
-            'aio_tracing_client_interceptors': None,
-            'tracing_client_interceptor': None,
+            "tracer_provider": None,
+            "grpc_tracing_server_interceptors": None,
+            "runtime_name": _runtime_args.get("name", "test"),
+            "metrics_registry": None,
+            "meter": None,
+            "aio_tracing_client_interceptors": None,
+            "tracing_client_interceptor": None,
         }
         runtime_args_dict = {**runtime_set_args, **default_args_dict, **_runtime_args}
         self.runtime_args = SimpleNamespace(**runtime_args_dict)
@@ -194,7 +194,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
     @staticmethod
     def is_ready(
         ctrl_address: str,
-        protocol: Optional[str] = 'grpc',
+        protocol: Optional[str] = "grpc",
         timeout: float = 1.0,
         logger=None,
         **kwargs,
@@ -212,7 +212,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         from marie.serve.runtimes.servers.grpc import GRPCServer
         from marie.serve.runtimes.servers.http import FastAPIBaseServer
 
-        if protocol is None or protocol == ProtocolType.GRPC or protocol == 'grpc':
+        if protocol is None or protocol == ProtocolType.GRPC or protocol == "grpc":
             res = GRPCServer.is_ready(ctrl_address)
         else:
             res = FastAPIBaseServer.is_ready(ctrl_address)
@@ -221,7 +221,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
     @staticmethod
     async def async_is_ready(
         ctrl_address: str,
-        protocol: Optional[str] = 'grpc',
+        protocol: Optional[str] = "grpc",
         timeout: float = 1.0,
         logger=None,
         **kwargs,
@@ -239,7 +239,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         from marie.serve.runtimes.servers.grpc import GRPCServer
         from marie.serve.runtimes.servers.http import FastAPIBaseServer
 
-        if protocol is None or protocol == ProtocolType.GRPC or protocol == 'grpc':
+        if protocol is None or protocol == ProtocolType.GRPC or protocol == "grpc":
             res = await GRPCServer.async_is_ready(ctrl_address, logger=logger)
         else:
             res = await FastAPIBaseServer.async_is_ready(ctrl_address, logger=logger)
@@ -250,7 +250,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
         cls,
         timeout: Optional[float],
         ready_or_shutdown_event: Union[
-            'multiprocessing.Event', 'threading.Event', 'asyncio.Event'
+            "multiprocessing.Event", "threading.Event", "asyncio.Event"
         ],
         ctrl_address: str,
         health_check: bool = False,

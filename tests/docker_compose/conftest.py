@@ -6,7 +6,7 @@ from typing import List
 import docker
 import pytest
 
-from marie.logging.logger import MarieLogger as JinaLogger
+from marie.logging_core.logger import MarieLogger as JinaLogger
 
 client = docker.from_env()
 cur_dir = os.path.dirname(__file__)

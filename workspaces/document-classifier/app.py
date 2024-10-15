@@ -10,8 +10,8 @@ import torch as torch
 
 from marie.components import TransformersDocumentClassifier
 from marie.helper import colored
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import DefaultOcrEngine, MockOcrEngine
 from marie.ocr.util import get_words_and_boxes
 from marie.registry.model_registry import ModelRegistry
@@ -54,7 +54,7 @@ def process_frames(
         results.append(
             {
                 "page": page_idx,
-                "classification": document.tags['classification'],
+                "classification": document.tags["classification"],
             }
         )
 
@@ -175,7 +175,7 @@ def parse_args():
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
-        default='marie/lmv3-document-classification',
+        default="marie/lmv3-document-classification",
         help="Path to pretrained model or model identifier from Model Hub",
     )
 
@@ -204,7 +204,7 @@ def ensure_model(model_name_or_path):
 if __name__ == "__main__":
     import torch
 
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
     # torch._dynamo.config.suppress_errors = False
     os.environ["MARIE_SUPPRESS_WARNINGS"] = "true"

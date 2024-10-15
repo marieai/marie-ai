@@ -14,7 +14,7 @@ from marie.components.template_matching import (
     MetaTemplateMatcher,
     VQNNFTemplateMatcher,
 )
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.json import load_json_file
 from marie.utils.resize_image import resize_image, resize_image_progressive
@@ -118,7 +118,6 @@ def check_template_matcher():
                 "image": "./assets/template_matching/sample-005.png",
                 "target": "./assets/template_matching/sample-005.png",
             },
-
             "007-B": {
                 "label": "CLAIM",
                 "coords": [[176, 90, 90, 33]],
@@ -150,7 +149,7 @@ def check_template_matcher():
 
         for c in template_coords:
             x, y, w, h = c
-            template = frames_t[0][y: y + h, x: x + w, :]
+            template = frames_t[0][y : y + h, x : x + w, :]
             # center the template in same size as the input image
             template, coord = resize_image(
                 template,
@@ -177,7 +176,7 @@ def check_template_matcher():
                     max_overlap=0.5,
                     max_objects=2,
                     window_size=window_size,
-                    downscale_factor=.75,
+                    downscale_factor=0.75,
                 )
                 print(results)
 

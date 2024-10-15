@@ -4,7 +4,7 @@ from typing import List, Optional
 from docarray import DocList
 
 from marie.base_handler import BaseHandler
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 from ...api.docs import MarieDoc
 

@@ -4,17 +4,17 @@ from typing import TYPE_CHECKING, AsyncIterator, Dict
 from marie.enums import ProtocolType
 from marie.helper import get_full_version
 from marie.proto import jina_pb2
-from marie.types.request.data import DataRequest, SingleDocumentRequest
-from marie.types.request.status import StatusMessage
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request.status import StatusMessage
 
 if TYPE_CHECKING:  # pragma: no cover
     from types import SimpleNamespace
 
     import grpc
 
-    from marie.logging.logger import MarieLogger
+    from marie.logging_core.logger import MarieLogger
     from marie.serve.runtimes.gateway.streamer import GatewayStreamer
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class GatewayRequestHandler:

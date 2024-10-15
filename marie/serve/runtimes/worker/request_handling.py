@@ -33,7 +33,7 @@ from marie.serve.executors import BaseExecutor
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types.request.data import DataRequest, SingleDocumentRequest
+from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
 from marie.utils.types import strtobool
 
@@ -47,8 +47,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry.propagate import Context
     from prometheus_client import CollectorRegistry
 
-    from marie.logging.logger import MarieLogger
-    from marie.types.request import Request
+    from marie.logging_core.logger import MarieLogger
+    from marie.types_core.request import Request
 
 
 # GB:MOD

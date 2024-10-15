@@ -15,7 +15,7 @@ from textual.widgets import Footer
 
 from marie.excepts import RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie_server.ctl.data_catalog import DataCatalog
 from marie_server.ctl.editor_collection import EditorCollection

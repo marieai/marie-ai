@@ -11,7 +11,7 @@ from skimage import metrics
 from torch import nn
 from torchvision import models, transforms
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...utils.image_utils import crop_to_content

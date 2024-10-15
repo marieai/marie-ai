@@ -7,7 +7,7 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.utils.image_utils import hash_frames_fast
 from marie.utils.json import load_json_file

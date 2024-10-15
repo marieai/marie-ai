@@ -12,15 +12,15 @@ from marie.clients.base import retry
 from marie.enums import WebsocketSubProtocols
 from marie.excepts import BadClient
 from marie.importer import ImportExtensions
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
-from marie.types.request.status import StatusMessage
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest
+from marie.types_core.request.status import StatusMessage
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentelemetry import trace
 
     from marie._docarray import Document
-    from marie.logging.logger import MarieLogger
+    from marie.logging_core.logger import MarieLogger
 
 if docarray_v2:
     from docarray.base_doc.io.json import orjson_dumps

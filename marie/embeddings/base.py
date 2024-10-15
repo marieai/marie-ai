@@ -4,7 +4,7 @@ from typing import List
 import torch
 
 from marie.embeddings.embeddings_object import EmbeddingsObject
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 
 
 class EmbeddingsBase(ABC):

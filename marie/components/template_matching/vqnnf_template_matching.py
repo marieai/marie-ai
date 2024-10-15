@@ -8,7 +8,7 @@ import torch
 from PIL import Image
 from torch import nn
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...embeddings.openai.openai_embeddings import OpenAIEmbeddings

@@ -3,7 +3,7 @@ from typing import Any, List
 from pika.exchange_type import ExchangeType
 
 from marie.excepts import BadConfigSource
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.messaging.events import EventMessage
 from marie.messaging.rabbitmq import BlockingPikaClient
 from marie.messaging.toast_handler import ToastHandler

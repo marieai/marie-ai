@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional, Union
 from marie.constants import __windows__
 from marie.excepts import PortAlreadyUsed, RuntimeTerminated
 from marie.helper import ArgNamespace, is_port_free, random_ports, send_telemetry_event
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.parsers import set_gateway_parser
 from marie.parsers.helper import _set_gateway_uses
 

@@ -12,15 +12,17 @@ from marie.embeddings.sentence_transformers.sentence_transformers_embeddings imp
     SentenceTransformerEmbeddings,
 )
 from marie.executor.storage.PostgreSQLStorage import PostgreSQLStorage
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
-compose_yml = os.path.join(cur_dir, 'docker-compose.yml')
+compose_yml = os.path.join(cur_dir, "docker-compose.yml")
 
 print(compose_yml)
 
 
-def _tags(index: int, ftype: str, checksum: str, embeddings: str, embedding_size: int) -> dict:
+def _tags(
+    index: int, ftype: str, checksum: str, embeddings: str, embedding_size: int
+) -> dict:
     return {
         "action": "classifier",
         "index": index,
@@ -36,17 +38,17 @@ def _tags(index: int, ftype: str, checksum: str, embeddings: str, embedding_size
 @pytest.fixture()
 def docker_compose(request):
     os.system(
-        f'docker compose -f {request.param} --project-directory . up  --build -d --remove-orphans'
+        f"docker compose -f {request.param} --project-directory . up  --build -d --remove-orphans"
     )
     time.sleep(5)
     yield
     os.system(
-        f'docker compose -f {request.param} --project-directory . down --remove-orphans'
+        f"docker compose -f {request.param} --project-directory . down --remove-orphans"
     )
 
 
 #  docker-compose -f docker-compose.yml --project-directory . up  --build  --remove-orphans
-@pytest.mark.parametrize('docker_compose', [compose_yml], indirect=['docker_compose'])
+@pytest.mark.parametrize("docker_compose", [compose_yml], indirect=["docker_compose"])
 def test_storage(tmpdir, docker_compose):
     # def test_storage(tmpdir):
     # benchmark only
@@ -55,7 +57,7 @@ def test_storage(tmpdir, docker_compose):
     storage = PostgreSQLStorage()
     handler = storage.handler
 
-    with TimeContext(f'### rolling insert {nr_docs} docs'):
+    with TimeContext(f"### rolling insert {nr_docs} docs"):
         print("Testing insert")
 
         ref_id = "test"
@@ -64,7 +66,8 @@ def test_storage(tmpdir, docker_compose):
                 StorageDoc(
                     content={"test": "Test", "xyz": "Greg"},
                     tags=_tags(index, "metadata", ref_id, "none", 0),
-                ) for index in range(nr_docs)
+                )
+                for index in range(nr_docs)
             ]
         )
 
@@ -77,8 +80,7 @@ def test_storage(tmpdir, docker_compose):
 
 
 # @pytest.mark.parametrize('docker_compose', [compose_yml], indirect=['docker_compose'])
-def test_embedding_storage(tmpdir
-                           ):
+def test_embedding_storage(tmpdir):
     # def test_storage(tmpdir):
     # benchmark only
     nr_docs = 1
@@ -87,16 +89,14 @@ def test_embedding_storage(tmpdir
     handler.clear()
 
     # create two embeddings for testing
-    texts = [
-        'The dog is barking',
-        'The cat is purring',
-        'The bear is growling'
-    ]
+    texts = ["The dog is barking", "The cat is purring", "The bear is growling"]
 
-    provider = SentenceTransformerEmbeddings(devices=["cpu"], use_gpu=False, batch_size=1, show_error=True)
+    provider = SentenceTransformerEmbeddings(
+        devices=["cpu"], use_gpu=False, batch_size=1, show_error=True
+    )
     embeddings = provider.get_embeddings_raw(texts)
 
-    with TimeContext(f'### rolling insert {nr_docs} docs'):
+    with TimeContext(f"### rolling insert {nr_docs} docs"):
         print("Testing insert")
         docs = DocList[StorageDoc]()
 

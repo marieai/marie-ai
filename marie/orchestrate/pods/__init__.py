@@ -15,12 +15,12 @@ from marie.enums import PodRoleType
 from marie.excepts import RuntimeFailToStart, RuntimeRunForeverEarlyError
 from marie.helper import typename
 from marie.jaml import JAML
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.orchestrate.pods.helper import ConditionalEvent, _get_event
 from marie.parsers.helper import _update_gateway_args
 from marie.serve.executors.run import run, run_raft
 
-__all__ = ['BasePod', 'Pod']
+__all__ = ["BasePod", "Pod"]
 
 
 class BasePod(ABC):
@@ -33,22 +33,22 @@ class BasePod(ABC):
     What makes a BasePod a BasePod is that it manages the lifecycle of a Runtime (gateway or not gateway)
     """
 
-    def __init__(self, args: 'argparse.Namespace'):
+    def __init__(self, args: "argparse.Namespace"):
         self.args = args
         if self.args.pod_role == PodRoleType.GATEWAY:
             _update_gateway_args(
                 self.args,
                 gateway_load_balancer=getattr(
-                    self.args, 'gateway_load_balancer', False
+                    self.args, "gateway_load_balancer", False
                 ),
             )
-        self.args.parallel = getattr(self.args, 'shards', 1)
+        self.args.parallel = getattr(self.args, "shards", 1)
         self.name = self.args.name or self.__class__.__name__
         self.logger = MarieLogger(self.name, **vars(self.args))
 
-        self._envs = {'JINA_DEPLOYMENT_NAME': self.name}
+        self._envs = {"JINA_DEPLOYMENT_NAME": self.name}
         if self.args.quiet:
-            self._envs['JINA_LOG_CONFIG'] = 'QUIET'
+            self._envs["JINA_LOG_CONFIG"] = "QUIET"
         if self.args.env:
             self._envs.update(self.args.env)
 
@@ -67,35 +67,37 @@ class BasePod(ABC):
         self._timeout_ctrl = self.args.timeout_ctrl
 
     def _get_control_address(self):
-        return f'127.0.0.1:{self.args.port[0]}'
+        return f"127.0.0.1:{self.args.port[0]}"
 
     def close(self) -> None:
         """Close the Pod
 
         This method makes sure that the `Process` is properly finished and its resources properly released
         """
-        self.logger.debug('waiting for ready or shutdown signal from runtime')
+        self.logger.debug("waiting for ready or shutdown signal from runtime")
         if not self.is_shutdown.is_set() and self.is_started.is_set():
             try:
-                self.logger.debug(f'terminate')
+                self.logger.debug(f"terminate")
                 self._terminate()
                 if not self.is_shutdown.wait(
                     timeout=self._timeout_ctrl if not __windows__ else 1.0
                 ):
                     if not __windows__:
                         raise Exception(
-                            f'Shutdown signal was not received for {self._timeout_ctrl} seconds'
+                            f"Shutdown signal was not received for {self._timeout_ctrl} seconds"
                         )
                     else:
                         self.logger.warning(
-                            'Pod was forced to close after 1 second. Graceful closing is not available on Windows.'
+                            "Pod was forced to close after 1 second. Graceful closing is not available on Windows."
                         )
             except Exception as ex:
                 self.logger.error(
-                    f'{ex!r} during {self.close!r}'
-                    + f'\n add "--quiet-error" to suppress the exception details'
-                    if not self.args.quiet_error
-                    else '',
+                    (
+                        f"{ex!r} during {self.close!r}"
+                        + f'\n add "--quiet-error" to suppress the exception details'
+                        if not self.args.quiet_error
+                        else ""
+                    ),
                     exc_info=not self.args.quiet_error,
                 )
         else:
@@ -132,7 +134,7 @@ class BasePod(ABC):
             ready_or_shutdown_event=self.ready_or_shutdown.event,
             ctrl_address=self.runtime_ctrl_address,
             timeout_ctrl=self._timeout_ctrl,
-            protocol=getattr(self.args, 'protocol', ["grpc"])[0],
+            protocol=getattr(self.args, "protocol", ["grpc"])[0],
             # for now protocol is not yet there part of Executor
         )
 
@@ -145,12 +147,12 @@ class BasePod(ABC):
         """
         _timeout = timeout or -1
         self.logger.warning(
-            f'{self} timeout after waiting for {self.args.timeout_ready}ms, '
-            f'if your executor takes time to load, you may increase --timeout-ready'
+            f"{self} timeout after waiting for {self.args.timeout_ready}ms, "
+            f"if your executor takes time to load, you may increase --timeout-ready"
         )
         self.close()
         raise TimeoutError(
-            f'{typename(self)}:{self.name} can not be initialized after {_timeout * 1e3}ms'
+            f"{typename(self)}:{self.name} can not be initialized after {_timeout * 1e3}ms"
         )
 
     def _check_failed_to_start(self):
@@ -196,11 +198,11 @@ class BasePod(ABC):
 
         timeout_ns = 1e9 * _timeout if _timeout else None
         now = time.time_ns()
-        check_protocol = getattr(self.args, 'protocol', ["grpc"])[0]
+        check_protocol = getattr(self.args, "protocol", ["grpc"])[0]
 
         async def check_readiness_server():
             self.logger.debug(
-                f'Checking readiness to {self.runtime_ctrl_address} with protocol {check_protocol}'
+                f"Checking readiness to {self.runtime_ctrl_address} with protocol {check_protocol}"
             )
             ready = await BaseServer.async_is_ready(
                 ctrl_address=self.runtime_ctrl_address,
@@ -211,11 +213,11 @@ class BasePod(ABC):
             )
             if ready:
                 self.logger.debug(
-                    f'Server on {self.runtime_ctrl_address} with protocol {check_protocol} is ready'
+                    f"Server on {self.runtime_ctrl_address} with protocol {check_protocol} is ready"
                 )
             else:
                 self.logger.debug(
-                    f'Server on {self.runtime_ctrl_address} with protocol {check_protocol} is not yet ready'
+                    f"Server on {self.runtime_ctrl_address} with protocol {check_protocol} is not yet ready"
                 )
             return ready
 
@@ -237,7 +239,7 @@ class BasePod(ABC):
         self._fail_start_timeout(_timeout)
 
     @property
-    def role(self) -> 'PodRoleType':
+    def role(self) -> "PodRoleType":
         """Get the role of this pod in a deployment
         .. #noqa: DAR201"""
         return self.args.pod_role
@@ -251,8 +253,7 @@ class BasePod(ABC):
         ...
 
     @abstractmethod
-    def _terminate(self):
-        ...
+    def _terminate(self): ...
 
     @abstractmethod
     def join(self, *args, **kwargs):
@@ -271,7 +272,7 @@ class Pod(BasePod):
     A :class:`Pod` must be equipped with a proper :class:`Runtime` class to work.
     """
 
-    def __init__(self, args: 'argparse.Namespace'):
+    def __init__(self, args: "argparse.Namespace"):
         super().__init__(args)
         self.runtime_cls = self._get_runtime_cls()
         cargs = None
@@ -281,8 +282,8 @@ class Pod(BasePod):
             self.raft_worker = multiprocessing.Process(
                 target=run_raft,
                 kwargs={
-                    'args': cargs_stateful,
-                    'is_ready': self.is_ready,
+                    "args": cargs_stateful,
+                    "is_ready": self.is_ready,
                 },
                 name=self.name,
                 daemon=True,
@@ -297,15 +298,15 @@ class Pod(BasePod):
         self.worker = multiprocessing.Process(
             target=run,
             kwargs={
-                'args': cargs or args,
-                'name': self.name,
-                'envs': self._envs,
-                'is_started': self.is_started,
-                'is_signal_handlers_installed': self.is_signal_handlers_installed,
-                'is_shutdown': self.is_shutdown,
-                'is_ready': self.is_ready,
-                'runtime_cls': self.runtime_cls,
-                'jaml_classes': JAML.registered_classes(),
+                "args": cargs or args,
+                "name": self.name,
+                "envs": self._envs,
+                "is_started": self.is_started,
+                "is_signal_handlers_installed": self.is_signal_handlers_installed,
+                "is_shutdown": self.is_shutdown,
+                "is_ready": self.is_ready,
+                "runtime_cls": self.runtime_cls,
+                "jaml_classes": JAML.registered_classes(),
             },
             name=self.name,
             daemon=False,
@@ -330,21 +331,21 @@ class Pod(BasePod):
         :param args: extra positional arguments to pass to join
         :param kwargs: extra keyword arguments to pass to join
         """
-        self.logger.debug(f'joining the process')
+        self.logger.debug(f"joining the process")
         self.worker.join(*args, **kwargs)
         if self.raft_worker is not None:
             self.raft_worker.join(*args, **kwargs)
-        self.logger.debug(f'successfully joined the process')
+        self.logger.debug(f"successfully joined the process")
 
     def _terminate(self):
         """Terminate the Pod.
         This method calls :meth:`terminate` in :class:`multiprocesssing.Process`.
         """
-        self.logger.debug(f'terminating the runtime process')
+        self.logger.debug(f"terminating the runtime process")
         self.worker.terminate()
         if self.raft_worker is not None:
             self.raft_worker.terminate()
-        self.logger.debug(f'runtime process properly terminated')
+        self.logger.debug(f"runtime process properly terminated")
 
     def _get_runtime_cls(self):
         from marie.orchestrate.pods.helper import update_runtime_cls
