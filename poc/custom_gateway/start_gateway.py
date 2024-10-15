@@ -1,7 +1,7 @@
 from request_handling_custom import GatewayRequestHandler
-from server_gateway import MarieServerGateway
 
 from marie import Flow
+from marie.serve.runtimes.servers.marie_gateway import MarieServerGateway
 
 
 def main():

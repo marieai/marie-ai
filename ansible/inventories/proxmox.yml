@@ -1,0 +1,6 @@
+pve:
+  hosts:
+    proxmox-local:
+      ansible_host: "pve.marieai.local"
+      ansibel_user: "root"
+

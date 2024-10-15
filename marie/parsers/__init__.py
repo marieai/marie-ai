@@ -1,7 +1,11 @@
 from marie.helper import GATEWAY_NAME
 from marie.parsers.helper import _SHOW_ALL_ARGS
 from marie.parsers.logging import mixin_suppress_root_logging_parser
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
+from marie.parsers.orchestrate.pod import (
+    mixin_gateway_discovery_parser,
+    mixin_gateway_job_scheduler_parser,
+    mixin_gateway_kv_store_parser,
+)
 from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
 from marie.parsers.orchestrate.runtimes.grpc_channel import (
     mixin_grpc_channel_options_parser,

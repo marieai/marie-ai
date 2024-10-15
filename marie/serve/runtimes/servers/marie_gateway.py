@@ -11,7 +11,6 @@ from docarray.documents import TextDoc
 
 import marie
 import marie.helper
-from marie import Gateway as BaseGateway
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobInfo, JobStatus
@@ -53,12 +52,12 @@ def create_balancer_interceptor() -> LoadBalancerInterceptor:
     return GatewayLoadBalancerInterceptor(notifier=notify)
 
 
-class MarieServerGateway(BaseGateway, CompositeServer):
+class MarieServerGateway(CompositeServer):
     """A custom Gateway for Marie server. Effectively we are providing a custom implementation of the Gateway class
     that providers communication between individual executors and the server.
 
     This utilizes service discovery(ETCD) to find deployed Executors from discovered gateways that could have spawned them(Flow/Deployment).
-
+    Ref : https://docs.jina.ai/v3.14.0/concepts/gateway/customization/#custom-gateway
     """
 
     def __init__(self, **kwargs):
@@ -69,6 +68,7 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
+        self.args = {**vars(self.runtime_args), **kwargs}
 
         if "kv_store_kwargs" not in kwargs:
             raise BadConfigSource("Missing kv_store_kwargs in config")
@@ -477,9 +477,9 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         await super().setup_server()
         await self.job_scheduler.start()
         await self.setup_service_discovery(
-            etcd_host=self.runtime_args.discovery_host,
-            etcd_port=self.runtime_args.discovery_port,
-            service_name=self.runtime_args.discovery_service_name,
+            etcd_host=self.args["discovery_host"],
+            etcd_port=self.args["discovery_port"],
+            service_name=self.args["discovery_service_name"],
         )
 
     async def run_server(self):
@@ -512,28 +512,38 @@ class MarieServerGateway(BaseGateway, CompositeServer):
         self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
 
         async def _start_watcher():
-            resolver = EtcdServiceResolver(
-                etcd_host,
-                etcd_port,
-                namespace="marie",
-                start_listener=False,
-                listen_timeout=5,
-            )
-
-            self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
-            resolver.watch_service(service_name, self.handle_discovery_event)
+            resolver = None
+            try:
+                resolver = EtcdServiceResolver(
+                    etcd_host,
+                    etcd_port,
+                    namespace="marie",
+                    start_listener=False,
+                    listen_timeout=5,
+                )
+                self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
+                resolver.watch_service(service_name, self.handle_discovery_event)
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to initialize etcd client on {etcd_host}:{etcd_port}"
+                )
+                if isinstance(e, RuntimeFailToStart):
+                    raise e
+                raise RuntimeFailToStart(
+                    f"Initialize etcd client failed on {etcd_host}:{etcd_port}, ensure the etcd server is running.",
+                    details=str(e),
+                )
 
         task = asyncio.create_task(_start_watcher())
         try:
             await task  # This raises an exception if the task had an exception
         except Exception as e:
-            self.logger.error(
-                f"Initialize etcd client failed failed on {etcd_host}:{etcd_port}"
-            )
+            self.logger.error(f"Task watcher failed: {e}")
             if isinstance(e, RuntimeFailToStart):
                 raise e
             raise RuntimeFailToStart(
-                f"Initialize etcd client failed failed on {etcd_host}:{etcd_port}, ensure the etcd server is running."
+                f"Unexpected error during service discovery setup for etcd client on {etcd_host}:{etcd_port}",
+                details=str(e),
             )
 
     def handle_discovery_event(self, service: str, event: str) -> None:

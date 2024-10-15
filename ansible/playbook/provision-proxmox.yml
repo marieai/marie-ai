@@ -1,0 +1,70 @@
+- name: Setup Proxmox VM
+  hosts: localhost
+  gather_facts: false
+
+
+  vars:
+    proxmox_api_urlX: "{{ lookup('env', 'PROXMOX_API_URL') }}"
+    proxmox_api_userX: "{{ lookup('env', 'PROXMOX_API_USER') }}"
+    proxmox_api_tokenX: "{{ lookup('env', 'PROXMOX_API_TOKEN') }}"
+
+
+    proxmox_api_url: "pve.marieai.lab"
+    proxmox_api_user: "ansible@pve"
+    proxmox_api_token_id: "automation"
+    proxmox_api_token: "1162f99e-2f34-4827-8065-31407e7a0d98"
+
+    proxmox_node: "pve"
+    vm_id: 100
+    vm_name: "cloned-vm"
+    template_id: 100  # ID of the template to clone
+    storage: "thin-sdb"
+    cores: 2
+    memory: 2048
+    # disk_size: "10G"
+    # network_bridge: "vmbr0"
+
+
+  # Define the variables to be prompted
+  vars_prompt:
+    - name: num_vms
+      prompt: "How many VMs do you want to provision?"
+      private: no
+
+    - name: starting_newid
+      prompt: "Enter the starting newid for the VMs"
+      private: no
+
+  tasks:
+    - delegate_to: localhost
+      block:
+
+      - name: Create Marie VM
+        community.general.proxmox_kvm:
+          api_host: "{{ proxmox_api_url }}"
+          api_token_id: "{{ proxmox_api_token_id }}"
+          api_token_secret: "{{ proxmox_api_token }}"
+          api_user: "{{ proxmox_api_user }}"
+          clone: marie-template
+          vmid: "{{ vm_id }}"
+          full: true
+          name: marie-template
+          node: "{{ proxmox_node }}"
+          storage: thin-sdb
+          # newid: 250
+          newid: "{{ (starting_newid | int) + item }}"
+          name: "marie-{{ '%03d' | format(item + 1) }}"
+          timeout: 600  # Increase the timeout to 600 seconds (10 minutes)
+        loop: "{{ range(0, num_vms | int) }}"
+
+      - name: Start Marie VM
+        community.general.proxmox_kvm:
+          api_host: "{{ proxmox_api_url }}"
+          api_token_id: "{{ proxmox_api_token_id }}"
+          api_token_secret: "{{ proxmox_api_token }}"
+          api_user: "{{ proxmox_api_user }}"
+          node: "{{ proxmox_node }}"
+          vmid: "{{ (starting_newid | int) + item }}"
+          state: started
+          timeout: 600  # Increase the timeout to 600 seconds (10 minutes)
+        loop: "{{ range(0, num_vms | int) }}"
