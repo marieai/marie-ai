@@ -19,7 +19,7 @@ class GatewayJobDistributor(JobDistributor):
         self.streamer = gateway_streamer
         self.logger = logger or MarieLogger(self.__class__.__name__)
 
-    async def submit_job(
+    async def send(
         self,
         submission_id: str,
         job_info: JobInfo,

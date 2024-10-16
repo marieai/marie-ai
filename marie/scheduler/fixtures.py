@@ -1,4 +1,4 @@
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.state import WorkState
 
 
 def create_schema(schema: str):

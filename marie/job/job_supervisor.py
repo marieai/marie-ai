@@ -192,7 +192,7 @@ class JobSupervisor:
 
     async def _submit_job_in_background(self, curr_info):
         try:
-            response = await self._job_distributor.submit_job(
+            response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,
                 send_callback=self.send_callback,

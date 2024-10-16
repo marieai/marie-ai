@@ -1,6 +1,9 @@
 import asyncio
 import json
+import os
+import sys
 import time
+import traceback
 from datetime import datetime
 from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -8,40 +11,43 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
+from rich.traceback import install
 
 import marie
 import marie.helper
+from marie.constants import (
+    __cache_path__,
+    __config_dir__,
+    __marie_home__,
+    __model_path__,
+)
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
+from marie.jaml import JAML
 from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
-from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
 from marie.proto import jina_pb2, jina_pb2_grpc
+from marie.scheduler import PostgreSQLJobScheduler
+from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
+from marie.scheduler.state import WorkState
 from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
 from marie.serve.networking.connection_stub import _ConnectionStubs
-from marie.serve.networking.sse import EventSourceResponse
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
-from marie.serve.runtimes.worker.http_fastapi_app import _gen_dict_documents
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request import Request
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
-from marie_server.scheduler import PostgreSQLJobScheduler
-from marie_server.scheduler.models import (
-    DEFAULT_RETRY_POLICY,
-    JobSubmissionModel,
-    WorkInfo,
-)
-from marie_server.scheduler.state import WorkState
+from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -50,6 +56,26 @@ def create_balancer_interceptor() -> LoadBalancerInterceptor:
         pass
 
     return GatewayLoadBalancerInterceptor(notifier=notify)
+
+
+def load_env_file(dotenv_path: Optional[str] = None) -> None:
+    from dotenv import load_dotenv
+
+    logger.info(f"Loading env file from {dotenv_path}")
+    load_dotenv(dotenv_path=dotenv_path, verbose=True)
+
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """
+    Handle uncaught exceptions
+    :param exc_type:
+    :param exc_value:
+    :param exc_traceback:
+    """
+    logger.error("exc_type", exc_type)
+    logger.error("exc_value", exc_value)
+    logger.error("exc_traceback", exc_traceback)
+    traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stdout)
 
 
 class MarieServerGateway(CompositeServer):
@@ -61,16 +87,47 @@ class MarieServerGateway(CompositeServer):
     """
 
     def __init__(self, **kwargs):
+        """Main entry point for the Marie server
+        :param yml_config:
+        :param env:
+        :param env_file:
+        """
         super().__init__(**kwargs)
 
-        self.logger = MarieLogger(self.__class__.__name__)
+        # install handler for exceptions
+        sys.excepthook = handle_exception
+        install(show_locals=True)
+
         self.logger.info(f"Setting up MarieServerGateway")
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.event_queue = asyncio.Queue()
         self.args = {**vars(self.runtime_args), **kwargs}
+        yml_config = self.args.get("uses")
 
-        if "kv_store_kwargs" not in kwargs:
+        if "env_file" not in kwargs:
+            env_file = os.path.join(__config_dir__, ".env")
+        else:
+            env_file = kwargs["env_file"]
+        load_env_file(dotenv_path=env_file)
+
+        context = {}
+        for k, v in os.environ.items():
+            context[k] = v
+
+        self.logger.info(f"Debugging information:")
+        self.logger.info(f"__model_path__ = {__model_path__}")
+        self.logger.info(f"__config_dir__ = {__config_dir__}")
+        self.logger.info(f"__marie_home__ = {__marie_home__}")
+        self.logger.info(f"__cache_path__ = {__cache_path__}")
+        self.logger.info(f"yml_config = {yml_config}")
+        self.logger.info(f"env_file = {env_file}")
+
+        # Load the config file and inject the environment variables, we do this here because we need to pass the context
+        # Another option is to modify the core BaseGateway.load_config method to accept context with environment variables
+        self.args = JAML.expand_dict(self.args, context)
+
+        if "kv_store_kwargs" not in self.args:
             raise BadConfigSource("Missing kv_store_kwargs in config")
 
         kv_store_kwargs = kwargs["kv_store_kwargs"]
@@ -87,10 +144,10 @@ class MarieServerGateway(CompositeServer):
                 f"kv_store_kwargs must contain the following keys: {expected_keys}"
             )
 
-        if "job_scheduler_kwargs" not in kwargs:
+        if "job_scheduler_kwargs" not in self.args:
             raise BadConfigSource("Missing job_scheduler_kwargs in config")
 
-        job_scheduler_kwargs = kwargs["job_scheduler_kwargs"]
+        job_scheduler_kwargs = self.args["job_scheduler_kwargs"]
         if not all(key in job_scheduler_kwargs for key in expected_keys):
             raise ValueError(
                 f"job_scheduler_kwargs must contain the following keys: {expected_keys}"
@@ -152,7 +209,7 @@ class MarieServerGateway(CompositeServer):
                 doc = TextDoc(text=text)
 
                 if False:
-                    result = await self.distributor.submit_job(
+                    result = await self.distributor.send(
                         JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
                         doc=doc,
                     )
@@ -463,7 +520,7 @@ class MarieServerGateway(CompositeServer):
         return response
 
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
-        print("Running custom dry run logic")
+        logger.info("Running custom dry run logic")
 
         status_message = StatusMessage()
         status_message.set_code(jina_pb2.StatusProto.SUCCESS)
@@ -475,6 +532,11 @@ class MarieServerGateway(CompositeServer):
         """
         self.logger.debug(f"Setting up MarieGateway server")
         await super().setup_server()
+
+        setup_toast_events(self.args.get("toast", {}))
+        setup_storage(self.args.get("storage", {}))
+        setup_auth(self.args.get("auth", {}))
+
         await self.job_scheduler.start()
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
@@ -497,19 +559,23 @@ class MarieServerGateway(CompositeServer):
         etcd_host: str,
         etcd_port: int,
         service_name: str,
-        watchdog_interval: int = 2,
+        watchdog_interval: int = 5,
     ):
         """
          Setup service discovery for the gateway.
 
         :param etcd_host: str - The host address of the ETCD service. Default is "0.0.0.0".
         :param etcd_port: int - The port of the ETCD service. Default is 2379.
-        :param watchdog_interval: int - The interval in seconds between each service address check. Default is 2.
+        :param service_name: str - The name of the service to discover.
+        :param watchdog_interval: int - The interval in seconds between each service address check. Default is 5.
         :return: None
 
         """
         self.logger.info(f"Setting up service discovery : {service_name}")
         self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
+
+        if not service_name:
+            raise BadConfigSource("Service name must be provided for service discovery")
 
         async def _start_watcher():
             resolver = None
@@ -519,7 +585,7 @@ class MarieServerGateway(CompositeServer):
                     etcd_port,
                     namespace="marie",
                     start_listener=False,
-                    listen_timeout=5,
+                    listen_timeout=watchdog_interval,
                 )
                 self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
                 resolver.watch_service(service_name, self.handle_discovery_event)

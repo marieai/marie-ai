@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
 
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.state import WorkState
 
 
 # https://cs.android.com/androidx/platform/frameworks/support/+/androidx-main:work/work-runtime/src/main/java/androidx/work/WorkInfo.kt

@@ -3,8 +3,8 @@ from typing import Dict
 
 from psycopg2.extras import Json
 
-from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.models import WorkInfo
+from marie.scheduler.state import WorkState
 
 
 def to_timestamp_with_tz(dt: datetime):
