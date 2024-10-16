@@ -6,6 +6,7 @@ from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__, __model_path__
 from marie.logging_core.mdc import MDC
 from marie.logging_core.profile import TimeContext
+from marie.models.utils import setup_torch_optimizations
 from marie.pipe.extract_pipeline import ExtractPipeline, s3_asset_path, split_filename
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
@@ -131,5 +132,6 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     # os.environ["MARIE_DISABLE_CUDA"] = "True"
     torch.set_float32_matmul_precision("high")
+    setup_torch_optimizations()
 
     run_extract_pipeline()

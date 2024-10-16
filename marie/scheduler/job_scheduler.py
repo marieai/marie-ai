@@ -1,8 +1,8 @@
 import abc
 from typing import Any, Dict, Optional
 
-from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.models import WorkInfo
+from marie.scheduler.state import WorkState
 
 
 class JobScheduler(abc.ABC):

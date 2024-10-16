@@ -5,6 +5,7 @@ import random
 import sys
 import threading
 import time
+from typing import Callable, List
 
 import pytest
 from docarray import DocList
@@ -340,7 +341,12 @@ class NoopJobDistributor(JobDistributor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def submit_job(self, job_info: JobInfo) -> DataRequest:
+    async def send(
+        self,
+        submission_id: str,
+        job_info: JobInfo,
+        send_callback: Callable[[List[DataRequest]], DataRequest] = None,
+    ) -> DataRequest:
         print(f"NoopJobDistributor: {job_info}")
         if job_info.status != JobStatus.PENDING:
             raise ValueError("Job status is not PENDING")

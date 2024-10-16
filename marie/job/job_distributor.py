@@ -12,7 +12,7 @@ class JobDistributor(abc.ABC):
     """
 
     @abc.abstractmethod
-    async def submit_job(
+    async def send(
         self,
         submission_id: str,
         job_info: JobInfo,

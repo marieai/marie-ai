@@ -21,8 +21,8 @@ executors:
   polling: "ANY"
   uses: TestExecutor
   port:
-  - 57750
-  port_monitoring: 58835
+  - 59429
+  port_monitoring: 50343
   kv_store_kwargs:
     provider: postgresql
     hostname: 127.0.0.1
@@ -50,6 +50,6 @@ gateway:
     max_pool_size: 5
     max_connections: 5
   port:
-  - 52908
+  - 63844
   port_monitoring:
-  - 61909
+  - 65398

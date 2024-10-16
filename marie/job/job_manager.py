@@ -127,7 +127,7 @@ class JobManager:
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
-                print(f"Job status: {job_id} : {job_status}")
+                self.logger.info(f"Monitored job status: {job_id} : {job_status}")
                 # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
                 # print("has_available_slot: ", self.has_available_slot())
                 if job_status.is_terminal():
