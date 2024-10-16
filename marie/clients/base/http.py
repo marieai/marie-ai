@@ -158,6 +158,7 @@ class HTTPBaseClient(BaseClient):
         if len(self._endpoints) == 0:
             await self._get_endpoints_from_openapi(**kwargs)
 
+        print("HERERE EREERER")
         async with AsyncExitStack() as stack:
             cm1 = ProgressBar(
                 total_length=inputs_length, disable=not self.show_progress
@@ -174,6 +175,7 @@ class HTTPBaseClient(BaseClient):
             else:
                 url = f"{proto}://{self.args.host}:{self.args.port}/post"
 
+            print("URL", url)
             if not self.reuse_session:
                 iolet = await stack.enter_async_context(
                     HTTPClientlet(

@@ -5,16 +5,26 @@ import sys
 import time
 import traceback
 from datetime import datetime
-from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Optional,
+)
 from urllib.parse import urlparse
 
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
+from fastapi import Depends, Request
 from rich.traceback import install
 
 import marie
 import marie.helper
+from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
     __cache_path__,
     __config_dir__,
@@ -24,7 +34,6 @@ from marie.constants import (
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
-from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.logging_core.predefined import default_logger as logger
@@ -44,7 +53,6 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types_core.request import Request
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
 from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
@@ -202,36 +210,6 @@ class MarieServerGateway(CompositeServer):
                 result = await self.job_scheduler.submit_job(work_info)
                 return {"result": result}
 
-            @app.get("/endpoint")
-            async def get(text: str):
-                self.logger.info(f"Received request at {datetime.now()}")
-                docs = DocList[TextDoc]([TextDoc(text=text)])
-                doc = TextDoc(text=text)
-
-                if False:
-                    result = await self.distributor.send(
-                        JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
-                        doc=doc,
-                    )
-
-                    return {"result": result}
-
-                if True:
-                    result = None
-                    async for docs in self.streamer.stream_docs(
-                        docs=DocList[TextDoc]([TextDoc(text=text)]),
-                        # doc=TextDoc(text=text),
-                        # exec_endpoint="/extract",  # _jina_dry_run_
-                        exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
-                        # exec_endpoint="/endpoint",
-                        # target_executor="executor0",
-                        return_results=False,
-                    ):
-                        result = docs[0].text
-                        # result = docs
-                        print(f"result: {result}")
-                        return {"result": result}
-
             @app.get("/check")
             async def get_health(text: str):
                 self.logger.info(f"Received request at {datetime.now()}")
@@ -293,9 +271,14 @@ class MarieServerGateway(CompositeServer):
                 path="/api/v1/invoke",
                 methods=["POST"],
                 summary="Invoke a new command /api/v1/invoke",
+                dependencies=[Depends(TokenBearer())],
             )
-            async def invoke_command(request: Request):
+            async def invoke_command(
+                request: Request, token: str = Depends(TokenBearer())
+            ):
                 self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Token : {token}")
+
                 payload = await request.json()
                 header = payload.get("header", {})
                 message = payload.get("parameters", {})

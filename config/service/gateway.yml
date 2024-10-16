@@ -1,4 +1,4 @@
-!MarieGateway
+!teway
 uses: MarieGateway
 py_modules:
   - marie.serve.runtimes.gateway.marie

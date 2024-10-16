@@ -158,6 +158,8 @@ class HTTPClientlet(AioHttpClientlet):
         :param request: request as dict
         :return: send post message
         """
+        print("send_message")
+        print(request)
         req_dict = request.to_dict()
         req_dict["exec_endpoint"] = req_dict["header"]["exec_endpoint"]
         if "target_executor" in req_dict["header"]:

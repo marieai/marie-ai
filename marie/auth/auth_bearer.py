@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from IPython.utils.openpy import source_to_unicode
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_403_FORBIDDEN
 
 from marie.auth.api_key_manager import APIKeyManager
@@ -13,12 +14,17 @@ class TokenBearer(HTTPBearer):
         super(TokenBearer, self).__init__(auto_error=auto_error)
 
     async def __call__(self, request: Request) -> Optional[str]:
-        credentials: HTTPAuthorizationCredentials = await super(
-            TokenBearer, self
-        ).__call__(request)
+
+        print("TokenBearer")
+        print(request.headers)
+
         try:
+            credentials: HTTPAuthorizationCredentials = await super(
+                TokenBearer, self
+            ).__call__(request)
+
             token = credentials.credentials
-            logger.debug(f"Verifying token => {token}")
+            logger.info(f"Verifying token => {token}")
 
             if credentials:
                 if not credentials.scheme == "Bearer":

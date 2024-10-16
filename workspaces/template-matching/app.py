@@ -10,7 +10,6 @@ import streamlit as st
 import torch
 from canvas_util import ImageUtils
 from PIL import Image
-from streamlit_drawable_canvas import st_canvas
 
 from marie.boxes.box_processor import PSMode
 from marie.components.template_matching import (
@@ -21,7 +20,7 @@ from marie.components.template_matching import (
 )
 from marie.ocr import CoordinateFormat, DefaultOcrEngine, OcrEngine
 from marie.ocr.util import meta_to_text
-from marie.utils.resize_image import resize_image, resize_image_progressive
+from marie.utils.resize_image import resize_image
 
 
 @st.cache_resource

@@ -82,6 +82,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = False
         self.task = None
+        self.sync_task = None
         self.monitoring_task = None
 
         lock_free = True
@@ -241,7 +242,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.create_queue(f"${queue}_dlq")
 
         self.running = True
-        # self.sync_task = asyncio.create_task(self._sync())
+        self.sync_task = asyncio.create_task(self._sync())
         self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 

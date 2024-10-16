@@ -28,7 +28,7 @@ class OptimizedDetectronPredictor:
 
     def __init__(self, cfg, half_precision=True):
         """
-        Initialize the model with the given config.
+        Initialize the model with the given config.zzgb
 
         :param cfg: the detectron2 config
         :param half_precision:   whether to use half precision or not (default: True) will only work on CUDA

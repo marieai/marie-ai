@@ -228,16 +228,21 @@ async def main():
         host=host, port=int(port), protocol=protocol, request_size=-1, asyncio=True
     )
 
-    ready = await client.is_flow_ready()
-    print(f"Flow is ready: {ready}")
+    # ready = await client.is_flow_ready()
+    # print(f"Flow is ready: {ready}")
 
+    request_kwargs = {
+        "headers": [
+            {"key", "value"},
+            {"key2", "value2"},
+        ]
+    }
     for i in range(0, 1):
         print(f"Sending request : {i}")
         start = time.perf_counter()
         async for resp in client.post(
             on="/api/v1/invoke",
             inputs=[],  # most request does not need inputs
-            parameters=parameters,
             request_size=-1,
             return_responses=True,  # return DocList instead of Response
             return_exceptions=True,

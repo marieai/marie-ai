@@ -236,9 +236,9 @@ def server(args: "Namespace"):
     from marie_server import __main__ as srv
 
     # marie server watch --etcd-host 127.0.0.1
-    if args.ctl_cli == "watch":
-        watch_sever_deployments(args)
-        return
+    # if args.ctl_cli == "watch":
+    #     watch_sever_deployments(args)
+    #     return
 
     if args.uses:
         _input = args.uses
