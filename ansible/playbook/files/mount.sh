@@ -22,11 +22,13 @@ then
 else
     echo "Mount not defined. Adding..."
 
+# sudo mount -t nfs 127.0.0.1:/mnt/shares/data /mnt/data/marie-ai/
+
 sudo -n uptime
 mkdir -p /mnt/data/marie-ai
 cat >>/etc/fstab <<'EOF'
 # MARIE_AI_START
-127.0.0.1:/mnt/shares/data  /mnt/data/marie-ai       nfs defaults,nfsvers=3 0 0
+192.168.1.33:/mnt/shares/data  /mnt/data/marie-ai       nfs defaults,nfsvers=3 0 0
 # MARIE_AI_END
 EOF
 

@@ -2,10 +2,10 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
-    from marie.logging.logger import MarieLogger
+    from marie.logging_core.logger import MarieLogger
 
 if docarray_v2:
     from docarray import BaseDoc, DocList
@@ -14,7 +14,7 @@ if docarray_v2:
 def get_fastapi_app(
     request_models_map: Dict,
     caller: Callable,
-    logger: 'MarieLogger',
+    logger: "MarieLogger",
     cors: bool = False,
     **kwargs,
 ):
@@ -41,12 +41,12 @@ def get_fastapi_app(
     from marie.serve.runtimes.gateway.models import _to_camel_case
 
     if not docarray_v2:
-        logger.warning('Only docarray v2 is supported with CSP. ')
+        logger.warning("Only docarray v2 is supported with CSP. ")
         return
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
-            description='Request ID', example=os.urandom(16).hex()
+            description="Request ID", example=os.urandom(16).hex()
         )
 
         class Config(BaseConfig):
@@ -62,12 +62,12 @@ def get_fastapi_app(
     if cors:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=['*'],
+            allow_origins=["*"],
             allow_credentials=True,
-            allow_methods=['*'],
-            allow_headers=['*'],
+            allow_methods=["*"],
+            allow_headers=["*"],
         )
-        logger.warning('CORS is enabled. This service is accessible from any website!')
+        logger.warning("CORS is enabled. This service is accessible from any website!")
 
     def add_post_route(
         endpoint_path,
@@ -89,8 +89,8 @@ def get_fastapi_app(
 
         app_kwargs = dict(
             path=f'/{endpoint_path.strip("/")}',
-            methods=['POST'],
-            summary=f'Endpoint {endpoint_path}',
+            methods=["POST"],
+            summary=f"Endpoint {endpoint_path}",
             response_model=Union[output_model, List[output_model]],
             response_class=DocArrayResponse,
         )
@@ -137,21 +137,21 @@ def get_fastapi_app(
 
         @app.api_route(**app_kwargs)
         async def post(request: Request):
-            content_type = request.headers.get('content-type')
-            if content_type == 'application/json':
+            content_type = request.headers.get("content-type")
+            if content_type == "application/json":
                 json_body = await request.json()
                 return await process(input_model(**json_body))
 
-            elif content_type in ('text/csv', 'application/csv'):
+            elif content_type in ("text/csv", "application/csv"):
                 import csv
                 from io import StringIO
 
                 bytes_body = await request.body()
-                csv_body = bytes_body.decode('utf-8')
+                csv_body = bytes_body.decode("utf-8")
                 if not is_valid_csv(csv_body):
                     raise HTTPException(
                         status_code=400,
-                        detail='Invalid CSV input. Please check your input.',
+                        detail="Invalid CSV input. Please check your input.",
                     )
 
                 def construct_model_from_line(
@@ -214,15 +214,15 @@ def get_fastapi_app(
                 data = []
                 for line in csv.reader(
                     StringIO(csv_body),
-                    delimiter=',',
+                    delimiter=",",
                     quoting=csv.QUOTE_NONE,
-                    escapechar='\\',
+                    escapechar="\\",
                 ):
                     if len(line) != len(field_names):
                         raise HTTPException(
                             status_code=400,
-                            detail=f'Invalid CSV format. Line {line} doesn\'t match '
-                            f'the expected field order {field_names}.',
+                            detail=f"Invalid CSV format. Line {line} doesn't match "
+                            f"the expected field order {field_names}.",
                         )
                     data.append(construct_model_from_line(input_doc_list_model, line))
 
@@ -231,15 +231,15 @@ def get_fastapi_app(
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f'Invalid content-type: {content_type}. '
-                    f'Please use either application/json or text/csv.',
+                    detail=f"Invalid content-type: {content_type}. "
+                    f"Please use either application/json or text/csv.",
                 )
 
     for endpoint, input_output_map in request_models_map.items():
-        if endpoint != '_jina_dry_run_':
-            input_doc_model = input_output_map['input']['model']
-            output_doc_model = input_output_map['output']['model']
-            parameters_model = input_output_map['parameters']['model']
+        if endpoint != "_jina_dry_run_":
+            input_doc_model = input_output_map["input"]["model"]
+            output_doc_model = input_output_map["output"]["model"]
+            parameters_model = input_output_map["parameters"]["model"]
             parameters_model_needed = parameters_model is not None
             if parameters_model_needed:
                 try:
@@ -285,8 +285,8 @@ def get_fastapi_app(
 
     # `/ping` route is required by AWS Sagemaker
     @app.get(
-        path='/ping',
-        summary='Get the health of Jina Executor service',
+        path="/ping",
+        summary="Get the health of Jina Executor service",
         response_model=JinaHealthModel,
     )
     async def _executor_health():

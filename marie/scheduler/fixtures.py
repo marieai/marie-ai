@@ -1,4 +1,4 @@
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.state import WorkState
 
 
 def create_schema(schema: str):
@@ -54,7 +54,8 @@ def create_job_table(schema: str):
       keep_until timestamp with time zone NOT NULL default now() + interval '14 days',
       output jsonb,
       dead_letter text,
-      policy text
+      policy text,
+      parent_job_id uuid
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
@@ -294,7 +295,7 @@ def create_index_job_fetch(schema):
 
 def create_exponential_backoff_function(schema):
     return f"""
-    CREATE OR REPLACE FUNCTION exponential_backoff(retry_delay INT, retry_count INT)
+    CREATE OR REPLACE FUNCTION {schema}.exponential_backoff(retry_delay INT, retry_count INT)
     RETURNS TIMESTAMP WITH TIME ZONE AS $$
     BEGIN
         RETURN now() + (retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) +

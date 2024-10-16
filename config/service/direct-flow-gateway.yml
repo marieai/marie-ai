@@ -1,0 +1,39 @@
+jtype: Flow
+version: '1'
+with: {}
+executors: []
+gateway:
+  uses: MarieServerGateway
+  discovery: true
+  discovery_host: 0.0.0.0
+  discovery_port: 2379
+  discovery_watchdog_interval: 2
+  discovery_service_name: gateway/marie
+  kv_store_kwargs:
+    provider: postgresql
+    hostname: 127.0.0.1
+    port: 5432
+    username: postgres
+    password: '123456'
+    database: postgres
+    default_table: kv_store_worker
+    max_pool_size: 5
+    max_connections: 5
+  job_scheduler_kwargs:
+    provider: postgresql
+    hostname: 127.0.0.1
+    port: 5432
+    database: postgres
+    username: postgres
+    password: '123456'
+    default_table: job_scheduler
+    max_pool_size: 5
+    max_connections: 5
+  port:
+  - 52000
+  - 51000
+  protocol:
+  - "GRPC"
+  - "HTTP"
+  port_monitoring:
+  - 57706

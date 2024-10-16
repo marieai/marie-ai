@@ -5,6 +5,7 @@ import random
 import sys
 import threading
 import time
+from typing import Callable, List
 
 import pytest
 from docarray import DocList
@@ -24,7 +25,7 @@ from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.storage.kv.in_memory import InMemoryKV
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
 from tests.helper import _generate_pod_args
 
@@ -340,7 +341,12 @@ class NoopJobDistributor(JobDistributor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def submit_job(self, job_info: JobInfo) -> DataRequest:
+    async def send(
+        self,
+        submission_id: str,
+        job_info: JobInfo,
+        send_callback: Callable[[List[DataRequest]], DataRequest] = None,
+    ) -> DataRequest:
         print(f"NoopJobDistributor: {job_info}")
         if job_info.status != JobStatus.PENDING:
             raise ValueError("Job status is not PENDING")

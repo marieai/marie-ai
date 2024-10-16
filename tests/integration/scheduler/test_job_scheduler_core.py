@@ -20,7 +20,7 @@ from tests.core.test_utils import async_delay, async_wait_for_condition_async_pr
 
 
 def compare_pydantic_models(
-        model1: BaseModel, model2: BaseModel, excludes: List
+    model1: BaseModel, model2: BaseModel, excludes: List
 ) -> Dict[str, Any]:
     """Compare two Pydantic models and return the differences.
     :param model1: model1 to compare
@@ -43,7 +43,7 @@ def compare_pydantic_models(
 
 
 async def check_job_scheduler_succeeded(
-        job_scheduler: JobScheduler, job_id: str
+    job_scheduler: JobScheduler, job_id: str
 ) -> bool:
     data = await job_scheduler.get_job(job_id)
     status = data.state
@@ -54,7 +54,7 @@ async def check_job_scheduler_succeeded(
 
 
 async def update_job_scheduler_status(
-        job_scheduler: JobScheduler, job_id: str, job_status: WorkState
+    job_scheduler: JobScheduler, job_id: str, job_status: WorkState
 ) -> None:
     await job_scheduler.put_status(job_id, job_status)
 
@@ -254,7 +254,7 @@ async def test_simultaneous_with_same_id(job_scheduler: JobScheduler):
 
 @pytest.mark.asyncio
 async def test_job_scheduler_submission(
-        job_scheduler: JobScheduler, job_manager: JobManager
+    job_scheduler: JobScheduler, job_manager: JobManager
 ):
     JobManager.SLOTS_AVAILABLE = 1
 
@@ -274,7 +274,7 @@ async def test_job_scheduler_submission(
 
 @pytest.mark.asyncio
 async def test_job_scheduler_completion(
-        job_scheduler: JobScheduler, job_manager: JobManager
+    job_scheduler: JobScheduler, job_manager: JobManager
 ):
     JobManager.SLOTS_AVAILABLE = 1
 

@@ -1,7 +1,7 @@
 from typing import Any, Dict
 
 from marie.job.common import JobInfoStorageClient
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.storage.database.postgres import PostgresqlMixin
 
 

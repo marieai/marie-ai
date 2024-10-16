@@ -6,7 +6,7 @@ import torch
 
 from marie import Document, DocumentArray, Executor, requests, safely_encoded
 from marie.executor.mixin import StorageMixin
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.docs import frames_from_docs
 from marie.utils.image_utils import convert_to_bytes, hash_frames_fast

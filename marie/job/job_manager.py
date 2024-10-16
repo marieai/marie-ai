@@ -17,7 +17,7 @@ from marie.job.scheduling_strategies import (
     NodeAffinitySchedulingStrategy,
     SchedulingStrategyT,
 )
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.storage.kv.storage_client import StorageArea
 
 # The max time to wait for the JobSupervisor to start before failing the job.
@@ -127,7 +127,7 @@ class JobManager:
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
-                print(f"Job status: {job_id} : {job_status}")
+                self.logger.info(f"Monitored job status: {job_id} : {job_status}")
                 # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
                 # print("has_available_slot: ", self.has_available_slot())
                 if job_status.is_terminal():
@@ -137,7 +137,7 @@ class JobManager:
                         break
                     elif job_status == JobStatus.FAILED:
                         is_alive = False
-                        self.logger.error(f"Job failed : {job_id}")
+                        self.logger.warning(f"Job failed : {job_id}")
                         break
 
                 if job_status == JobStatus.PENDING:
@@ -292,7 +292,7 @@ class JobManager:
         *,
         entrypoint: str,
         submission_id: Optional[str] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         runtime_env: Optional[Dict[str, Any]] = None,
         _start_signal_actor: Optional[ActorHandle] = None,
     ) -> str:

@@ -34,7 +34,6 @@ class JobInfoStorageClientProxy(JobInfoStorageClient):
         message: Optional[str] = None,
         jobinfo_replace_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        print("put_status called : ", job_id, status)
         await super().put_status(job_id, status, message, jobinfo_replace_kwargs)
         await self._event_publisher.publish(
             status,

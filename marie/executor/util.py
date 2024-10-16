@@ -8,7 +8,7 @@ import torch
 from marie.constants import __model_path__
 from marie.excepts import RuntimeFailToStart
 from marie.importer import ImportExtensions
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.utils.types import strtobool
 
 

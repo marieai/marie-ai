@@ -6,8 +6,6 @@ import traceback
 from functools import partial
 from typing import Any, Dict, Optional
 
-from docarray import BaseDoc, DocList
-from docarray.documents.legacy import LegacyDocument
 from rich.traceback import install
 
 import marie.helper
@@ -20,77 +18,17 @@ from marie.constants import (
     __model_path__,
 )
 from marie.importer import ImportExtensions
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
-from marie.messaging import (
-    NativeToastHandler,
-    PsqlToastHandler,
-    RabbitMQToastHandler,
-    Toast,
-)
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
+from marie.messaging import Toast
 from marie.messaging.events import EngineEventData, MarieEvent
 from marie.messaging.publisher import event_builder
-from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.device import gpu_device_count
-from marie.utils.json import store_json_object
-from marie.utils.pydantic import patch_pydantic_schema_2x
+from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
 from marie.utils.types import strtobool
 from marie_server.rest_extension import extend_rest_interface
 
 DEFAULT_TERM_COLUMNS = 120
-
-
-def setup_toast_events(toast_config: Dict[str, Any]):
-    """
-    Setup the toast events for the server notification system
-    :param toast_config: The toast config
-    """
-    native_config = toast_config["native"]
-    psql_config = toast_config["psql"]
-    rabbitmq_config = toast_config["rabbitmq"]
-
-    Toast.register(
-        NativeToastHandler(os.path.join(__cache_path__, "events.json")), native=True
-    )
-
-    if psql_config is not None:
-        Toast.register(PsqlToastHandler(psql_config), native=False)
-
-    if rabbitmq_config is not None:
-        Toast.register(RabbitMQToastHandler(rabbitmq_config), native=False)
-
-
-def setup_storage(storage_config: Dict[str, Any]) -> None:
-    """Setup the storage handler"""
-
-    if "s3" in storage_config and strtobool(storage_config["s3"]["enabled"]):
-        logger.info("Setting up storage handler for S3")
-        handler = S3StorageHandler(config=storage_config["s3"], prefix="S3_")
-        StorageManager.register_handler(handler=handler)
-        StorageManager.ensure_connection("s3://", silence_exceptions=False)
-
-        StorageManager.mkdir("s3://marie")
-
-
-def setup_scheduler(scheduler_config: Dict[str, Any]) -> None:
-    """Set up the job scheduler"""
-    if "psql" in scheduler_config:
-        # check if the scheduler is enabled
-        if scheduler_config["psql"]["enabled"]:
-            from marie_server.scheduler import PostgreSQLJobScheduler
-
-            scheduler = PostgreSQLJobScheduler(config=scheduler_config["psql"])
-            scheduler.start()
-    else:
-        logger.warning("No scheduler config found")
-
-
-def setup_auth(auth_config: Dict[str, Any]) -> None:
-    """Set up the auth handler"""
-    print("auth_config", auth_config)
-    from marie_server.auth.api_key_manager import APIKeyManager
-
-    APIKeyManager.from_config(auth_config)
 
 
 def load_env_file(dotenv_path: Optional[str] = None) -> None:
@@ -359,8 +297,6 @@ def setup_server(config: Dict[str, Any]) -> None:
     setup_toast_events(config.get("toast", {}))
     setup_storage(config.get("storage", {}))
     setup_auth(config.get("auth", {}))
-
-    # setup_scheduler(config.get("scheduler", {}))
 
 
 def filter_endpoint() -> None:

@@ -17,7 +17,7 @@ from marie.boxes.box_processor import BoxProcessor, PSMode, create_dirs
 from marie.boxes.line_processor import find_line_number, line_merge
 from marie.constants import __model_path__, __config_dir__
 from marie.detectron.detector import OptimizedDetectronPredictor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.utils.image_utils import imwrite, paste_fragment
 from marie.utils.overlap import merge_boxes, compute_iou, find_overlap
@@ -501,6 +501,7 @@ class BoxProcessorUlimDit(BoxProcessor):
             return bboxes, classes, scores
         except Exception as e:
             self.logger.error(f"Error in PSM_SPARSE_STEP : {e}")
+            raise e
         return [], [], []
 
     def psm_sparse(

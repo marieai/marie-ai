@@ -187,8 +187,9 @@ class EtcdClient(object):
         self, raw_key: bytes, event_callback: Callable, prefix: bool = False, **kwargs
     ) -> int:
         """Watch a key in etcd."""
-
-        print("Watching raw key:", raw_key)
+        log.info(
+            f"Watching raw key: {raw_key}",
+        )
 
         def _watch_callback(response: etcd3.watch.WatchResponse):
             if isinstance(response, grpc.RpcError):

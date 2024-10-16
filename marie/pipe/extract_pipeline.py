@@ -201,7 +201,6 @@ class ExtractPipeline(BasePipeline):
         documents = docs_from_image(frames)
         registered_frames = []
         metadata = []
-
         if enabled:
             try:
                 output_dir = ensure_exists(os.path.join(root_asset_dir, "boundary"))
@@ -318,6 +317,7 @@ class ExtractPipeline(BasePipeline):
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "work_dir": root_asset_dir,
             "pipeline": self.pipeline_name,
             "pages": f"{len(frames)}",
         }
@@ -437,6 +437,7 @@ class ExtractPipeline(BasePipeline):
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
+            "work_dir": root_asset_dir,
             "pages": f"{len(frames)}",
             "ocr": results,
         }

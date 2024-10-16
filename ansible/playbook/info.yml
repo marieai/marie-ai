@@ -9,10 +9,12 @@
     register: out
   - debug: var=out.stdout_lines
 
-  - name: Container status
-    script: info-container-status.sh marie-ai
-    register: out
-    failed_when: > 
-      'FAILED' in out.stdout or
-      'Permission denied' in out.stdout
-  - debug: var=out.stdout_lines
+
+  # check if docker conttainer is running given the container name
+
+  # Check if Docker is installed
+  - name: Check if Docker is installed
+    command: docker --version
+    register: docker_version
+    failed_when: docker_version.rc != 0
+    changed_when: false

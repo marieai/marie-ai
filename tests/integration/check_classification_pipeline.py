@@ -3,8 +3,8 @@ from pprint import pprint
 
 from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__
-from marie.logging.mdc import MDC
-from marie.logging.profile import TimeContext
+from marie.logging_core.mdc import MDC
+from marie.logging_core.profile import TimeContext
 from marie.models.utils import setup_torch_optimizations
 from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.pipe.extract_pipeline import split_filename
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     # pprint(config['executors'][0]['uses']['with']['pipelines'])
 
     # pipelines_config = config["pipelines"]
-    pipelines_config = config['executors'][0]['uses']['with']['pipelines']
+    pipelines_config = config["executors"][0]["uses"]["with"]["pipelines"]
     pipeline = ClassificationPipeline(pipelines_config=pipelines_config)
 
     runtime_conf = {
@@ -89,16 +89,20 @@ if __name__ == "__main__":
 
     with TimeContext(f"### ClassificationPipeline info"):
         results = pipeline.execute(
-            ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), runtime_conf=runtime_conf
+            ref_id=filename,
+            ref_type="pid",
+            frames=frames_from_file(img_path),
+            runtime_conf=runtime_conf,
         )
         print(results)
 
-        runtime_conf = {
-            'name': 'jpmc-corr'
-        }
+        runtime_conf = {"name": "jpmc-corr"}
 
         results = pipeline.execute(
-            ref_id=filename, ref_type="pid", frames=frames_from_file(img_path), runtime_conf=runtime_conf
+            ref_id=filename,
+            ref_type="pid",
+            frames=frames_from_file(img_path),
+            runtime_conf=runtime_conf,
         )
         print(results)
         store_json_object(results, f"/tmp/generators/results.json")

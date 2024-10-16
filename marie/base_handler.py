@@ -14,7 +14,7 @@ import torch
 from torch.profiler import ProfilerActivity, profile, record_function
 
 # from marie.logger import setup_logger
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.registry_base import RegistryHolder
 
 # logger = setup_logger(__name__)
@@ -179,9 +179,9 @@ class BaseHandler(metaclass=RegistryHolder):
                 logging.debug("Model name not found in config")
 
             result_path = os.path.join(result_path, dir_name)
-            self.profiler_args[
-                "on_trace_ready"
-            ] = torch.profiler.tensorboard_trace_handler(result_path)
+            self.profiler_args["on_trace_ready"] = (
+                torch.profiler.tensorboard_trace_handler(result_path)
+            )
             logger.info(
                 "Saving chrome trace to : ", result_path
             )  # pylint: disable=logging-too-many-args

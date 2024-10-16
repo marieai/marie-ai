@@ -8,33 +8,8 @@ from docarray.documents import TextDoc
 from marie_executor import MarieExecutor
 
 from marie import Deployment, Executor, Flow, requests
+from marie.api import AssetKeyDoc
 from marie.conf.helper import load_yaml
-
-
-class TestExecutorXYZ(Executor):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        print("TestExecutorXYZ init called")
-
-        # emulate the long loading time
-        # time.sleep(5)
-
-    @requests(on="/classify")
-    def func(
-        self,
-        docs: DocList[TextDoc],
-        parameters: dict = {},
-        *args,
-        **kwargs,
-    ):
-        print(f"FirstExec func called : {len(docs)}, {parameters}")
-        for doc in docs:
-            doc.text += " First"
-
-        return {
-            "parameters": parameters,
-            "data": f"Data reply at {time.time()}",
-        }
 
 
 class TestExecutor(MarieExecutor):
@@ -47,26 +22,24 @@ class TestExecutor(MarieExecutor):
     @requests(on="/extract")
     async def func_extract(
         self,
-        docs: DocList[TextDoc],
+        docs: DocList[AssetKeyDoc],
         parameters=None,
         *args,
         **kwargs,
     ):
         if parameters is None:
             parameters = {}
-
         print(f"FirstExec func called : {len(docs)}, {parameters}")
-
         # randomly throw an error to test the error handling
-        if random.random() > 0.999:
-            raise Exception("random error in FirstExec")
-
-        for doc in docs:
-            doc.text += " First Exec"
-        sec = 10
+        # if random.random() > 0.5:
+        #     raise Exception("random error in FirstExec")
+        #
+        # for doc in docs:
+        #     doc.text += " First Exec"
+        sec = 5
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
-        raise Exception("random error in FirstExec")
+        # raise Exception("random error in FirstExec")
 
         print(f"Sleeping for {sec} seconds - done : ", time.time())
         return {
@@ -111,19 +84,32 @@ def main():
     # yml_config = "/mnt/data/marie-ai/config/service/deployment.yml"
     # # Load the config file and set up the toast events
     # config = load_yaml(yml_config, substitute=True, context=context)
-    print("Bootstrapping server gateway")
+    print("Bootstrapping Flow")
     with (
         Flow(
             discovery=True,  # server gateway does not need discovery service
-            discovery_host="127.0.0.1",
+            discovery_host="0.0.0.0",
             discovery_port=2379,
             discovery_watchdog_interval=2,
+            discovery_service_name="gateway/marie",
+            kv_store_kwargs={
+                "provider": "postgresql",
+                "hostname": "127.0.0.1",
+                "port": 5432,
+                "username": "postgres",
+                "password": "123456",
+                "database": "postgres",
+                "default_table": "kv_store_worker",
+                "max_pool_size": 5,
+                "max_connections": 5,
+            },
         )
         .add(uses=TestExecutor, name="executor0", replicas=1)
         .config_gateway(
             # uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
         ) as f
     ):
+        f.save_config("/mnt/data/marie-ai/config/service/direct-flow.yml")
         f.block()
 
 

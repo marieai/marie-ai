@@ -10,14 +10,18 @@ from fastapi import HTTPException, Request
 
 from marie import Client, Flow
 from marie._core.utils import run_background_task
-from marie.api import extract_payload_to_uri, value_from_payload_or_args
+from marie.api import (
+    extract_payload_to_uri,
+    parse_payload_to_docs,
+    value_from_payload_or_args,
+)
 from marie.api.docs import AssetKeyDoc
 from marie.job.job_manager import generate_job_id
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete, mark_as_failed, mark_as_started
 from marie.messaging.publisher import mark_as_scheduled
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 from marie.utils.types import strtobool
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -107,7 +111,7 @@ def parse_response_to_payload(
     resp: DataRequest, expect_return_value: Optional[bool] = True
 ):
     """
-    We get raw response `marie.types.request.data.DataRequest` and we will extract the returned payload (Dictionary object)
+    We get raw response `marie.types_core.request.data.DataRequest` and we will extract the returned payload (Dictionary object)
     If the executor is not returning any value, we will return empty dictionary object. This is perfectly valid response
     as we are not expecting any value from the executor.
 
@@ -129,63 +133,6 @@ def parse_response_to_payload(
         }
 
     return {}
-
-
-async def parse_payload_to_docs(
-    payload: Any, clear_payload: Optional[bool] = True
-) -> tuple:
-    return parse_payload_to_docs_sync(payload, clear_payload)
-
-
-def parse_payload_to_docs_sync(
-    payload: Any, clear_payload: Optional[bool] = True
-) -> tuple:
-    """
-    Parse payload request, extract file and return list of Document objects
-
-    :param payload:
-    :param clear_payload:
-    :return:
-    """
-    # every request should contain queue_id if not present it will default to '0000-0000-0000-0000'
-    queue_id = value_from_payload_or_args(
-        payload, "queue_id", default="0000-0000-0000-0000"
-    )
-
-    asset_uri = extract_payload_to_uri(payload, queue_id)
-    pages = []
-
-    try:
-        pages_parameter = value_from_payload_or_args(payload, "pages", default="")
-        if len(pages_parameter) > 0:
-            pages = [int(page) for page in pages_parameter.split(",")]
-    except:
-        pass
-
-    # this is a hack to remove the data attribute from the payload and for backward compatibility
-    if clear_payload:
-        key = "data"
-        if "data" in payload:
-            key = "data"
-        elif "srcData" in payload:
-            key = "srcData"
-        elif "srcBase64" in payload:
-            key = "srcBase64"
-        elif "srcFile" in payload:
-            key = "srcFile"
-        elif "srcUrl" in payload:
-            key = "srcUrl"
-        elif "uri" in payload:
-            key = "uri"
-        del payload[key]
-
-    doc_id = value_from_payload_or_args(payload, "doc_id", default="")
-    doc_type = value_from_payload_or_args(payload, "doc_type", default="")
-    # asset_doc = AssetKeyDoc(asset=AssetKey(path=[asset_uri]), pages=pages)
-    asset_doc = AssetKeyDoc(asset_key=asset_uri, pages=pages)
-    parameters = {"queue_id": queue_id, "ref_id": doc_id, "ref_type": doc_type}
-
-    return parameters, asset_doc
 
 
 async def handle_request(

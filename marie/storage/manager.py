@@ -7,7 +7,7 @@ import multiprocessing as mp
 import os
 from collections import OrderedDict
 from marie.excepts import BadConfigSource
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 
 import io
 
@@ -64,11 +64,11 @@ class PathHandler:
         raise NotImplementedError()
 
     def _copy(
-            self,
-            local_path: str,
-            remote_path: str,
-            overwrite: bool = False,
-            **kwargs: Any,
+        self,
+        local_path: str,
+        remote_path: str,
+        overwrite: bool = False,
+        **kwargs: Any,
     ) -> bool:
         """
         Copies a source path to a destination path.
@@ -96,12 +96,12 @@ class PathHandler:
         raise NotImplementedError()
 
     def _write(
-            self,
-            src_path: StrOrBytesPath,
-            dst_path: str,
-            overwrite: bool = False,
-            handler: Optional["PathHandler"] = None,
-            **kwargs: Any,
+        self,
+        src_path: StrOrBytesPath,
+        dst_path: str,
+        overwrite: bool = False,
+        handler: Optional["PathHandler"] = None,
+        **kwargs: Any,
     ) -> bool:
         """
         Copies a source path to a destination path.
@@ -160,10 +160,10 @@ class PathHandler:
         raise NotImplementedError()
 
     def _read(
-            self,
-            path: str,
-            suppress_errors: bool = False,
-            **kwargs: Any,
+        self,
+        path: str,
+        suppress_errors: bool = False,
+        **kwargs: Any,
     ) -> bytes:
         """
         Reads the resource at the given URI and returns the contents as bytes.
@@ -178,11 +178,11 @@ class PathHandler:
         raise NotImplementedError()
 
     def _read_to_file(
-            self,
-            path: str,
-            dst_path: str | os.PathLike | io.BytesIO,
-            overwrite=False,
-            **kwargs: Any,
+        self,
+        path: str,
+        dst_path: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
     ) -> None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
@@ -334,10 +334,10 @@ class StorageManager:
 
     @staticmethod
     def copy(
-            src_path: str,
-            dst_path: str,
-            overwrite: bool = False,
-            **kwargs: Any,
+        src_path: str,
+        dst_path: str,
+        overwrite: bool = False,
+        **kwargs: Any,
     ) -> bool:
 
         src_handler = StorageManager.__get_path_handler(src_path)
@@ -357,9 +357,9 @@ class StorageManager:
 
     @staticmethod
     def ensure_connection(
-            path: Optional[str] = None,
-            silence_exceptions: object = Optional[bool],
-            **kwargs: Any,
+        path: Optional[str] = None,
+        silence_exceptions: object = Optional[bool],
+        **kwargs: Any,
     ) -> bool:
         """
         Ensures that the connection to the given path is established.
@@ -412,11 +412,11 @@ class StorageManager:
 
     @classmethod
     def write(
-            cls,
-            src_path: StrOrBytesPath,
-            dst_path: str,
-            overwrite: bool = False,
-            **kwargs: Any,
+        cls,
+        src_path: StrOrBytesPath,
+        dst_path: str,
+        overwrite: bool = False,
+        **kwargs: Any,
     ) -> bool:
 
         return StorageManager.__get_path_handler(dst_path)._write(
@@ -425,10 +425,10 @@ class StorageManager:
 
     @staticmethod
     def read_to_file(
-            path: str,
-            dst_path_or_buffer: str | os.PathLike | io.BytesIO,
-            overwrite=False,
-            **kwargs: Any,
+        path: str,
+        dst_path_or_buffer: str | os.PathLike | io.BytesIO,
+        overwrite=False,
+        **kwargs: Any,
     ) -> None:
         """
         Read resource data synchronously at the given URI and writes the contents to the given file.
@@ -465,11 +465,11 @@ class StorageManager:
 
     @classmethod
     def copy_dir(
-            cls,
-            local_path: str,
-            remote_path: str,
-            relative_to_dir: Optional[str] = "",
-            match_wildcard=None,
+        cls,
+        local_path: str,
+        remote_path: str,
+        relative_to_dir: Optional[str] = "",
+        match_wildcard=None,
     ) -> Optional[str]:
         """
         Copy local folder recursively to a remote storage, maintaining the sub folder structure
@@ -523,12 +523,12 @@ class StorageManager:
 
     @classmethod
     def copy_remote(
-            cls,
-            remote_path: str,
-            local_path: str,
-            match_wildcard=None,
-            overwrite=False,
-            silence_errors=False,
+        cls,
+        remote_path: str,
+        local_path: str,
+        match_wildcard=None,
+        overwrite=False,
+        silence_errors=False,
     ) -> Optional[str]:
         """
         Copy remote folder recursively to a local storage, maintaining the sub folder structure
@@ -590,9 +590,9 @@ class StorageManager:
 
     @classmethod
     def can_handle(
-            cls,
-            path: str,
-            allow_native: bool = False,
+        cls,
+        path: str,
+        allow_native: bool = False,
     ) -> bool:
         """
         Returns True if there is a PathHandler that can handle the given URI

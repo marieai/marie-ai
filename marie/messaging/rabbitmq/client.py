@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import pika
 from pika.exchange_type import ExchangeType
 
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.predefined import default_logger as logger
 from marie.utils.json import to_json
 
 

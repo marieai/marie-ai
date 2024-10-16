@@ -37,19 +37,32 @@ sudo apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plu
 # Install the NVIDIA container toolkit
 # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker
 
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
-      && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-      && curl -s -L https://nvidia.github.io/libnvidia-container/experimental/$distribution/libnvidia-container.list | \
-         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-         sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+# Check if nvidia-smi is installed
+# Check if nvidia-smi is installed
+if [ -x "$(command -v nvidia-smi)" ]; then
+    echo "nvidia-smi found, installing NVIDIA Docker toolkit"
 
-sudo apt-get update
-sudo apt-get install -yq nvidia-container-toolkit
+    # Remove existing NVIDIA repositories
+    sudo rm /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-sudo nvidia-ctk runtime configure --runtime=docker
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+        && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+        && curl -s -L https://nvidia.github.io/libnvidia-container/experimental/$distribution/libnvidia-container.list | \
+          sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+          sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-sudo systemctl restart docker
-sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi
+        sudo apt-get update
+        sudo apt-get install -yq nvidia-container-toolkit
+
+        sudo nvidia-ctk runtime configure --runtime=docker
+
+        sudo systemctl restart docker
+        sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi
+else
+    echo "nvidia-smi not found, skipping NVIDIA Docker toolkit installation"
+fi
 
 # cleanup
 sudo apt autoremove -yq
+
+

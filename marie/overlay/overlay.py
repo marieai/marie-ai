@@ -47,7 +47,8 @@ class OverlayProcessor(BaseHandler):
     def __setup(cuda, checkpoints_dir):
         """Model setup"""
 
-        gpu_id = "0" if cuda else "-1"
+        use_cuda = cuda and torch.cuda.is_available()
+        gpu_id = "0" if use_cuda else "-1"
 
         args = [
             "--dataroot",

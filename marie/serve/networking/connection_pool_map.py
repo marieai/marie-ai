@@ -1,7 +1,7 @@
 import os
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.networking import LoadBalancer
 from marie.serve.networking.instrumentation import (
     _NetworkingHistograms,

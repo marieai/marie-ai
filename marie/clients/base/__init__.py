@@ -17,12 +17,12 @@ from typing import (
 
 from marie.excepts import BadClientInput
 from marie.helper import T, parse_client, send_telemetry_event, typename
-from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.request import GeneratorSourceType
-    from marie.types.request import Request, Response
+    from marie.types_core.request import Request, Response
 
     InputType = Union[GeneratorSourceType, Callable[..., GeneratorSourceType]]
     CallbackFnType = Optional[Callable[[Response], None]]
@@ -38,7 +38,7 @@ class BaseClient(InstrumentationMixin, ABC):
 
     def __init__(
         self,
-        args: Optional['argparse.Namespace'] = None,
+        args: Optional["argparse.Namespace"] = None,
         **kwargs,
     ):
         if args and isinstance(args, argparse.Namespace):
@@ -48,17 +48,17 @@ class BaseClient(InstrumentationMixin, ABC):
 
         self.logger = MarieLogger(self.__class__.__name__, **vars(self.args))
 
-        if not self.args.proxy and os.name != 'nt':
+        if not self.args.proxy and os.name != "nt":
             # (Han 2020 12.12): gRPC channel is over HTTP2 and it does not work when we have proxy
             # as many enterprise users are behind proxy, a quick way to
             # surpass it is by temporally unset proxy. Please do NOT panic as it will NOT
             # affect users os-level envs.
-            os.unsetenv('http_proxy')
-            os.unsetenv('https_proxy')
+            os.unsetenv("http_proxy")
+            os.unsetenv("https_proxy")
         self._setup_instrumentation(
             name=(
                 self.args.name
-                if hasattr(self.args, 'name')
+                if hasattr(self.args, "name")
                 else self.__class__.__name__
             ),
             tracing=self.args.tracing,
@@ -68,7 +68,7 @@ class BaseClient(InstrumentationMixin, ABC):
             metrics_exporter_host=self.args.metrics_exporter_host,
             metrics_exporter_port=self.args.metrics_exporter_port,
         )
-        send_telemetry_event(event='start', obj_cls_name=self.__class__.__name__)
+        send_telemetry_event(event="start", obj_cls_name=self.__class__.__name__)
 
     async def close(self):
         """Closes the potential resources of the Client.
@@ -82,20 +82,20 @@ class BaseClient(InstrumentationMixin, ABC):
         """
         try:
             if self.tracing and self.tracer_provider:
-                if hasattr(self.tracer_provider, 'force_flush'):
+                if hasattr(self.tracer_provider, "force_flush"):
                     self.tracer_provider.force_flush()
-                if hasattr(self.tracer_provider, 'shutdown'):
+                if hasattr(self.tracer_provider, "shutdown"):
                     self.tracer_provider.shutdown()
             if self.metrics and self.meter_provider:
-                if hasattr(self.meter_provider, 'force_flush'):
+                if hasattr(self.meter_provider, "force_flush"):
                     self.meter_provider.force_flush()
-                if hasattr(self.meter_provider, 'shutdown'):
+                if hasattr(self.meter_provider, "shutdown"):
                     self.meter_provider.shutdown()
         except Exception as ex:
-            self.logger.warning(f'Exception during instrumentation teardown, {str(ex)}')
+            self.logger.warning(f"Exception during instrumentation teardown, {str(ex)}")
 
     @staticmethod
-    def check_input(inputs: Optional['InputType'] = None, **kwargs) -> None:
+    def check_input(inputs: Optional["InputType"] = None, **kwargs) -> None:
         """Validate the inputs and print the first request if success.
 
         :param inputs: the inputs
@@ -106,33 +106,33 @@ class BaseClient(InstrumentationMixin, ABC):
             # empty inputs is considered as valid
             return
 
-        if hasattr(inputs, '__call__'):
+        if hasattr(inputs, "__call__"):
             # it is a function
             inputs = inputs()
 
-        kwargs['data'] = inputs
-        kwargs['exec_endpoint'] = '/'
+        kwargs["data"] = inputs
+        kwargs["exec_endpoint"] = "/"
 
         if inspect.isasyncgenfunction(inputs) or inspect.isasyncgen(inputs):
             raise BadClientInput(
-                'checking the validity of an async generator is not implemented yet'
+                "checking the validity of an async generator is not implemented yet"
             )
 
         try:
             from marie.clients.request import request_generator
 
             r = next(request_generator(**kwargs))
-            from marie.types.request import Request
+            from marie.types_core.request import Request
 
             if not isinstance(r, Request):
-                raise TypeError(f'{typename(r)} is not a valid Request')
+                raise TypeError(f"{typename(r)} is not a valid Request")
         except Exception as ex:
-            default_logger.error(f'inputs is not valid!')
+            default_logger.error(f"inputs is not valid!")
             raise BadClientInput from ex
 
     def _get_requests(
         self, inputs, **kwargs
-    ) -> Tuple[Union[Iterator['Request'], AsyncIterator['Request']], Optional[int]]:
+    ) -> Tuple[Union[Iterator["Request"], AsyncIterator["Request"]], Optional[int]]:
         """
         Get request in generator.
 
@@ -141,22 +141,22 @@ class BaseClient(InstrumentationMixin, ABC):
         :return: Iterator of request and the length of the inputs.
         """
         _kwargs = vars(self.args)
-        if hasattr(inputs, '__call__'):
+        if hasattr(inputs, "__call__"):
             inputs = inputs()
 
-        _kwargs['data'] = inputs
+        _kwargs["data"] = inputs
         # override by the caller-specific kwargs
         _kwargs.update(kwargs)
 
-        if hasattr(inputs, '__len__'):
+        if hasattr(inputs, "__len__"):
             total_docs = len(inputs)
-        elif 'total_docs' in _kwargs:
-            total_docs = _kwargs['total_docs']
+        elif "total_docs" in _kwargs:
+            total_docs = _kwargs["total_docs"]
         else:
             total_docs = None
 
         if total_docs:
-            inputs_length = max(1, total_docs / _kwargs['request_size'])
+            inputs_length = max(1, total_docs / _kwargs["request_size"])
         else:
             inputs_length = None
 
@@ -172,10 +172,10 @@ class BaseClient(InstrumentationMixin, ABC):
     @abc.abstractmethod
     async def _get_results(
         self,
-        inputs: 'InputType',
-        on_done: 'CallbackFnType',
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
+        inputs: "InputType",
+        on_done: "CallbackFnType",
+        on_error: Optional["CallbackFnType"] = None,
+        on_always: Optional["CallbackFnType"] = None,
         **kwargs,
     ): ...
 
@@ -201,5 +201,5 @@ class BaseClient(InstrumentationMixin, ABC):
         :param kwargs: potential kwargs received passed from the public interface
         """
         raise NotImplementedError(
-            f'Streaming endpoints are not supported yet for {self.__class__.__name__}'
+            f"Streaming endpoints are not supported yet for {self.__class__.__name__}"
         )

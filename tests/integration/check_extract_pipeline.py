@@ -4,12 +4,22 @@ import torch
 
 from marie.conf.helper import load_yaml
 from marie.constants import __config_dir__, __model_path__
-from marie.logging.mdc import MDC
-from marie.logging.profile import TimeContext
+from marie.logging_core.mdc import MDC
+from marie.logging_core.profile import TimeContext
+from marie.models.utils import setup_torch_optimizations
 from marie.pipe.extract_pipeline import ExtractPipeline, s3_asset_path, split_filename
 from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
 from marie.utils.docs import frames_from_file
+
+print("CUDA available:", torch.cuda.is_available())
+print("Number of GPUs:", torch.cuda.device_count())
+
+for i in range(torch.cuda.device_count()):
+    print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+
+if torch.cuda.is_available() and torch.cuda.device_count() == 0:
+    raise RuntimeError("CUDA is available but no GPU device is found, exiting...")
 
 
 def setup_storage():
@@ -37,9 +47,6 @@ def run_extract_pipeline():
     img_path = "~/tmp/address-001.png"
     img_path = "~/tmp/demo/159000487_1.png"
     img_path = "~/tmp/4007/176075018.tif"
-    img_path = "~/tmp/analysis/BAD-LIFT/PID_3569_10895_0_201760141.tif"
-    img_path = "~/tmp/analysis/document-boundary/samples/PID_5871_13169_0_202225936.tif"
-    img_path = "/home/gbugaj/tmp/analysis/document-boundary/samples/PID_808_7548_0_202343052.tif"
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -54,12 +61,31 @@ def run_extract_pipeline():
     # s3_path = s3_asset_path(ref_id=filename, ref_type="pid", include_filename=True)
     # StorageManager.write(img_path, s3_path, overwrite=True)
 
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
-    pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
+    pipeline_config = load_yaml(
+        os.path.join(
+            __config_dir__, "tests-integration", "pipeline-integration.partial.yml"
+        )
+    )
 
-    with TimeContext(f"### ExtractPipeline info"):
-        results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path))
-        print(results)
+    use_cuda = torch.cuda.is_available()
+    if use_cuda and torch.cuda.device_count() > 0:
+        cuda_device = torch.cuda.current_device()
+        print(f"Using CUDA device {cuda_device}")
+        pipeline = ExtractPipeline(
+            pipeline_config=pipeline_config["pipeline"], cuda=True
+        )
+    else:
+        print("CUDA not available, using CPU")
+        pipeline = ExtractPipeline(
+            pipeline_config=pipeline_config["pipeline"], cuda=False
+        )
+
+    for i in range(3):
+        with TimeContext(f"### ExtractPipeline info [{i}]"):
+            results = pipeline.execute(
+                ref_id=filename, ref_type="pid", frames=frames_from_file(img_path)
+            )
+            print(results)
 
 
 def regions():
@@ -72,7 +98,11 @@ def regions():
 
     filename, prefix, suffix = split_filename(img_path)
 
-    pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration.partial.yml"))
+    pipeline_config = load_yaml(
+        os.path.join(
+            __config_dir__, "tests-integration", "pipeline-integration.partial.yml"
+        )
+    )
     # pipeline_config = load_yaml(os.path.join(__config_dir__, "tests-integration", "pipeline-integration-region.partial.yml"))
     pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"], cuda=True)
     regions = [
@@ -83,20 +113,25 @@ def regions():
             "x": 896,
             "y": 1562,
             "w": 733,
-            "h": 180
+            "h": 180,
         }
     ]
 
     for i in range(5):
         with TimeContext(f"### ExtractPipeline info [{i}]"):
-            results = pipeline.execute(ref_id=filename, ref_type="pid", frames=frames_from_file(img_path),
-                                       regions=regions)
+            results = pipeline.execute(
+                ref_id=filename,
+                ref_type="pid",
+                frames=frames_from_file(img_path),
+                regions=regions,
+            )
             print(results)
 
 
 if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     # os.environ["MARIE_DISABLE_CUDA"] = "True"
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
+    setup_torch_optimizations()
 
     run_extract_pipeline()

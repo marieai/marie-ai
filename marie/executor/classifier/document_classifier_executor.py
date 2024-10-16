@@ -8,9 +8,9 @@ from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
 from marie.executor.mixin import StorageMixin
-from marie.logging.logger import MarieLogger
-from marie.logging.mdc import MDC
-from marie.logging.predefined import default_logger as logger
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.mdc import MDC
+from marie.logging_core.predefined import default_logger as logger
 from marie.models.utils import (
     initialize_device_settings,
     setup_torch_optimizations,
@@ -96,7 +96,6 @@ class DocumentClassificationExecutor(Executor, StorageMixin):
     @requests(on="/document/classify")
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supportedncoded
     def classify(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
-
         """
         Document classification
 

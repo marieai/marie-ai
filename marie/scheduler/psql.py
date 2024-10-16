@@ -1,7 +1,8 @@
 import asyncio
 import contextlib
+import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -9,27 +10,34 @@ import psycopg2
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
-from marie.logging.logger import MarieLogger
-from marie.logging.predefined import default_logger as logger
-from marie.storage.database.postgres import PostgresqlMixin
-from marie_server.scheduler.fixtures import *
-from marie_server.scheduler.job_scheduler import JobScheduler
-from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.plans import (
+from marie.job.pydantic_models import JobPartition
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
+from marie.messaging import mark_as_scheduled
+from marie.scheduler.fixtures import *
+from marie.scheduler.job_scheduler import JobScheduler
+from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
+from marie.scheduler.plans import (
     cancel_jobs,
     complete_jobs,
+    complete_jobs_by_id,
     count_states,
     create_queue,
     fail_jobs_by_id,
     fetch_next_job,
     insert_job,
     insert_version,
+    mark_as_active_jobs,
     resume_jobs,
     to_timestamp_with_tz,
     try_set_monitor_time,
     version_table_exists,
 )
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.state import WorkState
+from marie.storage.database.postgres import PostgresqlMixin
+from model_zoo.cache.torch.pytorch_fairseq_main.examples.textless_nlp.gslm.unit2speech.multiproc import (
+    job_id,
+)
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
@@ -104,6 +112,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"WorkItem not found: {job_id}")
                 return
             work_state = convert_job_status_to_work_state(status)
+
             if status == JobStatus.PENDING:
                 self.logger.info(f"Job pending : {job_id}")
             elif status == JobStatus.SUCCEEDED:
@@ -232,8 +241,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         await self.create_queue(f"${queue}_dlq")
 
         self.running = True
-        self.sync_task = asyncio.create_task(self._sync())
-        # self.task = asyncio.create_task(self._poll())
+        # self.sync_task = asyncio.create_task(self._sync())
+        self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
@@ -285,19 +294,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
 
-    async def stop(self) -> None:
+    async def stop(self, timeout: float = 2.0) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
 
         if self.task is not None:
-            await self.task
+            try:
+                await asyncio.wait_for(self.task, timeout)
+            except asyncio.TimeoutError:
+                self.logger.warning("Task did not complete in time and was cancelled")
+
         if self.monitoring_task is not None:
-            await self.monitoring_task
+            try:
+                await asyncio.wait_for(self.monitoring_task, timeout)
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    "Monitoring task did not complete in time and was cancelled"
+                )
 
     def debug_info(self) -> str:
         print("Debugging info")
 
-    async def enqueue(self, work_info: WorkInfo) -> str:
+    async def enqueue(self, work_info: WorkInfo) -> str | None:
         """
         Enqueues a work item for processing on the next available executor.
 
@@ -314,9 +332,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
 
+        # FIXME : This is a hack for now
+        # extract entrypoint from work_info
+        # this need to be configurable from db as projects can have different entrypoints
+        name = work_info.name
+        entrypoint = "/extract"
+        if name == "extract":
+            entrypoint = "/extract"
+        elif name == "template-matching":
+            entrypoint = "/template-matching"
+        elif name == "classify":
+            entrypoint = "/classify"
+
         try:
             returned_id = await self.job_manager.submit_job(
-                entrypoint="echo hello", submission_id=submission_id
+                entrypoint=entrypoint,
+                submission_id=submission_id,
+                metadata=work_info.data,
             )
         except ValueError as e:
             self.logger.error(f"Error submitting job: {e}")
@@ -396,6 +428,48 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             finally:
                 self.connection.commit()
 
+    async def get_job_for_policy(self, work_info: WorkInfo) -> Optional[WorkInfo]:
+        """
+        Find a job by its name and data.
+        :param work_info:
+        """
+        schema = DEFAULT_SCHEMA
+        table = DEFAULT_JOB_TABLE
+        doc_type = work_info.data.get("metadata", {}).get("doc_type", "")
+        doc_id = work_info.data.get("metadata", {}).get("doc_id", "")
+
+        with self:
+            try:
+                cursor = self.connection.cursor()
+                cursor.execute(
+                    f"""
+                        SELECT
+                        id,
+                        name,
+                        priority,
+                        state,
+                        retry_limit,
+                        start_after,
+                        expire_in,
+                        data,
+                        retry_delay,
+                        retry_backoff,
+                        keep_until
+                    FROM {schema}.{table}
+                    WHERE data->'metadata'->>'doc_type' = '{doc_type}'
+                    AND data->'metadata'->>'doc_id' = '{doc_id}'
+                    """
+                )
+                record = cursor.fetchone()
+                if record:
+                    return self.record_to_work_info(record)
+                return None
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error getting job: {error}")
+                self.connection.rollback()
+            finally:
+                self.connection.commit()
+
     async def list_jobs(
         self, state: Optional[str | list[str]] = None, batch_size: int = 0
     ) -> Dict[str, WorkInfo]:
@@ -442,11 +516,48 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The work item to insert.
         :param overwrite: Whether to overwrite the work item if it already exists.
         :return: The ID of the inserted work item.
+        :raises ValueError: If the job submission fails or if the job already exists.
+        """
+        try:
+            job_id = await self.__submit_job(work_info, overwrite)
+            # TODO : Toast notification
+            # When we start processing the request, we will mark the job as `STARTED` in the worker node
+            api_tag = work_info.name
+            job_tag = work_info.data.get("ref_type", "")
+            api_key = work_info.data.get("api_key", "")
+            #
+            # await mark_as_scheduled(
+            #     api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
+            # )
+
+            return job_id
+        except Exception as e:
+            self.logger.error(f"Error submitting job: {e}")
+            # TODO : Toast notification
+
+            raise e
+
+    async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
+        """
+        :param work_info:
+        :param overwrite:
+        :return:
         """
         new_key_added = False
         submission_id = work_info.id
 
+        # FIXME : This is a hack to allow the job to be re-submitted after a failure
         work_info.retry_limit = 0
+        is_valid = await self.is_valid_submission(
+            work_info, ExistingWorkPolicy.REJECT_DUPLICATE
+        )
+        if not is_valid:
+            raise ValueError(
+                f"Job with submission_id {submission_id} already exists."
+                f"For work item : {work_info}."
+            )
+
+        splits = self.calculate_splits(work_info)
 
         with self:
             try:
@@ -468,8 +579,57 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        await self.enqueue(work_info)
+        # this is not needed when the scheduler is polling for jobs, as the job will be picked up by the scheduler
+        # and marked as active in the fetch_next_job query
+        job_id = await self.enqueue(work_info)
+        if job_id is None:
+            self.logger.error(f"Delaying scheduling work item: {work_info.id}")
+        else:
+            self.logger.info(f"Work item scheduled with ID: {job_id}")
+            with self:
+                try:
+                    cursor = self._execute_sql_gracefully(
+                        mark_as_active_jobs(
+                            DEFAULT_SCHEMA, work_info.name, [work_info.id]
+                        )
+                    )
+                    key_updated = cursor is not None and cursor.rowcount > 0
+                except (Exception, psycopg2.Error) as error:
+                    self.logger.error(f"Error updating job: {error}")
+                    self.connection.rollback()
+                    raise ValueError(
+                        f"Job update for submission_id {submission_id} failed. "
+                        f"Please check the logs for more information. {error}"
+                    )
+
         return submission_id
+
+    async def is_valid_submission(
+        self, work_info: WorkInfo, policy: ExistingWorkPolicy
+    ) -> bool:
+        """
+        :param work_info: Information about the work to be checked for validity.
+        :type work_info: WorkInfo
+        :param policy: Policy that dictates the rules for the work submission.
+        :type policy: ExistingWorkPolicy
+        :return: Returns True if the work submission is valid according to the policy, False otherwise.
+        :rtype: bool
+        """
+        if policy == ExistingWorkPolicy.ALLOW_ALL:
+            return True
+        if policy == ExistingWorkPolicy.REJECT_ALL:
+            return False
+        if policy == ExistingWorkPolicy.ALLOW_DUPLICATE:
+            return True
+        if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
+            existing_job = await self.get_job_for_policy(work_info)
+            return existing_job is None
+        if policy == ExistingWorkPolicy.REPLACE:
+            existing_job = await self.get_job_for_policy(work_info)
+            if existing_job and existing_job.state and existing_job.state.is_terminal():
+                return True
+            else:
+                return False
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.
@@ -486,7 +646,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def cancel_job(self, job_id: str, work_item: WorkInfo) -> None:
         """
         Cancel a job by its ID.
-        :param job_id:
+        :param job_id: The ID of the job.
+        :param work_item: The work item to cancel.
         """
         with self:
             try:
@@ -586,7 +747,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self.handle_job_event,
         )
 
-    async def count_states(self):
+    async def count_states(self) -> Dict[str, Dict[str, int]]:
+        """
+        Fetch and count job states from the database.
+
+        :return: A dictionary with queue names as keys and state counts as values.
+        """
         state_count_default = {key.lower(): 0 for key in WorkState.__members__.keys()}
         counts = []
 
@@ -608,7 +774,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return states
 
-    def record_to_work_info(self, record):
+    def record_to_work_info(self, record: Any) -> WorkInfo:
         """
         Convert a record to a WorkInfo object.
         :param record:
@@ -639,7 +805,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     cursor = self._execute_sql_gracefully(
                         try_set_monitor_time(
                             DEFAULT_SCHEMA,
-                            monitor_state_interval_seconds=MONITORING_POLL_PERIOD,
+                            monitor_state_interval_seconds=int(MONITORING_POLL_PERIOD),
                         )
                     )
                     monitored_on = cursor.fetchone()
@@ -659,17 +825,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 # TODO: emit error event
 
     async def complete(
-        self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
+        self,
+        job_id: str,
+        work_item: WorkInfo,
+        output_metadata: dict = None,
+        force=False,
     ):
         self.logger.info(f"Job completed : {job_id}, {work_item}")
         with self:
+
+            def complete_jobs_wrapper(
+                schema: str, name: str, ids: list, output: dict, _force: bool
+            ):
+                if _force:
+                    return complete_jobs_by_id(schema, name, ids, output)
+                else:
+                    return complete_jobs(schema, name, ids, output)
+
             try:
                 cursor = self._execute_sql_gracefully(
-                    complete_jobs(
+                    complete_jobs_wrapper(
                         DEFAULT_SCHEMA,
                         work_item.name,
                         [job_id],
                         {"on_complete": "done", **(output_metadata or {})},
+                        force,
                     )
                 )
                 counts = cursor.fetchone()[0]
@@ -700,7 +880,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     self.logger.error(f"Error completing failed job: {job_id}")
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error completing job: {error}")
+                self.logger.error(f"Error completing failed job: {error}")
 
     async def _sync(self):
         wait_time = SYNC_POLL_PERIOD
@@ -724,20 +904,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         job_info_state = convert_job_status_to_work_state(
                             job_info.status
                         )
-                        if work_item.state != job_info_state:
+                        if (
+                            job_info.status.is_terminal()
+                            and work_item.state != job_info_state
+                        ):
                             self.logger.info(
                                 f"State mismatch for job {job_id}: "
                                 f"WorkState={work_item.state}, JobInfoState={job_info_state}. "
                                 f"Updating to JobInfoState."
                             )
-                        # check if terminal status
-                        if job_info.status.is_terminal():
-                            self.logger.info(
-                                f"Job {job_id} is in terminal state, synchronizing."
-                            )
+                            # check that the job can be synced by checking the end time have been at least 60min
+                            synchronize = False
+                            remaining_time = None
+                            min_sync_interval = 5
+                            if job_info.end_time is not None:
+                                timestamp_ms = (
+                                    job_info.end_time
+                                )  # Unix timestamp in milliseconds
+                                timestamp_s = timestamp_ms / 1000
+                                end_time = datetime.fromtimestamp(timestamp_s)
+                                remaining_time = end_time - datetime.now()
+                                if end_time < datetime.now() - timedelta(
+                                    minutes=min_sync_interval
+                                ):
+                                    synchronize = True
+
+                            if not synchronize:
+                                self.logger.info(
+                                    f"Job has not ended more than {min_sync_interval} minutes ago, skipping "
+                                    f"synchronization.  {job_id}: {remaining_time.total_seconds()}"
+                                )
+                                continue
+
                             meta = {"synced": True}
                             if job_info.status == JobStatus.SUCCEEDED:
-                                await self.complete(job_id, work_item, meta)
+                                await self.complete(job_id, work_item, meta, force=True)
                             elif job_info.status == JobStatus.FAILED:
                                 await self.fail(job_id, work_item, meta)
                             elif job_info.status == JobStatus.STOPPED:
@@ -750,3 +951,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             except Exception as e:
                 logger.error(f"Error syncing jobs: {e}")
                 traceback.print_exc()
+
+    def calculate_splits(self, work_info: WorkInfo) -> list[JobPartition]:
+        """
+        Calculate the splits for a work item.
+        This is used to split the work item into smaller parts for parallel processing.
+        :param work_info:
+        :return:
+        """
+
+        return []

@@ -3,14 +3,14 @@ import copy
 from asyncio import Event, Task
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from jina._docarray import docarray_v2
+from marie._docarray import docarray_v2
 
 if not docarray_v2:
     from docarray import DocumentArray
 else:
     from docarray import DocList
 
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:
     from marie._docarray import DocumentArray
@@ -29,7 +29,7 @@ class BatchQueue:
         flush_all: bool = False,
         preferred_batch_size: int = 4,
         timeout: int = 10_000,
-        custom_metric: Optional[Callable[['DocumentArray'], Union[int, float]]] = None,
+        custom_metric: Optional[Callable[["DocumentArray"], Union[int, float]]] = None,
         use_custom_metric: bool = False,
         **kwargs,
     ) -> None:
@@ -53,7 +53,7 @@ class BatchQueue:
         self._timer_task: Optional[Task] = None
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(preferred_batch_size={self._preferred_batch_size}, timeout={self._timeout})'
+        return f"{self.__class__.__name__}(preferred_batch_size={self._preferred_batch_size}, timeout={self._timeout})"
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -318,18 +318,18 @@ class BatchQueue:
                 ):
                     if not len(batch_res_docs) == input_len_before_call:
                         raise ValueError(
-                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(batch_res_docs)}'
+                            f"Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(batch_res_docs)}"
                         )
                 elif batch_res_docs is None:
                     if not len(docs_inner_batch) == input_len_before_call:
                         raise ValueError(
-                            f'Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(docs_inner_batch)}'
+                            f"Dynamic Batching requires input size to equal output size. Expected output size {input_len_before_call}, but got {len(docs_inner_batch)}"
                         )
                 else:
-                    array_name = 'DocumentArray' if not docarray_v2 else 'DocList'
+                    array_name = "DocumentArray" if not docarray_v2 else "DocList"
                     raise TypeError(
-                        f'The return type must be {array_name} / `None` when using dynamic batching, '
-                        f'but getting {batch_res_docs!r}'
+                        f"The return type must be {array_name} / `None` when using dynamic batching, "
+                        f"but getting {batch_res_docs!r}"
                     )
             except Exception as exc:
                 # All the requests containing docs in this Exception should be raising it

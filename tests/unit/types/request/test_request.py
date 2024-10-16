@@ -8,10 +8,10 @@ from marie.excepts import BadRequestType
 from marie.helper import random_identity
 from marie.proto import jina_pb2
 from marie.proto.serializer import DataRequestProto
-from marie.types.request.data import DataRequest, Response
+from marie.types_core.request.data import DataRequest, Response
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def req():
     r = jina_pb2.DataRequestProto()
     r.header.request_id = random_identity()
@@ -81,7 +81,7 @@ def test_lazy_serialization():
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
     byte_array = DataRequestProto.SerializeToString(r)
 
@@ -97,7 +97,7 @@ def test_lazy_serialization_bytes(request_proto_bytes):
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs_bytes = da.to_bytes()
     byte_array = DataRequestProto.SerializeToString(r)
 
@@ -112,7 +112,7 @@ def test_lazy_serialization_bytes(request_proto_bytes):
 def test_status():
     r = DataRequest()
     r.docs.extend([Document()])
-    r.add_exception(ValueError('intentional_error'))
+    r.add_exception(ValueError("intentional_error"))
     byte_array = DataRequestProto.SerializeToString(r)
 
     deserialized_request = DataRequestProto.FromString(byte_array)
@@ -126,10 +126,10 @@ def test_load_parameters_wo_loading_data():  # test that accessing parameters do
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
-    parameters = {'a': 0}
+    parameters = {"a": 0}
     r.parameters = parameters
     byte_array = DataRequestProto.SerializeToString(r)
 
@@ -144,11 +144,11 @@ def test_change_parameters_wo_loading_data():  # test that changing parameters d
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
-    parameters = {'a': 0}
-    new_parameters = {'b': 1}
+    parameters = {"a": 0}
+    new_parameters = {"b": 1}
 
     r.parameters = parameters
     byte_array = DataRequestProto.SerializeToString(r)
@@ -172,7 +172,7 @@ def test_send_data_request_wo_data():  # check that when sending a DataRequestWo
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
     byte_array = DataRequestProto.SerializeToString(r)
@@ -194,7 +194,7 @@ def test_delete_of_pb2_wo_data():  # ensure that pb2_wo_data is destroyed when a
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
     byte_array = DataRequestProto.SerializeToString(r)
@@ -221,7 +221,7 @@ def test_change_only_params():  # check that when sending a DataRequestWoData th
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
     byte_array = DataRequestProto.SerializeToString(r)
@@ -257,7 +257,7 @@ def request_proto_bytes():
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
     return DataRequestProto.SerializeToString(r)
 
@@ -272,7 +272,7 @@ def test_proto_wo_data_to_param_change_data(request_proto_bytes):
 
     for proto in [proto_data, proto_wo_data]:
         proto.parameters.Clear()
-        proto.parameters.update({'b': 1})
+        proto.parameters.update({"b": 1})
 
     assert (  # check that once we serialize both proto have the same content
         proto_wo_data.SerializePartialToString()
@@ -284,7 +284,7 @@ def test_proto_wo_data_docs():  # check if we can access the docs after deserial
     doc_count = 1000
     r = DataRequest()
     da = r.docs
-    da.extend([Document(text='534534534er5yr5y645745675675675345')] * doc_count)
+    da.extend([Document(text="534534534er5yr5y645745675675675345")] * doc_count)
     r.data.docs = da
 
     proto_wo_data = jina_pb2.DataRequestProtoWoData()
@@ -299,10 +299,10 @@ def test_proto_wo_data_docs():  # check if we can access the docs after deserial
 
 def test_req_add_get_executors():
     r = DataRequest()
-    r.add_executor('one')
-    assert r.last_executor == 'one'
-    r.add_executor('two')
-    assert r.last_executor == 'two'
+    r.add_executor("one")
+    assert r.last_executor == "one"
+    r.add_executor("two")
+    assert r.last_executor == "two"
 
     r2 = DataRequest.from_proto(r.proto)
-    assert r2.last_executor == 'two'
+    assert r2.last_executor == "two"

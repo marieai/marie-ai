@@ -1,11 +1,11 @@
 import pytest
 
 from marie.importer import ImportExtensions
-from marie.logging.predefined import default_logger
+from marie.logging_core.predefined import default_logger
 
 
 def test_bad_import():
-    from marie.logging.predefined import default_logger
+    from marie.logging_core.predefined import default_logger
 
     with pytest.raises(ModuleNotFoundError):
         with ImportExtensions(required=True, logger=default_logger):

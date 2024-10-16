@@ -10,8 +10,8 @@ import torch as torch
 
 from marie.conf.helper import load_yaml
 from marie.helper import colored
-from marie.logging.mdc import MDC
-from marie.logging.profile import TimeContext
+from marie.logging_core.mdc import MDC
+from marie.logging_core.profile import TimeContext
 from marie.pipe.classification_pipeline import ClassificationPipeline
 from marie.utils.docs import frames_from_file
 from marie.utils.json import deserialize_value, to_json
@@ -37,7 +37,7 @@ def process_frames(
             ref_id=filename, ref_type="pid", frames=frames, runtime_conf=None
         )
     val = cleanup_json(results)
-    print('val', val)
+    print("val", val)
     return val
 
 
@@ -149,7 +149,7 @@ def parse_args():
 if __name__ == "__main__":
     import torch
 
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = False
     # torch._dynamo.config.suppress_errors = False
     os.environ["MARIE_SUPPRESS_WARNINGS"] = "true"

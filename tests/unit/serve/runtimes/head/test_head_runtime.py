@@ -21,27 +21,27 @@ from marie.serve.networking.utils import (
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.head.request_handling import HeaderRequestHandler
 from marie.serve.runtimes.servers import BaseServer
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest
 from tests.helper import _generate_pod_args
 
 
-@pytest.mark.parametrize('stream', [True, False])
+@pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.asyncio
 async def test_regular_data_case(stream):
     args = _generate_pod_args()
     args.polling = PollingType.ANY
-    connection_list_dict = {0: [f'fake_ip:8080']}
+    connection_list_dict = {0: [f"fake_ip:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         if stream:
             stub = jina_pb2_grpc.JinaRPCStub(channel)
-            for resp in stub.Call(request_generator('/', DocumentArray.empty(3))):
+            for resp in stub.Call(request_generator("/", DocumentArray.empty(3))):
                 assert resp
                 assert len(resp.docs) == 3
         else:
@@ -50,22 +50,22 @@ async def test_regular_data_case(stream):
                 _create_test_data_message()
             )
             assert response
-            assert 'is-error' in dict(call.trailing_metadata())
+            assert "is-error" in dict(call.trailing_metadata())
             assert len(response.docs) == 1
     assert not handle_queue.empty()
 
     _destroy_runtime(args, cancel_event, runtime_thread)
 
 
-@pytest.mark.parametrize('stream', [True, False])
-@pytest.mark.parametrize('disable_reduce', [False, True])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("disable_reduce", [False, True])
 def test_message_merging(disable_reduce, stream):
     if not disable_reduce:
         args = _generate_pod_args()
     else:
-        args = _generate_pod_args(['--no-reduce'])
+        args = _generate_pod_args(["--no-reduce"])
     args.polling = PollingType.ALL
-    connection_list_dict = {0: [f'ip1:8080'], 1: [f'ip2:8080'], 2: [f'ip3:8080']}
+    connection_list_dict = {0: [f"ip1:8080"], 1: [f"ip2:8080"], 2: [f"ip3:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
@@ -73,7 +73,7 @@ def test_message_merging(disable_reduce, stream):
 
     data_request = _create_test_data_message()
     result = send_requests_sync(
-        [data_request, data_request], f'{args.host}:{args.port[0]}'
+        [data_request, data_request], f"{args.host}:{args.port[0]}"
     )
     assert result
     assert _queue_length(handle_queue) == 3
@@ -85,16 +85,16 @@ def test_message_merging(disable_reduce, stream):
 def test_uses_before_uses_after():
     args = _generate_pod_args()
     args.polling = PollingType.ALL
-    args.uses_before_address = 'fake_address'
-    args.uses_after_address = 'fake_address'
-    connection_list_dict = {0: [f'ip1:8080'], 1: [f'ip2:8080'], 2: [f'ip3:8080']}
+    args.uses_before_address = "fake_address"
+    args.uses_after_address = "fake_address"
+    connection_list_dict = {0: [f"ip1:8080"], 1: [f"ip2:8080"], 2: [f"ip3:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
     assert handle_queue.empty()
 
     result = send_request_sync(
-        _create_test_data_message(), f'{args.host}:{args.port[0]}'
+        _create_test_data_message(), f"{args.host}:{args.port[0]}"
     )
     assert result
     assert _queue_length(handle_queue) == 5  # uses_before + 3 workers + uses_after
@@ -103,43 +103,43 @@ def test_uses_before_uses_after():
     _destroy_runtime(args, cancel_event, runtime_thread)
 
 
-@pytest.mark.parametrize('polling', ['any', 'all'])
+@pytest.mark.parametrize("polling", ["any", "all"])
 def test_dynamic_polling(polling):
     args = _generate_pod_args(
         [
-            '--polling',
+            "--polling",
             json.dumps(
-                {'/any': PollingType.ANY, '/all': PollingType.ALL, '*': polling}
+                {"/any": PollingType.ANY, "/all": PollingType.ALL, "*": polling}
             ),
-            '--shards',
+            "--shards",
             str(2),
         ]
     )
 
-    connection_list_dict = {0: [f'fake_ip:8080'], 1: [f'fake_ip:8080']}
+    connection_list_dict = {0: [f"fake_ip:8080"], 1: [f"fake_ip:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
 
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         response, call = stub.process_single_data.with_call(
-            _create_test_data_message(endpoint='all'), metadata=(('endpoint', '/all'),)
+            _create_test_data_message(endpoint="all"), metadata=(("endpoint", "/all"),)
         )
 
     assert response
     assert _queue_length(handle_queue) == 2
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         response, call = stub.process_single_data.with_call(
-            _create_test_data_message(endpoint='any'), metadata=(('endpoint', '/any'),)
+            _create_test_data_message(endpoint="any"), metadata=(("endpoint", "/any"),)
         )
 
     assert response
@@ -148,43 +148,43 @@ def test_dynamic_polling(polling):
     _destroy_runtime(args, cancel_event, runtime_thread)
 
 
-@pytest.mark.parametrize('polling', ['any', 'all'])
+@pytest.mark.parametrize("polling", ["any", "all"])
 def test_base_polling(polling):
     args = _generate_pod_args(
         [
-            '--polling',
+            "--polling",
             polling,
-            '--shards',
+            "--shards",
             str(2),
         ]
     )
-    connection_list_dict = {0: [f'fake_ip:8080'], 1: [f'fake_ip:8080']}
+    connection_list_dict = {0: [f"fake_ip:8080"], 1: [f"fake_ip:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         response, call = stub.process_single_data.with_call(
-            _create_test_data_message(endpoint='all'), metadata=(('endpoint', '/all'),)
+            _create_test_data_message(endpoint="all"), metadata=(("endpoint", "/all"),)
         )
 
     assert response
-    assert _queue_length(handle_queue) == 2 if polling == 'all' else 1
+    assert _queue_length(handle_queue) == 2 if polling == "all" else 1
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         response, call = stub.process_single_data.with_call(
-            _create_test_data_message(endpoint='any'), metadata=(('endpoint', '/any'),)
+            _create_test_data_message(endpoint="any"), metadata=(("endpoint", "/any"),)
         )
 
     assert response
-    assert _queue_length(handle_queue) == 4 if polling == 'all' else 2
+    assert _queue_length(handle_queue) == 4 if polling == "all" else 2
 
     _destroy_runtime(args, cancel_event, runtime_thread)
 
@@ -196,19 +196,19 @@ async def test_head_runtime_reflection():
 
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=3.0,
-        ctrl_address=f'{args.host}:{args.port[0]}',
+        ctrl_address=f"{args.host}:{args.port[0]}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
-    async with grpc.aio.insecure_channel(f'{args.host}:{args.port[0]}') as channel:
+    async with grpc.aio.insecure_channel(f"{args.host}:{args.port[0]}") as channel:
         service_names = await get_available_services(channel)
 
     assert all(
         service_name in service_names
         for service_name in [
-            'marie.JinaDataRequestRPC',
-            'marie.JinaRPC',
-            'marie.JinaSingleDataRequestRPC',
+            "marie.JinaDataRequestRPC",
+            "marie.JinaRPC",
+            "marie.JinaSingleDataRequestRPC",
         ]
     )
 
@@ -216,28 +216,28 @@ async def test_head_runtime_reflection():
 
 
 def test_timeout_behaviour():
-    args = _generate_pod_args(['--timeout-send', '100'])
+    args = _generate_pod_args(["--timeout-send", "100"])
     args.polling = PollingType.ANY
-    connection_list_dict = {0: [f'fake_ip:8080']}
+    connection_list_dict = {0: [f"fake_ip:8080"]}
     args.connection_list = json.dumps(connection_list_dict)
     cancel_event, handle_queue, runtime_thread = _create_runtime(args)
 
     with grpc.insecure_channel(
-        f'{args.host}:{args.port[0]}',
+        f"{args.host}:{args.port[0]}",
         options=get_default_grpc_options(),
     ) as channel:
         stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
         response, call = stub.process_single_data.with_call(_create_test_data_message())
 
     assert response
-    assert 'is-error' in dict(call.trailing_metadata())
+    assert "is-error" in dict(call.trailing_metadata())
     assert len(response.docs) == 1
     assert not handle_queue.empty()
 
     _destroy_runtime(args, cancel_event, runtime_thread)
 
 
-def _create_test_data_message(counter=0, endpoint='/'):
+def _create_test_data_message(counter=0, endpoint="/"):
     return list(
         request_generator(endpoint, DocumentArray([Document(text=str(counter))]))
     )[0]
@@ -257,19 +257,19 @@ def _create_runtime(args):
             retries=-1,
         ) -> asyncio.Task:
             async def mock_task_wrapper(new_requests, *args, **kwargs):
-                handle_queue.put('mock_called')
+                handle_queue.put("mock_called")
                 assert timeout == (
                     runtime_args.timeout_send / 1000 if timeout else None
                 )
                 await asyncio.sleep(0.1)
                 return new_requests[0], grpc.aio.Metadata.from_tuple(
-                    (('is-error', 'true'),)
+                    (("is-error", "true"),)
                 )
 
             return asyncio.create_task(mock_task_wrapper(request, connection))
 
-        if not hasattr(runtime_args, 'name') or not runtime_args.name:
-            runtime_args.name = 'testHead'
+        if not hasattr(runtime_args, "name") or not runtime_args.name:
+            runtime_args.name = "testHead"
         with AsyncNewLoopRuntime(
             runtime_args,
             cancel_event=cancel_event,
@@ -288,7 +288,7 @@ def _create_runtime(args):
     runtime_thread.start()
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'{args.host}:{args.port[0]}',
+        ctrl_address=f"{args.host}:{args.port[0]}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
     return cancel_event, handle_queue, runtime_thread
@@ -297,10 +297,10 @@ def _create_runtime(args):
 def _destroy_runtime(args, cancel_event, runtime_thread):
     cancel_event.set()
     runtime_thread.join()
-    assert not BaseServer.is_ready(f'{args.host}:{args.port[0]}')
+    assert not BaseServer.is_ready(f"{args.host}:{args.port[0]}")
 
 
-def _queue_length(queue: 'multiprocessing.Queue'):
+def _queue_length(queue: "multiprocessing.Queue"):
     # Pops elements from the queue and counts them
     # This is used instead of multiprocessing.Queue.qsize() since it is not supported on MacOS
     length = 0
@@ -313,7 +313,7 @@ def _queue_length(queue: 'multiprocessing.Queue'):
     return length
 
 
-def _queue_length_copy(queue: 'multiprocessing.Manager().Queue'):
+def _queue_length_copy(queue: "multiprocessing.Manager().Queue"):
     # Copies the queue and counts the elements in the copy
     # Used if the original queue needs to be preserved
     # This is used instead of multiprocessing.Queue.qsize() since it is not supported on MacOS

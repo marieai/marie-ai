@@ -19,12 +19,12 @@ from transformers import (
 )
 
 from marie.constants import __model_path__
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...api.docs import BatchableMarieDoc, MarieDoc
 from ...helper import batch_iterator
-from ...logging.profile import TimeContext
+from ...logging_core.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
 from ..document_classifier.base import BaseDocumentClassifier
 from ..util import scale_bounding_box
@@ -362,7 +362,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
     def optimize_model(self, model: nn.Module) -> Callable | Module:
         """Optimizes the model for inference. This method is called by the __init__ method."""
-        if True:
+        if False:
             return model
 
         try:
@@ -375,9 +375,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 torch._dynamo.config.suppress_errors = True
                 # torch.backends.cudnn.benchmark = True
                 # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
-                model = torch.compile(
-                    model, backend="inductor", mode="default", fullgraph=False
-                )
+                model = torch.compile(model)
                 return model
         except Exception as err:
             self.logger.warning(f"Model compile not supported: {err}")

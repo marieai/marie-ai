@@ -3,8 +3,8 @@ from typing import Dict
 
 from psycopg2.extras import Json
 
-from marie_server.scheduler.models import WorkInfo
-from marie_server.scheduler.state import WorkState
+from marie.scheduler.models import WorkInfo
+from marie.scheduler.state import WorkState
 
 
 def to_timestamp_with_tz(dt: datetime):
@@ -39,7 +39,7 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
     """
 
 
-def insert_job(schema: str, work_info: WorkInfo) -> str:
+def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> str:
     return f"""
         INSERT INTO {schema}.job (
           id,
@@ -53,7 +53,8 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           retry_limit,
           retry_delay,
           retry_backoff,
-          policy          
+          policy,
+          parent_job_id     
         )
         SELECT
           id,
@@ -82,7 +83,8 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           END as retry_delay,
           
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
-          q.policy
+          q.policy,
+          {'NULL' if parent_job_id is None else f"'{parent_job_id}'::uuid"} as parent_job_id
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
@@ -214,7 +216,56 @@ def fetch_next_job(schema: str):
     return query
 
 
+def mark_as_active_jobs(schema, name: str, ids: list, include_metadata: bool = False):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+
+    return f"""
+    WITH next AS (
+        SELECT id
+        FROM {schema}.job
+        WHERE name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
+    )
+    UPDATE {schema}.job j SET
+        state = '{WorkState.ACTIVE.value}',
+        started_on = now(),
+        retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
+    FROM next
+    WHERE name = '{name}' AND j.id = next.id
+    RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
+    """
+
+
+def _complete_jobs_query(
+    schema: str, name: str, ids: list, output: dict, state_condition: str
+):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    return f"""
+    WITH results AS (
+      UPDATE {schema}.job
+      SET completed_on = now(),
+          state = '{WorkState.COMPLETED.value}',
+          output = {Json(output)}::jsonb
+      WHERE name = '{name}'
+        AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        AND {state_condition}
+      RETURNING *
+    )
+    SELECT COUNT(*) FROM results
+    """
+
+
 def complete_jobs(schema: str, name: str, ids: list, output: dict):
+    state_condition = f"state = '{WorkState.ACTIVE.value}'"
+    return _complete_jobs_query(schema, name, ids, output, state_condition)
+
+
+def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
+    state_condition = "TRUE"  # No state condition for complete_jobs_by_id
+    return _complete_jobs_query(schema, name, ids, output, state_condition)
+
+
+def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
     query = f"""
     WITH results AS (
@@ -224,7 +275,6 @@ def complete_jobs(schema: str, name: str, ids: list, output: dict):
           output = {Json(output)}::jsonb
       WHERE name = '{name}'
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-        AND state = '{WorkState.ACTIVE.value}'
       RETURNING *
     )
     SELECT COUNT(*) FROM results

@@ -1,4 +1,5 @@
 """Argparser module for Flow"""
+
 from marie.parsers.base import set_base_parser
 from marie.parsers.helper import KVAppendAction, add_arg_group
 from marie.parsers.logging import mixin_suppress_root_logging_parser
@@ -12,40 +13,40 @@ def mixin_flow_features_parser(parser):
     """
     from marie.enums import FlowInspectType
 
-    gp = add_arg_group(parser, title='Flow Feature')
+    gp = add_arg_group(parser, title="Flow Feature")
 
     gp.add_argument(
-        '--uses',
+        "--uses",
         type=str,
-        help='The YAML path represents a flow. It can be either a local file path or a URL.',
+        help="The YAML path represents a flow. It can be either a local file path or a URL.",
     )
     gp.add_argument(
-        '--reload',
-        action='store_true',
+        "--reload",
+        action="store_true",
         default=False,
-        help='If set, auto-reloading on file changes is enabled: the Flow will restart while blocked if  YAML '
-        'configuration source is changed. This also applies apply to underlying Executors, if their source '
-        'code or YAML configuration has changed.',
+        help="If set, auto-reloading on file changes is enabled: the Flow will restart while blocked if  YAML "
+        "configuration source is changed. This also applies apply to underlying Executors, if their source "
+        "code or YAML configuration has changed.",
     )
 
     gp.add_argument(
-        '--env',
+        "--env",
         action=KVAppendAction,
-        metavar='KEY: VALUE',
-        nargs='*',
-        help='The map of environment variables that are available inside runtime',
+        metavar="KEY: VALUE",
+        nargs="*",
+        help="The map of environment variables that are available inside runtime",
     )
 
     gp.add_argument(
-        '--inspect',
+        "--inspect",
         type=FlowInspectType.from_string,
         choices=list(FlowInspectType),
         default=FlowInspectType.COLLECT,
-        help='''
+        help="""
     The strategy on those inspect deployments in the flow.
 
     If `REMOVE` is given then all inspect deployments are removed when building the flow.
-    ''',
+    """,
     )
 
 

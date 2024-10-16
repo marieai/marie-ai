@@ -12,70 +12,70 @@ from marie.parsers import set_gateway_parser
 from marie.serve import networking
 from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 
 @pytest.fixture
 def linear_graph_dict():
     return {
-        'start-gateway': ['deployment0'],
-        'deployment0': ['deployment1'],
-        'deployment1': ['deployment2'],
-        'deployment2': ['deployment3'],
-        'deployment3': ['end-gateway'],
+        "start-gateway": ["deployment0"],
+        "deployment0": ["deployment1"],
+        "deployment1": ["deployment2"],
+        "deployment2": ["deployment3"],
+        "deployment3": ["end-gateway"],
     }
 
 
 @pytest.fixture
 def bifurcation_graph_dict():
     return {
-        'start-gateway': ['deployment0', 'deployment4', 'deployment6'],
-        'deployment0': ['deployment1', 'deployment2'],
-        'deployment1': [],  # hanging_deployment
-        'deployment2': ['deployment3'],
-        'deployment4': ['deployment5'],
-        'deployment5': ['end-gateway'],
-        'deployment3': ['deployment5'],
-        'deployment6': [],  # hanging_deployment
+        "start-gateway": ["deployment0", "deployment4", "deployment6"],
+        "deployment0": ["deployment1", "deployment2"],
+        "deployment1": [],  # hanging_deployment
+        "deployment2": ["deployment3"],
+        "deployment4": ["deployment5"],
+        "deployment5": ["end-gateway"],
+        "deployment3": ["deployment5"],
+        "deployment6": [],  # hanging_deployment
     }
 
 
 @pytest.fixture
 def merge_graph_dict_directly_merge_in_gateway():
     return {
-        'start-gateway': ['deployment0'],
-        'deployment0': ['deployment1', 'deployment2'],
-        'deployment1': ['merger'],
-        'deployment2': ['merger'],
-        'merger': ['end-gateway'],
+        "start-gateway": ["deployment0"],
+        "deployment0": ["deployment1", "deployment2"],
+        "deployment1": ["merger"],
+        "deployment2": ["merger"],
+        "merger": ["end-gateway"],
     }
 
 
 @pytest.fixture
 def merge_graph_dict_directly_merge_in_last_deployment():
     return {
-        'start-gateway': ['deployment0'],
-        'deployment0': ['deployment1', 'deployment2'],
-        'deployment1': ['merger'],
-        'deployment2': ['merger'],
-        'merger': ['deployment_last'],
-        'deployment_last': ['end-gateway'],
+        "start-gateway": ["deployment0"],
+        "deployment0": ["deployment1", "deployment2"],
+        "deployment1": ["merger"],
+        "deployment2": ["merger"],
+        "merger": ["deployment_last"],
+        "deployment_last": ["end-gateway"],
     }
 
 
 @pytest.fixture
 def complete_graph_dict():
     return {
-        'start-gateway': ['deployment0', 'deployment4', 'deployment6'],
-        'deployment0': ['deployment1', 'deployment2'],
-        'deployment1': ['merger'],
-        'deployment2': ['deployment3'],
-        'deployment4': ['deployment5'],
-        'merger': ['deployment_last'],
-        'deployment5': ['merger'],
-        'deployment3': ['merger'],
-        'deployment6': [],  # hanging_deployment
-        'deployment_last': ['end-gateway'],
+        "start-gateway": ["deployment0", "deployment4", "deployment6"],
+        "deployment0": ["deployment1", "deployment2"],
+        "deployment1": ["merger"],
+        "deployment2": ["deployment3"],
+        "deployment4": ["deployment5"],
+        "merger": ["deployment_last"],
+        "deployment5": ["merger"],
+        "deployment3": ["merger"],
+        "deployment6": [],  # hanging_deployment
+        "deployment_last": ["end-gateway"],
     }
 
 
@@ -124,7 +124,7 @@ class DummyMockConnectionPool:
         docs = request.docs
         for doc in docs:
             clientid = doc.text[0:7]
-            new_doc = Document(id=doc.id, text=doc.text + f'-{clientid}-{deployment}')
+            new_doc = Document(id=doc.id, text=doc.text + f"-{clientid}-{deployment}")
             new_docs.append(new_doc)
 
         response_msg.data.docs = new_docs
@@ -160,7 +160,7 @@ def create_runtime(
         def decompress_wo_data(self):
             from marie.proto import jina_pb2
 
-            call_counts.put_nowait('called')
+            call_counts.put_nowait("called")
 
             self._pb_body = jina_pb2.DataRequestProtoWoData()
             self._pb_body.ParseFromString(self.buffer)
@@ -169,7 +169,7 @@ def create_runtime(
         def decompress(self):
             from marie.proto import jina_pb2
 
-            call_counts.put_nowait('called')
+            call_counts.put_nowait("called")
 
             if self.buffer:
                 self._pb_body = jina_pb2.DataRequestProto()
@@ -182,32 +182,33 @@ def create_runtime(
                     self._pb_body_old.SerializePartialToString()
                 )
             else:
-                raise ValueError('the buffer is already decompressed')
+                raise ValueError("the buffer is already decompressed")
 
         monkeypatch.setattr(
             DataRequest,
-            '_decompress',
+            "_decompress",
             decompress,
         )
 
         monkeypatch.setattr(
             DataRequest,
-            '_decompress_wo_data',
+            "_decompress_wo_data",
             decompress_wo_data,
         )
     with AsyncNewLoopRuntime(
         set_gateway_parser().parse_args(
             [
-                '--port',
-                f'{port}',
-                '--graph-description',
-                f'{graph_description}',
-                '--deployments-addresses',
-                '{}',
-                '--protocol',
+                "--port",
+                f"{port}",
+                "--graph-description",
+                f"{graph_description}",
+                "--deployments-addresses",
+                "{}",
+                "--protocol",
                 protocol,
             ]
-        ), req_handler_cls=GatewayRequestHandler
+        ),
+        req_handler_cls=GatewayRequestHandler,
     ) as runtime:
         runtime.run_forever()
 
@@ -219,8 +220,8 @@ def client_send(client_id: int, port: int, protocol: str):
 
     # send requests
     return c.post(
-        on='/',
-        inputs=DocumentArray([Document(text=f'client{client_id}-Request')]),
+        on="/",
+        inputs=DocumentArray([Document(text=f"client{client_id}-Request")]),
         return_responses=True,
     )
 
@@ -228,18 +229,18 @@ def client_send(client_id: int, port: int, protocol: str):
 NUM_PARALLEL_CLIENTS = 10
 
 
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize("protocol", ["grpc", "http", "websocket"])
 def test_grpc_gateway_runtime_handle_messages_linear(
     linear_graph_dict, monkeypatch, protocol
 ):
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
@@ -250,22 +251,22 @@ def test_grpc_gateway_runtime_handle_messages_linear(
         assert len(responses[0].docs) == 1
         assert (
             responses[0].docs[0].text
-            == f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-deployment2-client{client_id}-deployment3'
+            == f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-deployment2-client{client_id}-deployment3"
         )
 
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': protocol,
-            'port': port,
-            'graph_dict': linear_graph_dict,
+            "protocol": protocol,
+            "port": port,
+            "graph_dict": linear_graph_dict,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -282,35 +283,35 @@ def test_grpc_gateway_runtime_lazy_request_access(linear_graph_dict, monkeypatch
 
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyNoDocAccessMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
 
     def client_validate(client_id: int):
-        responses = client_send(client_id, port, 'grpc')
+        responses = client_send(client_id, port, "grpc")
         assert len(responses) > 0
 
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': 'grpc',
-            'port': port,
-            'graph_dict': linear_graph_dict,
-            'call_counts': call_counts,
-            'monkeypatch': monkeypatch,
+            "protocol": "grpc",
+            "port": port,
+            "graph_dict": linear_graph_dict,
+            "call_counts": call_counts,
+            "monkeypatch": monkeypatch,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -325,18 +326,18 @@ def test_grpc_gateway_runtime_lazy_request_access(linear_graph_dict, monkeypatch
         assert cp.exitcode == 0
 
 
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize("protocol", ["grpc", "http", "websocket"])
 def test_grpc_gateway_runtime_handle_messages_bifurcation(
     bifurcation_graph_dict, monkeypatch, protocol
 ):
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
@@ -348,24 +349,24 @@ def test_grpc_gateway_runtime_handle_messages_bifurcation(
         assert len(responses[0].docs) == 1
         assert (
             responses[0].docs[0].text
-            == f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-deployment3'
+            == f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-deployment3"
             or responses[0].docs[0].text
-            == f'client{client_id}-Request-client{client_id}-deployment4-client{client_id}-deployment5'
+            == f"client{client_id}-Request-client{client_id}-deployment4-client{client_id}-deployment5"
         )
 
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': protocol,
-            'port': port,
-            'graph_dict': bifurcation_graph_dict,
+            "protocol": protocol,
+            "port": port,
+            "graph_dict": bifurcation_graph_dict,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -377,19 +378,19 @@ def test_grpc_gateway_runtime_handle_messages_bifurcation(
         assert cp.exitcode == 0
 
 
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize("protocol", ["grpc", "http", "websocket"])
 def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
     merge_graph_dict_directly_merge_in_gateway, monkeypatch, protocol
 ):
     # TODO: Test incomplete until merging of responses is ready
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
@@ -399,11 +400,11 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
         assert len(responses) > 0
         assert len(responses[0].docs) == 1
         deployment1_path = (
-            f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger'
+            f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger"
             in responses[0].docs[0].text
         )
         deployment2_path = (
-            f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger'
+            f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger"
             in responses[0].docs[0].text
         )
         assert deployment1_path or deployment2_path
@@ -411,16 +412,16 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': protocol,
-            'port': port,
-            'graph_dict': merge_graph_dict_directly_merge_in_gateway,
+            "protocol": protocol,
+            "port": port,
+            "graph_dict": merge_graph_dict_directly_merge_in_gateway,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -432,19 +433,19 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_gateway(
         assert cp.exitcode == 0
 
 
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize("protocol", ["grpc", "http", "websocket"])
 def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
     merge_graph_dict_directly_merge_in_last_deployment, monkeypatch, protocol
 ):
     # TODO: Test incomplete until merging of responses is ready
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
@@ -454,11 +455,11 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
         assert len(responses) > 0
         assert len(responses[0].docs) == 1
         deployment1_path = (
-            f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger-client{client_id}-deployment_last'
+            f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger-client{client_id}-deployment_last"
             in responses[0].docs[0].text
         )
         deployment2_path = (
-            f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger-client{client_id}-deployment_last'
+            f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-merger-client{client_id}-deployment_last"
             in responses[0].docs[0].text
         )
         assert deployment1_path or deployment2_path
@@ -466,16 +467,16 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': protocol,
-            'port': port,
-            'graph_dict': merge_graph_dict_directly_merge_in_last_deployment,
+            "protocol": protocol,
+            "port": port,
+            "graph_dict": merge_graph_dict_directly_merge_in_last_deployment,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -487,19 +488,19 @@ def test_grpc_gateway_runtime_handle_messages_merge_in_last_deployment(
         assert cp.exitcode == 0
 
 
-@pytest.mark.parametrize('protocol', ['grpc', 'http', 'websocket'])
+@pytest.mark.parametrize("protocol", ["grpc", "http", "websocket"])
 def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(
     complete_graph_dict, monkeypatch, protocol
 ):
     # TODO: Test incomplete until merging of responses is ready
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_requests_once',
+        "send_requests_once",
         DummyMockConnectionPool.send_requests_once,
     )
     monkeypatch.setattr(
         networking.GrpcConnectionPool,
-        'send_discover_endpoint',
+        "send_discover_endpoint",
         DummyMockConnectionPool.send_discover_endpoint,
     )
     port = random_port()
@@ -510,27 +511,27 @@ def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(
         assert len(responses[0].docs) == 1
         # there are 3 incoming paths to merger, it could be any
         assert (
-            f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger-client{client_id}-deployment_last'
+            f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment1-client{client_id}-merger-client{client_id}-deployment_last"
             == responses[0].docs[0].text
-            or f'client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-deployment3-client{client_id}-merger-client{client_id}-deployment_last'
+            or f"client{client_id}-Request-client{client_id}-deployment0-client{client_id}-deployment2-client{client_id}-deployment3-client{client_id}-merger-client{client_id}-deployment_last"
             == responses[0].docs[0].text
-            or f'client{client_id}-Request-client{client_id}-deployment4-client{client_id}-deployment5-client{client_id}-merger-client{client_id}-deployment_last'
+            or f"client{client_id}-Request-client{client_id}-deployment4-client{client_id}-deployment5-client{client_id}-merger-client{client_id}-deployment_last"
             == responses[0].docs[0].text
         )
 
     p = multiprocessing.Process(
         target=create_runtime,
         kwargs={
-            'protocol': protocol,
-            'port': port,
-            'graph_dict': complete_graph_dict,
+            "protocol": protocol,
+            "port": port,
+            "graph_dict": complete_graph_dict,
         },
     )
     p.start()
     time.sleep(1.0)
     client_processes = []
     for i in range(NUM_PARALLEL_CLIENTS):
-        cp = multiprocessing.Process(target=client_validate, kwargs={'client_id': i})
+        cp = multiprocessing.Process(target=client_validate, kwargs={"client_id": i})
         cp.start()
         client_processes.append(cp)
 
@@ -542,7 +543,7 @@ def test_grpc_gateway_runtime_handle_messages_complete_graph_dict(
         assert cp.exitcode == 0
 
 
-def _queue_length(queue: 'multiprocessing.Queue'):
+def _queue_length(queue: "multiprocessing.Queue"):
     # Pops elements from the queue and counts them
     # Used if the underlying queue is sensitive to ordering
     # This is used instead of multiprocessing.Queue.qsize() since it is not supported on MacOS

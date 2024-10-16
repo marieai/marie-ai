@@ -11,8 +11,8 @@ from torch import nn
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
-from marie.logging.logger import MarieLogger
-from marie.logging.profile import TimeContext
+from marie.logging_core.logger import MarieLogger
+from marie.logging_core.profile import TimeContext
 from marie.models.icr.dataset import AlignCollate
 from marie.models.icr.memory_dataset import MemoryDataset
 from marie.models.icr.model import Model

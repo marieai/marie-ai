@@ -12,17 +12,17 @@ from typing import (
 )
 
 from marie.excepts import InternalNetworkError
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.stream.helper import AsyncRequestsIterator, _RequestsCounter
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 __all__ = ["RequestStreamer"]
 
 from marie._docarray import DocumentArray
-from marie.types.request.data import Response
+from marie.types_core.request.data import Response
 
 if TYPE_CHECKING:  # pragma: no cover
-    from marie.types.request import Request
+    from marie.types_core.request import Request
 
 
 class RequestStreamer:

@@ -7,12 +7,12 @@ from docarray.documents import TextDoc
 from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
-from marie.types.request.data import DataRequest
+from marie.types_core.request.data import DataRequest
 
 
 class JobSupervisor:
@@ -24,7 +24,7 @@ class JobSupervisor:
     """
 
     DEFAULT_JOB_STOP_WAIT_TIME_S = 3
-    DEFAULT_JOB_TIMEOUT_S = 60  # 60 seconds, there should be no job that takes more than 60 seconds to process
+    DEFAULT_JOB_TIMEOUT_S = 0  # 60 seconds * 60 minutes
 
     def __init__(
         self,
@@ -54,43 +54,45 @@ class JobSupervisor:
             f"Sending ping to {address} for request {request_id} on deployment {deployment_name}"
         )
 
-        channel = get_grpc_channel(address=address, asyncio=True)
-        connection_stub = _ConnectionStubs(
-            address=address,
-            channel=channel,
-            deployment_name=deployment_name,
-            metrics=_NetworkingMetrics(
-                sending_requests_time_metrics=None,
-                received_response_bytes=None,
-                send_requests_bytes_metrics=None,
-            ),
-            histograms=_NetworkingHistograms(),
-        )
-
-        doc = TextDoc(text=f"ping : _jina_dry_run_")
-        request = DataRequest()
-        request.document_array_cls = DocList[BaseDoc]()
-        request.header.exec_endpoint = "_jina_dry_run_"
-        request.header.target_executor = deployment_name
-        request.parameters = {
-            "job_id": self._job_id,
-        }
-        request.data.docs = DocList([doc])
-
-        try:
-            response, _ = await connection_stub.send_requests(
-                requests=[request], metadata={}, compression=False
+        async with get_grpc_channel(address=address, asyncio=True) as channel:
+            connection_stub = _ConnectionStubs(
+                address=address,
+                channel=channel,
+                deployment_name=deployment_name,
+                metrics=_NetworkingMetrics(
+                    sending_requests_time_metrics=None,
+                    received_response_bytes=None,
+                    send_requests_bytes_metrics=None,
+                ),
+                histograms=_NetworkingHistograms(),
             )
-            self.logger.debug(f"DryRun - Response: {response}")
-            if response.status.code == jina_pb2.StatusProto.SUCCESS:
-                return True
-            else:
-                raise RuntimeError(
-                    f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
+
+            doc = TextDoc(text=f"ping : _jina_dry_run_")
+            request = DataRequest()
+            request.document_array_cls = DocList[BaseDoc]()
+            request.header.exec_endpoint = "_jina_dry_run_"
+            request.header.target_executor = deployment_name
+            request.parameters = {
+                "job_id": self._job_id,
+            }
+            request.data.docs = DocList([doc])
+
+            try:
+                response, _ = await connection_stub.send_requests(
+                    requests=[request], metadata={}, compression=False
                 )
-        except Exception as e:
-            self.logger.error(f"Error during ping to {self.request_info} : {e}")
-            raise RuntimeError(f"Error during ping to {str(self.request_info)} : {e}")
+                self.logger.debug(f"DryRun - Response: {response}")
+                if response.status.code == jina_pb2.StatusProto.SUCCESS:
+                    return True
+                else:
+                    raise RuntimeError(
+                        f"Endpoint '_jina_dry_run_' failed with status code {response.status.code}"
+                    )
+            except Exception as e:
+                self.logger.error(f"Error during ping to {self.request_info} : {e}")
+                raise RuntimeError(
+                    f"Error during ping to {str(self.request_info)} : {e}"
+                )
 
     async def run(
         self,
@@ -160,9 +162,15 @@ class JobSupervisor:
                 self.logger.error(
                     f"Job {self._job_id} timed out after {self.DEFAULT_JOB_TIMEOUT_S} seconds."
                 )
-                await self._job_info_client.put_status(
-                    self._job_id, JobStatus.FAILED, message="Job submission timed out."
-                )
+                # If the job is still in PENDING state, then mark it as FAILED
+                old_info = await self._job_info_client.get_info(self._job_id)
+                if old_info is not None:
+                    if old_info.status.is_terminal() is False:
+                        await self._job_info_client.put_status(
+                            self._job_id,
+                            JobStatus.FAILED,
+                            message="Job submission timed out.",
+                        )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
         self.logger.debug(f"Job {self._job_id} submitted in the background.")
@@ -184,7 +192,7 @@ class JobSupervisor:
 
     async def _submit_job_in_background(self, curr_info):
         try:
-            response = await self._job_distributor.submit_job(
+            response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,
                 send_callback=self.send_callback,

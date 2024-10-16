@@ -1,7 +1,11 @@
 from marie.helper import GATEWAY_NAME
 from marie.parsers.helper import _SHOW_ALL_ARGS
 from marie.parsers.logging import mixin_suppress_root_logging_parser
-from marie.parsers.orchestrate.pod import mixin_gateway_discovery_parser
+from marie.parsers.orchestrate.pod import (
+    mixin_gateway_discovery_parser,
+    mixin_gateway_job_scheduler_parser,
+    mixin_gateway_kv_store_parser,
+)
 from marie.parsers.orchestrate.runtimes.container import mixin_container_runtime_parser
 from marie.parsers.orchestrate.runtimes.grpc_channel import (
     mixin_grpc_channel_options_parser,
@@ -51,7 +55,7 @@ def set_deployment_parser(parser=None):
 
         parser = set_base_parser()
 
-    set_pod_parser(parser, default_name='executor')
+    set_pod_parser(parser, default_name="executor")
 
     from marie.parsers.orchestrate.deployment import mixin_base_deployment_parser
 
@@ -81,18 +85,18 @@ def set_gateway_parser(parser=None):
     )
 
     mixin_base_deployment_parser(parser)
-    mixin_container_runtime_parser(parser, pod_type='gateway')
+    mixin_container_runtime_parser(parser, pod_type="gateway")
     mixin_prefetch_parser(parser)
     mixin_http_gateway_parser(parser)
     mixin_graphql_parser(parser)
     mixin_gateway_parser(parser)
-    mixin_pod_parser(parser, pod_type='gateway')
+    mixin_pod_parser(parser, pod_type="gateway")
 
     from marie.enums import DeploymentRoleType
 
     parser.set_defaults(
         name=GATEWAY_NAME,
-        runtime_cls='GatewayRuntime',
+        runtime_cls="GatewayRuntime",
         deployment_role=DeploymentRoleType.GATEWAY,
     )
 
@@ -119,7 +123,7 @@ def set_gateway_runtime_args_parser(parser=None):
 
     mixin_gateway_streamer_parser(parser)
     mixin_gateway_discovery_parser(parser)
-    mixin_pod_runtime_args_parser(parser, pod_type='gateway')
+    mixin_pod_runtime_args_parser(parser, pod_type="gateway")
     mixin_prefetch_parser(parser)
     _add_host(parser)
 
@@ -169,9 +173,9 @@ def set_help_parser(parser=None):
         parser = set_base_parser()
 
     parser.add_argument(
-        'query',
+        "query",
         type=str,
-        help='Look up usage & mention of argument name in Marie API. The name can be fuzzy',
+        help="Look up usage & mention of argument name in Marie API. The name can be fuzzy",
     )
     return parser
 
@@ -193,60 +197,60 @@ def get_main_parser():
     parser = set_base_parser()
 
     sp = parser.add_subparsers(
-        dest='cli',
+        dest="cli",
         required=True,
     )
 
     set_pod_parser(
         sp.add_parser(
-            'executor',
-            help='Start an Executor',
-            description='Start an Executor. Jina uses Executors process Documents',
+            "executor",
+            help="Start an Executor",
+            description="Start an Executor. Jina uses Executors process Documents",
             formatter_class=_chf,
         )
     )
 
     set_flow_parser(
         sp.add_parser(
-            'flow',
-            description='Start a Flow. Jina uses Flows to streamline and distribute Executors',
-            help='Start a Flow',
+            "flow",
+            description="Start a Flow. Jina uses Flows to streamline and distribute Executors",
+            help="Start a Flow",
             formatter_class=_chf,
         )
     )
 
     set_ping_parser(
         sp.add_parser(
-            'ping',
-            help='Ping an Executor/Flow',
-            description='Ping a remote Executor or a Flow.',
+            "ping",
+            help="Ping an Executor/Flow",
+            description="Ping a remote Executor or a Flow.",
             formatter_class=_chf,
         )
     )
 
     set_export_parser(
         sp.add_parser(
-            'export',
-            help='Export Jina API/Flow',
-            description='Export Jina API and Flow to JSONSchema, Kubernetes YAML, or SVG flowchart.',
+            "export",
+            help="Export Jina API/Flow",
+            description="Export Jina API and Flow to JSONSchema, Kubernetes YAML, or SVG flowchart.",
             formatter_class=_chf,
         )
     )
 
     set_new_project_parser(
         sp.add_parser(
-            'new',
-            help='Create a new Marie project',
-            description='Create a new Marie project with a predefined template',
+            "new",
+            help="Create a new Marie project",
+            description="Create a new Marie project with a predefined template",
             formatter_class=_chf,
         )
     )
 
     set_gateway_parser(
         sp.add_parser(
-            'gateway',
-            description='Start a Gateway to receive client Requests via gRPC/RESTful interface',
-            **(dict(help='Start a Gateway')) if _SHOW_ALL_ARGS else {},
+            "gateway",
+            description="Start a Gateway to receive client Requests via gRPC/RESTful interface",
+            **(dict(help="Start a Gateway")) if _SHOW_ALL_ARGS else {},
             formatter_class=_chf,
         )
     )
@@ -256,36 +260,36 @@ def get_main_parser():
 
     get_auth_parser(
         sp.add_parser(
-            'auth',
-            description='Login to Marie AI with your GitHub/Google/Email account',
+            "auth",
+            description="Login to Marie AI with your GitHub/Google/Email account",
             formatter_class=_chf,
-            help='Login to Marie AI',
+            help="Login to Marie AI",
         )
     )
 
     get_hub_parser(
         sp.add_parser(
-            'hub',
-            help='Manage Executor on Marie Hub',
-            description='Push/Pull an Executor to/from Marie Hub',
+            "hub",
+            help="Manage Executor on Marie Hub",
+            description="Push/Pull an Executor to/from Marie Hub",
             formatter_class=_chf,
         )
     )
 
     set_server_parser(
         sp.add_parser(
-            'server',
-            help='Manage Marie Server',
-            description='Manage Marie Server (e.g. start/stop/purge)',
+            "server",
+            help="Manage Marie Server",
+            description="Manage Marie Server (e.g. start/stop/purge)",
             formatter_class=_chf,
         )
     )
 
     set_help_parser(
         sp.add_parser(
-            'help',
-            help='Show help text of a CLI argument',
-            description='Show help text of a CLI argument',
+            "help",
+            help="Show help text of a CLI argument",
+            description="Show help text of a CLI argument",
             formatter_class=_chf,
         )
     )
@@ -293,32 +297,32 @@ def get_main_parser():
 
     set_pod_parser(
         sp.add_parser(
-            'pod',
-            description='Start a Pod. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            "pod",
+            description="Start a Pod. "
+            "You should rarely use this directly unless you "
+            "are doing low-level orchestration",
             formatter_class=_chf,
-            **(dict(help='Start a Pod')) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Start a Pod")) if _SHOW_ALL_ARGS else {},
         )
     )
 
     set_deployment_parser(
         sp.add_parser(
-            'deployment',
-            description='Start a Deployment. '
-            'You should rarely use this directly unless you '
-            'are doing low-level orchestration',
+            "deployment",
+            description="Start a Deployment. "
+            "You should rarely use this directly unless you "
+            "are doing low-level orchestration",
             formatter_class=_chf,
-            **(dict(help='Start a Deployment')) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Start a Deployment")) if _SHOW_ALL_ARGS else {},
         )
     )
 
     set_client_cli_parser(
         sp.add_parser(
-            'client',
-            description='Start a Python client that connects to a Marie Gateway',
+            "client",
+            description="Start a Python client that connects to a Marie Gateway",
             formatter_class=_chf,
-            **(dict(help='Start a Client')) if _SHOW_ALL_ARGS else {},
+            **(dict(help="Start a Client")) if _SHOW_ALL_ARGS else {},
         )
     )
 

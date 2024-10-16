@@ -11,7 +11,7 @@ from marie.boxes import BoxProcessorCraft, BoxProcessorUlimDit, PSMode
 from marie.boxes.box_processor import BoxProcessor
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.ocr.coordinate_format import CoordinateFormat
 from marie.utils.base64 import encodeToBase64
 from marie.utils.image_utils import crop_to_content, hash_frames_fast
@@ -308,9 +308,9 @@ class OcrEngine(ABC):
                             )
                             * 255
                         )
-                        region_overlay[
-                            padding : h + padding, padding : w + padding
-                        ] = region_fragment
+                        region_overlay[padding : h + padding, padding : w + padding] = (
+                            region_fragment
+                        )
                     else:
                         region_overlay = region_fragment
 
@@ -341,7 +341,13 @@ class OcrEngine(ABC):
                 batch_crop = img[
                     y_batch : y_batch + h_batch, x_batch : x_batch + w_batch
                 ]
-                (boxes, img_fragments, lines, _, lines_bboxes,) = (
+                (
+                    boxes,
+                    img_fragments,
+                    lines,
+                    _,
+                    lines_bboxes,
+                ) = (
                     list(chain.from_iterable(x))
                     for i, x in enumerate(zip(*bbox_results_batch))
                 )

@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Type
 
 import marie.check as check
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.utils.interrupts import raise_interrupts_as
 
 
@@ -182,9 +182,9 @@ class DagsterInvalidConfigDefinitionError(DagsterError):
                 "cannot be resolved.{reason_str}" + CONFIG_ERROR_VERBIAGE
             ).format(
                 original_root=repr(original_root),
-                stack_str="Error at stack path :" + ":".join(stack) + ". "
-                if stack
-                else "",
+                stack_str=(
+                    "Error at stack path :" + ":".join(stack) + ". " if stack else ""
+                ),
                 current_value=repr(current_value),
                 reason_str=f" Reason: {reason}." if reason else "",
             ),

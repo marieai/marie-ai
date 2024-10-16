@@ -2,8 +2,8 @@ import abc
 from typing import Callable, Dict, List, Optional
 
 from marie.job.common import JobInfo
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest
 
 
 class JobDistributor(abc.ABC):
@@ -12,7 +12,7 @@ class JobDistributor(abc.ABC):
     """
 
     @abc.abstractmethod
-    async def submit_job(
+    async def send(
         self,
         submission_id: str,
         job_info: JobInfo,

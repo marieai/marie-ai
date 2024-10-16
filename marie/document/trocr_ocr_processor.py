@@ -18,8 +18,8 @@ from torchvision.transforms import Compose, InterpolationMode
 from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
-from marie.logging.predefined import default_logger
-from marie.logging.profile import TimeContext, TimeContextCuda
+from marie.logging_core.predefined import default_logger
+from marie.logging_core.profile import TimeContext, TimeContextCuda
 from marie.models.icr.memory_dataset import MemoryDataset
 
 # required to register text_recognition
@@ -225,7 +225,7 @@ class TrOcrProcessor(OcrProcessor):
 
         start = time.time()
         # TODO : make this configurable
-        beam = 5  # default beam size is 5
+        beam = 3  # default beam size is 5
         (
             model,
             cfg,

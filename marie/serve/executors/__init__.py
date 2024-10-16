@@ -39,7 +39,7 @@ from marie.helper import (
 )
 from marie.importer import ImportExtensions
 from marie.jaml import JAML, JAMLCompatible, env_var_regex, internal_var_regex
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.serve.executors.decorators import (
     _init_requests_by_class,
     avoid_concurrent_lock_cls,
@@ -670,7 +670,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             return source
 
         if _dynamic_batching:
-            self.dynamic_batching = getattr(self, 'dynamic_batching', {})
+            self.dynamic_batching = getattr(self, "dynamic_batching", {})
             self.dynamic_batching = deep_update(
                 self.dynamic_batching, _dynamic_batching
             )

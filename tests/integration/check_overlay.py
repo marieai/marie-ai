@@ -8,7 +8,7 @@ import numpy as np
 import psutil
 import torch
 
-from marie.logging.profile import TimeContext
+from marie.logging_core.profile import TimeContext
 from marie.models.utils import enable_tf32, openmp_setup
 from marie.overlay.overlay import OverlayProcessor
 from marie.utils.docs import load_image

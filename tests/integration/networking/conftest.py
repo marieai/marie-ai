@@ -1,12 +1,12 @@
 import pytest
 
-from marie.logging.logger import MarieLogger as JinaLogger
+from marie.logging_core.logger import MarieLogger as JinaLogger
 from marie.serve.networking import _NetworkingMetrics
 
 
 @pytest.fixture()
 def logger():
-    return JinaLogger('test networking')
+    return JinaLogger("test networking")
 
 
 @pytest.fixture()

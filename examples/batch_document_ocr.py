@@ -4,15 +4,20 @@ import base64
 import json
 import logging
 import os
+import sys
+
+# Add the parent directory of examples to the sys.path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import threading
 import time
 import uuid
 from functools import partial
 from multiprocessing import Queue
 from pathlib import Path
+from typing import Any
 
 import requests
-from docarray.documents import TextDoc
 from pydantic.tools import parse_obj_as
 
 from examples.utils import (
@@ -23,7 +28,6 @@ from examples.utils import (
     setup_queue,
     setup_s3_storage,
 )
-from marie import Client
 from marie.pipe.components import s3_asset_path
 from marie.storage import StorageManager
 from marie.utils.json import load_json_file, store_json_object
@@ -43,7 +47,7 @@ def process_request(
     output_dir: str,
     config: ServiceConfig,
     stop_event: threading.Event = None,
-) -> str:
+) -> Any | None:
     if not os.path.exists(file_location):
         raise Exception(f"File not found : {file_location}")
 
@@ -180,9 +184,10 @@ def process_dir(
             continue
 
         if os.path.exists(json_output_path):
-            logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
+            # logger.warning(f"Skipping {img_path} : {json_output_path} already exists")
             continue
 
+        print("Processing : ", img_path)
         json_result = process_request(
             mode="multiline",
             file_location=str(img_path),
@@ -192,7 +197,6 @@ def process_dir(
         )
 
         print(json_result)
-        break
 
 
 def message_handler(stop_event, message):
@@ -259,20 +263,6 @@ def message_handler(stop_event, message):
 
 if __name__ == "__main__":
 
-    # client = Client(
-    #     host="0.0.0.0",
-    #     port=52000,
-    #     protocol="grpc",
-    #     request_size=-1,
-    #     # asyncio=True,
-    #     prefetch=1,
-    # )
-    #
-    # try:
-    #     client.post('', TextDoc(), request_size=1)
-    # except Exception as exc:
-    #     print(exc)
-
     stop_event = threading.Event()
     args = parse_args()
 
@@ -316,7 +306,9 @@ if __name__ == "__main__":
         )
 
     while True:
-        time.sleep(100)
+        time.sleep(5000)
+        print("Main thread is alive")
+
     # get curren thread
     current_thread = threading.current_thread()
     current_thread.join()
@@ -333,3 +325,5 @@ if __name__ == "__main__":
     #  find $dir -size 0 -type f -delete
 
     # --config config.dev.json  --pipeline default --input ~/datasets/private/corr-routing/ready/images/ --output_dir ~/datasets/private/corr-routing/ready/annotations
+
+    # --config config.dev.json  --pipeline default --input ~/datasets/private/corr-indexer/from-ml1/all_images --output_dir ~/datasets/private/corr-indexer/from-ml1/annotations

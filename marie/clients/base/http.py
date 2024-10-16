@@ -8,10 +8,10 @@ from marie.clients.base import BaseClient
 from marie.clients.base.helper import HTTPClientlet, handle_response_status
 from marie.clients.helper import callback_exec
 from marie.importer import ImportExtensions
-from marie.logging.profile import ProgressBar
+from marie.logging_core.profile import ProgressBar
 from marie.serve.stream import RequestStreamer
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     from marie.clients.base import CallbackFnType, InputType
@@ -39,11 +39,11 @@ class HTTPBaseClient(BaseClient):
     async def _get_endpoints_from_openapi(self, **kwargs):
         def extract_paths_by_method(spec):
             paths_by_method = {}
-            for path, methods in spec['paths'].items():
+            for path, methods in spec["paths"].items():
                 for method, details in methods.items():
                     if method not in paths_by_method:
                         paths_by_method[method] = []
-                    paths_by_method[method].append(path.strip('/'))
+                    paths_by_method[method].append(path.strip("/"))
 
             return paths_by_method
 
@@ -52,11 +52,11 @@ class HTTPBaseClient(BaseClient):
         import aiohttp
 
         session_kwargs = {}
-        if 'headers' in kwargs:
-            session_kwargs = {'headers': kwargs['headers']}
+        if "headers" in kwargs:
+            session_kwargs = {"headers": kwargs["headers"]}
 
-        proto = 'https' if self.args.tls else 'http'
-        target_url = f'{proto}://{self.args.host}:{self.args.port}/openapi.json'
+        proto = "https" if self.args.tls else "http"
+        target_url = f"{proto}://{self.args.host}:{self.args.port}/openapi.json"
         try:
 
             async with aiohttp.ClientSession(**session_kwargs) as session:
@@ -64,7 +64,7 @@ class HTTPBaseClient(BaseClient):
                     content = await response.read()
                     openapi_response = json.loads(content.decode())
                     self._endpoints = extract_paths_by_method(openapi_response).get(
-                        'post', []
+                        "post", []
                     )
         except:
             pass
@@ -79,8 +79,8 @@ class HTTPBaseClient(BaseClient):
 
         async with AsyncExitStack() as stack:
             try:
-                proto = 'https' if self.args.tls else 'http'
-                url = f'{proto}://{self.args.host}:{self.args.port}/dry_run'
+                proto = "https" if self.args.tls else "http"
+                url = f"{proto}://{self.args.host}:{self.args.port}/dry_run"
 
                 if not self.reuse_session:
                     iolet = await stack.enter_async_context(
@@ -106,7 +106,7 @@ class HTTPBaseClient(BaseClient):
 
                 r_str = await response.json()
                 handle_response_status(r_status, r_str, url)
-                if r_str['code'] == jina_pb2.StatusProto.SUCCESS:
+                if r_str["code"] == jina_pb2.StatusProto.SUCCESS:
                     return True
                 else:
                     self.logger.error(
@@ -114,16 +114,16 @@ class HTTPBaseClient(BaseClient):
                     )
             except Exception as e:
                 self.logger.error(
-                    f'Error while fetching response from HTTP server {e!r}'
+                    f"Error while fetching response from HTTP server {e!r}"
                 )
         return False
 
     async def _get_results(
         self,
-        inputs: 'InputType',
-        on_done: 'CallbackFnType',
-        on_error: Optional['CallbackFnType'] = None,
-        on_always: Optional['CallbackFnType'] = None,
+        inputs: "InputType",
+        on_done: "CallbackFnType",
+        on_error: Optional["CallbackFnType"] = None,
+        on_always: Optional["CallbackFnType"] = None,
         max_attempts: int = 1,
         initial_backoff: float = 0.5,
         max_backoff: float = 0.1,
@@ -154,7 +154,7 @@ class HTTPBaseClient(BaseClient):
             pass
 
         request_iterator, inputs_length = self._get_requests(inputs=inputs, **kwargs)
-        on = kwargs.get('on', '/post')
+        on = kwargs.get("on", "/post")
         if len(self._endpoints) == 0:
             await self._get_endpoints_from_openapi(**kwargs)
 
@@ -163,16 +163,16 @@ class HTTPBaseClient(BaseClient):
                 total_length=inputs_length, disable=not self.show_progress
             )
             p_bar = stack.enter_context(cm1)
-            proto = 'https' if self.args.tls else 'http'
-            endpoint = on.strip('/')
-            has_default_endpoint = 'default' in self._endpoints
+            proto = "https" if self.args.tls else "http"
+            endpoint = on.strip("/")
+            has_default_endpoint = "default" in self._endpoints
 
-            if endpoint != '' and endpoint in self._endpoints:
+            if endpoint != "" and endpoint in self._endpoints:
                 url = f'{proto}://{self.args.host}:{self.args.port}/{on.strip("/")}'
             elif has_default_endpoint:
-                url = f'{proto}://{self.args.host}:{self.args.port}/default'
+                url = f"{proto}://{self.args.host}:{self.args.port}/default"
             else:
-                url = f'{proto}://{self.args.host}:{self.args.port}/post'
+                url = f"{proto}://{self.args.host}:{self.args.port}/post"
 
             if not self.reuse_session:
                 iolet = await stack.enter_async_context(
@@ -204,8 +204,8 @@ class HTTPBaseClient(BaseClient):
                 iolet = self.iolet
 
             def _request_handler(
-                request: 'Request', **kwargs
-            ) -> 'Tuple[asyncio.Future, Optional[asyncio.Future]]':
+                request: "Request", **kwargs
+            ) -> "Tuple[asyncio.Future, Optional[asyncio.Future]]":
                 """
                 For HTTP Client, for each request in the iterator, we `send_message` using
                 http POST request and add it to the list of tasks which is awaited and yielded.
@@ -223,7 +223,7 @@ class HTTPBaseClient(BaseClient):
 
             streamer_args = vars(self.args)
             if prefetch:
-                streamer_args['prefetch'] = prefetch
+                streamer_args["prefetch"] = prefetch
             streamer = RequestStreamer(
                 request_handler=_request_handler,
                 result_handler=_result_handler,
@@ -237,23 +237,23 @@ class HTTPBaseClient(BaseClient):
                 handle_response_status(r_status, r_str, url)
 
                 da = None
-                if 'data' in r_str and r_str['data'] is not None:
+                if "data" in r_str and r_str["data"] is not None:
                     from marie._docarray import DocumentArray, docarray_v2
 
                     if not docarray_v2:
-                        da = DocumentArray.from_dict(r_str['data'])
+                        da = DocumentArray.from_dict(r_str["data"])
                     else:
                         from docarray import DocList
 
                         if issubclass(return_type, DocList):
                             da = return_type(
-                                [return_type.doc_type(**v) for v in r_str['data']]
+                                [return_type.doc_type(**v) for v in r_str["data"]]
                             )
                         else:
                             da = DocList[return_type](
-                                [return_type(**v) for v in r_str['data']]
+                                [return_type(**v) for v in r_str["data"]]
                             )
-                    del r_str['data']
+                    del r_str["data"]
 
                 resp = DataRequest(r_str)
                 if da is not None:
@@ -274,20 +274,20 @@ class HTTPBaseClient(BaseClient):
     async def _get_streaming_results(
         self,
         on: str,
-        inputs: 'Document',
+        inputs: "Document",
         parameters: Optional[Dict] = None,
         return_type: Type[Document] = Document,
         timeout: Optional[int] = None,
         **kwargs,
     ):
-        proto = 'https' if self.args.tls else 'http'
-        endpoint = on.strip('/')
-        has_default_endpoint = 'default' in self._endpoints
+        proto = "https" if self.args.tls else "http"
+        endpoint = on.strip("/")
+        has_default_endpoint = "default" in self._endpoints
 
-        if (endpoint != '' and endpoint in self._endpoints) or not has_default_endpoint:
-            url = f'{proto}://{self.args.host}:{self.args.port}/{endpoint}'
+        if (endpoint != "" and endpoint in self._endpoints) or not has_default_endpoint:
+            url = f"{proto}://{self.args.host}:{self.args.port}/{endpoint}"
         else:
-            url = f'{proto}://{self.args.host}:{self.args.port}/default'
+            url = f"{proto}://{self.args.host}:{self.args.port}/default"
         async with AsyncExitStack() as stack:
             if not self.reuse_session:
                 iolet = await stack.enter_async_context(

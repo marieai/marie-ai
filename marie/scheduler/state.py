@@ -26,3 +26,18 @@ class WorkState(Enum):
     EXPIRED = "expired"
     CANCELLED = "cancelled"
     FAILED = "failed"
+
+    def is_terminal(self) -> bool:
+        """Return whether or not this status is terminal.
+
+        A terminal status is one that cannot transition to any other status.
+
+        Returns:
+            True if this status is terminal, otherwise False.
+        """
+        return self in [
+            WorkState.COMPLETED,
+            WorkState.EXPIRED,
+            WorkState.CANCELLED,
+            WorkState.FAILED,
+        ]

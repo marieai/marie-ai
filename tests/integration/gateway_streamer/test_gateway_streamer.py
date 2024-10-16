@@ -10,20 +10,20 @@ from marie.serve.runtimes.asyncio import AsyncNewLoopRuntime
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers import BaseServer
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
-from marie.types.request import Request
-from marie.types.request.data import DataRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import DataRequest
 from tests.helper import _generate_pod_args
 
 
 class StreamerTestExecutor(Executor):
     @requests
     def foo(self, docs, parameters, **kwargs):
-        text_to_add = parameters.get('text_to_add', 'default ')
+        text_to_add = parameters.get("text_to_add", "default ")
         for doc in docs:
             doc.text += text_to_add
 
 
-def _create_worker_runtime(port, uses, name=''):
+def _create_worker_runtime(port, uses, name=""):
     args = _generate_pod_args()
     args.port = [port]
     args.name = name
@@ -34,37 +34,37 @@ def _create_worker_runtime(port, uses, name=''):
 
 def _setup(pod0_port, pod1_port):
     pod0_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(pod0_port, 'StreamerTestExecutor')
+        target=_create_worker_runtime, args=(pod0_port, "StreamerTestExecutor")
     )
     pod0_process.start()
 
     pod1_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(pod1_port, 'StreamerTestExecutor')
+        target=_create_worker_runtime, args=(pod1_port, "StreamerTestExecutor")
     )
     pod1_process.start()
 
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'0.0.0.0:{pod0_port}',
+        ctrl_address=f"0.0.0.0:{pod0_port}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'0.0.0.0:{pod1_port}',
+        ctrl_address=f"0.0.0.0:{pod1_port}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
     return pod0_process, pod1_process
 
 
 @pytest.mark.parametrize(
-    'parameters, target_executor, expected_text',
+    "parameters, target_executor, expected_text",
     [  # (None, None, 'default default '),
-        ({'pod0__text_to_add': 'param_pod0 '}, None, 'param_pod0 default '),
-        (None, 'pod1', 'default '),
-        ({'pod0__text_to_add': 'param_pod0 '}, 'pod0', 'param_pod0 '),
+        ({"pod0__text_to_add": "param_pod0 "}, None, "param_pod0 default "),
+        (None, "pod1", "default "),
+        ({"pod0__text_to_add": "param_pod0 "}, "pod0", "param_pod0 "),
     ],
 )
-@pytest.mark.parametrize('results_in_order', [False, True])
+@pytest.mark.parametrize("results_in_order", [False, True])
 @pytest.mark.asyncio
 async def test_custom_gateway(
     port_generator, parameters, target_executor, expected_text, results_in_order
@@ -117,14 +117,14 @@ async def test_custom_gateway(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('return_results', [False, True])
+@pytest.mark.parametrize("return_results", [False, True])
 async def test_gateway_stream_executor_error(port_generator, return_results):
     pod_port = port_generator()
     da = DocumentArray(
         [
-            Document(text='Request0'),
-            Document(text='Request1'),
-            Document(text='Request2'),
+            Document(text="Request0"),
+            Document(text="Request1"),
+            Document(text="Request2"),
         ]
     )
 
@@ -136,15 +136,15 @@ async def test_gateway_stream_executor_error(port_generator, return_results):
         def foo(self, docs, parameters, **kwargs):
             self.counter += 1
             if self.counter % 2 == 0:
-                raise ValueError('custom exception')
+                raise ValueError("custom exception")
 
     pod_process = multiprocessing.Process(
-        target=_create_worker_runtime, args=(pod_port, 'TestExecutor')
+        target=_create_worker_runtime, args=(pod_port, "TestExecutor")
     )
     pod_process.start()
     assert BaseServer.wait_for_ready_or_shutdown(
         timeout=5.0,
-        ctrl_address=f'0.0.0.0:{pod_port}',
+        ctrl_address=f"0.0.0.0:{pod_port}",
         ready_or_shutdown_event=multiprocessing.Event(),
     )
 
@@ -171,9 +171,9 @@ async def test_gateway_stream_executor_error(port_generator, return_results):
         assert len(errors) == 1
         error = errors[0]
         assert type(error) == ExecutorError
-        assert error.name == 'ValueError'
-        assert error.args == ['custom exception']
-        assert error.executor == 'TestExecutor'
+        assert error.name == "ValueError"
+        assert error.args == ["custom exception"]
+        assert error.executor == "TestExecutor"
 
         if return_results:
             assert all([isinstance(response, Request) for response in responses])

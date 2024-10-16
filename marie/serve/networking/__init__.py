@@ -20,7 +20,7 @@ from marie.constants import __default_endpoint__
 from marie.enums import PollingType
 from marie.excepts import InternalNetworkError
 from marie.importer import ImportExtensions
-from marie.logging.logger import MarieLogger
+from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
@@ -32,8 +32,8 @@ from marie.serve.networking.instrumentation import (
 )
 from marie.serve.networking.replica_list import _ReplicaList
 from marie.serve.networking.utils import DEFAULT_MINIMUM_RETRIES
-from marie.types.request import Request
-from marie.types.request.data import SingleDocumentRequest
+from marie.types_core.request import Request
+from marie.types_core.request.data import SingleDocumentRequest
 
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor

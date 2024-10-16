@@ -20,8 +20,8 @@ from marie.components.template_matching import (
 )
 from marie.constants import __config_dir__, __model_path__
 from marie.excepts import BadConfigSource
-from marie.logging.predefined import default_logger as logger
-from marie.logging.profile import TimeContext
+from marie.logging_core.predefined import default_logger as logger
+from marie.logging_core.profile import TimeContext
 from marie.ocr import CoordinateFormat, OcrEngine
 from marie.overlay.overlay import NoopOverlayProcessor, OverlayProcessor
 from marie.storage import StorageManager
@@ -431,9 +431,9 @@ def setup_template_matching(
 
     if not config.get("enabled", True):
         logger.warning(
-            f"Template matching disabled (using NOOP): {config['model_name_or_path']}"
+            f"Template matching disabled (using NOOP): {config['definitions_path']}"
         )
-        return None
+        return None, None
 
     matcher_vqnnft = VQNNFTemplateMatcher(model_name_or_path="NONE")
     matcher_meta = MetaTemplateMatcher(model_name_or_path="NONE")

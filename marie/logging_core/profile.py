@@ -4,7 +4,7 @@ from functools import wraps
 from typing import Callable, Optional, Union
 
 if typing.TYPE_CHECKING:
-    from marie.logging.logger import MarieLogger
+    from marie.logging_core.logger import MarieLogger
 
 import torch
 from rich.console import Console
@@ -66,7 +66,7 @@ def profiling(func):
     :param func: function to be profiled
     :return: arguments wrapper
     """
-    from marie.logging.predefined import default_logger
+    from marie.logging_core.predefined import default_logger
 
     @wraps(func)
     def arg_wrapper(*args, **kwargs):
@@ -76,10 +76,10 @@ def profiling(func):
         elapsed = time.perf_counter() - start_t
         end_mem = used_memory(unit=1)
         # level_prefix = ''.join('-' for v in inspect.stack() if v and v.index is not None and v.index >= 0)
-        level_prefix = ''
-        mem_status = f'memory Δ {get_readable_size(end_mem - start_mem)} {get_readable_size(start_mem)} -> {get_readable_size(end_mem)}'
+        level_prefix = ""
+        mem_status = f"memory Δ {get_readable_size(end_mem - start_mem)} {get_readable_size(start_mem)} -> {get_readable_size(end_mem)}"
         default_logger.info(
-            f'{level_prefix} {func.__qualname__} time: {elapsed}s {mem_status}'
+            f"{level_prefix} {func.__qualname__} time: {elapsed}s {mem_status}"
         )
         return r
 
@@ -102,7 +102,7 @@ class ProgressBar(Progress):
 
     def __init__(
         self,
-        description: str = 'Working...',
+        description: str = "Working...",
         total_length: Optional[float] = None,
         message_on_done: Optional[Union[str, Callable[..., str]]] = None,
         columns: Optional[Union[str, ProgressColumn]] = None,
@@ -130,15 +130,15 @@ class ProgressBar(Progress):
         """
 
         def _default_message_on_done(task):
-            return f'{task.completed} steps done in {get_readable_time(seconds=task.finished_time)}'
+            return f"{task.completed} steps done in {get_readable_time(seconds=task.finished_time)}"
 
         columns = columns or [
             SpinnerColumn(),
-            _OnDoneColumn(f'DONE', description, 'progress.description'),
-            BarColumn(complete_style='green', finished_style='yellow'),
+            _OnDoneColumn(f"DONE", description, "progress.description"),
+            BarColumn(complete_style="green", finished_style="yellow"),
             TimeElapsedColumn(),
-            '[progress.percentage]{task.percentage:>3.0f}%',
-            TextColumn('ETA:', style='progress.remaining'),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            TextColumn("ETA:", style="progress.remaining"),
             TimeRemainingColumn(),
             _OnDoneColumn(
                 message_on_done if message_on_done else _default_message_on_done
@@ -151,7 +151,7 @@ class ProgressBar(Progress):
         super().__init__(*columns, console=console, disable=disable, **kwargs)
 
         self.task_id = self.add_task(
-            'Working...', total=total_length if total_length else 100.0
+            "Working...", total=total_length if total_length else 100.0
         )
 
     def update(
@@ -183,7 +183,7 @@ class _OnDoneColumn(ProgressColumn):
     def __init__(
         self,
         text_on_done_format: Union[str, Callable],
-        text_init_format: str = '',
+        text_init_format: str = "",
         style: Optional[str] = None,
         table_column: Optional[Column] = None,
     ):
@@ -215,7 +215,7 @@ class _OnDoneColumn(ProgressColumn):
         self.text_init_format = text_init_format
         self.style = style
 
-    def render(self, task: 'Task') -> Text:
+    def render(self, task: "Task") -> Text:
         if task.finished_time:
             if callable(self.text_on_done_format):
                 return Text(self.text_on_done_format(task), style=self.style)
@@ -230,7 +230,7 @@ class _OnDoneColumn(ProgressColumn):
 class TimeContext:
     """Timing a code snippet with a context manager."""
 
-    def __init__(self, task_name: str, logger: 'MarieLogger' = None):
+    def __init__(self, task_name: str, logger: "MarieLogger" = None):
         """
         Create the context manager to timing a code snippet.
 
@@ -256,9 +256,9 @@ class TimeContext:
 
     def _enter_msg(self):
         if self._logger:
-            self._logger.info(self.task_name + '...')
+            self._logger.info(self.task_name + "...")
         else:
-            print(self.task_name, end=' ...\t', flush=True)
+            print(self.task_name, end=" ...\t", flush=True)
 
     def __exit__(self, typ, value, traceback):
         self.duration = self.now()
@@ -278,12 +278,12 @@ class TimeContext:
     def _exit_msg(self):
         if self._logger:
             self._logger.info(
-                f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
+                f"{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)"
             )
         else:
             print(
                 colored(
-                    f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
+                    f"{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)"
                 ),
                 flush=True,
             )
@@ -295,7 +295,7 @@ class TimeContextCuda:
     def __init__(
         self,
         task_name: str,
-        logger: 'MarieLogger' = None,
+        logger: "MarieLogger" = None,
         enabled=True,
         callback: callable = None,
     ):
@@ -333,9 +333,9 @@ class TimeContextCuda:
 
     def _enter_msg(self):
         if self._logger:
-            self._logger.info(self.task_name + '...')
+            self._logger.info(self.task_name + "...")
         else:
-            print(self.task_name, end=' ...\t', flush=True)
+            print(self.task_name, end=" ...\t", flush=True)
 
     def __exit__(self, typ, value, traceback):
         if not self.enabled:
@@ -351,12 +351,12 @@ class TimeContextCuda:
     def _exit_msg(self):
         if self._logger:
             self._logger.info(
-                f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
+                f"{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)"
             )
         else:
             print(
                 colored(
-                    f'{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)'
+                    f"{self.task_name} takes {self.readable_duration} ({self.duration:.3f}s)"
                 ),
                 flush=True,
             )
