@@ -45,9 +45,11 @@ def get_fastapi_app(
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
-            description="Request ID", example=os.urandom(16).hex()
+            None, description="Request ID", example=os.urandom(16).hex()
         )
 
+        # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
+        # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
         class Config(BaseConfig):
             alias_generator = _to_camel_case
             allow_population_by_field_name = True

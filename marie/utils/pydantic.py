@@ -1,10 +1,10 @@
 import pydantic
+from pydantic import BaseModel
 
 major_version = int(pydantic.__version__.split('.')[0])
 
-print(major_version)
 
-
+# delattr(BaseModel, "schema") # this will remove deprecated `schema` method from your models
 def patch_pydantic_schema(cls):
     print(major_version)
     raise NotImplementedError

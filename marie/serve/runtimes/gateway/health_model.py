@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 def _to_camel_case(snake_str: str) -> str:
@@ -19,10 +19,7 @@ class JinaHealthModel(BaseModel):
 class JinaInfoModel(BaseModel):
     """Pydantic BaseModel for Jina status, used as the response model in REST app."""
 
-    jina: Optional[Dict]
-    marie: Optional[Dict]
+    jina: Optional[Dict] = None
+    marie: Optional[Dict] = None
     envs: Dict
-
-    class Config:
-        alias_generator = _to_camel_case
-        allow_population_by_field_name = True
+    model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)

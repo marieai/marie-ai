@@ -35,6 +35,7 @@ from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
+from marie.utils.pydantic import patch_pydantic_schema_2x
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -1126,6 +1127,7 @@ class WorkerRequestHandler:
 
             from marie.serve.runtimes.helper import _create_aux_model_doc_list_to_list
 
+            LegacyDocument.schema = classmethod(patch_pydantic_schema_2x)
             legacy_doc_schema = LegacyDocument.schema()
             for endpoint_name, inner_dict in schemas.items():
                 if inner_dict["input"]["model"].schema() == legacy_doc_schema:

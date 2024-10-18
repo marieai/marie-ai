@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import re
+import traceback
 from collections import defaultdict
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Tuple, Type
@@ -15,6 +16,7 @@ from marie.serve.networking import GrpcConnectionPool
 from marie.serve.runtimes.helper import _parse_specific_params
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
+from marie.utils.pydantic import patch_pydantic_schema_2x
 
 if docarray_v2:
     from docarray import DocList
@@ -22,6 +24,7 @@ if docarray_v2:
 
     from marie.serve.runtimes.helper import _create_pydantic_model_from_schema
 
+    LegacyDocument.schema = classmethod(patch_pydantic_schema_2x)
     legacy_doc_schema = LegacyDocument.schema()
 
 

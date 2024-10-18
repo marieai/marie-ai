@@ -17,7 +17,7 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import marie.check as check
 from marie._annotations import PublicAttr, public
@@ -55,9 +55,7 @@ def parse_asset_key_string(s: str) -> Sequence[str]:
 
 class AssetKey(BaseModel):
     path: List[str]
-
-    class Config:
-        arbitrary_types_allowed = False
+    model_config = ConfigDict(arbitrary_types_allowed=False)
 
 
 class AssetKeyDAG(NamedTuple("_AssetKey", [("path", Sequence[str])])):

@@ -21,7 +21,7 @@ class WorkInfo(BaseModel):
     start_after: datetime
     expire_in_seconds: int
     keep_until: datetime
-    policy: Optional[str]
+    policy: Optional[str] = None
 
 
 class JobSubmissionModel(BaseModel):

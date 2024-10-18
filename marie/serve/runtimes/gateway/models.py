@@ -5,7 +5,14 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
-from pydantic import BaseConfig, BaseModel, Field, create_model, root_validator
+from pydantic import (
+    BaseConfig,
+    BaseModel,
+    ConfigDict,
+    Field,
+    create_model,
+    root_validator,
+)
 
 from marie._docarray import docarray_v2
 from marie.proto.jina_pb2 import (
@@ -215,7 +222,7 @@ def protobuf_to_pydantic_model(
             __config__=CustomConfig,
             __validators__=oneof_field_validators,
         )
-        model.update_forward_refs()
+        model.model_rebuild()
     PROTO_TO_PYDANTIC_MODELS.__setattr__(model_name, model)
 
     return model
@@ -253,26 +260,25 @@ if not docarray_v2:
             ]
         ] = Field(
             None,
-            example=[
-                {'text': 'hello, world!'},
-                {'uri': 'https://docs.marie.ai/_static/logo-light.svg'},
+            examples=[
+                [
+                    {'text': 'hello, world!'},
+                    {'uri': 'https://docs.marie.ai/_static/logo-light.svg'},
+                ]
             ],
             description=DESCRIPTION_DATA,
         )
         target_executor: Optional[str] = Field(
             None,
-            example='',
+            examples=[''],
             description=DESCRIPTION_TARGET_EXEC,
         )
         parameters: Optional[Dict] = Field(
             None,
-            example={},
+            examples=[{}],
             description=DESCRIPTION_PARAMETERS,
         )
-
-        class Config:
-            alias_generator = _to_camel_case
-            allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     class JinaResponseModel(BaseModel):
         """
@@ -283,10 +289,7 @@ if not docarray_v2:
         parameters: Dict = None
         routes: List[PROTO_TO_PYDANTIC_MODELS.RouteProto] = None
         data: Optional[PydanticDocumentArray] = None
-
-        class Config:
-            alias_generator = _to_camel_case
-            allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     class JinaEndpointRequestModel(JinaRequestModel):
         """
@@ -295,7 +298,7 @@ if not docarray_v2:
 
         exec_endpoint: str = Field(
             default='/',
-            example='/',
+            examples=['/'],
             description='The endpoint string, by convention starts with `/`. '
             'If you specify it as `/foo`, then all executors bind with `@requests(on="/foo")` will receive the request.',
         )

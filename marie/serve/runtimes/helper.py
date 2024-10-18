@@ -104,7 +104,8 @@ if docarray_v2:
         for field_name, field in model.__annotations__.items():
             if field_name not in model.__fields__:
                 continue
-            field_info = model.__fields__[field_name].field_info
+            # field_info = model.__fields__[field_name].field_info
+            field_info = model.__fields__[field_name]
             try:
                 if issubclass(field, DocList):
                     t: Any = field.doc_type
@@ -117,7 +118,7 @@ if docarray_v2:
         return create_model(
             model.__name__,
             __base__=model,
-            __validators__=model.__validators__,
+            # __validators__=model.__validators__,
             **fields,
         )
 
