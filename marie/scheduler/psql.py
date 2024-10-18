@@ -431,8 +431,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
-        doc_type = work_info.data.get("metadata", {}).get("ref_type", "")
-        doc_id = work_info.data.get("metadata", {}).get("ref_id", "")
+        ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
+        ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
         with self:
             try:
@@ -452,8 +452,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         retry_backoff,
                         keep_until
                     FROM {schema}.{table}
-                    WHERE data->'metadata'->>'doc_type' = '{doc_type}'
-                    AND data->'metadata'->>'doc_id' = '{doc_id}'
+                    WHERE data->'metadata'->>'ref_type' = '{ref_type}'
+                    AND data->'metadata'->>'ref_id' = '{ref_id}'
                     """
                 )
                 record = cursor.fetchone()
@@ -532,12 +532,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         new_key_added = False
         submission_id = work_info.id
+        submission_policy = ExistingWorkPolicy.create(
+            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+        )
 
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         work_info.retry_limit = 0
-        is_valid = await self.is_valid_submission(
-            work_info, ExistingWorkPolicy.REJECT_DUPLICATE
-        )
+        is_valid = await self.is_valid_submission(work_info, submission_policy)
         if not is_valid:
             raise ValueError(
                 f"Job with submission_id {submission_id} already exists."

@@ -468,13 +468,19 @@ class MarieServerGateway(CompositeServer):
         submission_model = JobSubmissionModel(**message)
         self.logger.info(f"Submission model : {submission_model}")
 
-        # ensure that project_id is in the metadata of the submission model
+        metadata = submission_model.metadata
+        project_id = metadata.get("project_id", None)
+        ref_type = metadata.get("ref_type", None)
+        ref_id = metadata.get("ref_id", None)
+        submission_policy = metadata.get("policy", None)
+
+        # ensure that project_id, ref_type, ref_id are the metadata of the submission model
         # we need this as this what we will use for Toast events
-        if (
-            "project_id" not in submission_model.metadata
-            or not submission_model.metadata["project_id"]
-        ):
-            return self.error_response("Project ID is required in the metadata", None)
+        if not ref_type or not ref_id:
+            return self.error_response(
+                "Project ID , Reference Type and Reference ID are required in the metadata",
+                None,
+            )
 
         retry = DEFAULT_RETRY_POLICY
 
@@ -490,13 +496,8 @@ class MarieServerGateway(CompositeServer):
             expire_in_seconds=0,
             keep_until=datetime.now(),
             on_complete=False,
+            policy=submission_policy,
         )
-
-        # at this point we should have the project_id in the metadata
-        metadata = work_info.data.get("metadata", {})
-        project_id = metadata.get("project_id", "")
-        ref_type = metadata.get("ref_type", "")
-        ref_id = metadata.get("ref_id", "")
 
         try:
             job_id = await self.job_scheduler.submit_job(work_info)
@@ -552,17 +553,18 @@ class MarieServerGateway(CompositeServer):
         try:
             self.logger.error(f"processing error : {msg} > {exception}", exc_info=True)
             # get the traceback and clear the frames to avoid memory leak
-            _, val, tb = sys.exc_info()
-            traceback.clear_frames(tb)
-
-            filename = tb.tb_frame.f_code.co_filename
-            name = tb.tb_frame.f_code.co_name
-            line_no = tb.tb_lineno
-            # print traceback
-            detail = "Internal Server Error"
-            exc_msg = {}
-
+            exc_msg = {"type": "Unknown", "message": "Unknown error"}
             if exception:
+                _, val, tb = sys.exc_info()
+                traceback.clear_frames(tb)
+
+                filename = tb.tb_frame.f_code.co_filename
+                name = tb.tb_frame.f_code.co_name
+                line_no = tb.tb_lineno
+                # print traceback
+                detail = "Internal Server Error"
+                exc_msg = {}
+
                 if not silence_exceptions:
                     detail = exception.__str__()
 

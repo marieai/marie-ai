@@ -27,9 +27,11 @@ metadata=$(cat <<EOF
 {
     "on": "/extract",
     "project_id": "project_id_000001",
-    "ref_id": "doc_id_$RANDOM",
+    "doc_idXXXX": "doc_id_$RANDOM",
+    "ref_id": "doc_id_0001",
     "ref_type": "doc_type",
     "uri": "s3://bucket/key",
+    "policy": "allow_all",
 
     "type": "pipeline",
     "name": "default",
