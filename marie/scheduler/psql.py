@@ -1,20 +1,19 @@
 import asyncio
 import contextlib
-import os
-import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
+from sympy.functions.combinatorial.numbers import partition
 
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
+from marie.job.partition.job_partitioner import MarieJobPartitioner
 from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
-from marie.messaging import mark_as_scheduled
 from marie.scheduler.fixtures import *
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
@@ -36,7 +35,6 @@ from marie.scheduler.plans import (
 )
 from marie.scheduler.state import WorkState
 from marie.storage.database.postgres import PostgresqlMixin
-from marie.utils.types import strtobool
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
@@ -536,8 +534,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
         )
 
-        # FIXME : This is a hack to allow the job to be re-submitted after a failure
-        work_info.retry_limit = 0
         is_valid = await self.is_valid_submission(work_info, submission_policy)
         if not is_valid:
             raise ValueError(
@@ -948,4 +944,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return:
         """
 
-        return []
+        partitioner = MarieJobPartitioner(10)
+        partitions = partitioner.partition(work_info)
+
+        return partitions

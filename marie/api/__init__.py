@@ -240,6 +240,7 @@ def parse_payload_to_docs_sync(
     """
     Parse payload request, extract file and return list of Document objects
 
+    :rtype: object
     :param payload:
     :param clear_payload:
     :return:
