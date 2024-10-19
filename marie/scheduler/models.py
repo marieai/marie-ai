@@ -21,6 +21,7 @@ class WorkInfo(BaseModel):
     start_after: datetime
     expire_in_seconds: int
     keep_until: datetime
+    policy: Optional[str] = None
 
 
 class JobSubmissionModel(BaseModel):
@@ -37,6 +38,20 @@ class ExistingWorkPolicy(Enum):
     REPLACE = "replace"  # replace existing submission that is not in terminal state
     ALLOW_DUPLICATE = "allow_duplicate"  # allow duplicate submissions
     REJECT_DUPLICATE = "reject_duplicate"  # reject duplicate submissions
+
+    @staticmethod
+    def create(value: str, default_policy: "ExistingWorkPolicy" = REJECT_DUPLICATE):
+        if not value or value.upper() == "DEFAULT":
+            return (
+                ExistingWorkPolicy[default_policy.upper()]
+                if isinstance(default_policy, str)
+                else default_policy
+            )
+
+        try:
+            return ExistingWorkPolicy[value.upper()]
+        except KeyError:
+            raise ValueError(f"Invalid value {value} for ExistingWorkPolicy")
 
 
 class BackoffPolicyType(Enum):

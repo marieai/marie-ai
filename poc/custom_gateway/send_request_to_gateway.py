@@ -15,6 +15,7 @@ def create_job_submit_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "name": args.name,
@@ -29,6 +30,7 @@ def create_job_status_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "job_id": args.job_id,
@@ -42,6 +44,7 @@ def create_job_stop_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "job_id": args.job_id,
@@ -55,6 +58,7 @@ def create_job_logs_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "job_id": args.job_id,
@@ -69,6 +73,7 @@ def create_job_events_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "job_id": args.job_id,
@@ -83,6 +88,7 @@ def create_job_list_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "job_id": args.job_id,
@@ -97,6 +103,7 @@ def create_nodes_list_request(args: argparse.Namespace):
     param = {
         "invoke_action": {
             "action_type": "command",
+            "api_key": args.api_key,
             "command": args.command,
             "action": args.action,
             "stream": "stdout",
@@ -106,7 +113,7 @@ def create_nodes_list_request(args: argparse.Namespace):
     return param, docs
 
 
-def parse_args():
+def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Job management system")
     subparsers = parser.add_subparsers(dest="command", help="Commands", required=True)
 
@@ -136,12 +143,21 @@ def parse_args():
         default=os.getenv("MARIE_ADDRESS", "127.0.0.1:52000"),
         help="Address of the Marie cluster to connect to. Can also be specified using the MARIE_ADDRESS environment variable.",
     )
+
     parser_submit.add_argument(
         "--protocol",
         type=str,
         default=os.getenv("MARIE_PROTOCOL", "grpc"),
         help="Protocol to use for communication with the Marie cluster (grpc, http). Can also be specified using the "
         "MARIE_PROTOCOL environment variable.",
+    )
+
+    parser_submit.add_argument(
+        "--api_key",
+        type=str,
+        default=os.getenv("MARIE_API_KEY", None),
+        help="API key to use for authentication. Can also be specified using the MARIE_API_KEY environment variable.",
+        required=True,
     )
 
     parser_submit.add_argument(
@@ -181,15 +197,29 @@ def parse_args():
     # Status command
     nodes_status = node_subparsers.add_parser("list", help="List all nodes")
 
-    return parser.parse_args()
+    return parser.parse_args(args)
 
 
 async def main():
     """
     This function sends a request to a Marie server gateway.
     """
-    args = parse_args()
+    # Mock parameters
+    mock_args = [
+        "job",
+        "submit",
+        "extract",
+        "--address",
+        "127.0.0.1:51000",
+        "--protocol",
+        "http",
+        "--api_key",
+        "mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ",
+    ]
+    mock_args = None
+    args = parse_args(mock_args)
     print(args)
+
     parameters = None
     if args.command == "job":
         if args.action == "submit":
@@ -222,14 +252,24 @@ async def main():
 
     address = args.address
     protocol = args.protocol
+    api_key = args.api_key
     print(f"Connecting to {address} using {protocol} protocol")
     host, port = address.split(":")
     client = Client(
         host=host, port=int(port), protocol=protocol, request_size=-1, asyncio=True
     )
 
-    ready = await client.is_flow_ready()
-    print(f"Flow is ready: {ready}")
+    # ready = await client.is_flow_ready()
+    # print(f"Flow is ready: {ready}")
+    # auth handler will check the headers, we also need to add the api_key to the metadata
+    request_kwargs = {}
+    headers = [
+        (
+            "Authorization",
+            f"Bearer {api_key}",
+        )
+    ]
+    request_kwargs["headers"] = headers
 
     for i in range(0, 1):
         print(f"Sending request : {i}")
@@ -241,6 +281,7 @@ async def main():
             request_size=-1,
             return_responses=True,  # return DocList instead of Response
             return_exceptions=True,
+            **request_kwargs,  # Unpack request_kwargs here
         ):
 
             print("Response: ")
@@ -270,3 +311,5 @@ if __name__ == "__main__":
     finally:
         print("Closing loop")
         loop.close()
+
+#  ./create_jobs.sh http://127.0.0.1:51000 1 mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ

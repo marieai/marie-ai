@@ -1,19 +1,19 @@
 import asyncio
 import contextlib
-import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
+from sympy.functions.combinatorial.numbers import partition
 
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
+from marie.job.partition.job_partitioner import MarieJobPartitioner
 from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
-from marie.messaging import mark_as_scheduled
 from marie.scheduler.fixtures import *
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
@@ -35,9 +35,6 @@ from marie.scheduler.plans import (
 )
 from marie.scheduler.state import WorkState
 from marie.storage.database.postgres import PostgresqlMixin
-from model_zoo.cache.torch.pytorch_fairseq_main.examples.textless_nlp.gslm.unit2speech.multiproc import (
-    job_id,
-)
 
 INIT_POLL_PERIOD = 1.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
@@ -75,6 +72,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
+        self.known_queues = set()
         self._reset_on_complete = False
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         if job_manager is None:
@@ -82,6 +80,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = False
         self.task = None
+        self.sync_task = None
         self.monitoring_task = None
 
         lock_free = True
@@ -235,14 +234,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
-        # TODO : This is a placeholder
-        queue = "extract"
-        await self.create_queue(queue)
-        await self.create_queue(f"${queue}_dlq")
-
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
-        self.task = asyncio.create_task(self._poll())
+        # self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
@@ -435,8 +429,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         schema = DEFAULT_SCHEMA
         table = DEFAULT_JOB_TABLE
-        doc_type = work_info.data.get("metadata", {}).get("doc_type", "")
-        doc_id = work_info.data.get("metadata", {}).get("doc_id", "")
+        ref_type = work_info.data.get("metadata", {}).get("ref_type", "")
+        ref_id = work_info.data.get("metadata", {}).get("ref_id", "")
 
         with self:
             try:
@@ -456,8 +450,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         retry_backoff,
                         keep_until
                     FROM {schema}.{table}
-                    WHERE data->'metadata'->>'doc_type' = '{doc_type}'
-                    AND data->'metadata'->>'doc_id' = '{doc_id}'
+                    WHERE data->'metadata'->>'ref_type' = '{ref_type}'
+                    AND data->'metadata'->>'ref_id' = '{ref_id}'
                     """
                 )
                 record = cursor.fetchone()
@@ -518,24 +512,15 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: The ID of the inserted work item.
         :raises ValueError: If the job submission fails or if the job already exists.
         """
-        try:
-            job_id = await self.__submit_job(work_info, overwrite)
-            # TODO : Toast notification
-            # When we start processing the request, we will mark the job as `STARTED` in the worker node
-            api_tag = work_info.name
-            job_tag = work_info.data.get("ref_type", "")
-            api_key = work_info.data.get("api_key", "")
-            #
-            # await mark_as_scheduled(
-            #     api_key, job_id, api_tag, job_tag, status, int(time.time()), payload
-            # )
 
-            return job_id
-        except Exception as e:
-            self.logger.error(f"Error submitting job: {e}")
-            # TODO : Toast notification
+        work_queue = work_info.name
+        if work_info.name not in self.known_queues:
+            self.logger.info(f"Checking for queue: {work_queue}")
+            await self.create_queue(work_queue)
+            await self.create_queue(f"${work_queue}_dlq")
+            self.known_queues.add(work_queue)
 
-            raise e
+        return await self.__submit_job(work_info, overwrite)
 
     async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         """
@@ -545,12 +530,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         """
         new_key_added = False
         submission_id = work_info.id
-
-        # FIXME : This is a hack to allow the job to be re-submitted after a failure
-        work_info.retry_limit = 0
-        is_valid = await self.is_valid_submission(
-            work_info, ExistingWorkPolicy.REJECT_DUPLICATE
+        submission_policy = ExistingWorkPolicy.create(
+            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
         )
+
+        is_valid = await self.is_valid_submission(work_info, submission_policy)
         if not is_valid:
             raise ValueError(
                 f"Job with submission_id {submission_id} already exists."
@@ -960,4 +944,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return:
         """
 
-        return []
+        partitioner = MarieJobPartitioner(10)
+        partitions = partitioner.partition(work_info)
+
+        return partitions

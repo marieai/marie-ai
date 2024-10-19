@@ -79,8 +79,7 @@ def get_fastapi_app(
 
     import os
 
-    from pydantic import BaseModel
-    from pydantic.config import BaseConfig, inherit_config
+    from pydantic import BaseModel, ConfigDict
 
     from marie.proto import jina_pb2
     from marie.serve.runtimes.gateway.models import (
@@ -89,19 +88,35 @@ def get_fastapi_app(
     )
     from marie.types_core.request.status import StatusMessage
 
+    # Manually set the configurations
+    class InnerConfig(ConfigDict):
+        def __init__(self):
+            super().__init__()
+            self.alias_generator = _to_camel_case
+            self.allow_population_by_field_name = True
+
+    # Use InnerConfig directly instead of inherit_config
+    _config = InnerConfig
+
     class Header(BaseModel):
         request_id: Optional[str] = Field(
-            description="Request ID", example=os.urandom(16).hex()
+            None, description="Request ID", example=os.urandom(16).hex()
         )
         target_executor: Optional[str] = Field(default=None, example="")
 
-        class Config(BaseConfig):
-            alias_generator = _to_camel_case
-            allow_population_by_field_name = True
+        # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
+        # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
+        class Config(ConfigDict):
+            def __init__(self):
+                super().__init__()
+                self.alias_generator = _to_camel_case
+                self.allow_population_by_field_name = True
 
-    class InnerConfig(BaseConfig):
-        alias_generator = _to_camel_case
-        allow_population_by_field_name = True
+    class InnerConfig(ConfigDict):
+        def __init__(self):
+            super().__init__()
+            self.alias_generator = _to_camel_case
+            self.allow_population_by_field_name = True
 
     @app.get(
         path="/dry_run",
@@ -290,7 +305,7 @@ def get_fastapi_app(
                 parameters_model = Optional[Dict]
                 default_parameters = None
 
-            _config = inherit_config(InnerConfig, BaseDoc.__config__)
+            # _config =_config inherit_config(InnerConfig, BaseDoc.__config__)
 
             endpoint_input_model = pydantic.create_model(
                 f'{endpoint.strip("/")}_input_model',

@@ -104,7 +104,8 @@ if docarray_v2:
         for field_name, field in model.__annotations__.items():
             if field_name not in model.__fields__:
                 continue
-            field_info = model.__fields__[field_name].field_info
+            # field_info = model.__fields__[field_name].field_info
+            field_info = model.__fields__[field_name]
             try:
                 if issubclass(field, DocList):
                     t: Any = field.doc_type
@@ -117,7 +118,7 @@ if docarray_v2:
         return create_model(
             model.__name__,
             __base__=model,
-            __validators__=model.__validators__,
+            # __validators__=model.__validators__,
             **fields,
         )
 
@@ -191,7 +192,7 @@ if docarray_v2:
             ret = bool
             for rec in range(num_recursions):
                 ret = List[ret]
-        elif field_type == 'object' or field_type is None:
+        elif field_type == 'object' or field_type is None or field_type == 'null':
             if 'additionalProperties' in field_schema:  # handle Dictionaries
                 additional_props = field_schema['additionalProperties']
                 if additional_props.get('type') == 'object':
@@ -297,11 +298,13 @@ if docarray_v2:
             )
 
         model = create_model(model_name, __base__=base_class, **fields)
-        model.__config__.title = schema.get('title', model.__config__.title)
+        model.model_config['title'] = schema.get(
+            'title', model.model_config.setdefault('title', model_name)
+        )
 
         for k in RESERVED_KEYS:
             if k in schema:
                 schema.pop(k)
-        model.__config__.schema_extra = schema
+        model.model_config['json_schema_extra'] = schema
         cached_models[model_name] = model
         return model

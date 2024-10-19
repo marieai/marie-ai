@@ -2,10 +2,10 @@ from pydantic import BaseModel
 
 
 class ConnectionStatus(BaseModel):
-    connecting = "CONNECTING"
-    disconnected = "DISCONNECTED"
-    read_write = "R/W"
-    read_only = "RO"
+    connecting: str = "CONNECTING"
+    disconnected: str = "DISCONNECTED"
+    read_write: str = "R/W"
+    read_only: str = "RO"
 
 
 class Config(BaseModel):

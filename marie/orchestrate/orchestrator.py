@@ -1,9 +1,17 @@
 from abc import ABC
 from contextlib import ExitStack
 
+import pydantic
+from docarray.documents.legacy import LegacyDocument
 from rich.table import Table
 
 from marie.helper import CatchAllCleanupContextManager, get_internal_ip, get_public_ip
+from marie.utils.pydantic import patch_pydantic_schema_2x
+
+pydantic_major_version = int(pydantic.__version__.split('.')[0])
+
+if pydantic_major_version >= 2:
+    LegacyDocument.schema = classmethod(patch_pydantic_schema_2x)
 
 
 class BaseOrchestrator(ExitStack, ABC):

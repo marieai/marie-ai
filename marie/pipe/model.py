@@ -7,9 +7,9 @@ from pydantic import BaseModel
 
 class ClassifierBase(BaseModel):
     page: int
-    score: Optional[float]
-    classifier: Optional[str]
-    classification: Optional[str]
+    score: Optional[float] = None
+    classifier: Optional[str] = None
+    classification: Optional[str] = None
 
 
 class SubClassifier(BaseModel):

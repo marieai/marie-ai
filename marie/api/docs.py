@@ -17,15 +17,15 @@ DOC_KEY_ASSET_KEY = "asset_key"
 
 class AssetKeyDoc(BaseDoc):
     asset_key: str
-    pages: Optional[list[int]]
+    pages: Optional[list[int]] = None
 
 
 class StorageDoc(BaseDoc):
-    content: Optional[Any]
-    blob: Optional[Any]
-    tensor: Optional[AnyTensor]
-    tags: Optional[dict]  # type: ignore
-    embedding: Optional[AnyTensor]
+    content: Optional[Any] = None
+    blob: Optional[Any] = None
+    tensor: Optional[AnyTensor] = None
+    tags: Optional[dict] = None  # type: ignore
+    embedding: Optional[AnyTensor] = None
 
 
 class MarieDoc(ImageDoc):

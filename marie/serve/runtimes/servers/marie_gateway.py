@@ -11,10 +11,13 @@ from urllib.parse import urlparse
 import grpc
 from docarray import DocList
 from docarray.documents import TextDoc
+from fastapi import Depends, Request
 from rich.traceback import install
 
 import marie
 import marie.helper
+from marie.auth.api_key_manager import APIKeyManager
+from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
     __cache_path__,
     __config_dir__,
@@ -24,10 +27,10 @@ from marie.constants import (
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
-from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.logging_core.predefined import default_logger as logger
+from marie.messaging import mark_as_failed, mark_as_scheduled
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
@@ -44,10 +47,10 @@ from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 from marie.storage.kv.psql import PostgreSQLKV
-from marie.types_core.request import Request
 from marie.types_core.request.data import DataRequest, Response
 from marie.types_core.request.status import StatusMessage
 from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
+from marie.utils.types import strtobool
 
 
 def create_balancer_interceptor() -> LoadBalancerInterceptor:
@@ -202,36 +205,6 @@ class MarieServerGateway(CompositeServer):
                 result = await self.job_scheduler.submit_job(work_info)
                 return {"result": result}
 
-            @app.get("/endpoint")
-            async def get(text: str):
-                self.logger.info(f"Received request at {datetime.now()}")
-                docs = DocList[TextDoc]([TextDoc(text=text)])
-                doc = TextDoc(text=text)
-
-                if False:
-                    result = await self.distributor.send(
-                        JobInfo(status=JobStatus.PENDING, entrypoint="_jina_dry_run_"),
-                        doc=doc,
-                    )
-
-                    return {"result": result}
-
-                if True:
-                    result = None
-                    async for docs in self.streamer.stream_docs(
-                        docs=DocList[TextDoc]([TextDoc(text=text)]),
-                        # doc=TextDoc(text=text),
-                        # exec_endpoint="/extract",  # _jina_dry_run_
-                        exec_endpoint="_jina_dry_run_",  # _jina_dry_run_
-                        # exec_endpoint="/endpoint",
-                        # target_executor="executor0",
-                        return_results=False,
-                    ):
-                        result = docs[0].text
-                        # result = docs
-                        print(f"result: {result}")
-                        return {"result": result}
-
             @app.get("/check")
             async def get_health(text: str):
                 self.logger.info(f"Received request at {datetime.now()}")
@@ -293,12 +266,20 @@ class MarieServerGateway(CompositeServer):
                 path="/api/v1/invoke",
                 methods=["POST"],
                 summary="Invoke a new command /api/v1/invoke",
+                dependencies=[Depends(TokenBearer())],
             )
-            async def invoke_command(request: Request):
+            async def invoke_command(
+                request: Request, token: str = Depends(TokenBearer())
+            ):
                 self.logger.info(f"Received request at {datetime.now()}")
+                self.logger.info(f"Token : {token}")
+
                 payload = await request.json()
                 header = payload.get("header", {})
                 message = payload.get("parameters", {})
+
+                if "api_key" not in message or message["api_key"] is None:
+                    message["api_key"] = token
 
                 req = DataRequest()
                 req.parameters = message
@@ -359,18 +340,27 @@ class MarieServerGateway(CompositeServer):
         :param request: The request to decode.
         :return: The response.
         """
-        print(f"Processing request: {request}")
-        print(request.parameters)
-        print(request.data)
+        self.logger.info(f"Processing request: {request}")
         message = request.parameters
+
         if "invoke_action" not in message:
             response = Response()
             response.parameters = {"error": "Invalid request, missing invoke_action"}
             return response
 
         invoke_action = message["invoke_action"]
-        command = invoke_action.get("command")  # job
 
+        if "api_key" not in invoke_action or invoke_action["api_key"] is None:
+            response = Response()
+            response.parameters = {"error": "Invalid request, missing api_key"}
+            return response
+
+        if not APIKeyManager.is_valid(invoke_action["api_key"]):
+            response = Response()
+            response.parameters = {"error": "Invalid or expired token"}
+            return response
+
+        command = invoke_action.get("command")  # job
         if command == "job":
             return self.handle_job_command(invoke_action)
         elif command == "nodes":
@@ -471,8 +461,27 @@ class MarieServerGateway(CompositeServer):
         :return: The response with the submission result.
         """
         self.logger.info(f"Handling job submit command : {message}")
+        silence_exceptions = strtobool(
+            os.environ.get("MARIE_SILENCE_EXCEPTIONS", False)
+        )
+
         submission_model = JobSubmissionModel(**message)
         self.logger.info(f"Submission model : {submission_model}")
+
+        metadata = submission_model.metadata
+        project_id = metadata.get("project_id", None)
+        ref_type = metadata.get("ref_type", None)
+        ref_id = metadata.get("ref_id", None)
+        submission_policy = metadata.get("policy", None)
+
+        # ensure that project_id, ref_type, ref_id are the metadata of the submission model
+        # we need this as this what we will use for Toast events
+        if not ref_type or not ref_id:
+            return self.error_response(
+                "Project ID , Reference Type and Reference ID are required in the metadata",
+                None,
+            )
+
         retry = DEFAULT_RETRY_POLICY
 
         work_info = WorkInfo(
@@ -487,8 +496,9 @@ class MarieServerGateway(CompositeServer):
             expire_in_seconds=0,
             keep_until=datetime.now(),
             on_complete=False,
+            policy=submission_policy,
         )
-        # TODO : convert to using Errors as Values instead of Exceptions
+
         try:
             job_id = await self.job_scheduler.submit_job(work_info)
 
@@ -498,26 +508,82 @@ class MarieServerGateway(CompositeServer):
                 "msg": f"job submitted with id {job_id}",
                 "job_id": job_id,
             }
-
+            await mark_as_scheduled(
+                api_key=project_id,
+                job_id=job_id,
+                event_name=work_info.name,
+                job_tag=ref_type,
+                status="OK",
+                timestamp=int(time.time()),
+                payload=metadata,
+            )
             return response
-        except ValueError as ex:
-            return self.error_response(f"Failed to submit job. {ex}", ex)
+        except BaseException as ex:
+            response = self.error_response(
+                f"Failed to submit job. {ex}", ex, silence_exceptions
+            )
+            try:
+                exc_msg = response.parameters.get("exception", "Unknown error")
+                job_key = f"failed/{ref_type}/{ref_id}"
 
-    def error_response(self, msg: str, exception: Optional[Exception]) -> Response:
+                self.logger.error(f"Marking job as failed: {job_key}")
+                await mark_as_failed(
+                    api_key=project_id,
+                    job_id=job_key,
+                    event_name=work_info.name,
+                    job_tag=ref_type,
+                    status="FAILED",
+                    timestamp=int(time.time()),
+                    payload=exc_msg,
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to mark job as failed: {e}")
+            return response
+
+    def error_response(
+        self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False
+    ) -> Response:
         """
         Set the response parameters to indicate a failure.
         :param msg: A string representing the error message.
         :param exception: An optional exception that triggered the error.
+        :param silence_exceptions: A boolean indicating whether to silence the exception.
         :return: The response object with the error parameters set.
         """
-        response = Response()
+        try:
+            self.logger.error(f"processing error : {msg} > {exception}", exc_info=True)
+            # get the traceback and clear the frames to avoid memory leak
+            exc_msg = {"type": "Unknown", "message": "Unknown error"}
+            if exception:
+                _, val, tb = sys.exc_info()
+                traceback.clear_frames(tb)
 
-        exc_msg = ""
-        if exception:
-            exc_msg = str(exception)
+                filename = tb.tb_frame.f_code.co_filename
+                name = tb.tb_frame.f_code.co_name
+                line_no = tb.tb_lineno
+                # print traceback
+                detail = "Internal Server Error"
+                exc_msg = {}
 
-        response.parameters = {"status": "error", "msg": msg, "exception": exc_msg}
-        return response
+                if not silence_exceptions:
+                    detail = exception.__str__()
+
+                exc_msg = {
+                    "type": type(exception).__name__,
+                    "message": detail,
+                    "filename": filename.split("/")[-1],
+                    "name": name,
+                    "line_no": line_no,
+                }
+
+            response = Response()
+            response.parameters = {"status": "error", "msg": msg, "exception": exc_msg}
+            return response
+
+            # return {"status": "error", "error": {"code": code, "message": detail}}
+        except Exception as e:
+            logger.error(f"Failure handling exception: {e}", exc_info=True)
+            raise e
 
     async def custom_dry_run(self, empty, context) -> jina_pb2.StatusProto:
         logger.info("Running custom dry run logic")

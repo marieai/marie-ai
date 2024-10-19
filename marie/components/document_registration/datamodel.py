@@ -1,20 +1,20 @@
 from typing import List, Union
 
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DocumentBoundaryPrediction(BaseModel):
     label: str
     detected: bool
     mode: str
-    aligned_image: Union[np.ndarray, None]
+    aligned_image: Union[np.ndarray, None] = None
     boundary_bbox: List[int]
     score: float
-    visualization_image: Union[np.ndarray, None]  # Added for visualization purposes
-
-    class Config:
-        arbitrary_types_allowed = True
+    visualization_image: Union[np.ndarray, None] = (
+        None  # Added for visualization purposes
+    )
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def to_dict(self, include_images=False):
         if include_images:

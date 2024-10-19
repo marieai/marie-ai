@@ -524,3 +524,27 @@ pydantic_core                                2.10.1
 ```bash
   git filter-repo --mailmap mailmap --force
 ```
+
+
+# Pydantic upgrade
+Upgrade pydantic to the latest version
+
+```bash 
+pip install pydantic --force-reinstall
+```
+Upgrade FastAPI to the latest version or version above `0.100.2` to fix the issue with `pydantic`
+
+```bash
+pip install fastapi --force-reinstall
+```
+
+Install `bump-pydantic` and run it via `bump.sh` script to convert all `pydantic` models to the latest version
+
+```shell
+pip install bump-pydantic
+./bump.sh
+```
+
+To patch JINA AI apply changes from the commits.
+
+

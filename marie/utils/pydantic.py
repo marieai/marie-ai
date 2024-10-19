@@ -1,13 +1,16 @@
 import pydantic
+from pydantic import BaseModel
+
+from marie.excepts import NotSupportedError
 
 major_version = int(pydantic.__version__.split('.')[0])
 
-print(major_version)
-
 
 def patch_pydantic_schema(cls):
-    print(major_version)
-    raise NotImplementedError
+    raise NotSupportedError(
+        f"This version of Pydantic is not supported for patching : {pydantic.__version__}\n"
+        f"Upgrade to >=2 or higher"
+    )
 
 
 if major_version >= 2:

@@ -13,10 +13,11 @@ class TokenBearer(HTTPBearer):
         super(TokenBearer, self).__init__(auto_error=auto_error)
 
     async def __call__(self, request: Request) -> Optional[str]:
-        credentials: HTTPAuthorizationCredentials = await super(
-            TokenBearer, self
-        ).__call__(request)
         try:
+            credentials: HTTPAuthorizationCredentials = await super(
+                TokenBearer, self
+            ).__call__(request)
+
             token = credentials.credentials
             logger.debug(f"Verifying token => {token}")
 

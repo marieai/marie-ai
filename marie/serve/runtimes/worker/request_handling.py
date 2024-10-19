@@ -35,6 +35,7 @@ from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
+from marie.utils.pydantic import patch_pydantic_schema_2x
 from marie.utils.types import strtobool
 
 if docarray_v2:

@@ -30,7 +30,6 @@ class GatewayRequestHandler:
         tracing_client_interceptor=None,
         **kwargs,
     ):
-        print("GatewayRequestHandler INITED")
         import json
 
         from marie.serve.runtimes.gateway.streamer import (
