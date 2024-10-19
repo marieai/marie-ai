@@ -223,6 +223,9 @@ class TopologyGraph:
                         if docarray_v2:
                             from docarray.documents.legacy import LegacyDocument
 
+                            LegacyDocument.schema = classmethod(
+                                patch_pydantic_schema_2x
+                            )
                             schemas = json_format.MessageToDict(endp.schemas)
                             self._pydantic_models_by_endpoint = {}
                             models_created_by_name = {}
