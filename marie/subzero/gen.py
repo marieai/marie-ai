@@ -1,7 +1,12 @@
 import json
+import os
+import time
 
-from vllm import LLM as vLLM
+import torch
+from vllm import LLM
 from vllm.sampling_params import SamplingParams
+
+from marie.models.icr.modules.prediction import device
 
 
 def generate_prompt(labels, text):
@@ -26,45 +31,54 @@ def generate_prompt(labels, text):
         prompt += f'"{label}": [],\n'
 
     prompt += "}\n\n"
-    prompt += "\n\nTEXT:"
+    prompt += "\n\nTEXT:\n"
     prompt += text
+    prompt += "\nEND_OF_TEXT"
     return prompt
 
 
 # LLaMA3 and Mixtral
 def llvm_ner(model_name, prompt):
-    model_name = "gpt2"  # Use a publicly accessible model no login required
-    sampling_params = SamplingParams(max_tokens=8192)
-    llm = vLLM(
-        model=model_name,
-        tokenizer_mode="auto",
-        load_format="auto",
+    # https://www.reddit.com/r/LocalLLaMA/comments/18rryf1/why_is_noone_finetuning_something_like_t5/
+    # https://docs.vllm.ai/en/latest/quantization/auto_awq.html
+    # https://lightning.ai/lightning-ai/studios/optimized-llm-inference-api-for-mistral-7b-using-vllm?tab=overview
+
+    model_name = "mistralai/Mistral-Nemo-Instruct-2407"
+    # mistralai/Mistral-7B-v0.1
+    tensor_parallel_size = int(os.environ.get("DEVICES", "1"))
+    sampling_params = SamplingParams(max_tokens=200)  # , temperature=0.5
+
+    llm = LLM(
+        "mistralai/Mistral-7B-v0.1",
+        tensor_parallel_size=tensor_parallel_size,
+        dtype=torch.bfloat16,
+        gpu_memory_utilization=1.0,
     )
 
-    if False:
-        model_name = "mistralai/Mistral-NeMo-Instruct-2407"
-        sampling_params = SamplingParams(max_tokens=8192)
-        llm = vLLM(
-            model=model_name,
-            tokenizer_mode="mistral",
-            load_format="mistral",
-            config_format="mistral",
-        )
+    # llm = LLM(
+    #     "TheBloke/Mistral-7B-v0.1-AWQ",
+    #     dtype=torch.float16,
+    #     quantization="AWQ",
+    # )
 
-    if False:
-        model_name = "gpt-3.5-turbo"  # Use a publicly accessible model
-        sampling_params = SamplingParams(max_tokens=8192)
-        llm = vLLM(
-            model=model_name,
-            tokenizer_mode="openai",
-            load_format="openai",
-            # config_format="openai",
-        )
+    # print(
+    #     llm.generate("This is me warming up the model", sampling_params=sampling_params)
+    # )
+    print(f"running inference through  prompt.")
+    #
+    # llm = vLLM(
+    #     model=model_name,
+    #     tokenizer_mode="mistral",
+    #     load_format="safetensors",
+    #     device="cuda",
+    # )
 
     messages = [
         {
-            'role': 'user',
-            'content': prompt,
+            "role": "system",
+            "content": "Entity Recognition Expert",
+            "role": "user",
+            "content": prompt,
         },
     ]
 
@@ -75,22 +89,43 @@ def llvm_ner(model_name, prompt):
     """
 
     print(messages)
-    res = llm.chat(
-        messages=messages, sampling_params=sampling_params, chat_template=chat_template
-    )
-    print(res)
+    try:
+        t0 = time.perf_counter()
+
+        res = llm.chat(
+            messages=messages,
+            sampling_params=sampling_params,
+            chat_template=chat_template,
+        )
+
+        output = res[0]
+        print("Response Object:", output)
+        t1 = time.perf_counter()
+        print(
+            f"time : {t1 - t0}  , tokens_generated : {len(output.outputs[0].token_ids)}"
+        )
+        print("Request ID:", output.request_id)
+        print("Prompt:", output.prompt)
+        if output.outputs:
+            for response in output.outputs:
+                print("Response:", response.text)
+
+    except Exception as e:
+        print(f"Error during chat: {e}")
+        res = {}
+
     return res
 
 
 # Sample Text
-labels = ['SKILLS', 'NAME', 'CERTIFICATE', 'HOBBIES', 'COMPANY', 'UNIVERSITY']
+labels = ["SKILLS", "NAME", "CERTIFICATE", "HOBBIES", "COMPANY", "UNIVERSITY"]
 
 text = "I went to the University of California, Berkeley and graduated with a degree in Computer Science. I have a certificate in Data Science from Coursera. I have worked at Google for 5 years. My hobbies include playing the guitar and reading books. I am proficient in Python, Java, and C++."
 
 # Results
 # llama_result = ollama_ner('llama3', text)
 prompt = generate_prompt(labels, text)
-mixtral_result = llvm_ner('mixtral', prompt)
+mixtral_result = llvm_ner("mixtral", prompt)
 
 # print("LLaMA3 Result:", llama_result)
 print("Mixtral Result:", mixtral_result)

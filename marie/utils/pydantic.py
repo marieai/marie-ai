@@ -1,5 +1,4 @@
 import pydantic
-from pydantic import BaseModel
 
 from marie.excepts import NotSupportedError
 
