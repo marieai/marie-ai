@@ -468,11 +468,12 @@ def extract_icr(image, boxp, icrp):
 def decorate_funsd(src_dir: str, debug_fragments=False):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
-    output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+    output_ann_dir = ensure_exists(
+        os.path.expanduser(os.path.join(src_dir, "annotations"))
+    )
     ocr_annotations_dir = os.path.expanduser(
         "~/datasets/private/corr-indexer/ocr_annotations"
     )  # TODO : Change this to a config value
-
     if not os.path.exists(ocr_annotations_dir):
         raise Exception(f"OCR Annotations not found : {ocr_annotations_dir}")
 
@@ -530,7 +531,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         unique_line_ids = sorted(np.unique(lines))
         line_bboxes = ocr_meta["meta"]["lines_bboxes"]
 
-        print(f"line_bboxes = {len(line_bboxes)}")
         if False:
             # line_numbers : line number associated with bounding box
             # lines : raw line boxes that can be used for further processing
@@ -539,6 +539,8 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             )
 
         for i, item in enumerate(data["form"]):
+            debug_fragments = False
+
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
@@ -573,9 +575,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             try:
                 text = " ".join([line["text"] for line in results["lines"]])
             except Exception as ex:
-                # raise ex
                 print(ex)
-                # pass
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
@@ -607,7 +607,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             )
             index = i + 1
 
-        # debug_fragments = True
+        debug_fragments = True
         if debug_fragments:
             file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
@@ -619,69 +619,73 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         y0 = 0
 
         print("-------- MASKED ----------")
-        for i, word in enumerate(results_masked["words"]):
-            w_text = word["text"]
-            x, y, w, h = word["box"]
-            line_number = find_line_number(line_bboxes, [x, y, w, h])
-            w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-            adj_word = {"text": w_text, "box": w_box}
+        current_max_index = data["form"][-1]["id"]
+        # Add masked boxes to the end of the list of annotations, with the same line number as the original box
+        # some of the boxes may be empty, so we will filter them out
+        if results_masked is not None and len(results_masked["words"]) > 0:
+            for i, word in enumerate(results_masked["words"]):
+                x, y, w, h = word["box"]
 
-            item = {
-                "id": index + i,
-                "text": w_text,
-                "box": w_box,
-                "line_number": line_number,
-                "linking": [],
-                "label": "other",
-                "words": [adj_word],
-            }
+                # check if the word is same as image size if so skip it
+                if w == image_masked.shape[1] and h == image_masked.shape[0]:
+                    print(f"Skipping word due to masked image constrain : {word}")
+                    continue
 
-            data["form"].append(item)
+                line_number = find_line_number(line_bboxes, [x, y, w, h])
+                word_box = [x, y, x + w, y + h]
 
-        # need to reorder items, so they are sorted in proper order Y then X
-        lines_unsorted = []
-        for i, item in enumerate(data["form"]):
+                item = {
+                    "id": current_max_index + i,
+                    "text": word["text"],
+                    "box": word_box,
+                    "line_number": line_number,
+                    "linking": [],  # TODO: Not in use.
+                    "label": "other",
+                    "words": [{"text": word["text"], "box": word_box}],
+                }
+
+                data["form"].append(item)
+
+        # remove all the text nodes that are placeholders for ICR "text": "POPULATE_VIA_ICR"
+        data["form"] = [
+            item for item in data["form"] if item["text"] != "POPULATE_VIA_ICR"
+        ]
+
+        # Find all annotations by line number
+        items_by_line = {}
+        form_data = []
+        for item in data["form"]:
+            print(f"item = {item}")
             if "line_number" not in item:
-                print(f"Missing line number for : {item}")
-                print(item)
-                item["line_number"] = -1  # Assign a default value
-            lines_unsorted.append(item["line_number"])
+                print(f"skipping item = {item}")
+                continue
+            if item["line_number"] not in items_by_line:
+                items_by_line[item["line_number"]] = []
+            items_by_line[item["line_number"]].append(item)
+            form_data.append(item)
 
-        lines_unsorted = np.array(lines_unsorted)
-        unique_line_ids = sorted(np.unique(lines_unsorted))
-        data_form_sorted = []
+        data["form"] = form_data
+        # Order by line number
+        unique_line_numbers = list(items_by_line.keys())
+        unique_line_numbers.sort()
+        items_by_line = {
+            line: np.array(items_by_line[line]) for line in unique_line_numbers
+        }
+
         word_index = 0
+        data_form_sorted = []
+        # Order annotations by X value (left to right) per line
+        for line_number, items_on_line in items_by_line.items():
+            boxes_on_line = np.array([item["box"] for item in items_on_line])
+            items_on_line = items_on_line[np.argsort(boxes_on_line[:, 0])]
 
-        for i, line_numer in enumerate(unique_line_ids):
-            # print(f'line_numer =>  {line_numer}')
-            item_pics = []
-            box_picks = []
-
-            for j, item in enumerate(data["form"]):
-                word_line_number = item["line_number"]
-                if line_numer == word_line_number:
-                    item_pics.append(item)
-                    box_picks.append(item["box"])
-
-            item_pics = np.array(item_pics)
-            box_picks = np.array(box_picks)
-
-            indices = np.argsort(box_picks[:, 0])
-            item_pics = item_pics[indices]
-
-            for k, item in enumerate(item_pics):
+            for item in items_on_line:
                 item["word_index"] = word_index
                 data_form_sorted.append(item)
                 word_index += 1
 
-        data["form"] = []
-
-        for i, item in enumerate(data_form_sorted):
-            data["form"].append(item)
-            # print(f"\t=>  {item}")
-
+        data["form"] = data_form_sorted
         json_path = os.path.join(output_ann_dir, file)
-        print(json_path)
         with open(json_path, "w") as json_file:
             json.dump(
                 data,
@@ -692,6 +696,62 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 indent=2,
                 cls=NumpyEncoder,
             )
+
+        if False:
+            # need to reorder items, so they are sorted in proper order Y then X
+            lines_unsorted = []
+            for i, item in enumerate(data["form"]):
+                if "line_number" not in item:
+                    print(f"Missing line number for : {item}")
+                    print(item)
+                    item["line_number"] = -1  # Assign a default value
+                lines_unsorted.append(item["line_number"])
+
+            lines_unsorted = np.array(lines_unsorted)
+            unique_line_ids = sorted(np.unique(lines_unsorted))
+            data_form_sorted = []
+            word_index = 0
+
+            for i, line_numer in enumerate(unique_line_ids):
+                # print(f'line_numer =>  {line_numer}')
+                item_pics = []
+                box_picks = []
+
+                for j, item in enumerate(data["form"]):
+                    word_line_number = item["line_number"]
+                    if line_numer == word_line_number:
+                        item_pics.append(item)
+                        box_picks.append(item["box"])
+
+                item_pics = np.array(item_pics)
+                box_picks = np.array(box_picks)
+
+                indices = np.argsort(box_picks[:, 0])
+                item_pics = item_pics[indices]
+
+                for k, item in enumerate(item_pics):
+                    item["word_index"] = word_index
+                    data_form_sorted.append(item)
+                    word_index += 1
+
+            data["form"] = []
+
+            for i, item in enumerate(data_form_sorted):
+                data["form"].append(item)
+                # print(f"\t=>  {item}")
+
+            json_path = os.path.join(output_ann_dir, file)
+            print(json_path)
+            with open(json_path, "w") as json_file:
+                json.dump(
+                    data,
+                    json_file,
+                    sort_keys=False,
+                    separators=(",", ": "),
+                    ensure_ascii=False,
+                    indent=2,
+                    cls=NumpyEncoder,
+                )
 
 
 def generate_pan(num_char):

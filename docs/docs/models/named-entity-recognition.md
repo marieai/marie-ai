@@ -405,8 +405,7 @@ Command for visualizing FUNDS like datasets.
 **usage**
 
 ```shell
- PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py visualize --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled \
- --config ~/dataset/private/corr-indexer/visualize-config.json
+ PYTHONPATH="$PWD" python ./tools/coco_funsd_augmenter.py visualize --dir ~/datasets/private/corr-indexer/output/dataset/test-augmented  --config ~/datasets/private/corr-indexer/visualize-config.json
 ```
 
 Configuration is optional but if provided we will have constant label colors across images.
