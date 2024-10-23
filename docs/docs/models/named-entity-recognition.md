@@ -162,6 +162,78 @@ create a directory name.
 └── validation
 ```
 
+## Merge/Split multiple datasets (unilm/dit/tools)
+When we have multiple datasets that we want to merge into one dataset we can use `unilm/dit/tools` script.
+This step is not needed if we are working with a single dataset that we exported from CVAT directly.
+Howevere if we have multiple datasets that we want to merge into one dataset we can use `unilm/dit/tools` script to have valid Train/Test split.
+
+```shell
+~/unilm/dit/tools
+├── cocosplit.py
+└── merge_dir.py
+```
+
+Merge multiple datasets into one.
+
+```shell
+python ./merge_dir.py --src_dir ~/datasets/private/corr-indexer/coco_annotations --output_file ~/datasets/private/corr-indexer/converted/instances_default_merged.json
+```
+
+Split into Train/Test datasets
+
+```shell
+python ./cocosplit.py  ~/datasets/private/corr-indexer/converted/instances_default_merged.json ~/datasets/private/corr-indexer/converted/instances_training.json ~/datasets/private/corr-indexer/converted/instances_test.json -s .8
+```
+
+Expected output will be two files `instances_training.json` and `instances_test.json` that will be used for training and testing.
+You should see output similar to this:
+
+```shell
+
+┌── unilm/dit/tools   v3.10.12(marie) 5 months ago took 1s   
+└─λ python ./merge_dir.py --src_dir ~/datasets/private/corr-indexer/coco_annotations --output_file ~/datasets/private/corr-indexer/converted/merged.json
+Namespace(src_dir='/home/greg/datasets/private/corr-indexer/coco_annotations', output_file='/home/greg/datasets/private/corr-indexer/converted/merged.json')
+Found 6 files in /home/greg/datasets/private/corr-indexer/coco_annotations
+Output file: /home/greg/datasets/private/corr-indexer/converted/merged.json
+Merging 6 files
+Merging : 1
+ 47%|███████████████████████████████████████████████████████████████████████████████████████████▉                                                                                                        | 1279/2726 [00:01<00:01, 805.32it/s]
+ 47%|███████████████████████████████████████████████████████████████████████████████████████████▉                                                                                                        | 1279/2726 [00:03<00:04, 337.89it/s]
+Merging : 2
+ 49%|████████████████████████████████████████████████████████████████████████████████████████████████                                                                                                    | 1392/2840 [00:03<00:03, 367.85it/s]
+ 49%|████████████████████████████████████████████████████████████████████████████████████████████████                                                                                                    | 1392/2840 [00:04<00:05, 278.87it/s]
+Merging : 3
+ 51%|████████████████████████████████████████████████████████████████████████████████████████████████████▎                                                                                               | 1523/2977 [00:05<00:05, 280.48it/s]
+ 51%|████████████████████████████████████████████████████████████████████████████████████████████████████▎                                                                                               | 1523/2977 [00:06<00:06, 218.39it/s]
+Merging : 4
+ 48%|█████████████████████████████████████████████████████████████████████████████████████████████▍                                                                                                      | 1668/3497 [00:07<00:08, 225.62it/s]
+ 48%|█████████████████████████████████████████████████████████████████████████████████████████████▍                                                                                                      | 1668/3497 [00:08<00:09, 189.33it/s]
+Merging : 5
+ 48%|██████████████████████████████████████████████████████████████████████████████████████████████▏                                                                                                     | 1693/3522 [00:09<00:09, 186.61it/s]
+ 48%|██████████████████████████████████████████████████████████████████████████████████████████████▏                                                                                                     | 1693/3522 [00:09<00:10, 180.44it/s]
+
+┌── unilm/dit/tools   v3.10.12(marie) 5 months ago took 1m41s   
+└─λ code .
+
+┌── unilm/dit/tools   v3.10.12(marie) 5 months ago    
+└─λ python ./cocosplit.py  ~/datasets/private/corr-indexer/converted/instances_default_merged.json ~/datasets/private/corr-indexer/converted/instances_training.json ~/datasets/private/corr-indexer/converted/instances_test.json -s .8
+Saved 35930 entries in /home/greg/datasets/private/corr-indexer/converted/instances_training.json and 8894 in /home/greg/datasets/private/corr-indexer/converted/instances_test.json
+```
+
+After split the JSON files should be moved to following directories.
+
+```shell
+~/dataset/indexer
+├── train-deck-raw
+├── test-deck-raw
+```
+
+# visualize the dataset using DETECTRON2 (THIS NEEDS TO BE UPDATED)
+```shell
+python -m detectron2.data.datasets.coco ~/datasets/private/corr-indexer/test-deck-raw/annotations/instances_default.json ~/datasets/private/corr-indexer/test-deck-raw/images  corr_indexer_dataset_test
+```
+
+
 Activate our marie-ai environment.
 ```shell
 cd ~/dev/marie-ai
@@ -222,7 +294,6 @@ optional arguments:
                         Should full image paths be striped from annotations file
   --dir DIR             Base data directory
 ```
-
 **usage**
 
 ```shell
@@ -322,9 +393,9 @@ Run all conversion phases[convert,decorate,augment,rescale] using most defaults.
 model and make sure that everything is configured correctly.
 
 **usage**
-
+[181312401_2.json](../../../../../../datasets/private/corr-indexer/output/dataset/test/annotations_tmp/181312401_2.json)
 ```shell
-PYTHONPATH="$PWD" python ./tools/coco_funsd_augmenter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/datasets/private/corr-indexer  --config ~/datasets/private/corr-indexer/config.json ```
+PYTHONPATH="$PWD" python ./tools/coco_funsd_augmenter.py convert-all --mode test  --strip_file_name_path true --aug-count 2 --dir ~/datasets/private/corr-indexer  --config ~/datasets/private/corr-indexer/config.json
 ```
 
 

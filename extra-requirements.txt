@@ -169,3 +169,6 @@ textual:                      standard,core
 textual_textarea:             standard,core
 textual_fastdatatable:        standard,core
 etcd3:                        standard,core
+
+typing_extensions>=4.12.2:    standard,core
+vllm:                         standard,core

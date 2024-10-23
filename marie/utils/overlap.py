@@ -227,7 +227,7 @@ def compute_iou(box1, box2):
     area1 = (x2 - x1) * ((y2 - y1) // 4)  # box1 area
     area2 = (x4 - x3) * ((y4 - y3) // 4)  # box2 area
     union = area1 + area2 - intersection
-    iou = intersection / union
+    iou = intersection / union if union != 0 else 0
     return iou
 
 

@@ -1,10 +1,7 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
-#ARG CUDA_VERSION=11.6.1
-ARG CUDA_VERSION=11.8.0
-#ARG CUDA_VERSION=11.3.1
+ARG CUDA_VERSION=12.4.1
 
-#FROM nvidia/cuda:11.3.1-runtime-ubuntu20.04 as build-image
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04 as build-image
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
