@@ -426,7 +426,7 @@ Split COCO dataset for training and test.
 **usage**
 
 ```shell
-PYTHONPATH="$PWD" python ./marie/coco_funsd_converter.py split --dir ~/dataset/private/corr-indexer/output/dataset/test-rescaled --ratio .8
+PYTHONPATH="$PWD" python ./marie/coco_funsd_augmenter.py split --dir ~/datasets/private/corr-indexer/output/dataset/test-rescaled --ratio .8
 ```
  
 #### Configuration  

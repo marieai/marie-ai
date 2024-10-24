@@ -26,15 +26,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
-from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.line_processor import find_line_number
 from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
-from marie.utils.overlap import (
-    compute_iou,
-    find_overlap_horizontal,
-    merge_bboxes_as_block,
-)
+from marie.utils.overlap import compute_iou, find_overlap_horizontal
 from marie.utils.utils import ensure_exists
 
 # FUNSD format can be found here
@@ -343,6 +338,7 @@ def extract_icr_from_meta(snippet, scr_box_xyxy, ocr_meta_results):
     """
     results = {
         "words": [],
+        "lines": [],
     }
 
     # scr_box -> x0,y0,x1,y1
@@ -358,6 +354,9 @@ def extract_icr_from_meta(snippet, scr_box_xyxy, ocr_meta_results):
     h, w = snippet.shape[0], snippet.shape[1]
     scr_box_xyxy = [int(x) for x in scr_box_xyxy]
 
+    # print("**************************")
+    # print(f"scr_box_xyxy : {scr_box_xyxy}   : box_xywh : {box_xywh}")
+
     # find all the intersections of bounding boxes with the snippet box from ocr_meta
     # there is only one page we are processing so we will only have one entry
     ocr_meta = ocr_meta_results[0]
@@ -370,11 +369,14 @@ def extract_icr_from_meta(snippet, scr_box_xyxy, ocr_meta_results):
 
     for line in lines:
         bbox = line["bbox"]
+        line_number = line["line"]
+
         bbox_xyxy = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
         iou = compute_iou(bbox_xyxy, scr_box_xyxy)
+        # print(f"iou: {iou}  : box: {box_xywh}  : line : {line}")
         if iou > 0.0:
             # has_found_line = True
-            print(f"iou: {iou}  : box: {box_xywh}  : line : {line}")
+            # print(f"iou : {iou}  : box: {box_xywh}  : line : {line}")
             wordids = line["wordids"]
             aligned_words = [w for w in words if w["id"] in wordids]
             word_boxes = [w["box"] for w in aligned_words]
@@ -492,8 +494,9 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        # if guid == 5:
-        #     break
+        if guid == -1:
+            print("BREAKING")
+            break
 
         file_path = os.path.join(ann_dir, file)
         print("Processing : ", file_path)
@@ -525,7 +528,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             )
 
         ocr_meta_results = from_json_file(ocr_json_path)
-        print(ocr_meta_results)
         ocr_meta = ocr_meta_results[0]
         lines = ocr_meta["meta"]["lines"]
         unique_line_ids = sorted(np.unique(lines))
@@ -553,7 +555,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 cv2.imwrite(file_path, snippet)
 
             boxes, results = extract_icr_from_meta(snippet, box, ocr_meta_results)
-            # boxes, results = extract_icr(snippet, boxp, icrp)
             # results.pop("meta", None)
 
             if (
@@ -570,29 +571,21 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 cv2.imwrite(file_path, snippet)
 
             words = []
-            text = ""
-
-            try:
-                text = " ".join([line["text"] for line in results["lines"]])
-            except Exception as ex:
-                print(ex)
+            text = " ".join([line["text"] for line in results["lines"]])
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
             # results["word"] are in a xywh format in local position and need to be converted to relative position
-            print("-------------------------------")
-            print(results["words"])
             for word in results["words"]:
                 w_text = word["text"]
                 x, y, w, h = word["box"]
-                w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-                adj_word = {"text": w_text, "box": w_box}
+                word_box = [x, y, x + w, y + h]
+                adj_word = {"text": w_text, "box": word_box}
                 words.append(adj_word)
 
             item["words"] = words
             item["text"] = text
             item["line_number"] = line_number
-            print(item)
 
         # create masked image for OTHER label
         image_masked, _ = load_image(image_path)
@@ -655,7 +648,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         items_by_line = {}
         form_data = []
         for item in data["form"]:
-            print(f"item = {item}")
             if "line_number" not in item:
                 print(f"skipping item = {item}")
                 continue
@@ -697,62 +689,6 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 cls=NumpyEncoder,
             )
 
-        if False:
-            # need to reorder items, so they are sorted in proper order Y then X
-            lines_unsorted = []
-            for i, item in enumerate(data["form"]):
-                if "line_number" not in item:
-                    print(f"Missing line number for : {item}")
-                    print(item)
-                    item["line_number"] = -1  # Assign a default value
-                lines_unsorted.append(item["line_number"])
-
-            lines_unsorted = np.array(lines_unsorted)
-            unique_line_ids = sorted(np.unique(lines_unsorted))
-            data_form_sorted = []
-            word_index = 0
-
-            for i, line_numer in enumerate(unique_line_ids):
-                # print(f'line_numer =>  {line_numer}')
-                item_pics = []
-                box_picks = []
-
-                for j, item in enumerate(data["form"]):
-                    word_line_number = item["line_number"]
-                    if line_numer == word_line_number:
-                        item_pics.append(item)
-                        box_picks.append(item["box"])
-
-                item_pics = np.array(item_pics)
-                box_picks = np.array(box_picks)
-
-                indices = np.argsort(box_picks[:, 0])
-                item_pics = item_pics[indices]
-
-                for k, item in enumerate(item_pics):
-                    item["word_index"] = word_index
-                    data_form_sorted.append(item)
-                    word_index += 1
-
-            data["form"] = []
-
-            for i, item in enumerate(data_form_sorted):
-                data["form"].append(item)
-                # print(f"\t=>  {item}")
-
-            json_path = os.path.join(output_ann_dir, file)
-            print(json_path)
-            with open(json_path, "w") as json_file:
-                json.dump(
-                    data,
-                    json_file,
-                    sort_keys=False,
-                    separators=(",", ": "),
-                    ensure_ascii=False,
-                    indent=2,
-                    cls=NumpyEncoder,
-                )
-
 
 def generate_pan(num_char):
     import string
@@ -769,6 +705,7 @@ def generate_pan(num_char):
 @lru_cache(maxsize=20)
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
+    # print(f"Loading font : {font_path}")
     return ImageFont.truetype(font_path, font_size)
 
 
@@ -787,7 +724,7 @@ def generate_text(label, width, height, font_path):
     # space_w, _ = draw.textsize(" ", font=font)
     space_w, _ = draw.textbbox((0, 0), " ", font=font)[2:4]
 
-    dec = 2
+    dec = 1
     index = 0
     label_text = ""
 
@@ -810,7 +747,10 @@ def generate_text(label, width, height, font_path):
     while True:
         if index > 5:
             font_size = font_size - dec
+            # print(f"Reducing font size : {font_size}")
             font = get_cached_font(font_path, font_size)
+            if font_size < 10:
+                break
             index = 0
             # space_w, _ = draw.textsize(" ", font=font)
             space_w, _ = draw.textbbox((0, 0), " ", font=font)[2:4]
@@ -877,6 +817,7 @@ def generate_text(label, width, height, font_path):
                 label_text = "".join(random.choices(string.digits, k=N))
             else:
                 label_text = "".join(random.choices(string.ascii_letters, k=N))
+            label_text = label_text.upper()
 
         if label == "url":
             label_text = fake.domain_name()
@@ -1224,13 +1165,32 @@ def visualize_funsd(src_dir: str, dst_dir: str, config: dict):
         for i, item in enumerate(data["form"]):
             predicted_label = item["label"].lower()
             color = label2color[predicted_label]
+            box_xyxy = item["box"]
+            box_xywh = [
+                box_xyxy[0],
+                box_xyxy[1],
+                box_xyxy[2] - box_xyxy[0],
+                box_xyxy[3] - box_xyxy[1],
+            ]
 
+            # print("---------------------------------")
+            # print(f"predicted_label : {predicted_label}")
+            # print(f"  **  : {box_xyxy}  : {box_xywh}")
+            # print(item["text"])
+
+            #  (x0, y0, x1, y1)
             for word in item["words"]:
-                box = word["box"]
-                draw.rectangle(box, outline=color, width=1)
+                box_xyxy = word["box"]
+                box_xywh = [
+                    box_xyxy[0],
+                    box_xyxy[1],
+                    box_xyxy[2] - box_xyxy[0],
+                    box_xyxy[3] - box_xyxy[1],
+                ]
+                # print(f"  >> {word['text']} : {box_xyxy}  : {box_xywh}")
+                # draw.rectangle(box_xyxy, outline=color, width=1)
 
             box = item["box"]
-
             if predicted_label != "other":
                 draw.rectangle(
                     box,
@@ -1538,8 +1498,9 @@ def default_visualize(args: object):
     print(args)
     print("*" * 180)
 
-    src_dir = args.dir
-    dst_dir = args.dir_output
+    src_dir = os.path.expanduser(args.dir)
+    dst_dir = os.path.expanduser(args.dir_output)
+    args.config = os.path.expanduser(args.config)
 
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
