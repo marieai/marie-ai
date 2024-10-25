@@ -5,12 +5,9 @@ from marie.executor.ner import NerExtractionExecutor
 from marie.utils.docs import docs_from_file, frames_from_docs
 from marie.utils.image_utils import hash_file, hash_frames_fast
 
-# executor = NerExtractionExecutor("rms/layoutlmv3-large-20221118-001-best")
-executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner")
+# executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-patpay-ner")
-# executor = NerExtractionExecutor(
-#     "/mnt/data/models/layoutlmv3-large-finetuned/checkpoint-10000"
-# )
+executor = NerExtractionExecutor("rms/layoutlmv3-large-20241024-stride128")
 
 
 def process_image(image):

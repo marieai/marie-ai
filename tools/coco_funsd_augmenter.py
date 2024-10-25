@@ -1261,8 +1261,8 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
 def __rescale_annotate_frames(
     ann_dir_dest, img_dir_dest, filename, json_path, image_path
 ):
-    if False and filename != "152618378_2":
-        return
+    # if False and filename != "152618378_2":
+    #     return
 
     # 152630220_3  152618378_2 152618400  152624795_3
     print(f"filename : {filename}")
@@ -1295,7 +1295,7 @@ def __rescale_annotate_frames(
 
 
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
-    if True:
+    if False:
         print("Skipping rescale_annotate_frames")
         return
 
@@ -1365,8 +1365,12 @@ def split_dataset(src_dir, output_path, split_percentage):
     if not os.path.exists(img_dir):
         raise Exception("Source directory missing expected 'images' sub-directory")
 
+    # shuffle the dataset
+    ann_files = os.listdir(ann_dir)
+    random.shuffle(ann_files)
     file_set = []
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+
+    for guid, file in enumerate(ann_files):
         json_path = os.path.join(ann_dir, file)
         image_path = os.path.join(img_dir, file).replace("json", "png")
         filename = image_path.split("/")[-1].split(".")[0]
@@ -1398,7 +1402,6 @@ def split_dataset(src_dir, output_path, split_percentage):
     os.makedirs(ann_dir_out_test, exist_ok=True)
     os.makedirs(img_dir_out_test, exist_ok=True)
 
-    np.random.shuffle(file_set)
     train_set = file_set[0:sample_count]
     test_set = file_set[sample_count:-1]
 
