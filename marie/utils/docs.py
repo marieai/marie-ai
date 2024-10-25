@@ -371,6 +371,7 @@ def docs_from_asset(
 
 def frames_from_file(img_path: StrOrBytesPath) -> List[np.ndarray]:
     """Create Numpy frame array from image"""
+    img_path = os.path.expanduser(img_path)
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"File not found : {img_path}")
     loaded, frames = load_image(img_path)

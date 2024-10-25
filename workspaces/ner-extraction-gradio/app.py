@@ -7,7 +7,7 @@ from marie.utils.image_utils import hash_file, hash_frames_fast
 
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner")
 # executor = NerExtractionExecutor("rms/layoutlmv3-large-patpay-ner")
-executor = NerExtractionExecutor("rms/layoutlmv3-large-20241024-stride128")
+executor = NerExtractionExecutor("rms/layoutlmv3-large-corr-ner-20241025")
 
 
 def process_image(image):
@@ -49,12 +49,12 @@ def interface():
     iface = gr.Interface(
         fn=process_image,
         inputs=[
-            gr.inputs.Image(type="pil"),
+            gr.Image(type="pil"),
         ],
         outputs=[
-            gr.outputs.JSON(),
-            gr.outputs.Image(type="pil", label="annotated image"),
-            gr.outputs.Image(type="pil", label="predictions"),
+            gr.JSON(),
+            gr.Image(type="pil", label="annotated image"),
+            gr.Image(type="pil", label="predictions"),
         ],
         title=title,
         description=description,

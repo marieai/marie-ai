@@ -14,7 +14,7 @@ class LineMetadata(Serializable):
         self,
         page_id: int,
         line_id: Optional[int],
-        **kwargs: Dict[str, Union[str, int, float]]
+        **kwargs: Dict[str, Union[str, int, float]],
     ) -> None:
         """
         :param page_id: page number where paragraph starts, the numeration starts from page 0
@@ -24,6 +24,14 @@ class LineMetadata(Serializable):
         self.line_id: Optional[int] = line_id
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    def __str__(self) -> str:
+        metadata = {
+            key: value
+            for key, value in self.__dict__.items()
+            if not key.startswith('_')
+        }
+        return f"LineMetadata(page_id={self.page_id}, line_id={self.line_id}, metadata={metadata})"
 
     def to_model(self) -> BaseModel:
         raise NotImplementedError
