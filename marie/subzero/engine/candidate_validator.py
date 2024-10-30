@@ -122,7 +122,7 @@ class CandidateValidator:
         x_offset: int,
         y_offset: int,
     ) -> MatchSection:
-        section = MatchSection("Cut Section")
+        section = MatchSection(label="Cut Section")
         section.set_x_offset(x_offset)
         section.set_y_offset(y_offset)
 
