@@ -12,7 +12,7 @@ from marie.subzero.models.definition import (
     Margin,
     Perimeter,
 )
-from marie.subzero.models.results import MatchField, MatchSection
+from marie.subzero.models.match import MatchField, MatchSection
 from marie.subzero.processor.scan_result import GrapnelScanResult
 from marie.subzero.processor.selector_matcher import SelectorMatcher
 from marie.subzero.utils.blob_util import BlobUtil

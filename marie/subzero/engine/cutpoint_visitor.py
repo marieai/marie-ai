@@ -6,7 +6,7 @@ from marie.subzero.cutpoint.cutpoint_matching_engine import CutpointMatchingEngi
 from marie.subzero.engine.base import BaseProcessingVisitor
 from marie.subzero.engine.candidate_validator import CandidateValidator
 from marie.subzero.models.definition import ExecutionContext, Layer, SelectionType
-from marie.subzero.models.results import MatchSection, MatchSectionType, SubzeroResult
+from marie.subzero.models.match import MatchSection, MatchSectionType, SubzeroResult
 from marie.subzero.processor.page_span import PageSpan
 
 LOGGER = logging.getLogger(__name__)
@@ -24,8 +24,8 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
 
     def visit(self, context: ExecutionContext, parent: SubzeroResult) -> None:
         template = context.get_template()
-        parent.set_pages(context.get_pages())
-        layers = template.get_layers()
+        parent.set_pages(context.pages)
+        layers = template.layers
 
         if layers:
             for layer in layers:
@@ -42,8 +42,8 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         assert layer is not None
         assert parent is not None
 
-        start_selectors = [layer.start_selector_set]
-        stop_selectors = layer.get_stop_selector_sets()
+        start_selectors = layer.start_selector_sets
+        stop_selectors = layer.stop_selector_sets
 
         start_selector_hits = []
         stop_selector_hits = []
@@ -66,7 +66,7 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         self.populate_values(layer, matched_sections)
         self.prepare_initial_page_spans(context, matched_sections)
 
-        if layer.get_selection_type() == SelectionType.NEGATION:
+        if layer.selection_type == SelectionType.NEGATION:
             self.process_negative_layer(context, layer, matched_sections)
             return
 

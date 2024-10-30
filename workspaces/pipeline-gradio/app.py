@@ -57,7 +57,7 @@ def process_image(image):
 
     if scale != 100:
         image = image.resize(
-            (int(image.width * int(scale) / 100), int(image.height * int(scale) / 100))
+            (int(image.w * int(scale) / 100), int(image.h * int(scale) / 100))
         )
 
     # apply augmentation transformation

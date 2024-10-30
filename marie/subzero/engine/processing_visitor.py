@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
 from marie.subzero.models.definition import ExecutionContext
-from marie.subzero.models.results import SubzeroResult
+from marie.subzero.models.match import SubzeroResult
 
 
 class ProcessingVisitor(ABC):

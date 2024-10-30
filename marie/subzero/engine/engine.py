@@ -6,7 +6,7 @@ from marie.subzero.engine.print_visitor import PrintVisitor
 from marie.subzero.engine.processing_visitor import ProcessingVisitor
 from marie.subzero.engine.template_validator_visitor import TemplateValidatorVisitor
 from marie.subzero.models.definition import ExecutionContext
-from marie.subzero.models.results import SubzeroResult
+from marie.subzero.models.match import SubzeroResult
 
 LOGGER = logging.getLogger(__name__)
 

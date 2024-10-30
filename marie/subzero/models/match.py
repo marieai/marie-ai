@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from marie.subzero.models.base import Location, Rectangle
+from marie.subzero.models.base import Location, Page, PageDetails, Rectangle
 from marie.subzero.models.definition import Layer, RowExtractionStrategy
 
 
@@ -21,24 +21,6 @@ class MatchSectionVisitor(ABC):
 class ResultType(str, Enum):
     ANCHOR = "ANCHOR"
     BLOB = "BLOB"
-
-
-class PageDetails(BaseModel):
-    page_index: int
-    w: int
-    h: int
-
-    def __str__(self) -> str:
-        return f"{self.w}, {self.h}"
-
-
-class Page(BaseModel):
-    page_number: int
-    image: Optional[str] = None  # Assuming image is a file path
-    details: Optional[PageDetails] = None
-
-    def __str__(self) -> str:
-        return f"Page Number: {self.page_number}, Image: {self.image}, Details: {self.details}"
 
 
 class ScanResult(BaseModel):
@@ -160,10 +142,13 @@ class MatchSection(BaseModel):
     row_extraction_strategy: Optional[RowExtractionStrategy] = None
     owner_layer: Optional[Layer] = None
 
-    # pages: Optional[List['PageModel']] = None
+    pages: Optional[List['Page']] = None
 
     def __str__(self) -> str:
         return f"{self.label} : Sections [ start [ {self.start} ] stop [ {self.stop} ] size = {len(self.sections)}  span -> {self.span}"
+
+    def set_pages(self, pages: List[Page]) -> None:
+        self.pages = pages
 
     def visit(self, visitor: "MatchSectionVisitor") -> None:
         """
@@ -180,4 +165,4 @@ class SubzeroResult(MatchSection):
 
     def __init__(self, label: Optional[str] = None):
         super().__init__(label=label)
-        self.type = "WRAPPER"
+        self.type = MatchSectionType.WRAPPER

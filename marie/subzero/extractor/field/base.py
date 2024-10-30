@@ -1,9 +1,8 @@
 from abc import ABC
-from typing import Optional
 
 from marie.subzero.models.base import Dimension, Perimeter
 from marie.subzero.models.definition import FieldMapping
-from marie.subzero.models.results import MatchField, ResultType, ScanResult
+from marie.subzero.models.match import MatchField, ResultType, ScanResult
 
 
 class BaseFieldExtractionHandler(ABC):

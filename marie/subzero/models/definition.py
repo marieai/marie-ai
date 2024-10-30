@@ -2,39 +2,18 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
-from sphinx.addnodes import document
 
-from marie.subzero.models.base import Margin, Perimeter, SelectionType, SelectorSet
+from marie.subzero.models.base import (
+    CutpointStrategy,
+    Margin,
+    Page,
+    Perimeter,
+    RowExtractionStrategy,
+    SelectionType,
+    SelectorSet,
+)
 from marie.subzero.readers.meta_reader.meta_reader import MetaReader
 from marie.subzero.structures.unstructured_document import UnstructuredDocument
-
-
-class RowExtractionStrategy(str, Enum):
-    PRIMARY_COLUMN_VARIABLE = "Primary Column / Variable Length Ordinals"
-    PRIMARY_COLUMN_FIXED = "Primary Column / Fixed Length Ordinals"
-    COMPOSITE_FIXED = "Composite Rows /  Fixed Length Ordinals"
-
-    @property
-    def label(self) -> str:
-        return self.value
-
-
-class CutpointStrategy(str, Enum):
-    START_ON_STOP = ("Restart On Starts", "Description for START_ON_STOP")
-    STOP_ON_STOP = ("Start After Stop", "Description for STOP_ON_STOP")
-    STOP_ON_PAGE_BREAK = ("Stop on Page Break", "Description for STOP_ON_PAGE_BREAK")
-    DYNAMIC = ("Dynamic", "Description for DYNAMIC")
-    PATTERN_DEFINITION = ("Pattern Definition", "Description for PATTERN_DEFINITION")
-
-    def __new__(cls, value, description):
-        obj = str.__new__(cls, value)
-        obj._value_ = value
-        obj.description = description
-        return obj
-
-    @property
-    def label(self) -> str:
-        return self.value
 
 
 class MappingType(str, Enum):
@@ -82,9 +61,12 @@ class Layer(BaseModel):
     field_mappings: List[FieldMapping] = []
     non_repeating_field_mappings: List[FieldMapping] = []
     document_level_field_mappings: List[FieldMapping] = []
-    start_selector_set: SelectorSet = SelectorSet()
+
+    # converted to selector sets
+    start_selector_sets: List[SelectorSet] = []
     stop_selector_sets: List[SelectorSet] = []
-    continuation_selector_set: SelectorSet = SelectorSet()
+    continuation_selector_sets: List[SelectorSet] = []
+
     layers: List["Layer"] = []
     parent_layer_identifier: Optional[str] = None
     selection_type: SelectionType = SelectionType.POSITIVE
@@ -142,16 +124,13 @@ class WorkUnit(BaseModel):
 class ExecutionContext(BaseModel):
     template: Optional["Template"] = None
     document: Optional["UnstructuredDocument"] = None
-    # pages: List['GrapnelPage'] = []
+    pages: List['Page'] = []
     tree: Optional[Any] = None
     doc_id: str
     metadata: Optional[Dict] = None
 
     class Config:
         arbitrary_types_allowed = True
-
-    def __init__(self, **data):
-        super().__init__(**data)
 
     def __str__(self) -> str:
         return (
@@ -160,6 +139,9 @@ class ExecutionContext(BaseModel):
             f"document={self.document}, "
             f"metadata_keys={list(self.metadata.keys()) if self.metadata else []})"
         )
+
+    def get_template(self) -> Template:
+        return self.template
 
     @classmethod
     def create(

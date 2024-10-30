@@ -33,11 +33,11 @@ def process_data_matrix(filename):
     for obj in decoded_objects:
         print("Decoded Data : ", obj.data.decode('utf-8'))
         rect = obj.rect
-        cv2.rectangle(output, (rect.left, rect.top), (rect.left + rect.width, rect.top + rect.height), (0, 0, 255), 2)
+        cv2.rectangle(output, (rect.left, rect.top), (rect.left + rect.w, rect.top + rect.h), (0, 0, 255), 2)
         # cv2.putText(output, obj.data.decode('utf-8'), (rect.left, rect.top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
 
-        center_x = rect.left + rect.width // 2
-        center_y = rect.top + rect.height // 2
+        center_x = rect.left + rect.w // 2
+        center_y = rect.top + rect.h // 2
 
         text_size = cv2.getTextSize(obj.data.decode('utf-8'), cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1)[0]
 

@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from marie.subzero.continuation.base import ContinuationStrategy
 from marie.subzero.models.definition import ExecutionContext, Layer, SelectorSet
-from marie.subzero.models.results import MatchSection, ScanResult
+from marie.subzero.models.match import MatchSection, ScanResult
 from marie.subzero.processor.selector_matcher import SelectorMatcher
 
 LOGGER = logging.getLogger(__name__)

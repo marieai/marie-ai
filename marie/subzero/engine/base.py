@@ -6,7 +6,7 @@ from marie.subzero.engine.processing_visitor import ProcessingVisitor
 from marie.subzero.models.definition import ExecutionContext, Layer
 
 # from marie.subzero.event import LifecycleEvent, LifecycleEventType, LifecycleManager
-from marie.subzero.models.results import (
+from marie.subzero.models.match import (
     MatchFieldRow,
     MatchSection,
     MatchSectionVisitor,

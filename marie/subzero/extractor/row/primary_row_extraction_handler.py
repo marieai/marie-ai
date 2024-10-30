@@ -9,7 +9,7 @@ from marie.subzero.models.definition import (
     Layer,
     RowExtractionStrategy,
 )
-from marie.subzero.models.results import MatchFieldRow, MatchSection, Span
+from marie.subzero.models.match import MatchFieldRow, MatchSection, Span
 
 LOGGER = logging.getLogger(__name__)
 

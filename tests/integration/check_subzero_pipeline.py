@@ -9,7 +9,6 @@ from marie.storage import StorageManager
 from marie.storage.s3_storage import S3StorageHandler
 from marie.subzero.engine.engine import SubzeroEngine
 from marie.subzero.models.definition import ExecutionContext, Layer, Template, WorkUnit
-from marie.subzero.readers.meta_reader.meta_reader import MetaReader
 from marie.utils.docs import frames_from_file
 from marie.utils.json import load_json_file
 

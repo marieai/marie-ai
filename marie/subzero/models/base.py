@@ -4,6 +4,34 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 
+class RowExtractionStrategy(str, Enum):
+    PRIMARY_COLUMN_VARIABLE = "Primary Column / Variable Length Ordinals"
+    PRIMARY_COLUMN_FIXED = "Primary Column / Fixed Length Ordinals"
+    COMPOSITE_FIXED = "Composite Rows /  Fixed Length Ordinals"
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+
+class CutpointStrategy(str, Enum):
+    START_ON_STOP = ("Restart On Starts", "Description for START_ON_STOP")
+    STOP_ON_STOP = ("Start After Stop", "Description for STOP_ON_STOP")
+    STOP_ON_PAGE_BREAK = ("Stop on Page Break", "Description for STOP_ON_PAGE_BREAK")
+    DYNAMIC = ("Dynamic", "Description for DYNAMIC")
+    PATTERN_DEFINITION = ("Pattern Definition", "Description for PATTERN_DEFINITION")
+
+    def __new__(cls, value, description):
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.description = description
+        return obj
+
+    @property
+    def label(self) -> str:
+        return self.value
+
+
 class Point2D(BaseModel):
     """
     Represents a point in 2D space with X and Y coordinates.
@@ -119,6 +147,24 @@ class Blob(BaseModel):
 
     def __hash__(self) -> int:
         return hash((self.x, self.y, self.w, self.h, self.page))
+
+
+class PageDetails(BaseModel):
+    page_index: int
+    w: int
+    h: int
+
+    def __str__(self) -> str:
+        return f"{self.w}, {self.h}"
+
+
+class Page(BaseModel):
+    page_number: int
+    image: Optional[str] = None  # Assuming image is a file path
+    details: Optional[PageDetails] = None
+
+    def __str__(self) -> str:
+        return f"Page Number: {self.page_number}, Image: {self.image}, Details: {self.details}"
 
 
 class Selector(BaseModel):

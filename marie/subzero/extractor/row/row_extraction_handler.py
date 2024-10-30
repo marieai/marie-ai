@@ -3,7 +3,7 @@ from typing import List, Set
 
 from marie.subzero.models.base import Blob
 from marie.subzero.models.definition import ExecutionContext, FieldMapping, Layer
-from marie.subzero.models.results import MatchFieldRow, MatchSection, Span
+from marie.subzero.models.match import MatchFieldRow, MatchSection, Span
 
 
 class RowExtractionHandler(ABC):

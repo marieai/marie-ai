@@ -3,7 +3,7 @@ from collections import deque
 from typing import List, Optional
 
 from marie.subzero.models.definition import CutpointStrategy, Layer
-from marie.subzero.models.results import (
+from marie.subzero.models.match import (
     Location,
     LocationType,
     MatchSection,

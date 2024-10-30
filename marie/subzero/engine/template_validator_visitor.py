@@ -4,7 +4,7 @@ from typing import List
 from marie.subzero.engine.base import BaseProcessingVisitor
 from marie.subzero.models.base import Selector
 from marie.subzero.models.definition import ExecutionContext, Layer
-from marie.subzero.models.results import SubzeroResult
+from marie.subzero.models.match import SubzeroResult
 
 
 class TemplateValidatorVisitor(BaseProcessingVisitor):
@@ -32,7 +32,7 @@ class TemplateValidatorVisitor(BaseProcessingVisitor):
                 stack.extend(layers)
 
     def validate(self, context: ExecutionContext, layer: Layer) -> None:
-        sets = [[layer.start_selector_set], layer.stop_selector_sets]
+        sets = [layer.start_selector_sets, layer.stop_selector_sets]
 
         for set_list in sets:
             for ss in set_list:

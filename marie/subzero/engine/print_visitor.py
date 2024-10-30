@@ -3,7 +3,7 @@ from typing import List
 
 from marie.subzero.engine.base import BaseProcessingVisitor
 from marie.subzero.models.definition import ExecutionContext
-from marie.subzero.models.results import (
+from marie.subzero.models.match import (
     MatchField,
     MatchFieldRow,
     MatchSection,

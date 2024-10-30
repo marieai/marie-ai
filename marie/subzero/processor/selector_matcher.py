@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from marie.subzero.models.base import Selector
 from marie.subzero.models.definition import ExecutionContext, Layer, SelectorSet
-from marie.subzero.models.results import MatchSection, ScanResult, ScoredMatchResult
+from marie.subzero.models.match import MatchSection, ScanResult, ScoredMatchResult
 from marie.subzero.processor.page_span import PageSpan
 
 LOGGER = logging.getLogger(__name__)

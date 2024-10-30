@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from marie.subzero.models.base import Location
 from marie.subzero.models.definition import ExecutionContext
-from marie.subzero.models.results import MatchSection, Span
+from marie.subzero.models.match import MatchSection, Span
 
 
 class PageSpan:

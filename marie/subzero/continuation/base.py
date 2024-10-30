@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from marie.subzero.models.definition import ExecutionContext, Layer
-from marie.subzero.models.results import MatchSection
+from marie.subzero.models.match import MatchSection
 
 
 class ContinuationStrategy(ABC):

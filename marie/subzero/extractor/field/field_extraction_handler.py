@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List
 
 from marie.subzero.models.definition import ExecutionContext, FieldMapping
-from marie.subzero.models.results import MatchField, MatchSection
+from marie.subzero.models.match import MatchField, MatchSection
 
 
 class FieldExtractionHandler(ABC):
