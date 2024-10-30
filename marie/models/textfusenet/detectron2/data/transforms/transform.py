@@ -104,7 +104,7 @@ def HFlip_rotated_box(transform, rotated_boxes):
             in absolute coordinates.
     """
     # Transform x_center
-    rotated_boxes[:, 0] = transform.width - rotated_boxes[:, 0]
+    rotated_boxes[:, 0] = transform.w - rotated_boxes[:, 0]
     # Transform angle
     rotated_boxes[:, 4] = -rotated_boxes[:, 4]
     return rotated_boxes
