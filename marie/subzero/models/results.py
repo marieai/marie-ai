@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import List, Optional
 
@@ -5,6 +6,16 @@ from pydantic import BaseModel, Field
 
 from marie.subzero.models.base import Location, Rectangle
 from marie.subzero.models.definition import Layer, RowExtractionStrategy
+
+
+class MatchSectionVisitor(ABC):
+    @abstractmethod
+    def visit(self, result: "MatchSection") -> None:
+        """
+        :param result: An instance of MatchSection containing the result data.
+        :return: None
+        """
+        pass
 
 
 class ResultType(str, Enum):
@@ -54,6 +65,33 @@ class ScoredMatchResult(BaseModel):
         return f"Score: {self.score}, Items: {self.items}, Index: {self.index}, Candidates: {self.candidates}"
 
 
+class LocationType(str, Enum):
+    START = "START"
+    STOP = "STOP"
+    CONTINUE = "CONTINUE"
+
+
+class TypedScanResult(ScanResult):
+    def __init__(
+        self,
+        input: ScanResult,
+        location_type: LocationType,
+    ):
+        super().__init__(input)
+        self.location_type = location_type
+
+    @staticmethod
+    def wrap(
+        candidates: List[ScanResult], location_type: LocationType
+    ) -> List["TypedScanResult"]:
+        if not candidates:
+            return []
+        return [TypedScanResult(candidate, location_type) for candidate in candidates]
+
+    def __str__(self) -> str:
+        return f"{self.location_type} - {super().__str__()}"
+
+
 class Span(BaseModel):
     page: int
     y: int
@@ -74,7 +112,7 @@ class MatchField(BaseModel):
         return f"Field ID {self.owner_field_identifier} {self.scan_result}"
 
 
-class MatchSectionType(str):
+class MatchSectionType(str, Enum):
     WRAPPER = "WRAPPER"
     CONTENT = "CONTENT"
     REJECTED = "REJECTED"
@@ -82,7 +120,7 @@ class MatchSectionType(str):
 
 class MatchFieldRow(BaseModel):
     fields: Optional[List[MatchField]] = Field(default_factory=list)
-    children: List['MatchFieldRow'] = Field(default_factory=list)
+    children: List["MatchFieldRow"] = Field(default_factory=list)
     details: Optional[PageDetails] = None
 
     def __str__(self) -> str:
@@ -94,23 +132,27 @@ class MatchFieldRow(BaseModel):
         if self.children:
             for child in self.children:
                 builder.append(f"\n               {child}")
-        return ''.join(builder)
+        return "".join(builder)
 
 
 class MatchSection(BaseModel):
-    sections: List['MatchSection'] = []
-    parent: Optional['MatchSection'] = None
+    sections: List["MatchSection"] = []
+    parent: Optional["MatchSection"] = None
     type: MatchSectionType = MatchSectionType.CONTENT
-    start_candidates: Optional[List['ScanResult']] = None
-    stop_candidates: Optional[List['ScanResult']] = None
+    start_candidates: Optional[List["ScanResult"]] = None
+    stop_candidates: Optional[List["ScanResult"]] = None
 
     # fields: List['MatchField'] = []
     # matched_field_rows: List['MatchFieldRowModel'] = []
     # matched_non_repeating_fields: List['MatchField'] = []
     # matched_document_level_fields: List['MatchField'] = []
 
+    # Start location of this section, they do not necessarily equal the start and stop of spans
     start: Optional[Location] = None
     stop: Optional[Location] = None
+
+    span: Optional[List["Span"]] = None
+
     label: str = "NO-LABEL"
     x_offset: int = 0
     y_offset: int = 0
@@ -121,4 +163,21 @@ class MatchSection(BaseModel):
     # pages: Optional[List['PageModel']] = None
 
     def __str__(self) -> str:
-        return f"{self.label} : Sections [ start [ {self.start} ] stop [ {self.stop} ] size = {len(self.sections)} startSelectorSetOwnerIdentifier : {self.start_selector_set_owner_identifier} stopSelectorSetOwnerIdentifier : {self.stop_selector_set_owner_identifier}] -> {self.span}"
+        return f"{self.label} : Sections [ start [ {self.start} ] stop [ {self.stop} ] size = {len(self.sections)}  span -> {self.span}"
+
+    def visit(self, visitor: "MatchSectionVisitor") -> None:
+        """
+        :param visitor: An instance of MatchSectionVisitor that will be used to invoke the visit method.
+        :return: None
+        """
+        visitor.visit(self)
+
+
+class SubzeroResult(MatchSection):
+    """
+    Matched document information
+    """
+
+    def __init__(self, label: Optional[str] = None):
+        super().__init__(label=label)
+        self.type = "WRAPPER"

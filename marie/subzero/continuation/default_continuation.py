@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from marie.subzero.continuation.base import ContinuationStrategy
 from marie.subzero.models.definition import ExecutionContext, Layer
@@ -11,5 +11,6 @@ class DefaultContinuationStrategy(ContinuationStrategy):
         context: ExecutionContext,
         layer: Layer,
         matched_sections: List[MatchSection],
+        parent_layer: Optional[Layer],
     ):
         pass

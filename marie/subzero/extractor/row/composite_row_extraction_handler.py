@@ -2,7 +2,7 @@ import logging
 from collections import defaultdict
 from typing import Dict, List
 
-from marie.subzero.extractor.row_extraction_handler import RowExtractionHandler
+from marie.subzero.extractor.row.row_extraction_handler import RowExtractionHandler
 from marie.subzero.models.base import Blob
 from marie.subzero.models.definition import (
     ExecutionContext,

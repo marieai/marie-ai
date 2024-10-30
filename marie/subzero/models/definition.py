@@ -2,16 +2,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
+from sphinx.addnodes import document
 
-from marie.subzero.models.base import SelectorSet
-from marie.subzero.pydantic_models.base import (
-    Combinator,
-    Margin,
-    Perimeter,
-    SelectionType,
-    Selector,
-)
-from marie.subzero.pydantic_models.results import ScanResult
+from marie.subzero.models.base import Margin, Perimeter, SelectionType, SelectorSet
+from marie.subzero.readers.meta_reader.meta_reader import MetaReader
+from marie.subzero.structures.unstructured_document import UnstructuredDocument
 
 
 class RowExtractionStrategy(str, Enum):
@@ -50,7 +45,7 @@ class MappingType(str, Enum):
 
 
 class FieldMapping(BaseModel):
-    margin: Optional['Margin'] = None
+    margin: Optional["Margin"] = None
     selector_set: Optional[SelectorSet] = None
     required: bool = False
     search_perimeter: Optional[Perimeter] = None
@@ -90,31 +85,31 @@ class Layer(BaseModel):
     start_selector_set: SelectorSet = SelectorSet()
     stop_selector_sets: List[SelectorSet] = []
     continuation_selector_set: SelectorSet = SelectorSet()
-    image_alignment_anchor_selector_set: SelectorSet = SelectorSet()
-    inner_layers: List['Layer'] = []
+    layers: List["Layer"] = []
     parent_layer_identifier: Optional[str] = None
     selection_type: SelectionType = SelectionType.POSITIVE
     layer_name: Optional[str] = None
     # field_anchors: List['FieldAnchor'] = []
-    constraints: List['Constraint'] = []
+    constraints: List["Constraint"] = []
+    color_index: int = 0
 
     class Config:
         arbitrary_types_allowed = True
 
 
 class Template(BaseModel):
-    id: int
+    tid: str
     version: int
-    layers: Optional[List['Layer']] = None
+    layers: Optional[List["Layer"]] = None
     name: str = ""
 
     class Config:
         arbitrary_types_allowed = True
 
-    def set_layers(self, layers: List['Layer']):
+    def set_layers(self, layers: List["Layer"]):
         self.layers = layers
 
-    def add_layer(self, layer: 'Layer'):
+    def add_layer(self, layer: "Layer"):
         if self.layers is None:
             self.layers = []
         if layer.parent_layer_identifier is not None:
@@ -126,7 +121,7 @@ class Template(BaseModel):
                 layer.color_index = 1
         self.layers.append(layer)
 
-    def remove_layer(self, layer: 'Layer') -> bool:
+    def remove_layer(self, layer: "Layer") -> bool:
         if self.layers is None:
             return False
         return self.layers.remove(layer)
@@ -136,26 +131,20 @@ class Template(BaseModel):
             for layer in self.layers:
                 layer.delete(obj)
 
-    def layer_color_index(self):
-        index = 1
-        if not self.layers:
-            return
-        for layer in self.layers:
-            if layer.parent_layer_identifier is not None:
-                layer.color_index = 999
-            elif layer.color_index <= 0:
-                layer.color_index = index
-                index += 1
-            else:
-                index = layer.color_index
+
+class WorkUnit(BaseModel):
+    doc_id: str
+    template: Optional[Template] = None
+    metadata: Optional[List] = None
+    frames: Optional[List] = None
 
 
 class ExecutionContext(BaseModel):
-    template: Optional['Template'] = None
+    template: Optional["Template"] = None
+    document: Optional["UnstructuredDocument"] = None
     # pages: List['GrapnelPage'] = []
     tree: Optional[Any] = None
     doc_id: str
-    # selector_hits: List['ScanResult'] = []
     metadata: Optional[Dict] = None
 
     class Config:
@@ -164,8 +153,29 @@ class ExecutionContext(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
 
-    def set_selector_hits(self, results: List[ScanResult]):
-        self.selector_hits.extend(results)
+    def __str__(self) -> str:
+        return (
+            f"ExecutionContext(doc_id={self.doc_id}, "
+            f"template={self.template}, "
+            f"document={self.document}, "
+            f"metadata_keys={list(self.metadata.keys()) if self.metadata else []})"
+        )
 
-    def get_selector_hits(self) -> List[ScanResult]:
-        return self.selector_hits
+    @classmethod
+    def create(
+        cls, work_unit: WorkUnit, page_numbers: Optional[List[int]] = None
+    ) -> "ExecutionContext":
+        frames = work_unit.frames
+        metadata = work_unit.metadata
+        template = work_unit.template
+
+        if page_numbers:
+            frames = [frame for idx, frame in enumerate(frames) if idx in page_numbers]
+            metadata = [
+                meta for idx, meta in enumerate(metadata) if idx in page_numbers
+            ]
+
+        doc = MetaReader.from_data(frames=frames, ocr_meta=metadata)
+        return ExecutionContext(
+            doc_id=work_unit.doc_id, template=template, document=doc
+        )

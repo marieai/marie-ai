@@ -32,7 +32,7 @@ class LineMetadata(Serializable):
         metadata = {
             key: value
             for key, value in self.__dict__.items()
-            if not key.startswith('_')
+            if not key.startswith("_")
         }
         return f"LineMetadata(page_id={self.page_id}, line_id={self.line_id}, model={self.model}, metadata={metadata})"
 

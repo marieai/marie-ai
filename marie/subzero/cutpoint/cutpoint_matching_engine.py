@@ -18,7 +18,7 @@ class CutpointMatchingEngine:
         # self.handlers.append(ImageAnchorCutpointMatchingHandler())
         pass
 
-    def find_cut_points(
+    def find_cutpoints(
         self,
         context: ExecutionContext,
         selector_sets: List[SelectorSet],
@@ -27,3 +27,5 @@ class CutpointMatchingEngine:
     ) -> List[ScanResult]:
         cutpoints = []
         selector_matcher = SelectorMatcher(context, parent)
+
+        return cutpoints

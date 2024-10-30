@@ -6,6 +6,9 @@ from marie.subzero.structures.line_with_meta import LineWithMeta
 
 
 class UnstructuredDocument:
+    """
+    A document that contains a list of lines with metadata.
+    """
 
     def __init__(self, lines: List[LineWithMeta], metadata: Dict[str, Any]) -> None:
         self.metadata = metadata
@@ -28,6 +31,9 @@ class UnstructuredDocument:
                     )
                 id_set.add(word.id)
                 rtree.insert(word.id, word.to_xyxy(), obj=word)
+
+    def __str__(self) -> str:
+        return f"UnstructuredDocument with {self.page_count} pages, {len(self.lines)} lines and metadata keys: {list(self.metadata.keys())}"
 
     def get_or_create_rtree(self, page_id: int) -> index.Index:
         if page_id not in self.rtree_by_page:
@@ -58,3 +64,7 @@ class UnstructuredDocument:
             )
         )
         return [result.object for result in results]
+
+    @property
+    def page_count(self) -> int:
+        return len(set(line.metadata.page_id for line in self.lines))

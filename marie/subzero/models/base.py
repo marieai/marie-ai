@@ -66,7 +66,7 @@ class Perimeter(BaseModel):
         super().__init__(x_min=max(x_min - expansion, 0), x_max=x_max + expansion)
 
     @staticmethod
-    def union(src1: 'Perimeter', src2: 'Perimeter') -> 'Perimeter':
+    def union(src1: "Perimeter", src2: "Perimeter") -> "Perimeter":
         x1 = min(src1.x_min, src2.x_min)
         x2 = max(src1.x_max, src2.x_max)
         return Perimeter(x1, x2)
