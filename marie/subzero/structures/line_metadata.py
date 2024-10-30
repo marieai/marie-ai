@@ -2,6 +2,7 @@ from typing import Dict, Optional, Union
 
 from pydantic import BaseModel
 
+from marie.subzero.models.models import LineModel
 from marie.subzero.structures.serializable import Serializable
 
 
@@ -14,6 +15,7 @@ class LineMetadata(Serializable):
         self,
         page_id: int,
         line_id: Optional[int],
+        model: LineModel,
         **kwargs: Dict[str, Union[str, int, float]],
     ) -> None:
         """
@@ -22,6 +24,7 @@ class LineMetadata(Serializable):
         """
         self.page_id: int = page_id
         self.line_id: Optional[int] = line_id
+        self.model: LineModel = model
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -31,7 +34,7 @@ class LineMetadata(Serializable):
             for key, value in self.__dict__.items()
             if not key.startswith('_')
         }
-        return f"LineMetadata(page_id={self.page_id}, line_id={self.line_id}, metadata={metadata})"
+        return f"LineMetadata(page_id={self.page_id}, line_id={self.line_id}, model={self.model}, metadata={metadata})"
 
     def to_model(self) -> BaseModel:
         raise NotImplementedError

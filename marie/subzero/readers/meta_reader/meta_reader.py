@@ -3,7 +3,7 @@ from typing import Any, List, Optional, Union
 
 import numpy as np
 
-from marie.subzero.pydantic_models.models import LineModel, WordModel
+from marie.subzero.models.models import LineModel, WordModel
 from marie.subzero.readers.base import BaseReader
 from marie.subzero.structures.line_metadata import LineMetadata
 from marie.subzero.structures.line_with_meta import LineWithMeta
@@ -67,9 +67,9 @@ class MetaReader(BaseReader):
                 print(f"Line / Words : {line_idx}, {len(meta_words)}")
                 print(meta_line)
 
-                lmd = LineMetadata(
-                    page_id=page_id, line_id=line_idx, **meta_line.dict()
-                )
+                data = meta_line.model_dump()
+
+                lmd = LineMetadata(page_id=page_id, line_id=line_idx, model=meta_line)
 
                 lwm = LineWithMeta(
                     line=meta_line.text,
@@ -78,7 +78,7 @@ class MetaReader(BaseReader):
                 )
                 print(lwm)
 
-                unstructured_lines.append(meta_line)
+                unstructured_lines.append(lwm)
             # pprint(result)
             # meta = result.get("meta", {})
             # pprint(meta)

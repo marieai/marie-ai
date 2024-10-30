@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, conlist
+from pydantic import BaseModel
 
 
 class WordModel(BaseModel):
@@ -10,6 +10,15 @@ class WordModel(BaseModel):
     box: List[int]
     line: int
     word_index: int
+
+    def to_xyxy(self) -> List[int]:
+        """
+        Convert bounding box from (x, y, w, h) to (minx, miny, maxx, maxy).
+        """
+        x, y, w, h = self.box
+        minx, miny = x, y
+        maxx, maxy = x + w, y + h
+        return [minx, miny, maxx, maxy]
 
 
 class LineModel(BaseModel):
