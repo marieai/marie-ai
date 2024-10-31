@@ -171,5 +171,5 @@ textual_fastdatatable:        standard,core
 etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
-vllm:                         standard,core
+#vllm:                         standard,core
 rtree:                        standard,core

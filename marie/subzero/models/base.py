@@ -1,13 +1,28 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
 
 class RowExtractionStrategy(str, Enum):
-    PRIMARY_COLUMN_VARIABLE = "Primary Column / Variable Length Ordinals"
-    PRIMARY_COLUMN_FIXED = "Primary Column / Fixed Length Ordinals"
-    COMPOSITE_FIXED = "Composite Rows /  Fixed Length Ordinals"
+    PRIMARY_COLUMN_VARIABLE = (
+        "PRIMARY_COLUMN_VARIABLE",
+        "Primary Column / Variable Length Ordinals",
+    )
+    PRIMARY_COLUMN_FIXED = (
+        "PRIMARY_COLUMN_FIXED",
+        "Primary Column / Fixed Length Ordinals",
+    )
+    COMPOSITE_FIXED = (
+        "PRIMARY_COLUMN_FIXED",
+        " Composite Rows /  Fixed Length Ordinals",
+    )
+
+    def __new__(cls, value, description):
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.description = description
+        return obj
 
     @property
     def label(self) -> str:
@@ -15,11 +30,11 @@ class RowExtractionStrategy(str, Enum):
 
 
 class CutpointStrategy(str, Enum):
-    START_ON_STOP = ("Restart On Starts", "Description for START_ON_STOP")
-    STOP_ON_STOP = ("Start After Stop", "Description for STOP_ON_STOP")
-    STOP_ON_PAGE_BREAK = ("Stop on Page Break", "Description for STOP_ON_PAGE_BREAK")
-    DYNAMIC = ("Dynamic", "Description for DYNAMIC")
-    PATTERN_DEFINITION = ("Pattern Definition", "Description for PATTERN_DEFINITION")
+    START_ON_STOP = ("START_ON_STOP", "Description for START_ON_STOP")
+    STOP_ON_STOP = ("STOP_ON_STOP", "Description for STOP_ON_STOP")
+    STOP_ON_PAGE_BREAK = ("STOP_ON_PAGE_BREAK", "Description for STOP_ON_PAGE_BREAK")
+    DYNAMIC = ("DYNAMIC", "Description for DYNAMIC")
+    PATTERN_DEFINITION = ("PATTERN_DEFINITION", "Description for PATTERN_DEFINITION")
 
     def __new__(cls, value, description):
         obj = str.__new__(cls, value)
@@ -182,6 +197,9 @@ class Selector(BaseModel):
 
 class TextSelector(Selector):
     text: str
+    multiline: Optional[bool] = False
+    method: Optional[str] = "equals"
+    strategy: Optional[str] = "embedding"
 
 
 class PatternSelector(Selector):
@@ -197,7 +215,9 @@ class RegexSelector(Selector):
 
 
 class SelectorSet(BaseModel):
-    selectors: Optional[List[Selector]] = None
+    selectors: Optional[
+        List[Union[TextSelector | ImageSelector | RegexSelector | PatternSelector]]
+    ] = None
 
     def __str__(self) -> str:
         buffer = "SelectorSet : \n"

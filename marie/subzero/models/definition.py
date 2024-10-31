@@ -77,6 +77,7 @@ class Layer(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+        use_enum_values = True
 
 
 class Template(BaseModel):
@@ -124,7 +125,7 @@ class WorkUnit(BaseModel):
 class ExecutionContext(BaseModel):
     template: Optional["Template"] = None
     document: Optional["UnstructuredDocument"] = None
-    pages: List['Page'] = []
+    pages: List["Page"] = []
     tree: Optional[Any] = None
     doc_id: str
     metadata: Optional[Dict] = None
