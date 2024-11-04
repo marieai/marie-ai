@@ -176,7 +176,10 @@ def interface():
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
-        filename = selection["name"]
+
+        print("selection", selection)
+        # filename = selection["name"]
+        filename = selection[0]
         return process_image(filename)
 
     with gr.Blocks() as iface:
@@ -185,7 +188,9 @@ def interface():
         with gr.Row(variant="compact"):
             with gr.Column():
                 src = gr.components.File(
-                    type="file", source="upload", label="Multi-page TIFF/PDF file"
+                    type="filepath",  # Corrected type parameter
+                    label="Multi-page TIFF/PDF file",
+                    file_count="single",
                 )
                 with gr.Row():
                     btn_reset = gr.Button("Clear")
@@ -194,28 +199,28 @@ def interface():
             with gr.Column():
                 chk_store_info = gr.Checkbox(
                     label="Store filtered data in temp directory",
-                    default=True,
+                    value=True,
                     interactive=True,
                 )
 
                 chk_filter_results = gr.Checkbox(
                     label="Filter results",
-                    default=False,
+                    value=False,
                     interactive=True,
                 )
 
                 gr.Number(
                     label="Threshold",
-                    min=0,
-                    max=1,
+                    minimum=0,
+                    maximum=1,
                     step=0.1,
-                    default=0.95,
+                    value=0.95,
                     interactive=True,
                     precision=2,
                 )
 
                 txt_prefix = gr.Textbox(
-                    "Prefix", label="Prefix", default="filtered", interactive=True
+                    "Prefix", label="Prefix", value="filtered", interactive=True
                 )
                 txt_prefix.change(fn=print_textbox, inputs=[txt_prefix])
 
@@ -225,13 +230,13 @@ def interface():
                 #     outputs=[],
                 # )
 
-        with gr.Row(live=True):
+        with gr.Row():
             gallery = gr.Gallery(
                 label="Image frames",
                 show_label=False,
                 elem_id="gallery",
                 interactive=True,
-            ).style(columns=4, object_fit="contain", height="auto")
+            )  # .style(columns=4, object_fit="contain", height="auto")
 
         btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
         btn_reset.click(lambda: src.clear())
