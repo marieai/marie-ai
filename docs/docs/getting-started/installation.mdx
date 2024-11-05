@@ -67,7 +67,7 @@ Version identifiers [are explained here](https://github.com/marieai/marie-ai/blo
 
 ## Prerequisites
 * Linux
-* Python 3.10
+* Python 3.12
 * [Pytorch torch-2.0.0.XXXXXXXXXX+cu118](https://pytorch.org/get-started/locally/)
 * [CUDA 11.8](https://developer.nvidia.com/cuda-11-8-0-download-archive?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_local)
 * [cuDNN 8.7.0](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html)
@@ -94,11 +94,11 @@ On Ubuntu 22.04 you can use the following command to install Python 3.10
 
 ```shell
 sudo apt-get update
-sudo apt install python3.10
-sudo apt install python3.10-dev
+sudo apt install python3.12
+sudo apt install python3.12-dev
 sudo apt install python3-virtualenv
-sudo apt install python3.10-venv
-python3.10 -m venv .env
+sudo apt install python3.12-venv
+python3.12 -m venv .env
 ```
 
 :::note
@@ -197,6 +197,7 @@ Create the wheel file and install it :
 
 Next install from source :
 
+
 ```shell
 git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
@@ -208,6 +209,10 @@ git checkout develop
 
 pip install  Cython
 pip install pybind11
+pip install wheel setuptools pip --upgrade
+
+pip install fastwer --use-pep517
+
 
 pip install -r requirements.txt
 pip install -v -e .

@@ -101,6 +101,9 @@ The solution in this case is to instruct users how to download the file before s
 ## Development environment
 If you wish to run and develop `Marie-AI` directly, [install it from source](../installation.mdx#installing-from-source):
 
+
+
+
 ```shell
 git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
@@ -111,7 +114,10 @@ git checkout develop
 # That is, any local modifications on the code will take effect immediately
 
 pip install  Cython
-pip install pybind11
+pip install "pybind11[global]"  # This prevents "ModuleNotFoundError: No module named 'pybind11'"
+
+sudo apt-get install libpq-dev # Required to install psycopg2
+
 
 pip install -r requirements.txt
 pip install -v -e .
