@@ -198,6 +198,11 @@ Create the wheel file and install it :
 Next install from source :
 
 
+## ISSUES: Packages that fail to install under PEP 517 with build isolation #2252
+
+https://github.com/astral-sh/uv/issues/2252
+
+
 ```shell
 git clone https://github.com/marieai/marie-ai.git
 cd marie-ai
@@ -212,7 +217,6 @@ pip install pybind11
 pip install wheel setuptools pip --upgrade
 
 pip install fastwer --use-pep517
-
 
 pip install -r requirements.txt
 pip install -v -e .

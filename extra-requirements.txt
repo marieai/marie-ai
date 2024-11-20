@@ -133,11 +133,11 @@ munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
-onnx==1.15.0:                 standard,core
-onnxruntime==1.20.0:          standard,core
-onnxruntime-gpu:              standard,core
-onnxconverter_common==1.13.0: standard,core
-onnxmltools:                  standard,core
+# onnx==1.15.0:                 standard,core
+# onnxruntime==1.20.0:          standard,core
+# onnxruntime-gpu:              standard,core
+# onnxconverter_common==1.13.0: standard,core
+# onnxmltools:                  standard,core
 
 pika:                         standard,core
 sentencepiece:                standard,core
