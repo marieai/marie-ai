@@ -3,7 +3,8 @@ ansible_connection: ssh
 # The key used to connect to the remote machines is the same for all the machines
 ansible_ssh_private_key_file: ~/keys/gpu-cluster/gpu-svc.pem
 
-ansible_python_interpreter: /usr/bin/python3
+# ansible_python_interpreter: /usr/bin/python3
+ansible_python_interpreter: /opt/venv/bin/python
 
 # https://docs.ansible.com/ansible-core/2.14/playbook_guide/playbooks_privilege_escalation.html#playbooks-privilege-escalation
 # https://stackoverflow.com/questions/47873671/becoming-non-root-user-in-ansible-fails

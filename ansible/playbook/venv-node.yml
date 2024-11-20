@@ -1,0 +1,57 @@
+---
+- name: Marie-AI - Status Node
+  hosts: ml_cluster
+  gather_facts: false
+
+  vars:
+    stack_name: "dev"
+
+  tasks:
+    # use the default python3 and then we will switch to VENV
+    - name: Set the Python interpreter to the virtual environment
+      set_fact:
+        ansible_python_interpreter: /usr/bin/python3
+        
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      become_user: root 
+      become: yes
+      become_method: sudo
+
+    - name: Install python3-venv with --fix-missing option
+      apt:
+        name: python3-venv
+        state: present
+        update_cache: yes
+        force_apt_get: yes
+        install_recommends: no
+        allow_unauthenticated: yes
+
+      become_user: root 
+      become: yes
+      become_method: sudo
+
+    - name: Create a virtual environment
+      command: python3 -m venv /opt/venv
+      args:
+        creates: /opt/venv/bin/activate
+      become_user: root 
+      become: yes
+      become_method: sudo
+
+    - name: Install specific version of requests and urllib3 in virtual environment
+      pip:
+        name:
+          - requests==2.31.0
+          - urllib3<2.0
+        virtualenv: /opt/venv
+        state: present
+      become_user: root 
+      become: yes
+      become_method: sudo
+
+    - name: Set the Python interpreter to the virtual environment
+      set_fact:
+        ansible_python_interpreter: /opt/venv/bin/python
+        

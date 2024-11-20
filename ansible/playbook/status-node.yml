@@ -5,8 +5,28 @@
 
   vars:
     stack_name: "dev"
+    venv_path: "/opt/venv"
 
   tasks:
+
+    - name: Check if virtual environment exists
+      stat:
+        path: "{{ venv_path }}/bin/activate"
+      register: venv_check
+
+    - name: Fail if virtual environment does not exist
+      fail:
+        msg: "Virtual environment does not exist at {{ venv_path }}"
+      when: not venv_check.stat.exists
+
+    - name: Display virtual environment name
+      command: /bin/bash -c 'source /opt/venv/bin/activate && echo $VIRTUAL_ENV'
+      register: venv_name
+
+    - name: Show virtual environment name
+      debug:
+        msg: "Virtual environment: {{ venv_name.stdout }}"
+
 
     - name: Install python docker
       apt: name=python3-docker state=latest
