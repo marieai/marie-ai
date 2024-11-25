@@ -80,7 +80,7 @@ There are known issues with upstream packages as they are not yet compatible wit
 ### Setup Python 3.10
 
 ```shell
-sudo apt-get install python3.10
+sudo apt-get install python3.11
 ```
 From inside this directory, create a virtual environment using the Python venv module:
 
@@ -90,13 +90,13 @@ sudo apt install software-properties-common -y
 sudo add-apt-repository ppa:deadsnakes/ppa
 ```
 
-On Ubuntu 22.04 you can use the following command to install Python 3.10
+On Ubuntu 22.04 you can use the following command to install Python 3.11, 3.12 and 3.13
 
 ```shell
 sudo apt-get update
 sudo apt install python3.12
 sudo apt install python3.12-dev
-sudo apt install python3-virtualenv
+sudo apt install python3-vrtualenv
 sudo apt install python3.12-venv
 python3.12 -m venv .env
 ```
@@ -263,6 +263,14 @@ fairseq 0.12.2 requires omegaconf<2.1, but you have omegaconf 2.2.3 which is inc
  pip uninstall hydra-core
  pip uninstall omegacon
  pip uninstall fairseq
+```
+
+## packaging.requirements.InvalidRequirement: .* suffix can only be used with `==` or `!=` operators
+https://github.com/pypa/pipx/issues/998
+https://github.com/omry/omegaconf/pull/1195
+
+```
+python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 ```
 
 Install `Detectron2` and then `fairseq`
@@ -465,9 +473,27 @@ docker logs  marie-icr-0  -f --since 0m
 ```
 
 
-
-
 ## Common issues
+
+Resolve common PIP / Setuptools issues (Not required but it will help to avoid issues)
+```shell
+python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
+```
+
+### Fix broken PIP
+
+ModuleNotFoundError: No module named 'distutils'
+No module named 'distutils' on Python >=3.12
+
+``` shell
+wget https://bootstrap.pypa.io/pip/pip.pyz
+python3 pip.pyz install setuptools
+pip install -e detectron2
+curl -O https://bootstrap.pypa.io/get-pip.py
+python3 get-pip.py
+python3 -m pip install --upgrade setuptools
+```
+
 
 ### Segmentation fault
 
@@ -478,18 +504,24 @@ There is a segmentation fault happening with `opencv-python==4.5.4.62` switching
 pip install opencv-python==4.5.4.60
 ```
 
-
 ### Missing convert_namespace_to_omegaconf
 
 Install `fairseq` from source, the release version is  missing `convert_namespace_to_omegaconf`
 
-```bash
+Old installation
+```shell
 git clone https://github.com/pytorch/fairseq.git
 cd fairseq
 pip install -r requirements.txt
 python setup.py build develop
 ```
 
+New installation
+```shell
+git clone https://github.com/pytorch/fairseq.git
+cd fairseq
+pip install --editable ./
+```
 
 ### `distutils` has no attribute version
 
