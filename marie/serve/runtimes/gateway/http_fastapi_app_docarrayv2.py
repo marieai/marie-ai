@@ -110,7 +110,9 @@ def get_fastapi_app(
             def __init__(self):
                 super().__init__()
                 self.alias_generator = _to_camel_case
-                self.allow_population_by_field_name = True
+                self.allow_population_by_field_name = (
+                    True  # replace with populate_by_name
+                )
 
     class InnerConfig(ConfigDict):
         def __init__(self):

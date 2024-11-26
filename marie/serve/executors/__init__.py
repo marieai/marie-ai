@@ -1268,7 +1268,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
             to main thread.
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's dynamic_batching field
         :param reload: a flag indicating if the Executor should watch the Python files of its implementation to reload the code live while serving.
-        :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
+        :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://jina.ai/serve/api/jina.orchestrate.flow.base/>`
 
         """
         warnings.warn(
@@ -1374,12 +1374,12 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         :param uses_metas: dictionary of parameters to overwrite from the default config's metas field
         :param uses_requests: dictionary of parameters to overwrite from the default config's requests field
         :param uses_dynamic_batching: dictionary of parameters to overwrite from the default config's requests field
-        :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://docs.jina.ai/api/jina.orchestrate.flow.base/>`
+        :param kwargs: other kwargs accepted by the Flow, full list can be found `here <https://jina.ai/serve/api/jina.orchestrate.flow.base/>`
         """
 
         warnings.warn(
-            f"Executor.to_docker_compose_yaml() is no more supported and will be deprecated soon. Use Deployment to export docker compose YAML files: "
-            f"https://docs.jina.ai/concepts/executor/serve/#serve-via-docker-compose",
+            f'Executor.to_docker_compose_yaml() is no more supported and will be deprecated soon. Use Deployment to export docker compose YAML files: '
+            f'https://jina.ai/serve/concepts/executor/serve/#serve-via-docker-compose',
             DeprecationWarning,
         )
         from marie.orchestrate.flow.base import Flow

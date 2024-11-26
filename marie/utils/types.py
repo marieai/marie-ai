@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from distutils import util
 from types import TracebackType
 from typing import Tuple, Type, Union
 
@@ -9,11 +8,17 @@ ExcInfo = Union[
 ]
 
 
-def strtobool(val: [bool | str]) -> bool:
+def strtobool(val: Union[bool, str]) -> bool:
     """
-    Convert bool string or bool to a bool type
+    Convert a bool string or bool to a bool type.
     """
     if isinstance(val, bool):
         return val
 
-    return bool(util.strtobool(val))
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return True
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return False
+    else:
+        raise ValueError(f"Invalid truth value: {val}")
