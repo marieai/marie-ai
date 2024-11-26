@@ -44,32 +44,31 @@ def interface():
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
-        filename = selection["name"]
+        print("selection", selection)
+        filename = selection[0]
         return process_image(filename)
 
     with gr.Blocks() as iface:
         gr.Markdown(article)
 
         with gr.Row(variant="compact"):
-            srcXXX = gr.components.Image(
-                type="pil", source="upload", image_mode="L", label="Single page image"
-            )
-            src = gr.components.File(
-                type="file", source="upload", label="Multi-page TIFF/PDF file"
-            )
+            src = gr.components.File(type="filepath", label="Multi-page TIFF/PDF file")
 
         with gr.Row():
             btn_reset = gr.Button("Clear")
             btn_submit = gr.Button("Process", variant="primary")
             btn_grid = gr.Button("Image-Grid", variant="primary")
 
-        with gr.Row(live=True):
+        with gr.Row():
             gallery = gr.Gallery(
                 label="Image frames",
                 show_label=False,
                 elem_id="gallery",
                 interactive=True,
-            ).style(columns=4, object_fit="contain", height="auto")
+                columns=4,  # Moved columns here
+                object_fit="contain",  # Moved object_fit here
+                height="auto",  # Moved height here
+            )
 
         with gr.Row():
             with gr.Column():

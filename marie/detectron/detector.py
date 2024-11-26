@@ -43,6 +43,7 @@ class OptimizedDetectronPredictor:
 
         self.cfg = cfg.clone()  # cfg can be modified by model
         self.model = build_model(self.cfg)
+        # FIXME: This is causing the model to fail
         # self.model = self.optimize_model(self.model)
 
         if self.half_precision:

@@ -77,22 +77,15 @@ Version identifiers [are explained here](https://github.com/marieai/marie-ai/blo
 Setup development environment for Marie-AI. We recommend using Python 3.10.
 There are known issues with upstream packages as they are not yet compatible with Python 3.11.
 
-### Setup Python 3.10
-
-```shell
-sudo apt-get install python3.11
-```
+### Setup Python
 From inside this directory, create a virtual environment using the Python venv module:
 
-Here we will add third-party repository for Python 3.10 on Ubuntu 20.04
+On Ubuntu 22.04 you can use the following commands to install Python 3.11, 3.12 and 3.13
+
 ```shell
+
 sudo apt install software-properties-common -y
 sudo add-apt-repository ppa:deadsnakes/ppa
-```
-
-On Ubuntu 22.04 you can use the following command to install Python 3.11, 3.12 and 3.13
-
-```shell
 sudo apt-get update
 sudo apt install python3.12
 sudo apt install python3.12-dev
@@ -107,7 +100,7 @@ If you are experienced with PyTorch and have already installed it, just skip thi
 
 :::
 
-###  Install Pytorch 2.0
+###  Install Pytorch 2.x
 The following command will install PyTorch 2.0 with CUDA 11.8 support.
 If you want to install PyTorch without CUDA support, you can remove the `cu118` part from the command.
 
@@ -197,7 +190,6 @@ Create the wheel file and install it :
 
 Next install from source :
 
-
 ## ISSUES: Packages that fail to install under PEP 517 with build isolation #2252
 https://github.com/astral-sh/uv/issues/2252
 
@@ -224,6 +216,12 @@ pip install fastwer --use-pep517
 pip install -r requirements.txt
 pip install -v -e .
 ```
+## Custom Wheels
+There are few wheels that are not available on PyPi and need to be installed manually.
+```shell
+pip install  wheels/etcd3-0.12.0-py2.py3-none-any.whl --force-reinstall
+```
+
 
 ### Additional dependencies
 
@@ -232,12 +230,15 @@ FVCore install
 python3 -m pip install -U 'git+https://github.com/facebookresearch/fvcore'
 ```
 
-Fairseq install
+Fairseq install use the MarieAI-Fork (python 3.12 compatible)
 
 ```shell
-git clone https://github.com/pytorch/fairseq.git
+git clone https://github.com/marieai/fairseq.git
 cd fairseq 
 python setup.py build install
+
+# new method
+# pip install -e . -v
 ```
 
 Detectron2 install
@@ -480,7 +481,7 @@ Resolve common PIP / Setuptools issues (Not required but it will help to avoid i
 python3 -m pip install --no-cache-dir -U pip==22.0.4 setuptools==53.0.0 wheel==0.36.2
 ```
 
-### Fix broken PIP
+### Fix broken/deprecated PIP modules
 
 ModuleNotFoundError: No module named 'distutils'
 No module named 'distutils' on Python >=3.12
@@ -488,12 +489,18 @@ No module named 'distutils' on Python >=3.12
 ``` shell
 wget https://bootstrap.pypa.io/pip/pip.pyz
 python3 pip.pyz install setuptools
-pip install -e detectron2
 curl -O https://bootstrap.pypa.io/get-pip.py
 python3 get-pip.py
 python3 -m pip install --upgrade setuptools
 ```
 
+### A module that was compiled using NumPy 1.x cannot be run in NumPy 2.1.3 as it may crash.
+
+Reinstall `opencv-python` to fix the issue or downgrade numpy < 2.0.0
+
+```shell
+ pip install opencv-python --force
+```
 
 ### Segmentation fault
 
@@ -521,6 +528,12 @@ New installation
 git clone https://github.com/pytorch/fairseq.git
 cd fairseq
 pip install --editable ./
+```
+
+Patche the `fairseq` installation to prevents: `omegaconf.errors.ValidationError: Object of unsupported type: '_MISSING_TYP`
+
+```shell
+python patches/patch-omegaconf-py312.py
 ```
 
 ### `distutils` has no attribute version

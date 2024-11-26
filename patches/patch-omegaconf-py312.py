@@ -7,7 +7,7 @@ def apply_patch():
     try:
         import omegaconf
 
-        target_file = os.path.join(os.path.dirname(omegaconf.__file__), 'omegaconf.py')
+        target_file = os.path.join(os.path.dirname(omegaconf.__file__), "omegaconf.py")
     except ImportError:
         print("Error: omegaconf module is not installed.")
         sys.exit(1)
@@ -18,11 +18,11 @@ def apply_patch():
         sys.exit(1)
 
     # Check if the patch is already present
-    with open(target_file, 'r') as file:
+    with open(target_file, "r") as file:
         content = file.read()
         if (
-            'from dataclasses import _MISSING_TYPE' in content
-            and 'if isinstance(obj, _MISSING_TYPE):' in content
+            "from dataclasses import _MISSING_TYPE" in content
+            and "if isinstance(obj, _MISSING_TYPE):" in content
         ):
             print("Patch is already present in the file.")
             sys.exit(0)
@@ -33,7 +33,7 @@ def apply_patch():
         .strip()
         .lower()
     )
-    if response not in ['yes', 'y']:
+    if response not in ["yes", "y"]:
         print("Patch not applied.")
         sys.exit(0)
 
@@ -45,15 +45,15 @@ def apply_patch():
     """
 
     # Apply the patch
-    lines = content.split('\n')
+    lines = content.split("\n")
     for i, line in enumerate(lines):
-        if 'if obj is _DEFAULT_MARKER_:' in line:
-            lines.insert(i + 1, patch_content)
+        if "if obj is _DEFAULT_MARKER_:" in line:
+            lines.insert(i + 2, patch_content)
             break
 
     # Write the patched content back to the file
-    with open(target_file, 'w') as file:
-        file.write('\n'.join(lines))
+    with open(target_file, "w") as file:
+        file.write("\n".join(lines))
 
     print(f"Patch applied successfully to {target_file}")
 
