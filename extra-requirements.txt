@@ -117,7 +117,7 @@ PyPDF4:                       standard,core
 reportlab:                    standard,core
 pycocotools:                  standard,core
 nltk:                         standard,core
-timm==0.6.12:                 standard,core
+timm==1.0.11:                 standard,core
 #segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
@@ -173,3 +173,4 @@ etcd3:                        standard,core
 typing_extensions>=4.12.2:    standard,core
 #vllm:                         standard,core
 rtree:                        standard,core
+scikit-image:                  standard,core

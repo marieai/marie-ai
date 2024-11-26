@@ -87,7 +87,6 @@ def process_image(filename):
         "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
-    print(result)
     # get boxes and words from the result
     words = []
     boxes_norm = []
@@ -132,14 +131,14 @@ def process_image(filename):
         for idx, line in enumerate(result["lines"]):
             line_text = line["text"]
             confidence = line["confidence"]
-            # convert form xywh to xyxy
+            # convert from xywh to xyxy
             converted = [
-                line["bbox"][0],
-                line["bbox"][1],
-                line["bbox"][0] + line["bbox"][2],
-                line["bbox"][1] + line["bbox"][3],
+                int(line["bbox"][0]),
+                int(line["bbox"][1]),
+                int(line["bbox"][0] + line["bbox"][2]),
+                int(line["bbox"][1] + line["bbox"][3]),
             ]
-            print("line bbox", line["bbox"], converted, line_text)
+            print("line bbox", converted, line_text)
             line_image = image.crop(converted)
 
             with open(
@@ -151,7 +150,7 @@ def process_image(filename):
                 f"/tmp/icr/{request_id}/lines/{prefix_text}_{idx}_{confidence}.png"
             )
 
-    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result), text
+    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
 
 
 def image_to_gallery(image_src):

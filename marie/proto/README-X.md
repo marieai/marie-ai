@@ -27,7 +27,7 @@ This build the docker image that will be used to generate the python code from t
 docker build -f Dockerfiles/protogen-3.21.Dockerfile -t marieai/protogen-3.21:local .
 ```
 
-This build the docker image that will be used to generate the python code from the proto for proto **after* 3.19
+This build the docker image that will be used to generate the pytfixhon code from the proto for proto **after* 3.19
 
 ## 2. generate the python code from the proto
 
@@ -36,20 +36,20 @@ note: you need to be in the root of the repo to do the following steps
 ### For DocArray v1
 
 ``` cmd
-docker run -it -v $(pwd)/marie/proto/docarray_v1:/jina/proto marieai/protogen:local
+docker run -it -v $(pwd)/marie/proto/docarray_v1:/marie/proto marieai/protogen:local
 ```
 
 ``` cmd
-docker run -it -v $(pwd)/marie/proto/docarray_v1:/jina/proto marieai/protogen-3.21:local
+docker run -it -v $(pwd)/marie/proto/docarray_v1:/marie/proto marieai/protogen-3.21:local
 ```
 
 ### For DocArray v2
 
 ``` cmd
-docker run -it -v $(pwd)/marie/proto/docarray_v2:/jina/proto marieai/protogen:local
+docker run -it -v $(pwd)/marie/proto/docarray_v2:/marie/proto marieai/protogen:local
 ```
 
 ``` cmd
-docker run -it -v $(pwd)/marie/proto/docarray_v2:/jina/proto marieai/protogen-3.21:local
+docker run -it -v $(pwd)/marie/proto/docarray_v2:/marie/proto marieai/protogen-3.21:local
 ```
 
