@@ -5,14 +5,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
-from pydantic import (
-    BaseConfig,
-    BaseModel,
-    ConfigDict,
-    Field,
-    create_model,
-    root_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, create_model, root_validator
 
 from marie._docarray import docarray_v2
 from marie.proto.jina_pb2 import (
@@ -57,11 +50,13 @@ DESCRIPTION_EXEC_ENDPOINT = (
 )
 
 
-class CustomConfig(BaseConfig):
+class CustomConfig(ConfigDict):
     """Pydantic config for Camel case and enum handling"""
 
-    use_enum_values = True
-    allow_population_by_field_name = True
+    def __init__(self):
+        super().__init__()
+        self.use_enum_values = True
+        self.populate_by_name = True
 
 
 def _get_oneof_validator(oneof_fields: List, oneof_key: str) -> Callable:

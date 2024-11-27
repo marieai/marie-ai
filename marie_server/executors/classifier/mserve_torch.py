@@ -4,8 +4,8 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from marie import Client
+from marie.auth.auth_bearer import TokenBearer
 from marie.logging_core.predefined import default_logger as logger
-from marie_server.auth.auth_bearer import TokenBearer
 from marie_server.rest_extension import handle_request, process_document_request
 
 classifier_flow_is_ready = False

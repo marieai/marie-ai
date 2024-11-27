@@ -93,7 +93,7 @@ def get_fastapi_app(
         def __init__(self):
             super().__init__()
             self.alias_generator = _to_camel_case
-            self.allow_population_by_field_name = True
+            self.populate_by_name = True
 
     # Use InnerConfig directly instead of inherit_config
     _config = InnerConfig
@@ -106,19 +106,7 @@ def get_fastapi_app(
 
         # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
-        class Config(ConfigDict):
-            def __init__(self):
-                super().__init__()
-                self.alias_generator = _to_camel_case
-                self.allow_population_by_field_name = (
-                    True  # replace with populate_by_name
-                )
-
-    class InnerConfig(ConfigDict):
-        def __init__(self):
-            super().__init__()
-            self.alias_generator = _to_camel_case
-            self.allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     @app.get(
         path="/dry_run",

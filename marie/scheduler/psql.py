@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-from sympy.functions.combinatorial.numbers import partition
 
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus

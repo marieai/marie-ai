@@ -5,11 +5,11 @@ import time
 
 from docarray import DocList
 from docarray.documents import TextDoc
-from marie_executor import MarieExecutor
 
 from marie import Deployment, Executor, Flow, requests
 from marie.api import AssetKeyDoc
 from marie.conf.helper import load_yaml
+from marie.executor.marie_executor import MarieExecutor
 
 
 class TestExecutor(MarieExecutor):
@@ -85,30 +85,24 @@ def main():
     # # Load the config file and set up the toast events
     # config = load_yaml(yml_config, substitute=True, context=context)
     print("Bootstrapping Flow")
-    with (
-        Flow(
-            discovery=True,  # server gateway does not need discovery service
-            discovery_host="0.0.0.0",
-            discovery_port=2379,
-            discovery_watchdog_interval=2,
-            discovery_service_name="gateway/marie",
-            kv_store_kwargs={
-                "provider": "postgresql",
-                "hostname": "127.0.0.1",
-                "port": 5432,
-                "username": "postgres",
-                "password": "123456",
-                "database": "postgres",
-                "default_table": "kv_store_worker",
-                "max_pool_size": 5,
-                "max_connections": 5,
-            },
-        )
-        .add(uses=TestExecutor, name="executor0", replicas=1)
-        .config_gateway(
-            # uses=MariePodGateway, protocols=["GRPC", "HTTP"], ports=[61000, 61001]
-        ) as f
-    ):
+    with Flow(
+        discovery=True,  # server gateway does not need discovery service
+        discovery_host="0.0.0.0",
+        discovery_port=2379,
+        discovery_watchdog_interval=2,
+        discovery_service_name="gateway/marie",
+        kv_store_kwargs={
+            "provider": "postgresql",
+            "hostname": "127.0.0.1",
+            "port": 5432,
+            "username": "postgres",
+            "password": "123456",
+            "database": "postgres",
+            "default_table": "kv_store_worker",
+            "max_pool_size": 5,
+            "max_connections": 5,
+        },
+    ).add(uses=TestExecutor, name="executor0", replicas=1) as f:
         f.save_config("/mnt/data/marie-ai/config/service/direct-flow.yml")
         f.block()
 

@@ -1,5 +1,4 @@
 import abc
-import asyncio
 import logging
 import threading
 import time
@@ -202,22 +201,20 @@ class EtcdServiceRegistry(ServiceRegistry):
         :return: None
         """
 
-        async def _heartbeat_setup():
-            initial_delay = self._heartbeat_time
-            await asyncio.sleep(initial_delay)
+        def _heartbeat_setup():
+            print(
+                f"Setting up heartbeat for etcd service registry  : {self._heartbeat_time}"
+            )
+            time.sleep(self._heartbeat_time)
             while True:
                 try:
                     self.heartbeat()
-                    await asyncio.sleep(self._heartbeat_time)
+                    time.sleep(self._heartbeat_time)
                 except Exception as e:
                     log.error(f"Error in heartbeat : {str(e)}")
 
-        def _polling_status():
-            task = self._loop.create_task(_heartbeat_setup())
-            self._loop.run_until_complete(task)
-
         polling_status_thread = threading.Thread(
-            target=_polling_status,
+            target=_heartbeat_setup,
             daemon=True,
         )
         polling_status_thread.start()

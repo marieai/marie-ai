@@ -833,12 +833,21 @@ class MarieServerGateway(CompositeServer):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
 
+        executors_ = list(self.deployment_nodes.keys())
+        graph_description = {
+            "start-gateway": executors_,
+        }
+        # add end-gateway to the graph for each executor
+        for executor in executors_:
+            graph_description[executor] = ["end-gateway"]
+
         # FIXME: testing with only one executor
         deployments_addresses = {}
         graph_description = {
             "start-gateway": ["executor0"],
             "executor0": ["end-gateway"],
         }
+
         deployments_metadata = {"deployment0": {"key": "value"}}
         for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
             connections = []

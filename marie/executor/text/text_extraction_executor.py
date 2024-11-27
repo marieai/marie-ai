@@ -1,4 +1,5 @@
 import os
+import time
 import warnings
 from typing import Any, Optional, Union
 
@@ -10,6 +11,7 @@ from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, StorageDoc
 from marie.boxes import PSMode
+from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -305,7 +307,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             )
 
 
-class TextExtractionExecutorMock(Executor):
+class TextExtractionExecutorMock(MarieExecutor):
     def __init__(
         self,
         name: str = "",
@@ -428,3 +430,31 @@ class TextExtractionExecutorMock(Executor):
         #  DocList / Dict / `None`
         converted = safely_encoded(lambda x: x)(self.runtime_info)
         return converted
+
+    @requests(on="/extract")
+    async def func_extract(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters=None,
+        *args,
+        **kwargs,
+    ):
+        if parameters is None:
+            parameters = {}
+        print(f"FirstExec func called : {len(docs)}, {parameters}")
+        # randomly throw an error to test the error handling
+        # if random.random() > 0.5:
+        #     raise Exception("random error in FirstExec")
+        #
+        # for doc in docs:
+        #     doc.text += " First Exec"
+        sec = 5
+        print(f"Sleeping for {sec} seconds : ", time.time())
+        time.sleep(sec)
+        # raise Exception("random error in FirstExec")
+
+        print(f"Sleeping for {sec} seconds - done : ", time.time())
+        return {
+            "parameters": parameters,
+            "data": "Data reply",
+        }
