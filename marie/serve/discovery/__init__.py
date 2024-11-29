@@ -63,7 +63,6 @@ class DiscoveryServiceMixin:
             raise Exception("Expected runtime_args to be configured")
 
         self.logger.info("Setting up service discovery ETCD ...")
-        self.sd_state = "started"
         self.discovery_host = discovery_host
         self.discovery_port = discovery_port
         self.discovery_scheme = discovery_scheme
@@ -73,19 +72,24 @@ class DiscoveryServiceMixin:
         ctrl_address = f"{host}:{port}"
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
 
+        # TODO - this should be configurable
+        service_ttl = 6
+        heartbeat_time = 2
+
         etcd_registry = EtcdServiceRegistry(
             self.discovery_host,
             self.discovery_port,
-            heartbeat_time=5,
+            heartbeat_time=heartbeat_time,
         )
         lease = etcd_registry.register(
             [discovery_service_name],
             ctrl_address,
-            6,
+            service_ttl=service_ttl,
             addr_cls=JsonAddress,
             metadata=deployments_addresses,
         )
 
+        self.sd_state = "started"
         self.logger.info(f"Lease ID: {lease.id}")
 
     def _teardown_service_discovery(

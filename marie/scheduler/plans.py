@@ -151,7 +151,7 @@ def count_states(schema: str):
     """
 
 
-def cancel_jobs(schema, name: str, ids: list):
+def cancel_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
     return f"""
@@ -168,7 +168,7 @@ def cancel_jobs(schema, name: str, ids: list):
     """
 
 
-def resume_jobs(schema, name: str, ids: list):
+def resume_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
     return f"""

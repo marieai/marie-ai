@@ -219,7 +219,6 @@ async def main():
     mock_args = None
     args = parse_args(mock_args)
     print(args)
-
     parameters = None
     if args.command == "job":
         if args.action == "submit":

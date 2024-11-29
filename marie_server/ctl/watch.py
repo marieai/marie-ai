@@ -218,8 +218,7 @@ class MarieApp(App):
         :return: None
 
         """
-        log(f"Setting up service discovery : {service_name}")
-        log(f"ETCD host : {etcd_host}:{etcd_port}")
+        log(f"Setting up service discovery : {etcd_host}:{etcd_port}/{service_name}")
 
         async def _start_watcher():
             if not service_name:

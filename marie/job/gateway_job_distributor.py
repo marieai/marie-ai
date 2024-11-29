@@ -35,7 +35,6 @@ class GatewayJobDistributor(JobDistributor):
                 f"Current status is {curr_status} with message {curr_message}."
             )
 
-        # attempt to get gateway streamer if not initialized
         if self.streamer is None:
             self.logger.warning(f"Gateway streamer is not initialized")
             raise RuntimeError("Gateway streamer is not initialized")
@@ -43,7 +42,6 @@ class GatewayJobDistributor(JobDistributor):
         parameters = {"job_id": submission_id}  # "#job_info.job_id,
         if job_info.metadata:
             parameters.update(job_info.metadata)
-
         print(f"entrypoint = {job_info.entrypoint}")
         # metadata for payload is nested in metadata
         metadata = job_info.metadata.get("metadata", {})
@@ -51,21 +49,30 @@ class GatewayJobDistributor(JobDistributor):
         parameters, asset_doc = await parse_payload_to_docs(metadata)
         job_tag = parameters["ref_type"] if "ref_type" in parameters else ""
         parameters["job_id"] = submission_id
-        # payload data attribute should be stripped at this time
         parameters["payload"] = metadata  # THIS IS TEMPORARY HERE
-        input_docs = DocList[AssetKeyDoc]([asset_doc])
+
+        # entrypoint format is executor://endpoint/path or /endpoint/path
+        exec_endpoint = job_info.entrypoint
+        target_executor = None
+
+        if "://" in job_info.entrypoint:
+            target_executor, exec_endpoint = job_info.entrypoint.split("://", 1)
+
+        print(f"exec_endpoint = {exec_endpoint}")
+        print(f"target_executor = {target_executor}")
 
         request = DataRequest()
         request.document_array_cls = DocList[AssetKeyDoc]()
-        request.header.exec_endpoint = job_info.entrypoint
+        request.header.exec_endpoint = exec_endpoint
+        if target_executor:
+            request.header.target_executor = target_executor
         request.parameters = parameters
-        request.data.docs = input_docs
+        request.data.docs = DocList[AssetKeyDoc]([asset_doc])
 
         # doc = TextDoc(text=f"sample text : {job_info.entrypoint}")
-        #
+
         # metadata = job_info.metadata
         # print(f"metadata: {metadata}")
-        #
         # request = DataRequest()
         # request.document_array_cls = DocList[BaseDoc]()
         # request.header.exec_endpoint = "/extract"

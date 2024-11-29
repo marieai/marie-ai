@@ -199,7 +199,6 @@ class MarieServerGateway(CompositeServer):
                     start_after=datetime.now(),
                     expire_in_seconds=0,
                     keep_until=datetime.now(),
-                    on_complete=False,
                 )
 
                 result = await self.job_scheduler.submit_job(work_info)
@@ -495,7 +494,6 @@ class MarieServerGateway(CompositeServer):
             start_after=datetime.now(),
             expire_in_seconds=0,
             keep_until=datetime.now(),
-            on_complete=False,
             policy=submission_policy,
         )
 
@@ -625,7 +623,7 @@ class MarieServerGateway(CompositeServer):
         etcd_host: str,
         etcd_port: int,
         service_name: str,
-        watchdog_interval: int = 5,
+        watchdog_interval: int = 1,
     ):
         """
          Setup service discovery for the gateway.
@@ -637,8 +635,9 @@ class MarieServerGateway(CompositeServer):
         :return: None
 
         """
-        self.logger.info(f"Setting up service discovery : {service_name}")
-        self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
+        self.logger.info(
+            f"Setting up service discovery : {etcd_host}:{etcd_port}/{service_name}"
+        )
 
         if not service_name:
             raise BadConfigSource("Service name must be provided for service discovery")
@@ -833,17 +832,30 @@ class MarieServerGateway(CompositeServer):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
 
+        # TODO : We can only do one Executor for now, need to update this to handle multiple executors
+
+        # Graph here is just a simple start-gateway -> executor -> end-gateway representation of the deployment
+        # it does not care if the executor is a Flow or a Deployment or if nodes are present in the executor
+        # this allows us to use same gateway streamer for all types of deployments
+
+        # {
+        #     "start-gateway": ["executor0","extract_executor"],
+        #     "executor0": ["end-gateway"],
+        #     "extract_executor": ["end-gateway"]
+        # }
+
         executors_ = list(self.deployment_nodes.keys())
         graph_description = {
             "start-gateway": executors_,
         }
-        # add end-gateway to the graph for each executor
         for executor in executors_:
             graph_description[executor] = ["end-gateway"]
 
+        print(f"graph_description: {graph_description}")
+
         # FIXME: testing with only one executor
         deployments_addresses = {}
-        graph_description = {
+        graph_descriptionXXXX = {
             "start-gateway": ["executor0"],
             "executor0": ["end-gateway"],
         }

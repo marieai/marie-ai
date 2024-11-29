@@ -122,7 +122,7 @@ class JobManager:
                 DEFAULT_JOB_START_TIMEOUT_SECONDS,
             )
         )
-        is_alive = True
+        is_alive = False
 
         while is_alive:
             try:
@@ -171,7 +171,6 @@ class JobManager:
                             err_msg += (
                                 " This may be because the job entrypoint's specified "
                                 "resources (entrypoint_num_cpus, entrypoint_num_gpus, "
-                                "entrypoint_resources, entrypoint_memory)"
                                 "aren't available on the cluster."
                                 " Try checking the cluster's available resources with "
                                 "`marie nodes status` and specifying fewer resources for the "

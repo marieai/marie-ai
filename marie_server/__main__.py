@@ -119,15 +119,7 @@ def main(
 
 def patch_libs():
     """Patch the libraries"""
-    logger.warning("Patching libraries")
-    # patch pydantic schema
-    # LegacyDocument.schema = classmethod(patch_pydantic_schema_2x)
-    #
-    # schema = LegacyDocument.schema()
-    # logger.info(f"Schema : {schema}")
-
-    # store_json_object(schema, os.path.join("/home/greg/tmp/marie", "schema-2.x.json"))
-    # print(schema)
+    logger.warning("Patching libraries if needed")
 
 
 def __main__(
@@ -155,33 +147,6 @@ def __main__(
     torch_home = os.path.join(__model_path__, "cache", "torch")
     os.environ["TORCH_HOME"] = torch_home
 
-    if False:
-        import shutil
-
-        # os.environ['COLUMNS'] = "211"
-        # os.environ['LINES'] = "50"
-        print(f"shutil.which('python') = {shutil.which('python')}")
-        print(shutil.get_terminal_size())
-        print(columns())
-
-        print(shutil.get_terminal_size())
-        import logging
-        import shutil
-
-        from rich.console import Console
-        from rich.logging import RichHandler
-
-        logging.basicConfig(
-            level=logging.DEBUG, handlers=[RichHandler(enable_link_path=True)]
-        )
-        logging.error("test")
-        logging.warning("test")
-        logging.info("test")
-        logging.debug("test")
-        Console().print(shutil.get_terminal_size())
-
-        sys.exit(1)
-
     PYTHONPATH = os.environ.get("PYTHONPATH", "")
 
     logger.info(f"Debugging information:")
@@ -201,12 +166,13 @@ def __main__(
         "gpu_device_count": gpu_device_count(),
     }
 
-    jemallocpath = "/usr/lib/%s-linux-gnu/libjemalloc.so.2" % (platform.machine(),)
+    jemallocpath = "/usr/lib/%s-linux-gnu/ .so.2" % (platform.machine(),)
 
     if os.path.isfile(jemallocpath):
+        logger.info("Found %s, will use" % (jemallocpath,))
         os.environ["LD_PRELOAD"] = jemallocpath
     else:
-        logger.info("Could not find %s, will not use" % (jemallocpath,))
+        logger.warning("Could not find %s, will not use" % (jemallocpath,))
 
     # put env variables into context
     if env:
@@ -255,7 +221,7 @@ def __main__(
             external=True,
         )
 
-    marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
+    # marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
 
     filter_endpoint()
     setup_server(config)

@@ -25,7 +25,8 @@ fi
 # create number of jobs based on the input from the user
 metadata=$(cat <<EOF
 {
-    "on": "/extract",
+    "on": "/document/extractXXXX",
+    "on___": "extract_executor://extract",
     "project_id": "project_id_000001",
     "doc_idXXXX": "doc_id_$RANDOM",
     "ref_id": "doc_id_0001",

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 
+from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
@@ -71,12 +72,12 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
+        self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         self.known_queues = set()
         self._reset_on_complete = False
-        self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         if job_manager is None:
-            raise ValueError("Job manager is required for JobScheduler")
-
+            raise BadConfigSource("job_manager argument is required for JobScheduler")
+        self.queue_names = config.get("queue_names", [])
         self.running = False
         self.task = None
         self.sync_task = None
@@ -87,6 +88,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
+        if self.queue_names is None or len(self.queue_names) == 0:
+            raise BadConfigSource("Queue names are required for JobScheduler")
+
+        self.logger.info(f"Queue names: {self.queue_names}")
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
@@ -313,30 +318,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         Enqueues a work item for processing on the next available executor.
 
         :param work_info: The information about the work item to be processed.
-        :return: A tuple containing a boolean indicating whether the work item was successfully enqueued and the ID of the work item.
+        :return: The ID of the work item if successfully enqueued, None otherwise.
         """
+        submission_id = work_info.id
         if not self.job_manager.has_available_slot():
             self.logger.info(
-                f"No available slots for work, scheduling : {work_info.id}"
+                f"No available slots for work, scheduling : {submission_id}"
             )
             return None
-
-        submission_id = work_info.id
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
+        entrypoint = work_info.data.get("metadata", {}).get("on")
+        if not entrypoint:
+            raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        # FIXME : This is a hack for now
-        # extract entrypoint from work_info
-        # this need to be configurable from db as projects can have different entrypoints
-        name = work_info.name
-        entrypoint = "/extract"
-        if name == "extract":
-            entrypoint = "/extract"
-        elif name == "template-matching":
-            entrypoint = "/template-matching"
-        elif name == "classify":
-            entrypoint = "/classify"
-
+        self.logger.info(f'incoming entrypoint:{entrypoint}')
         try:
             returned_id = await self.job_manager.submit_job(
                 entrypoint=entrypoint,
@@ -359,22 +355,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param stop_event: an event to signal when to stop iterating over the records
         :return:
         """
+
         async with self._lock:
             with self:
                 try:
                     fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
-                    query = fetch_query_def(
-                        name="extract",  # TODO this is a placeholder
-                        batch_size=limit,
-                        include_metadata=False,
-                        priority=True,
-                    )
-                    # we can't use named cursors as it will throw an error
-                    cursor = self.connection.cursor()
-                    cursor.itersize = limit
-                    cursor.execute(f"{query}")
-                    records = [record for record in cursor]
-
+                    records = []
+                    for queue in self.known_queues:
+                        query = fetch_query_def(
+                            name=queue,
+                            batch_size=limit,
+                            include_metadata=False,
+                            priority=True,
+                        )
+                        # we can't use named cursors as it will throw an error
+                        cursor = self.connection.cursor()
+                        cursor.itersize = limit
+                        cursor.execute(f"{query}")
+                        records.extend([record for record in cursor])
                     return records
                 except (Exception, psycopg2.Error) as error:
                     self.logger.error(f"Error fetching next job: {error}")

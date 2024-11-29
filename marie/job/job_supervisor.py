@@ -67,7 +67,7 @@ class JobSupervisor:
                 histograms=_NetworkingHistograms(),
             )
 
-            doc = TextDoc(text=f"ping : _jina_dry_run_")
+            doc = TextDoc(text=f"ping : {deployment_name}@_jina_dry_run_")
             request = DataRequest()
             request.document_array_cls = DocList[BaseDoc]()
             request.header.exec_endpoint = "_jina_dry_run_"
@@ -199,11 +199,12 @@ class JobSupervisor:
             )
             # printing the whole response will trigger a bug in rich.print with stackoverflow
             # format the response
-            print("Response type: ", type(response))
-            print("Response data: ", response.data)
-            print("Response data: ", response.parameters)
-            print("Response docs: ", response.data.docs)
-            print("Response status: ", response.status)
+            if False:
+                print("Response type: ", type(response))
+                print("Response data: ", response.data)
+                print("Response data: ", response.parameters)
+                print("Response docs: ", response.data.docs)
+                print("Response status: ", response.status)
 
             # This monitoring strategy allows us to have Floating Executors that can be used to run jobs outside of the main
             # deployment. This is useful for running jobs that are not part of the main deployment, but are still part of the
@@ -215,12 +216,6 @@ class JobSupervisor:
             # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
 
             job_status = await self._job_info_client.get_status(self._job_id)
-            print(
-                "Job status from  _submit_job_in_background: ",
-                job_status,
-                job_status.is_terminal(),
-            )
-
             if response.status.code == jina_pb2.StatusProto.SUCCESS:
                 if job_status.is_terminal():
                     self.logger.warning(

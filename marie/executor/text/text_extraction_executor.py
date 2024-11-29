@@ -151,7 +151,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
         job_id = parameters.get("job_id")
         MDC.put("request_id", job_id)
 
-        self.logger.info("Starting ICR processing request")
+        self.logger.info("Starting OCR request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
