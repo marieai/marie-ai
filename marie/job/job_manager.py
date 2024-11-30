@@ -122,7 +122,7 @@ class JobManager:
                 DEFAULT_JOB_START_TIMEOUT_SECONDS,
             )
         )
-        is_alive = False
+        is_alive = True
 
         while is_alive:
             try:
