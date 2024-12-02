@@ -157,7 +157,9 @@ class MarieServerGateway(CompositeServer):
             )
 
         self.distributor = GatewayJobDistributor(
-            gateway_streamer=None, logger=self.logger
+            gateway_streamer=None,
+            deployment_nodes=None,
+            logger=self.logger,
         )
 
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
@@ -891,6 +893,7 @@ class MarieServerGateway(CompositeServer):
 
         self.streamer = streamer
         self.distributor.streamer = streamer
+        self.distributor.deployment_nodes = self.deployment_nodes
         JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
 
     async def gateway_server_offline(self, service: str, ev_value):
@@ -953,6 +956,3 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
         :return:
         """
         return self.active_connection
-
-
-# clear;for i in {0..10};do curl localhost:51000/endpoint?text=x_${i} ;done;

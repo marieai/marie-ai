@@ -7,16 +7,16 @@ py_modules:
 # This will be changed in the future
 # marie gateway --uses /mnt/data/marie-ai/config/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000
 
+#protocols:
+#  - "GRPC"
+#  - "HTTP"
+#
+#ports:
+#  - 54000
+#  - 55000
+
 port_monitoring:
   - 57706
-
-protocols:
-  - "GRPC"
-  - "HTTP"
-
-ports:
-  - 54000
-  - 55000
 
 # Shared configuration
 shared_config:
@@ -71,6 +71,7 @@ with:
     default_table: job_scheduler
     max_pool_size: 5
     max_connections: 5
+    queue_names: [extract,classify,transform,load] # Queue names for the job scheduler to monitor
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

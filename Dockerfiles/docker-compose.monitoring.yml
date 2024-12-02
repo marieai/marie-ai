@@ -1,15 +1,56 @@
-version: "3.9"
-
 # ############### Networks ###############
 
 # Container networking setup
 # docker network create --driver=bridge public
 # sysctl net.ipv4.conf.all.forwarding=1
 
-# Dashboard accessible via `http://localhost:7777/dashboard/#/'
-# Consul accessible via `http://localhost:8500/`
+# Dashboards
+# http://localhost:16686/ # Jaeger
+# http://localhost:3000/login # Grafana
+# http://localhost:3100/ # Loki
+# http://localhost:9090/ # Prometheus
+# http://localhost:9093/#/status # Alertmanager
+
+# https://jina.ai/serve/cloud-nativeness/opentelemetry/#opentelemetry
+# https://opentelemetry.io/docs/collector/installation/
+# https://github.com/stefanoboriero/lgtm-docker
 
 services:
+  # Jaeger https://www.jaegertracing.io/docs/2.0/getting-started/
+  jaeger:
+    image: jaegertracing/jaeger:2.0.0
+    container_name: jaeger
+    ports:
+      - "5778:5778"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14268:14268"
+      - "9411:9411"
+    command:
+      - "--set"
+      - "receivers.otlp.protocols.http.endpoint=0.0.0.0:4318"
+      - "--set"
+      - "receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317"
+    restart: unless-stopped
+    networks:
+      - public
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.114.0
+    command: [ "--config=/etc/otel-collector-config.yml" ]
+    volumes:
+      - ./config/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      - "8888" # Prometheus metrics exposed by the collector
+      - "8889" # Prometheus exporter metrics
+      - "4317:4317" # OTLP gRPC receiver
+    depends_on:
+      - jaeger
+    networks:
+      - public
+
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -56,7 +97,7 @@ services:
       - public
 
   loki:
-    image: grafana/loki:2.7.5
+    image: grafana/loki:3.1.0
     restart: unless-stopped
     volumes:
       - ./config/grafana/loki:/etc/loki
@@ -70,22 +111,6 @@ services:
     networks:
       - public
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    restart: unless-stopped
-    container_name: 'marie-rabbitmq'
-    ports:
-        - 5672:5672 # AMQP
-        - 15672:15672 # HTTP
-    environment:
-        - RABBITMQ_DEFAULT_USER=guest
-        - RABBITMQ_DEFAULT_PASS=guest
-        - RABBITMQ_DEFAULT_VHOST=/
-    volumes:
-        - rabbitmq_data:/var/lib/rabbitmq
-        - rabbitmq_log:/var/log/rabbitmq
-    networks:
-        - public
 
 volumes:
   prometheus_data:
@@ -95,10 +120,6 @@ volumes:
   loki_data:
     driver: local
   alertmanager_data:
-    driver: local
-  rabbitmq_data:
-    driver: local
-  rabbitmq_log:
     driver: local
 
 # ############### Networks ###############

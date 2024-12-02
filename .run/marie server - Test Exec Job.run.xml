@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="marie server - Test Exec Job" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="marie server - Test Exec Job" type="PythonConfigurationType" factoryName="Python" singleton="false">
     <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />

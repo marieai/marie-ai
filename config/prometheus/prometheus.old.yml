@@ -1,0 +1,102 @@
+---
+global:
+  scrape_interval: 20s
+  scrape_timeout: 20s
+scrape_configs:
+
+  - job_name: traefik
+    scheme: http
+    static_configs:
+      - targets:
+          - "traefik:7777"
+
+  - job_name: 'consul-flow-gateway'
+    scrape_interval: 15s
+    metrics_path: /
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:57843
+        target_label: __address__
+#        target_label: __meta_consul_service_port
+#        target_label: instance
+
+    # Job config for extracting nvidia metrics via dcgm-exporter
+  - job_name: 'consul-gpu-metrics'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:9400
+        target_label: __address__
+#        target_label: __meta_consul_service_port
+#        target_label: instance
+
+
+    # Job config for extracting nvidia metrics
+  - job_name: 'consul-cadvisor-metrics'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:8077
+        target_label: __address__
+#        target_label: __meta_consul_service_port
+#        target_label: instance
+
+
+    # Job config for extracting metrics via node-exporter
+  - job_name: 'consul-node-exporter'
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scheme: http
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        regex: traefik-system-ingress
+        action: keep
+
+      - source_labels: [__meta_consul_service_address]
+        regex: (.*)
+        action: replace
+        replacement: ${1}:9100
+        target_label: __address__
+
+# Alerting setup
+alerting:
+  alertmanagers:
+    - scheme: http
+      static_configs:
+        - targets: [ 'alertmanager:9093' ]
+

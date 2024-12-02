@@ -441,17 +441,18 @@ class TextExtractionExecutorMock(MarieExecutor):
     ):
         if parameters is None:
             parameters = {}
-        print(f"FirstExec func called : {len(docs)}, {parameters}")
+        print(f"func called : {len(docs)}, {parameters}")
         # randomly throw an error to test the error handling
-        # if random.random() > 0.5:
-        #     raise Exception("random error in FirstExec")
+        import random
+
+        if random.random() > 0.5:
+            raise Exception("random error in exec")
         #
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 5
+        sec = 2
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
-        # raise Exception("random error in FirstExec")
 
         print(f"Sleeping for {sec} seconds - done : ", time.time())
         return {

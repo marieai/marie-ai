@@ -4,6 +4,7 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Executor, requests
+from marie.constants import __default_endpoint__
 from marie.logging_core.logger import MarieLogger
 from marie.serve.executors import __dry_run_endpoint__
 
@@ -19,6 +20,25 @@ class MarieExecutor(Executor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__)
+
+    # @requests(on=__default_endpoint__)
+    async def default_endpoint(
+        self,
+        docs: DocList[TextDoc],
+        parameters=None,
+        *args,
+        **kwargs,
+    ):
+        """
+        Default endpoint to be executed in asynchronous mode
+        :param docs:
+        :param parameters:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        print("Default endpoint called")
+        return docs
 
     @requests(on=__dry_run_endpoint__)
     async def dry_run_func(
