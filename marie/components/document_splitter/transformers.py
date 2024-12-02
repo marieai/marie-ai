@@ -21,7 +21,7 @@ from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
 from ...helper import batch_iterator
-from ...logging.profile import TimeContext
+from ...logging_core.profile import TimeContext
 from ...registry.model_registry import ModelRegistry
 from ..util import scale_bounding_box
 from .base import BaseDocumentSplitter
