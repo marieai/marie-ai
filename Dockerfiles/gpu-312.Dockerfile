@@ -1,7 +1,7 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
-ARG CUDA_VERSION=12.2.2
+ARG CUDA_VERSION=12.4.1
 
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 as build-image
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu22.04 as build-image
 
 ARG http_proxy
 ARG https_proxy
@@ -37,31 +37,34 @@ ENV PIP_NO_CACHE_DIR=1 \
 # Tweak this list to reduce build time
 # https://developer.nvidia.com/cuda-gpus
 ENV TORCH_CUDA_ARCH_LIST "7.0;7.2;7.5;8.0;8.6;8.9;9.0"
-ENV PIP_DEFAULT_TIMEOUT=100
+
+ENV PIP_DEFAULT_TIMEOUT=100 \
+    # Allow statements and log messages to immediately appear
+    PYTHONUNBUFFERED=1 \
+    # disable a pip version check to reduce run-time & log-spam
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # cache is useless in docker image, so disable to reduce image size
+    PIP_NO_CACHE_DIR=1
+
+
+RUN test -e /usr/local/cuda/bin/nvcc
+RUN /usr/local/cuda/bin/nvcc --version
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
 
-RUN apt-get update && apt-get upgrade -y && \
-        apt install wget -y \
+RUN apt-get update && \
+        apt-get install wget -y \
         build-essential \
         curl \
         git \
         lshw \
         zlib1g \
-        pkg-config \
         python3.12 \
-        python3.12-dev \
-        python3-virtualenv \
         python3.12-venv \
-        python3-dev \
-        python3-pip \
-        python3-wheel \
-        python3-packaging \
+        python3.12-dev \
         python3-opencv \
-        python3-venv \
-        python3-setuptools \
         libopenblas-dev \
         libopenmpi-dev \
         openmpi-bin \
@@ -82,46 +85,53 @@ RUN apt-get update && apt-get upgrade -y && \
     && apt-get autoremove \
     && apt-get clean
 
+
+# Ensure the correct symbolic links
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+&& ln -sf /usr/bin/python3.12 /usr/bin/python
+
 # Install requirements
 # change on extra-requirements.txt, setup.py will invalid the cache
 COPY requirements.txt extra-requirements.txt setup.py /tmp/
-
-# COPY patches and wheels directory to /tmp
 COPY ./patches/* /tmp/patches/
 COPY ./wheels/* /tmp/wheels/
 
-RUN python3.12 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:${PATH}"
 
-RUN curl -O https://bootstrap.pypa.io/get-pip.py
-RUN python3 get-pip.py
-RUN python3 -m pip install --upgrade setuptools
-RUN python3 -m pip install "pybind11[global]" # This prevents "ModuleNotFoundError: No module named 'pybind11'"
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3.12 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN curl -O https://bootstrap.pypa.io/get-pip.py \
+    && python3 get-pip.py \
+    && python3 -m pip install --upgrade setuptools \
+    && python3 -m pip install 'pybind11[global]'
+
+# verify that virtual environment is used and python version is correct
+RUN python3 --version \
+    && which python3
 
 # install custom wheels
-RUN python3.12 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl
-RUN python3.12 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
+RUN python3 -m pip install /tmp/wheels/etcd3-0.12.0-py2.py3-none-any.whl \
+    && python3 -m pip install /tmp/wheels/fastwer-0.1.3-cp312-cp312-linux_x86_64.whl
 
-RUN python3 -m pip install intel-openmp
-# USING NIGHTLY causes CUDA multiprocessing error
-# https://forums.developer.nvidia.com/t/python-opencv-multiprocessing-doesnt-work-with-cuda/180195
-#RUN python3 -m pip install --pre torch[dynamo] torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118 --force
-RUN python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --force
+# RUN python3 -m pip install intel-openmp
+# RUN /bin/bash -c ". /opt/venv/bin/activate \
+#     && python3 -c 'import torch; print(torch.__version__); print(torch.cuda.is_available())'"
 
-# Validate PyTorch setup
-RUN python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+RUN python3 -m pip install omegaconf==2.3.0 \
+    && python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
 
 # Order is important, need to install detectron2 last expected version is 0.6
-RUN python3 -m pip install omegaconf==2.3.0
-RUN python3 /tmp/patches/patch-omegaconf-py312.py --no-confirm
+# We also disable build isolation to avoid issues with error in detectron2 : No module named 'torch'
 
-RUN python3 -m pip install git+https://github.com/facebookresearch/fvcore
-RUN python3 -m pip install git+https://github.com/marieai/fairseq.git --no-dependencies
-#    python3 -m pip install git+https://github.com/ying09/TextFuseNet.git && \
-RUN python3 -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+RUN python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \
+    && python3 -m pip install git+https://github.com/facebookresearch/fvcore \
+    && python3 -m pip install git+https://github.com/marieai/fairseq.git  \
+    && python3 -m pip install --no-build-isolation  git+https://github.com/facebookresearch/detectron2.git -v 
 
-RUN cd /tmp/ && \
-    python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+RUN cd /tmp/ \
+    && python3 -m pip install --default-timeout=100 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} .
+
 
 # No inference is being done currently 
 #RUN git clone https://github.com/NVIDIA/apex && \
@@ -129,7 +139,7 @@ RUN cd /tmp/ && \
 #    sed -i '/check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)/d' setup.py && \
 #    python3 setup.py install --cpp_ext --cuda_ext
 
-FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu22.04 
 
 ARG http_proxy
 ARG https_proxy
@@ -155,10 +165,16 @@ LABEL org.opencontainers.image.created=${BUILD_DATE} \
 
 # Install necessary apt packages
 RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
+RUN add-apt-repository ppa:deadsnakes/ppa
+
+RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get --no-install-recommends install -yq \
         ca-certificates \
         tzdata \
-        python3-distutils \
+        python3.12 \
+        python3.12-venv \
+        python3.12-dev \        
         python3-opencv \
         git \
         git-lfs \
@@ -187,16 +203,19 @@ ENV WORKDIR /marie
 COPY --from=build-image /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
+# Install PIP
+RUN curl -O https://bootstrap.pypa.io/get-pip.py && \
+    python3 get-pip.py
+
+
 # Install and initialize MARIE-AI, copy all necessary files
 # copy will almost always invalididate the cache
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
-## This is where we will map all of our configs
-#RUN mkdir -p /etc/marie
-#COPY ./config/marie.yml /etc/marie/marie.yml
-
 # copy will almost always invalid the cache
-COPY . /marie/
+# COPY . /marie/
+# Force copy all files to /marie
+COPY --chown=root:root . /marie/
 
 # this is important otherwise we will get python error that module is not found
 # RUN export PYTHONPATH="/marie"
@@ -204,7 +223,7 @@ COPY . /marie/
 
 # install marie again but this time no deps
 RUN cd /marie && \
-    pip install --no-deps --compile . && \
+    python3 -m pip install --no-deps --compile . && \
     rm -rf /tmp/* && rm -rf /marie
 
 WORKDIR ${WORKDIR}

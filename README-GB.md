@@ -178,7 +178,7 @@ Overwrite the container `ENTRYPOINT` by using `--entrypoint` from command line a
 `nvidia-smi`
 
 ```sh
-docker run -it --rm  --gpus all --entrypoint /bin/bash marieai/marie:3.0.31-cuda
+docker run -it --rm  --gpus all --entrypoint /bin/bash marieai/marie:3.0.30-cuda
 ```
  
 Remove dangling containers
