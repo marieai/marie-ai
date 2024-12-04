@@ -15,3 +15,7 @@
 !daemon/**
 !docarray/**
 !fastentrypoints.py
+
+# Allow directories for wheels and patches
+!wheels/**
+!patches/**

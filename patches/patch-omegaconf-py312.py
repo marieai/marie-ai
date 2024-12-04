@@ -1,8 +1,9 @@
+import argparse
 import os
 import sys
 
 
-def apply_patch():
+def apply_patch(no_confirm):
     # Determine the path to the omegaconf.py file
     try:
         import omegaconf
@@ -28,14 +29,15 @@ def apply_patch():
             sys.exit(0)
 
     # Prompt the user to verify if they want to apply the patch
-    response = (
-        input(f"Do you want to apply the patch to {target_file}? (yes/no): ")
-        .strip()
-        .lower()
-    )
-    if response not in ["yes", "y"]:
-        print("Patch not applied.")
-        sys.exit(0)
+    if not no_confirm:
+        response = (
+            input(f"Do you want to apply the patch to {target_file}? (yes/no): ")
+            .strip()
+            .lower()
+        )
+        if response not in ["yes", "y"]:
+            print("Patch not applied.")
+            sys.exit(0)
 
     # Define the patch content
     patch_content = """
@@ -59,4 +61,13 @@ def apply_patch():
 
 
 if __name__ == "__main__":
-    apply_patch()
+    parser = argparse.ArgumentParser(description="Apply patch to omegaconf.py")
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Apply patch without confirmation",
+        default=False,
+    )
+    args = parser.parse_args()
+
+    apply_patch(args.no_confirm)
