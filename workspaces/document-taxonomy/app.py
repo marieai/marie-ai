@@ -1,4 +1,7 @@
+import copy
+
 import gradio as gr
+import numpy as np
 import torch as torch
 from PIL import Image
 
@@ -8,13 +11,14 @@ from marie.document import TrOcrProcessor
 from marie.executor.ner.utils import normalize_bbox
 from marie.utils.docs import frames_from_file
 from marie.utils.json import to_json
+from marie.utils.utils import batchify
 
 use_cuda = torch.cuda.is_available()
 
 prefix_text = "0"
 import os
 from time import time
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 from loguru import logger
@@ -36,6 +40,66 @@ model.eval()
 
 label2id = {"TABLE": 0, "SECTION": 1, "CODES": 2, "OTHER": 3}
 id2label = {id: label for label, id in label2id.items()}
+
+
+def create_chunks(metadata, tokenizer) -> List[Dict]:
+    """
+    Divides a document into chunks based on max token length.
+    """
+    # For an LLM, the context window should "have text around" the target point, meaning it should include both text before and after the current point of focus (the line)
+    chunks = []
+    max_token_length = tokenizer.model_max_length
+    lines = copy.deepcopy(metadata["lines"])
+    # adding spatial context to the lines as in LMDX paper https://arxiv.org/pdf/2309.10952
+
+    for idx, line in enumerate(lines):
+        line_text = line["text"]
+        line_bbox_xywh = [int(x) for x in line["bbox"]]
+        x, y = line_bbox_xywh[0], line_bbox_xywh[1]
+        line["text"] = line_text + f" {x}|{y}"
+
+    for idx, line in enumerate(lines):
+        line_id = line["line"]
+        chunk_size_start = 0
+        chunk_size_end = 0
+        chunk_idx = 0
+        token_length = 0
+        prompt = ""
+        q = ""
+        c = ""
+
+        while token_length <= max_token_length:
+            start = max(0, idx - chunk_size_start)
+            end = min(len(lines), idx + chunk_size_end)
+            source_row = lines[idx]
+            selected_rows = lines[start:end]
+
+            q = source_row["text"]
+            c = "\n".join([r["text"] for r in selected_rows])
+            current_prompt = f"""classify: {q}\ncontext: {c}\n"""
+
+            tokens = tokenizer(
+                current_prompt, return_tensors="pt", add_special_tokens=False
+            )
+            token_count = len(tokens["input_ids"][0])
+            if token_count > max_token_length:
+                break
+
+            if chunk_idx % 2 == 0:
+                chunk_size_start += 1
+            else:
+                chunk_size_end += 1
+
+            chunk_idx += 1
+            prompt = current_prompt
+            token_length = token_count
+
+            if start == 0 and end == len(lines):
+                break
+        chunks.append(
+            {"line_id": line_id, "question": q, "context": c, "prompt": prompt}
+        )
+    return chunks
 
 
 def classify(texts_to_classify: List[str]) -> List[Tuple[str, float]]:
@@ -73,7 +137,6 @@ def classify(texts_to_classify: List[str]) -> List[Tuple[str, float]]:
 
 def build_ocr_engine():
     text_layout = None
-
     box_processor = BoxProcessorUlimDit(
         models_dir="../../model_zoo/unilm/dit/text_detection",
         cuda=use_cuda,
@@ -87,9 +150,78 @@ def build_ocr_engine():
 box_processor, icr_processor, text_layout = build_ocr_engine()
 
 
-def process_taxonomies(result: dict):
+def group_taxonomies_by_label(lines: List[Dict]) -> List[Dict]:
+    """
+    Groups contiguous lines with the same label into taxonomy groups.
+    """
+    if len(lines) == 0:
+        return []
+
+    grouped_lines = []
+    current_group = {"label": lines[0]["taxonomy"]["label"], "lines": [lines[0]]}
+
+    for line in lines[1:]:
+        if line["taxonomy"]["label"] == current_group["label"]:
+            current_group["lines"].append(line)
+        else:
+            grouped_lines.append(current_group)
+            current_group = {"label": line["taxonomy"]["label"], "lines": [line]}
+
+    grouped_lines.append(current_group)  # Add the last group
+
+    for group in grouped_lines:
+        print(f"Group: {group['label']}")
+        group_size = len(group["lines"])
+        total_score = 0
+        min_x, min_y, max_x, max_y = (
+            float('inf'),
+            float('inf'),
+            float('-inf'),
+            float('-inf'),
+        )
+        for line in group["lines"]:
+            score = line['taxonomy']['score']
+            total_score += score
+            score = f"{score:.4f}"
+            line_info = f"Line {line['line']}: {score} > {line['text']}"
+            print(line_info)
+            bbox = line['bbox']
+            min_x = min(min_x, bbox[0])
+            min_y = min(min_y, bbox[1])
+            max_x = max(max_x, bbox[0] + bbox[2])
+            max_y = max(max_y, bbox[1] + bbox[3])
+        average_score = total_score / group_size
+        print(f"Average Score for Group '{group['label']}': {average_score:.4f}")
+        group['bbox'] = [min_x, min_y, max_x - min_x, max_y - min_y]
+        group['score'] = average_score
+        print(f"Bounding Box for Group '{group['label']}': {group['bbox']}")
+
+    return grouped_lines
+
+
+def process_taxonomies(result: dict, batch_size: int = 16):
     print("Processing taxonomies")
-    print(result)
+    chunks = create_chunks(result, tokenizer)
+    num_batches = len(chunks) // batch_size + (len(chunks) % batch_size > 0)
+    batched_chunks = batchify(chunks, batch_size)
+    print("num_batches", num_batches)
+
+    for idx, batch in enumerate(batched_chunks):
+        print(f"Processing batch {idx + 1}/{num_batches}")
+        texts = [chunk["prompt"] for chunk in batch]
+        predictions = classify(texts)
+        print(predictions)
+        for chunk, prediction in zip(batch, predictions):
+            chunk["prediction"] = prediction
+            for line in result["lines"]:
+                if line["line"] == chunk["line_id"]:
+                    label = chunk["prediction"][0]
+                    score = chunk["prediction"][1]
+                    line["taxonomy"] = {"label": label, "score": score}
+                    break
+
+    taxonomy_groups = group_taxonomies_by_label(result["lines"])
+    return taxonomy_groups
 
 
 def process_image(filename):
@@ -126,9 +258,18 @@ def process_image(filename):
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
 
-    process_taxonomies(result)
+    taxonomy_groups = process_taxonomies(result, batch_size=16)
+    taxonomy_line_bboxes = [group["bbox"] for group in taxonomy_groups]
+    taxonomy_labels = [group["label"] for group in taxonomy_groups]
+    image_width = image.size[0]
+    taxonomy_line_bboxes = [
+        [0, bbox[1], image_width, bbox[3]] for bbox in taxonomy_line_bboxes
+    ]
 
-    return bboxes_img, overlay_image, lines_img, to_json(result)
+    taxonomy_overlay_image = visualize_bboxes(
+        image, np.array(taxonomy_line_bboxes), format="xywh", labels=taxonomy_labels
+    )
+    return bboxes_img, overlay_image, taxonomy_overlay_image, to_json(result)
 
 
 def image_to_gallery(image_src):
