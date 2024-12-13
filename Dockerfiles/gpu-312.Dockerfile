@@ -213,9 +213,12 @@ RUN curl -O https://bootstrap.pypa.io/get-pip.py && \
 COPY ./im-policy.xml /etc/ImageMagick-6/policy.xml
 
 # copy will almost always invalid the cache
-# COPY . /marie/
-# Force copy all files to /marie
-COPY --chown=root:root . /marie/
+COPY . /marie/
+
+# Testing force copy
+COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v1/
+COPY ./marie/proto/docarray_v2/ /marie/proto/docarray_v2/
+
 
 # this is important otherwise we will get python error that module is not found
 # RUN export PYTHONPATH="/marie"
@@ -224,7 +227,8 @@ COPY --chown=root:root . /marie/
 # install marie again but this time no deps
 RUN cd /marie && \
     python3 -m pip install --no-deps --compile . && \
-    rm -rf /tmp/* && rm -rf /marie
+    echo "MARIE-AI installed successfully"
+    #rm -rf /tmp/* && rm -rf /marie
 
 WORKDIR ${WORKDIR}
 ENTRYPOINT ["marie"]

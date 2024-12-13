@@ -171,7 +171,6 @@ class Lmdx:
                 current_df = pd.concat([current_df, new_df]).reset_index(drop=True)
                 # current_df = current_df.append(row, ignore_index=True)
                 token_count += len(tokens)
-
             # Add the last DataFrame
             df_list.append(current_df)
 
