@@ -1,10 +1,8 @@
 import os
-import re
 from collections import Counter
 
 import pandas as pd
 import pytesseract
-from PIL import Image
 
 from .utils import format_segment, normalize_box, regex_split
 

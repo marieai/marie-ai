@@ -46,13 +46,8 @@ def find_overlap_vertical(box, data):
     overlaps = []
     indexes = []
     scores = []
-
     if len(data) == 0:
         return [], [], []
-
-    # print("overlap ***********")
-    # print(data)
-
     x, y, w, h = box
     y1min = y
     y1max = y + h
@@ -99,7 +94,6 @@ def find_overlap_vertical(box, data):
             scores.append(iou)
             overlaps.append(bb)
             indexes.append(i)
-
     return overlaps, indexes, scores
 
 
