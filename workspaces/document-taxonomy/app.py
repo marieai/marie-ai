@@ -31,18 +31,20 @@ from transformers import (
 
 # TODO: Move this to document_taxonomy package
 MODEL_ID = os.path.expanduser(
-    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/checkpoint-1560"
+    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/checkpoint-6000-1024-base"
+    # "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/512-0_9805782233085468"
 )
+max_input_length = 1024
 
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True, bnb_4bit_use_double_quant=False
-)
+# quantization_config = BitsAndBytesConfig(
+#     load_in_4bit=True, bnb_4bit_use_double_quant=False
+# )
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL_ID, quantization_config=quantization_config
+    MODEL_ID, quantization_config=None
 )
 model.to(device)
-tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
+tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
 
 # 15-25% faster inference with high precision
 torch.set_float32_matmul_precision('high')
@@ -61,12 +63,6 @@ def create_chunks(metadata, tokenizer) -> List[Dict]:
     max_token_length = tokenizer.model_max_length
     # adding spatial context
     lines = verbalizers("SPATIAL_FORMAT", metadata)
-
-    for idx, line in enumerate(lines):
-        line_text = line["text"]
-        line_bbox_xywh = [int(x) for x in line["bbox"]]
-        x, y = line_bbox_xywh[0], line_bbox_xywh[1]
-        line["text"] = line_text + f" {x}|{y}"
 
     for idx, line in enumerate(lines):
         line_id = line["line"]
@@ -119,7 +115,7 @@ def classify(texts_to_classify: List[str]) -> List[Tuple[str, float]]:
     inputs = tokenizer(
         texts_to_classify,
         return_tensors="pt",
-        max_length=512,
+        max_length=max_input_length,
         truncation=True,
         padding=True,
     ).to(device)

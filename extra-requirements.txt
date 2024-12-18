@@ -174,3 +174,5 @@ typing_extensions>=4.12.2:    standard,core
 #vllm:                         standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
+filetype:                      standard,core
+dataclasses_json:              standard,core

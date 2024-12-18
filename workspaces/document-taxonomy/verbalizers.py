@@ -80,11 +80,9 @@ def verbalizers_SPATIAL_FORMAT(metadata):
         line_buffer = line_buffer.replace(" " * SPACES, " ")
         line_buffer = line_buffer.rstrip()
         print(line_buffer)
-
         x, y = line_bbox_xywh[0], line_bbox_xywh[1]
         verbalizer = f"{line_buffer} {x}|{y}"
-        # line["text"] = verbalizer
-        line["text"] = line_buffer
+        line["text"] = verbalizer
     return lines
 
 
