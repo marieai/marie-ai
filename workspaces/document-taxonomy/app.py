@@ -4,6 +4,7 @@ import gradio as gr
 import numpy as np
 import torch as torch
 from PIL import Image
+from verbalizers import verbalizers
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
@@ -22,15 +23,24 @@ from typing import Dict, List, Tuple
 
 import torch
 from loguru import logger
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
 
 # TODO: Move this to document_taxonomy package
 MODEL_ID = os.path.expanduser(
-    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy"
+    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/checkpoint-1560"
 )
 
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True, bnb_4bit_use_double_quant=False
+)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_ID, quantization_config=quantization_config
+)
 model.to(device)
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 
@@ -49,8 +59,8 @@ def create_chunks(metadata, tokenizer) -> List[Dict]:
     # For an LLM, the context window should "have text around" the target point, meaning it should include both text before and after the current point of focus (the line)
     chunks = []
     max_token_length = tokenizer.model_max_length
-    lines = copy.deepcopy(metadata["lines"])
-    # adding spatial context to the lines as in LMDX paper https://arxiv.org/pdf/2309.10952
+    # adding spatial context
+    lines = verbalizers("SPATIAL_FORMAT", metadata)
 
     for idx, line in enumerate(lines):
         line_text = line["text"]
