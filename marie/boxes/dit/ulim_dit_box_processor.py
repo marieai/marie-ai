@@ -120,10 +120,10 @@ def visualize_bboxes(
         if blackout:
             fill_color_rgbaa = blackout_color
             width = 0
-
+        width = 2
         draw.rectangle(
             box,
-            outline="#993300",
+            outline="#FF0000",
             fill=fill_color_rgbaa,
             width=width,
         )

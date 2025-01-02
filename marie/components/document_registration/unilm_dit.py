@@ -304,14 +304,6 @@ class UnilmDocumentBoundaryRegistration(BaseDocumentBoundaryRegistration):
         width, height = image.shape[1], image.shape[0]
         self.logger.info(f"Processing document: {doc_id}")
 
-        print(f"Image shape: {image.shape}")
-        print("Registration mode: ", registration_mode)
-        print("Registration point: ", registration_point)
-        print("Margin width: ", margin_width)
-        print("Margin height: ", margin_height)
-        print("Image width: ", width)
-        print("Image height: ", height)
-
         with torch.no_grad():
             self.logger.info(f"Inference on image: {image.shape}")
             rp = self.predictor(image)

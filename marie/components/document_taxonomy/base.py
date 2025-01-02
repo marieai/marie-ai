@@ -20,44 +20,46 @@ class BaseDocumentTaxonomy(BaseHandler):
     def predict(
         self,
         documents: DocList[MarieDoc],
-        words: Optional[List[List[str]]] = None,
-        boxes: Optional[List[List[List[int]]]] = None,
+        metadata: List[dict],
+        taxonomy_key: str = "taxonomy",
         batch_size: Optional[int] = None,
     ) -> DocList:
         """
         Predict document taxonomy. This method must be implemented by subclasses.
         :param documents:
-        :param words:
-        :param boxes:
+        :param metadata:
+        :param taxonomy_key:
         :param batch_size:
         """
         pass
 
     def run(
         self,
-        documents: DocList,
-        words: Optional[List[List[str]]] = None,
-        boxes: Optional[List[List[List[int]]]] = None,
+        documents: DocList[MarieDoc],
+        metadata: List[dict],
+        taxonomy_key: str = "taxonomy",
         batch_size: Optional[int] = None,
     ) -> DocList:
         """
-        Run the document splitter on the given documents.
+        Run the document taxonomy on the given documents.
 
-        :param documents: the documents to split
-        :param words:
-        :param boxes:
-        :param batch_size:
-        :return: the split documents in a DocumentArray
+        :param documents: the documents to process
+        :param metadata: the metadata for the documents
+        :param taxonomy_key: the key to use for the taxonomy
+        :param batch_size: the batch size to use
+        :return: the taxonomy annotated documents in a DocumentArray
         """
         if documents:
             results = self.predict(
-                documents=documents, words=words, boxes=boxes, batch_size=batch_size
+                documents=documents,
+                metadata=metadata,
+                taxonomy_key=taxonomy_key,
+                batch_size=batch_size,
             )
         else:
             results = DocList()
 
         document_id = [document.id for document in documents]
 
-        # output = {"documents": results}
         self.logger.info(f" documents with IDs: {document_id}")
         return results
