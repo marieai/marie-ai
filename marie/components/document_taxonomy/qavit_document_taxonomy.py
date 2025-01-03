@@ -1,54 +1,124 @@
 import os
-from typing import Any, Callable, List, Optional, Union
+from functools import partial
+from pathlib import Path
+from time import time
+from typing import Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from docarray import DocList
+from peft import LoraConfig, TaskType, get_peft_model
 from PIL import Image
-from torch.nn import Module
-from tqdm import tqdm
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    LayoutLMv3ImageProcessor,
-    LayoutLMv3Processor,
-)
+from ruamel.yaml import YAML
 
-from marie import DocumentArray
+from marie import DocumentArray, check
 from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 
-from ...helper import batch_iterator
-from ...logging_core.profile import TimeContext
+from ...api.docs import MarieDoc
+from ...boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from ...registry.model_registry import ModelRegistry
-from ..util import scale_bounding_box
+from ...utils.docs import frames_from_docs
+from ...utils.utils import batchify
 from .base import BaseDocumentTaxonomy
+from .datamodel import TaxonomyPrediction
+from .qavit.VisualT5 import VisualT5
+from .verbalizers import create_chunks
+
+
+def get_visual_t5(config):
+    model = VisualT5.from_pretrained(config['llm'])
+    model.freeze_llm_weights(config)
+    # Apply LoRa
+    if config["use_lora"]:
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_2_SEQ_LM,
+            inference_mode=False,
+            r=config["lora_r"],
+            lora_alpha=config["lora_alpha"],
+            lora_dropout=config["lora_dropout"],
+            target_modules=config["lora_target_modules"],
+            bias="none",
+        )
+        model = get_peft_model(model, peft_config)
+
+    model.initialize_vision_modules(config)
+    model.freeze_vision_weights(config)
+    # Create a two-param group optimizer
+    model_base_params, model_translation_params = [], []
+    for name, p in model.named_parameters():
+        if 'translation_mlp' in name:
+            model_translation_params.append(p)
+        else:
+            model_base_params.append(p)
+    translation_mul = (
+        config['translation_lr_mul'] if 'translation_lr_mul' in config else 1.0
+    )
+
+    optimizer = torch.optim.AdamW(
+        [
+            {'params': model_base_params},
+            {
+                'params': model_translation_params,
+                'lr': config['base_lr'] * translation_mul,
+            },
+        ],
+        lr=config['base_lr'],
+        weight_decay=config['weight_decay'],
+    )
+    return model, optimizer, model.get_image_processor(), model.get_tokenizer()
+
+
+def vt5_collate_fn(batch, tokenizer, processor, **kwargs):
+    """
+    Collate function for VisualT5
+    :param batch:
+    :param tokenizer:
+    :param processor:
+    :param kwargs:
+    :return:
+    """
+    image_list, question_list = [], []
+    instruct_list = []
+
+    for image, question, instruct, _ in batch:
+        image_list.append(image)
+        question_list.append(question)
+        instruct_list.append(instruct)
+    # tokenize
+    questions = tokenizer(
+        question_list,
+        return_tensors="pt",
+        padding='longest',
+        truncation=True,
+        max_length=512,
+    )
+    return {
+        'images': processor(images=image_list, return_tensors="pt"),
+        'input_ids': questions.input_ids,
+        'attention_mask': questions.attention_mask,
+    }, instruct_list
 
 
 class QaVitDocumentTaxonomy(BaseDocumentTaxonomy):
     """
-    Question Aware Vision Transformer for Multimodal Reasoning.
+    Transformer based model for document taxonomy prediction.
     """
 
     def __init__(
         self,
         model_name_or_path: Union[str, os.PathLike],
         model_version: Optional[str] = None,
-        tokenizer: Optional[str] = None,
         use_gpu: bool = True,
-        labels: Optional[List[str]] = None,
         batch_size: int = 16,
         use_auth_token: Optional[Union[str, bool]] = None,
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
+        labels: Optional[List[str]] = None,
         **kwargs,
     ):
         """
-        Question Aware Vision Transformer for Multimodal Reasoning.
-        https://arxiv.org/pdf/2402.05472
-
+        Load a document taxonomy model from ModelRepository or HuggingFace model hub.
 
         TODO: ADD EXAMPLE AND CODE SNIPPET
 
@@ -67,13 +137,15 @@ class QaVitDocumentTaxonomy(BaseDocumentTaxonomy):
                         A list containing torch device objects and/or strings is supported (For example
                         [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
                         parameter is not used and a single cpu device is used for inference.
+        :param id2label: A dictionary mapping label ids to label names.
+        :param kwargs: Additional keyword arguments passed to the model.
         """
         super().__init__(**kwargs)
+        self.max_input_length = 512  # make this a parameter for different models
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document taxonomy : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
-        self.labels = labels
         self.progress_bar = False
 
         resolved_devices, _ = initialize_device_settings(
@@ -101,148 +173,124 @@ class QaVitDocumentTaxonomy(BaseDocumentTaxonomy):
         assert os.path.exists(model_name_or_path)
         self.logger.info(f"Resolved model : {model_name_or_path}")
 
-        if tokenizer is None:
-            tokenizer = model_name_or_path
+        config = Path(model_name_or_path) / "config.yaml"
+        yaml = YAML(typ='rt')
+        self.config = yaml.load(open(config, 'r'))
+        self.model, self.optimizer, self.image_processor, self.tokenizer = (
+            get_visual_t5(self.config)
+        )
+        self.model.eval()
+        self.model.to(self.device)
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name_or_path
+        self.collator = partial(
+            vt5_collate_fn, tokenizer=self.tokenizer, processor=self.image_processor
         )
-        self.model = self.model.eval().to(resolved_devices[0])
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-        feature_extractor = LayoutLMv3ImageProcessor(
-            apply_ocr=False, do_resize=True, resample=Image.LANCZOS
-        )
-        self.processor = LayoutLMv3Processor(
-            feature_extractor, tokenizer=self.tokenizer
-        )
-
-        if False:
-            self.model = self.optimize_model(self.model)
 
     def predict(
         self,
-        documents: DocumentArray,
-        words: Optional[List[List[str]]] = None,
-        boxes: Optional[List[List[List[int]]]] = None,
+        documents: DocList[MarieDoc],
+        metadata: List[dict],
+        taxonomy_key: str = "taxonomy",
         batch_size: Optional[int] = None,
     ) -> DocumentArray:
-
-        if batch_size is None:
-            batch_size = self.batch_size
+        check.sequence_param(documents, "documents", of_type=MarieDoc)
+        check.sequence_param(metadata, "metadata", of_type=Dict)
+        check.str_param(taxonomy_key, "taxonomy_key")
+        assert len(documents) == len(
+            metadata
+        ), "Documents and metadata must have the same length"
 
         if len(documents) == 0:
             return documents
+        if batch_size is None:
+            batch_size = self.batch_size
 
-        assert (
-            words is not None and boxes is not None
-        ), "words and boxes must be provided for sequence classification"
-        assert (
-            len(documents) == len(words) == len(boxes)
-        ), "documents, words and boxes must have the same length"
+        frames = frames_from_docs(documents)
+        max_token_length = (
+            self.tokenizer.model_max_length - 112
+        )  # 112 is a buffer that we need to leave for the prompt
 
-        batches = batch_iterator(documents, batch_size)
-        predictions = []
-        pb = tqdm(
-            total=len(documents),
-            disable=not self.progress_bar,
-            desc="Classifying documents",
-        )
-
-        for batch in batches:
-            batch_results = []
-
-            for doc, w, b in zip(batch, words, boxes):
-                if doc.content_type != "tensor":
-                    raise ValueError(
-                        f"Document content_type {doc.content_type} is not supported"
-                    )
-                batch_results.append(
-                    self.predict_document_image(
-                        doc.tensor, words=w, boxes=b, top_k=self.top_k
-                    )
+        for doc, frame, meta in zip(documents, frames, metadata):
+            chunks = create_chunks(meta, self.tokenizer, max_token_length)
+            num_batches = len(chunks) // batch_size + (len(chunks) % batch_size > 0)
+            batched_chunks = batchify(chunks, batch_size)
+            if taxonomy_key in doc.tags:
+                self.logger.warning(
+                    f"Document {doc.id} already contains a tag with key {taxonomy_key}. Overwriting it."
                 )
 
-            predictions.extend(batch_results)
-            pb.update(len(batch))
-        pb.close()
+            annotations = []
+            for idx, batched_chunk in enumerate(batched_chunks):
+                self.logger.info(f"Processing batch {idx + 1}/{num_batches}")
+                predictions = self.classify(batched_chunk, frame)
 
-        for document, prediction in zip(documents, predictions):
-            formatted_prediction = {
-                "label": prediction[0]["label"],
-                "score": prediction[0]["score"],
-                "details": {el["label"]: el["score"] for el in prediction},
-            }
-            document.tags["split"] = formatted_prediction
+                for chunk, prediction in zip(batched_chunk, predictions):
+                    annotation = TaxonomyPrediction(
+                        line_id=int(chunk["line_id"]),
+                        label=prediction[0],
+                        score=prediction[1],
+                    )
+                    annotations.append(annotation)
+                doc.tags[taxonomy_key] = annotations
         return documents
 
-    def predict_document_image(
-        self,
-        image: np.ndarray,
-        words: List[List[str]],
-        boxes: List[List[int]],
-        top_k: int = 1,
-    ) -> list[dict[str, Any]]:
+    @torch.no_grad()
+    def classify(self, chunked_input: List[Dict], frame) -> List[Tuple[str, float]]:
         """
-        Predicts the label of a document image.
-
-        :param image: image to predict
-        :param words: words in the image
-        :param boxes: bounding boxes of the words
-        :param top_k: number of predictions to return
-        :return: prediction dictionary with label and score
+        Classify multiple input texts into their predicted labels and associated confidence scores.
+        :rtype: List[Tuple[str, float]]
         """
-        id2label = self.model.config.id2label
-        width, height = image.shape[1], image.shape[0]
-        width_scale = 1000 / width
-        height_scale = 1000 / height
-        boxes_normalized = [
-            scale_bounding_box(box, width_scale, height_scale) for box in boxes
-        ]
+        start = time()
+        categories = ["TABLE", "SECTION", "CODES", "OTHER"]
+        batch = []
+        # convert to pillow image
+        image = Image.fromarray(frame.astype("uint8")).convert("RGB")
+        image.save("/home/greg/tmp/test-deck/0_1735852778890/converted_pil.png")
 
-        encoding = self.processor(
-            image,
-            words,
-            boxes=boxes_normalized,
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
+        idx = 0
+        for chunk in chunked_input:
+            question = f"classify: {chunk['question']}\ncontext: {chunk['context']}\noptions: {', '.join(categories)}"
+            instruct = question
+
+            question_bbox = [x for x in chunk['question_bbox']]
+            bbox_xywh = [x for x in chunk['bbox']]
+            bbox_xyxy = [
+                bbox_xywh[0],
+                bbox_xywh[1],
+                bbox_xywh[0] + bbox_xywh[2],
+                bbox_xywh[1] + bbox_xywh[3],
+            ]
+            src_image = visualize_bboxes(
+                image,
+                [question_bbox],
+                format="xywh",
+                blackout=True,
+                blackout_color=(255, 255, 0, 125),
+            )
+            chunk_image = src_image.crop(bbox_xyxy)
+            # chunk_image.save(f"/home/greg/tmp/test-deck/0_1735852778890/converted_pil_chunk_{idx}.png")
+            batch.append((chunk_image, question, instruct, chunk))
+
+        inputs, instructions_list = self.collator(batch)
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        predicted_labels = []
+        confidences = []
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                **inputs, max_new_tokens=12, instructions_list=instructions_list
+            )
+            answers = self.tokenizer.batch_decode(
+                generated_ids, skip_special_tokens=True
+            )
+
+            for answer, chunk in zip(answers, chunked_input):
+                predicted_labels.append(answer)
+                confidences.append(1.0)  # TODO: add confidence
+
+        self.logger.debug(
+            f"Classification of {len(chunked_input)} batch took {time() - start} seconds"
         )
 
-        with torch.inference_mode():
-            output = self.model(
-                input_ids=encoding["input_ids"].to(self.device),
-                attention_mask=encoding["attention_mask"].to(self.device),
-                bbox=encoding["bbox"].to(self.device),
-                pixel_values=encoding["pixel_values"].to(self.device),
-            )
-        # TODO: add top_k support
-
-        logits = output.logits
-        predicted_class = logits.argmax(-1)
-        probabilities = F.softmax(logits, dim=-1).squeeze().tolist()
-
-        return [
-            {
-                "label": id2label[predicted_class.item()],
-                "score": probabilities[predicted_class.item()],
-            }
-        ]
-
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
-        """Optimizes the model for inference. This method is called by the __init__ method."""
-        try:
-            with TimeContext("Compiling model", logger=self.logger):
-                import torch._dynamo as dynamo
-                import torchvision.models as models
-
-                torch._dynamo.config.verbose = False
-                torch._dynamo.config.suppress_errors = True
-                # torch.backends.cudnn.benchmark = True
-                # model = torch.compile(model, backend="inductor", mode="max-autotune")
-                # model = torch.compile(model, backend="onnxrt", fullgraph=False)
-                model = torch.compile(model)
-                return model
-        except Exception as err:
-            self.logger.warning(f"Model compile not supported: {err}")
-            return model
+        return list(zip(predicted_labels, confidences))

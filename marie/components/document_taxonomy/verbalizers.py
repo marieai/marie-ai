@@ -1,21 +1,28 @@
 import copy
 from math import ceil
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
+from marie.utils.overlap import merge_bboxes_as_block
 
-def create_chunks(metadata, tokenizer) -> List[Dict]:
+
+def create_chunks(metadata, tokenizer, max_token_length: Optional[int]) -> List[Dict]:
     """
     Divides a document into chunks based on max token length.
     For an LLM, the context window should "have text around" the target point, meaning it should include both text before and after the current point of focus (the line)
     """
     chunks = []
-    max_token_length = tokenizer.model_max_length
+    if max_token_length is None:
+        max_token_length = tokenizer.model_max_length
+
     lines = verbalizers("LMDX", metadata)
+    meta_size = metadata["meta"]["imageSize"]
+    w, h = meta_size["width"], meta_size["height"]
 
     for idx, line in enumerate(lines):
         line_id = line["line"]
+        line_bbox_xywh = [int(x) for x in line["bbox"]]
         chunk_size_start = 0
         chunk_size_end = 0
         chunk_idx = 0
@@ -23,6 +30,7 @@ def create_chunks(metadata, tokenizer) -> List[Dict]:
         prompt = ""
         q = ""
         c = ""
+        collected_bbox_xywh = []
 
         while token_length <= max_token_length:
             start = max(0, idx - chunk_size_start)
@@ -33,7 +41,7 @@ def create_chunks(metadata, tokenizer) -> List[Dict]:
             q = source_row["text"]
             c = "\n".join([r["text"] for r in selected_rows])
             current_prompt = f"""classify: {q}\ncontext: {c}\n"""
-
+            collected_bbox_xywh = [line["bbox"] for line in selected_rows]
             tokens = tokenizer(
                 current_prompt, return_tensors="pt", add_special_tokens=False
             )
@@ -52,8 +60,21 @@ def create_chunks(metadata, tokenizer) -> List[Dict]:
 
             if start == 0 and end == len(lines):
                 break
+
+        block_xywh = merge_bboxes_as_block(collected_bbox_xywh)
+
+        block_xywh[0] = 0
+        block_xywh[2] = w
+
         chunks.append(
-            {"line_id": line_id, "question": q, "context": c, "prompt": prompt}
+            {
+                "line_id": line_id,
+                "question": q,
+                "context": c,
+                "bbox": block_xywh,
+                "question_bbox": line_bbox_xywh,
+                "prompt": prompt,
+            }
         )
     return chunks
 

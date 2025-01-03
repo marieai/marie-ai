@@ -5,15 +5,19 @@ from marie.components.document_taxonomy.datamodel import TaxonomyPrediction
 
 
 def merge_annotations(
-    annotations: List[TaxonomyPrediction], src_metadata: dict, key: str = "taxonomy"
+    annotations: List[TaxonomyPrediction],
+    src_metadata: dict,
+    key: str = "taxonomy",
+    default_label: str = "unknown",
 ) -> dict:
     metadata = copy.deepcopy(src_metadata)
-    for annotation in annotations:
-        for line in metadata["lines"]:
+    for line in metadata["lines"]:
+        for annotation in annotations:
             if line["line"] == annotation.line_id:
                 line[key] = {"label": annotation.label, "score": annotation.score}
                 break
-    print(metadata)
+        else:
+            line[key] = {"label": default_label, "score": 0.0}
     return metadata
 
 

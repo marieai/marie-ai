@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from accelerate.hooks import AlignDevicesHook, add_hook_to_module
-from clip_encoder import CLIPVisionTower
 from torch import nn
 from transformers import (
     AutoTokenizer,
@@ -13,6 +12,8 @@ from transformers import (
     T5ForConditionalGeneration,
 )
 from transformers.modeling_outputs import BaseModelOutput, ModelOutput, Seq2SeqLMOutput
+
+from .clip_encoder import CLIPVisionTower
 
 
 class MLP(nn.Module):

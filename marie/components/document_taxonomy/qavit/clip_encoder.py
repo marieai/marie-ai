@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
-from clip_qavit import InstructCLIPVisionModel
 from transformers import CLIPImageProcessor, CLIPVisionConfig, CLIPVisionModel
+
+from .clip_qavit import InstructCLIPVisionModel
 
 
 class CLIPVisionTower(nn.Module):

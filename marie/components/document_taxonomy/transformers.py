@@ -21,8 +21,7 @@ from .verbalizers import create_chunks
 
 class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
     """
-    Transformer based model for document taxonomy  using the HuggingFace's transformers framework
-    (https://github.com/huggingface/transformers).
+    Transformer based model for document taxonomy prediction.
     """
 
     def __init__(
@@ -62,7 +61,6 @@ class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
         :param kwargs: Additional keyword arguments passed to the model.
         """
         super().__init__(**kwargs)
-        self.max_input_length = 512  # make this a parameter for different models
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Document taxonomy : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
@@ -102,7 +100,7 @@ class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
         )
         self.model = self.model.eval().to(resolved_devices[0])
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-
+        self.max_input_length = self.tokenizer.model_max_length
         if id2label is not None:
             self.id2label = {int(key): value for key, value in self.id2label.items()}
         else:
@@ -128,7 +126,9 @@ class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
             batch_size = self.batch_size
 
         for doc, meta in zip(documents, metadata):
-            chunks = create_chunks(meta, self.tokenizer)
+            chunks = create_chunks(
+                meta, self.tokenizer, max_token_length=self.max_input_length
+            )
             num_batches = len(chunks) // batch_size + (len(chunks) % batch_size > 0)
             batched_chunks = batchify(chunks, batch_size)
             if taxonomy_key in doc.tags:
@@ -136,11 +136,11 @@ class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
                     f"Document {doc.id} already contains a tag with key {taxonomy_key}. Overwriting it."
                 )
 
+            annotations = []
             for idx, batch in enumerate(batched_chunks):
                 self.logger.info(f"Processing batch {idx + 1}/{num_batches}")
                 texts = [chunk["prompt"] for chunk in batch]
                 predictions = self.classify(texts)
-                annotations = []
 
                 for chunk, prediction in zip(batch, predictions):
                     annotation = TaxonomyPrediction(
@@ -172,22 +172,17 @@ class TransformersDocumentTaxonomy(BaseDocumentTaxonomy):
             padding=True,
         ).to(self.device)
 
-        # inputs = inputs.to("cuda" if torch.cuda.is_available() else "cpu")
         with torch.no_grad():
             outputs = self.model(**inputs)
+
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        confidences, predicted_classes = torch.max(probs, dim=1)
+        predicted_classes = predicted_classes.cpu().numpy()
+        confidences = confidences.cpu().numpy()
+        predicted_labels = [self.id2label[class_id] for class_id in predicted_classes]
+
         self.logger.debug(
-            f"Classification of {len(texts_to_classify)} examples took {time() - start} seconds"
+            f"Classification of {len(texts_to_classify)} batch took {time() - start} seconds"
         )
 
-        logits = outputs.logits
-        probs = torch.nn.functional.softmax(logits, dim=-1)
-
-        # Get the top class and the corresponding probability (certainty) for each input text
-        confidences, predicted_classes = torch.max(probs, dim=1)
-        predicted_classes = (
-            predicted_classes.cpu().numpy()
-        )  # Move to CPU for numpy conversion if needed
-        confidences = confidences.cpu().numpy()  # Same here
-
-        predicted_labels = [self.id2label[class_id] for class_id in predicted_classes]
         return list(zip(predicted_labels, confidences))
