@@ -6,12 +6,11 @@ import numpy as np
 import torch
 
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
-from marie.components.document_taxonomy.datamodel import TaxonomyPrediction
-from marie.components.document_taxonomy.qavit_document_taxonomy import (
-    QaVitDocumentTaxonomy,
-)
-from marie.components.document_taxonomy.transformers import (
+from marie.components.document_taxonomy import (
     DocumentTaxonomyClassification,
+    DocumentTaxonomySeq2SeqLM,
+    QaVitDocumentTaxonomy,
+    TaxonomyPrediction,
 )
 from marie.components.document_taxonomy.util import (
     group_taxonomies_by_label,
@@ -46,13 +45,24 @@ def check_document_taxonomy():
     model_name_or_path = os.path.join(__model_path__, "taxonomy/document")
 
     model_type = 'qavit'
-    # model_type = 'flan-t5'
+    model_type = 'flan-t5-seq2seq'
 
     if model_type == 'flan-t5':
         model_name_or_path = 'marie/flan-t5-taxonomy-document'
         processor = DocumentTaxonomyClassification(
             model_name_or_path=model_name_or_path,
             use_gpu=True,
+        )
+    elif model_type == 'flan-t5-seq2seq':
+        model_name_or_path = 'marie/flan-t5-taxonomy-document-seq2seq'
+        label2id = {"TABLE": 0, "SECTION": 1, "CODES": 2, "OTHER": 3}
+        id2label = {id: label for label, id in label2id.items()}
+
+        processor = DocumentTaxonomySeq2SeqLM(
+            model_name_or_path=model_name_or_path,
+            use_gpu=True,
+            k_completions=5,
+            id2label=id2label,
         )
     elif model_type == 'qavit':
         model_name_or_path = 'marie/visual-t5-taxonomy-document'
@@ -87,6 +97,7 @@ def check_document_taxonomy():
     )
     overlay_filename = os.path.expanduser(os.path.join(os.path.dirname(filepath), "taxonomy_overlay.png"))
     taxonomy_overlay_image.save(overlay_filename)
+    print(f"Saved overlay image to {overlay_filename}")
 
 
 if __name__ == "__main__":

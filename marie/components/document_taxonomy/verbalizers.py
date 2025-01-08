@@ -7,73 +7,115 @@ import numpy as np
 from marie.utils.overlap import merge_bboxes_as_block
 
 
-def create_chunks(metadata, tokenizer, max_token_length: Optional[int]) -> List[Dict]:
+def create_chunks(
+    metadata, tokenizer, max_token_length: Optional[int], method='LMDX', mode='line'
+) -> List[Dict]:
     """
     Divides a document into chunks based on max token length.
-    For an LLM, the context window should "have text around" the target point, meaning it should include both text before and after the current point of focus (the line)
+    For an Classification LLM, the context window should "have text around" the target point, meaning it should include both text before and after the current point of focus (the line)
+    For an Seq2Seq LLM, the context is the lines to classify
     """
     chunks = []
     if max_token_length is None:
         max_token_length = tokenizer.model_max_length
 
-    lines = verbalizers("LMDX", metadata)
+    lines = verbalizers(method, metadata)
     meta_size = metadata["meta"]["imageSize"]
     w, h = meta_size["width"], meta_size["height"]
 
+    max_lines_per_chunk = 16
+    print(f"Selected max_lines_per_chunk: {max_lines_per_chunk}")
     for idx, line in enumerate(lines):
         line_id = line["line"]
+        line_text = line["text"]
         line_bbox_xywh = [int(x) for x in line["bbox"]]
         chunk_size_start = 0
         chunk_size_end = 0
         chunk_idx = 0
         token_length = 0
         prompt = ""
-        q = ""
-        c = ""
+        last_q = ""
+        last_c = ""
         collected_bbox_xywh = []
 
+        if line_text == "":
+            continue
+
+        # https://github.com/google-research/FLAN/blob/main/flan/v2/flan_templates_branched.py
+        target_rows = []
+        max_iterations = 100  # Limit to prevent infinite loop
+        iterations = 0
+
         while token_length <= max_token_length:
+            if iterations >= max_iterations:
+                print("Breaking loop due to max_iterations limit")
+                raise ValueError("Breaking loop due to max_iterations limit")
+                # break  # Safeguard against an infinite loop
+
+            iterations += 1
             start = max(0, idx - chunk_size_start)
             end = min(len(lines), idx + chunk_size_end)
             source_row = lines[idx]
             selected_rows = lines[start:end]
 
-            q = source_row["text"]
+            if len(target_rows) < max_lines_per_chunk:
+                target_rows = selected_rows[:max_lines_per_chunk]
+
+            q = "\n".join([r["text"] for r in target_rows])
             c = "\n".join([r["text"] for r in selected_rows])
-            current_prompt = f"""classify: {q}\ncontext: {c}\n"""
+
+            current_prompt = f"""classify each row:\n\n{q}\n\ncontext:\n\n{c}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
+            current_prompt = f"""classify each row:\n\n{q}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
+
+            # q = source_row["text"]
+            # c = "\n".join([r["text"] for r in selected_rows])
+            # current_prompt = f"""classify: {q}\ncontext: {c}\n"""
+            #
+
             collected_bbox_xywh = [line["bbox"] for line in selected_rows]
             tokens = tokenizer(
                 current_prompt, return_tensors="pt", add_special_tokens=False
             )
-            token_count = len(tokens["input_ids"][0])
-            if token_count > max_token_length:
+            current_length = len(tokens["input_ids"][0])
+            if current_length > max_token_length:
                 break
 
-            if chunk_idx % 2 == 0:
-                chunk_size_start += 1
-            else:
+            if mode == 'seq2seq':
+                chunk_size_start = 0
                 chunk_size_end += 1
+            else:
+                if chunk_idx % 2 == 0:
+                    chunk_size_start += 1
+                else:
+                    chunk_size_end += 1
 
             chunk_idx += 1
             prompt = current_prompt
-            token_length = token_count
+            token_length = current_length
+            last_q = q
+            last_c = c
 
-            if start == 0 and end == len(lines):
+            if start == 0 and end == len(lines) or (start == idx and end == len(lines)):
+                break
+
+            if max_lines_per_chunk == len(target_rows):
                 break
 
         block_xywh = merge_bboxes_as_block(collected_bbox_xywh)
 
         block_xywh[0] = 0
         block_xywh[2] = w
+        line_ids = [r["line"] for r in target_rows]
 
         chunks.append(
             {
                 "line_id": line_id,
-                "question": q,
-                "context": c,
+                "question": last_q,
+                "context": last_c,
                 "bbox": block_xywh,
                 "question_bbox": line_bbox_xywh,
                 "prompt": prompt,
+                "line_ids": line_ids,
             }
         )
     return chunks
@@ -273,7 +315,7 @@ def verbalizers_SPATIAL_FORMAT(metadata):
 
         line_buffer = line_buffer.replace(" " * SPACES, " ")
         line_buffer = line_buffer.rstrip()
-        line["text"] = f"<{index}> {line_buffer} {qx:02d}|{qy:02d}"
+        line["text"] = f"{line_buffer} {qx:02d}|{qy:02d}"
         index += 1
     return lines
 

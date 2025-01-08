@@ -9,6 +9,7 @@ from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
+from marie.components.document_taxonomy import DocumentTaxonomySeq2SeqLM
 from marie.components.document_taxonomy.base import BaseDocumentTaxonomy
 from marie.components.document_taxonomy.datamodel import TaxonomyPrediction
 from marie.components.document_taxonomy.qavit_document_taxonomy import (
@@ -26,11 +27,6 @@ from marie.executor.ner.utils import normalize_bbox
 from marie.utils.docs import docs_from_image, frames_from_file
 
 use_cuda = torch.cuda.is_available()
-
-# TODO: Move this to document_taxonomy package
-MODEL_ID = os.path.expanduser(
-    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy-trainer/R2-0.973529761794621"
-)
 max_input_length = 512
 
 # quantization_config = BitsAndBytesConfig(
@@ -44,6 +40,15 @@ def build_processor(model_type, model_name_or_path) -> BaseDocumentTaxonomy:
         processor = DocumentTaxonomyClassification(
             model_name_or_path=model_name_or_path,
             use_gpu=True,
+        )
+    elif model_type == 'flan-t5-seq2seq':
+        label2id = {"TABLE": 0, "SECTION": 1, "CODES": 2, "OTHER": 3}
+        id2label = {id: label for label, id in label2id.items()}
+        processor = DocumentTaxonomySeq2SeqLM(
+            model_name_or_path=model_name_or_path,
+            use_gpu=True,
+            k_completions=5,
+            id2label=id2label,
         )
     elif model_type == 'qavit':
         processor = QaVitDocumentTaxonomy(
@@ -69,7 +74,10 @@ def build_ocr_engine():
 
 box_processor, icr_processor, text_layout = build_ocr_engine()
 
-document_processor = build_processor('flan-t5', 'marie/flan-t5-taxonomy-document')
+# document_processor = build_processor('flan-t5-seq2seq', 'marie/flan-t5-taxonomy-document')
+document_processor = build_processor(
+    'flan-t5-seq2seq', 'marie/flan-t5-taxonomy-document-seq2seq'
+)
 table_processor = build_processor('flan-t5', 'marie/flan-t5-taxonomy-document-table')
 
 # Constants for taxonomy keys
