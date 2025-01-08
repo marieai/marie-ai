@@ -245,7 +245,9 @@ class QaVitDocumentTaxonomy(BaseDocumentTaxonomy):
         batch = []
         # convert to pillow image
         image = Image.fromarray(frame.astype("uint8")).convert("RGB")
-        image.save("/home/greg/tmp/test-deck/0_1735852778890/converted_pil.png")
+        image.save(
+            os.path.expanduser("~/tmp/test-deck/0_1735852778890/converted_pil.png")
+        )
 
         idx = 0
         for chunk in chunked_input:

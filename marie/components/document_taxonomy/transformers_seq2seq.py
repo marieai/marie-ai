@@ -4,7 +4,11 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 from docarray import DocList
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import (
+    AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 
 from marie import DocumentArray, check
 from marie.constants import __model_path__
@@ -19,7 +23,7 @@ from .datamodel import TaxonomyPrediction
 from .verbalizers import create_chunks
 
 
-class DocumentTaxonomyClassification(BaseDocumentTaxonomy):
+class DocumentTaxonomySeq2SeqLM(BaseDocumentTaxonomy):
     """
     Transformer based model for document taxonomy prediction.
     """
@@ -62,7 +66,7 @@ class DocumentTaxonomyClassification(BaseDocumentTaxonomy):
         """
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
-        self.logger.info(f"Document taxonomy : {model_name_or_path}")
+        self.logger.info(f"Document taxonomy Seq2Seq : {model_name_or_path}")
         self.show_error = show_error  # show prediction errors
         self.batch_size = batch_size
         self.progress_bar = False
@@ -95,16 +99,14 @@ class DocumentTaxonomyClassification(BaseDocumentTaxonomy):
         if tokenizer is None:
             tokenizer = model_name_or_path
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name_or_path
-        )
+        if id2label is None:
+            raise ValueError("id2label is required for Seq2Seq models")
+
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
         self.model = self.model.eval().to(resolved_devices[0])
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         self.max_input_length = self.tokenizer.model_max_length
-        if id2label is not None:
-            self.id2label = {int(key): value for key, value in self.id2label.items()}
-        else:
-            self.id2label = self.model.config.id2label
+        self.id2label = {int(key): value for key, value in id2label.items()}
 
     def predict(
         self,

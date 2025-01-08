@@ -10,7 +10,9 @@ from marie.components.document_taxonomy.datamodel import TaxonomyPrediction
 from marie.components.document_taxonomy.qavit_document_taxonomy import (
     QaVitDocumentTaxonomy,
 )
-from marie.components.document_taxonomy.transformers import TransformersDocumentTaxonomy
+from marie.components.document_taxonomy.transformers import (
+    DocumentTaxonomyClassification,
+)
 from marie.components.document_taxonomy.util import (
     group_taxonomies_by_label,
     merge_annotations,
@@ -48,7 +50,7 @@ def check_document_taxonomy():
 
     if model_type == 'flan-t5':
         model_name_or_path = 'marie/flan-t5-taxonomy-document'
-        processor = TransformersDocumentTaxonomy(
+        processor = DocumentTaxonomyClassification(
             model_name_or_path=model_name_or_path,
             use_gpu=True,
         )
