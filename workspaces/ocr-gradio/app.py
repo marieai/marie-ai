@@ -9,12 +9,10 @@ from PIL import Image
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
-from marie.document.layoutreader import TextLayout
 from marie.executor.ner.utils import normalize_bbox
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.json import store_json_object, to_json
-from marie.utils.ocr_debug import dump_bboxes
 from marie.utils.utils import current_milli_time, ensure_exists
 
 use_cuda = torch.cuda.is_available()
@@ -74,7 +72,6 @@ def to_text(result):
 def process_image(filename):
     print("Processing image : ", filename)
     image = Image.open(filename).convert("RGB")
-    # image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     (
         boxes,
         fragments,

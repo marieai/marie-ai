@@ -1,3 +1,4 @@
+import re
 import tempfile
 from os import PathLike
 from typing import Union
@@ -9,7 +10,6 @@ from marie.document import TrOcrProcessor
 from marie.executor.util import setup_cache
 from marie.logging_core.predefined import default_logger as logger
 from marie.ocr import DefaultOcrEngine, MockOcrEngine, OcrEngine, VotingOcrEngine
-from marie.renderer import TextRenderer
 from marie.utils.json import load_json_file
 from marie.utils.utils import ensure_exists
 
@@ -27,8 +27,11 @@ def get_words_and_boxes(
     words = []
     boxes = []
     lines = []
+
     if not ocr_results:
         return words, boxes
+    if isinstance(ocr_results, dict):
+        ocr_results = [ocr_results]
     if page_index >= len(ocr_results):
         raise ValueError(f"Page index {page_index} is out of range.")
 
@@ -42,29 +45,35 @@ def get_words_and_boxes(
 
 
 def meta_to_text(
-    meta_or_path: Union[dict | str | PathLike], text_output_path: str = None
+    meta_or_path: Union[dict | list | str | PathLike],
+    text_output_path: str = None,
+    collapsed_text: bool = False,
 ) -> str:
     """
     Convert meta data to text.
 
     :param meta_or_path: Meta data or path to meta data.
     :param text_output_path:  Path to text output file. If not provided, a temporary file will be used.
+    :param collapsed_text: Collapse text, remove extra new lines between lines.
     :return:
     """
 
     if isinstance(meta_or_path, (str, PathLike)):
         results = load_json_file(meta_or_path)
+    elif isinstance(meta_or_path, dict):
+        results = [meta_or_path]
     else:
         results = meta_or_path
 
     # create a fake frames array from metadata in the results, this is needed for the renderer for sizing
-    frames = []
+    if False:
+        frames = []
 
-    for result in results:
-        meta = result["meta"]["imageSize"]
-        width = meta["width"]
-        height = meta["height"]
-        frames.append(np.zeros((height, width, 3), dtype=np.uint8))
+        for result in results:
+            meta = result["meta"]["imageSize"]
+            width = meta["width"]
+            height = meta["height"]
+            frames.append(np.zeros((height, width, 3), dtype=np.uint8))
 
     # write to temp file and read it back
     if text_output_path:
@@ -83,7 +92,10 @@ def meta_to_text(
     tmp_file.close()
 
     with open(tmp_file.name, "r") as f:
-        return f.read()
+        text = f.read()
+        if collapsed_text:
+            text = re.sub(r'\n\s*\n+', '\n', text)
+    return text
 
 
 def get_known_ocr_engines(

@@ -305,6 +305,7 @@ class TransformersDocumentIndexer(BaseDocumentIndexer):
         words: List[List[str]],
         boxes: List[List[List[int]]],
         batch_size: Optional[int] = None,
+        **kwargs,
     ) -> DocList[MarieDoc]:
         if batch_size is None:
             batch_size = self.batch_size

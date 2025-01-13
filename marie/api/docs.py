@@ -35,6 +35,7 @@ class MarieDoc(ImageDoc):
 class BatchableMarieDoc(MarieDoc):
     words: List
     boxes: List
+    text: Optional[str] = None
 
 
 class OutputDoc(BaseDoc):
