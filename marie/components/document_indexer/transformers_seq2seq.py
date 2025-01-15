@@ -125,6 +125,8 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
             model_name_or_path, self.labels, self.device.type
         )
         self.model = self.optimize_model(self.model)
+        self.max_source_length = self.tokenizer.model_max_length
+        print(f"max_source_length: {self.max_source_length}")
 
     def __load_model(
         self, model_name_or_path: str, labels: list[str], device: str
@@ -135,6 +137,9 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
 
+        print("tokenizer.model_max_length", tokenizer.model_max_length)
+        tokenizer.model_max_length = 1024
+        print("tokenizer.model_max_length", tokenizer.model_max_length)
         model.to(device)
         model.eval()
 
@@ -285,7 +290,7 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
         input_texts = [text]
         num_beams = 6
         max_new_tokens = 512
-        print(f"Estimated number of tokens: {max_new_tokens}")
+        print(f"max_new_tokens: {max_new_tokens}")
 
         start_time = time.time()
         predictions = self.generate_predictions(
@@ -326,7 +331,7 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
 
         tokenized_inputs = tokenizer(
             inputs,
-            max_length=512,
+            max_length=self.max_source_length,
             truncation=True,
             padding=True,
             return_tensors="pt",

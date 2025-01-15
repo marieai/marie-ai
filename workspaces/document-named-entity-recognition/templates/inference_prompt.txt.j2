@@ -1,21 +1,22 @@
-Extract the following relations from the text. Each relation should be returned in the format: "key predicate value >>>". Ensure the key, predicate, and value appear exactly as they are in the text. If the value is missing, leave it empty.
-**Do not hallucinate or invent details** that are not present in the text.
-Key should always before the predicate and the value should always come after the predicate.
+**Task**: Extract all relationships from the provided text in the format:
+`key KEY_FOR value >>>`
 
-Steps:
-1. **Reasoning**: First, analyze the text and identify the entities and relationships between them.
-2. **Extraction**: Once the relationships are clear, extract each one in the format: `key predicate value >>>`
-3. **Format**: Use the exact wording from the text for `key`, `predicate`, and `value`. If any value is missing, leave it empty.
+### Instructions:
+1. **Identify Relationships**: Analyze the text to find entities and the relationships between them.
+2. **Extraction Rules**:
+   - Format each relationship as: `key KEY_FOR value >>>`
+   - Use exact wording from the text for `key`, `KEY_FOR`, and `value`.
+   - Avoid duplicate `KEY_FOR` values unless associated with distinct keys.
+3. **Exclusions**:
+   - Exclude address-related details like "PO BOX", city, state, or ZIP codes.
+   - Provide only explicit information from the text; do not infer or assume.
+4. **Formatting**:
+   - Ensure relationships are distinct and formatted correctly.
 
-Text:
+**Output Format**:
+`key1 KEY_FOR value1 >>>`
+`key2 KEY_FOR value2 >>>`
+
+**Text**:
 {{ text }}
 
-Example Output:
-GROUP ID #: KEY_FOR 2231333 >>>
-PATIENT NAME: KEY_FOR GREG BROWN >>>
-PATIENT ID#: KEY_FOR 200155538-00 >>>
-PROVIDER #: KEY_FOR 3242686 >>>
-PRODUCT: KEY_FOR PREFERRED VALUE >>>
-PATIENT ACCT #: KEY_FOR ZZZZ0747 >>>
-CLAIM #: KEY_FOR 00021704100 >>>
-NPI #: KEY_FOR >>>
