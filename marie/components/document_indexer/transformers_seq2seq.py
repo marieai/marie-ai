@@ -24,6 +24,9 @@ from ...utils.json import load_json_file, store_json_object
 from ...utils.utils import ensure_exists
 from .base import BaseDocumentIndexer
 
+MAX_SOURCE_LENGTH = 1024
+MAX_TARGET_LENGTH = 512
+
 
 class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
     """
@@ -135,6 +138,7 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
 
+        tokenizer.model_max_length = MAX_SOURCE_LENGTH
         model.to(device)
         model.eval()
 
@@ -326,7 +330,7 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
 
         tokenized_inputs = tokenizer(
             inputs,
-            max_length=512,
+            max_length=MAX_SOURCE_LENGTH,
             truncation=True,
             padding=True,
             return_tensors="pt",

@@ -61,16 +61,15 @@ def create_chunks(
             if len(target_rows) < max_lines_per_chunk:
                 target_rows = selected_rows[:max_lines_per_chunk]
 
-            q = "\n".join([r["text"] for r in target_rows])
-            c = "\n".join([r["text"] for r in selected_rows])
-
-            current_prompt = f"""classify each row:\n\n{q}\n\ncontext:\n\n{c}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
-            current_prompt = f"""classify each row:\n\n{q}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
-
-            # q = source_row["text"]
-            # c = "\n".join([r["text"] for r in selected_rows])
-            # current_prompt = f"""classify: {q}\ncontext: {c}\n"""
-            #
+            if mode == 'seq2seq':
+                q = "\n".join([r["text"] for r in target_rows])
+                c = "\n".join([r["text"] for r in selected_rows])
+                current_prompt = f"""classify each row:\n\n{q}\n\ncontext:\n\n{c}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
+                current_prompt = f"""classify each row:\n\n{q}\n\nOPTIONS:\n-TABLE \n-SECTION \n-CODE \n-OTHER"""
+            else:
+                q = source_row["text"]
+                c = "\n".join([r["text"] for r in selected_rows])
+                current_prompt = f"""classify: {q}\ncontext: {c}\n"""
 
             collected_bbox_xywh = [line["bbox"] for line in selected_rows]
             tokens = tokenizer(
