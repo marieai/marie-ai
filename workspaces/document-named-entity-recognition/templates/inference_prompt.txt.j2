@@ -1,22 +1,10 @@
-**Task**: Extract all relationships from the provided text in the format:
-`key KEY_FOR value >>>`
+Extract the following key-value from the text. Each key-value should be returned in the format: "key SEPARATOR value >>>". Ensure the key and value appear exactly as they are in the text. If the value is missing, leave it empty.
+Ensure format is as follows: `key SEPARATOR value >>>`.
+Only provide information explicitly mentioned in the text; do not assume or infer anything that is not directly stated.
+'SEPARATOR' is a constant string that should be used to separate the key and value in the output.
 
-### Instructions:
-1. **Identify Relationships**: Analyze the text to find entities and the relationships between them.
-2. **Extraction Rules**:
-   - Format each relationship as: `key KEY_FOR value >>>`
-   - Use exact wording from the text for `key`, `KEY_FOR`, and `value`.
-   - Avoid duplicate `KEY_FOR` values unless associated with distinct keys.
-3. **Exclusions**:
-   - Exclude address-related details like "PO BOX", city, state, or ZIP codes.
-   - Provide only explicit information from the text; do not infer or assume.
-4. **Formatting**:
-   - Ensure relationships are distinct and formatted correctly.
-
-**Output Format**:
-`key1 KEY_FOR value1 >>>`
-`key2 KEY_FOR value2 >>>`
-
-**Text**:
+Text:
 {{ text }}
 
+Output:
+key SEPARATOR value >>>
