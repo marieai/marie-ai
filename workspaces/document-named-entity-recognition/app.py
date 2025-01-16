@@ -1,5 +1,4 @@
 import json
-import os
 
 import cv2
 import numpy as np
@@ -8,14 +7,14 @@ import torch
 from canvas_util import ImageUtils
 from jinja2 import Environment, FileSystemLoader
 from PIL import Image
-from util import generate_unique_key, process_image, save_to_json_file
+from util import generate_unique_key, process_image
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.components.document_indexer.transformers_seq2seq import (
     TransformersSeq2SeqDocumentIndexer,
 )
 from marie.document import TrOcrProcessor
-from marie.ocr.util import get_words_and_boxes, meta_to_text
+from marie.ocr.util import get_words_and_boxes
 from marie.utils.docs import docs_from_image
 
 use_cuda = torch.cuda.is_available()

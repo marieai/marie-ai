@@ -1,22 +1,10 @@
-Extract all relations from the text. For each relation, reason through the text to identify the key, KEY_FOR, and value, then format them as:
-`key KEY_FOR value >>>`
-
-Steps:
-1. **Reasoning**: First, analyze the text and identify the entities and relationships between them.
-2. **Extraction**: Once the relationships are clear, extract each one in the format: `key KEY_FOR value >>>`
-3. **Format**:
-   - Use the exact wording from the text for `key`, `KEY_FOR`, and `value`.
-   - If a value is missing, leave it empty.
-   - Ensure that there are no duplicate `KEY_FOR` values without a different key.
-   - Avoid having two keys together without a separator.
-4. **Validation**: Ensure the integrity of the format by checking for these rules during extraction.
-
-- Exclude address-related entries such as "PO BOX" and other address fields (e.g., "CINCINNATI", "OH", "45263-2110").
-- Only include keys and values that are relevant to the patient, policy, claim, or contact information.
-- Only provide information that is explicitly mentioned in the text.
-- Do not make any assumptions or add information that is not in the provided input.
-- There should be no duplicate `KEY_FOR` values without a different key.
-- If two keys appear together without clear separation, resolve this condition by ensuring they are processed as distinct entries using a valid separator or context.
+Extract the following key-value from the text. Each key-value should be returned in the format: "key SEPARATOR value >>>". Ensure the key and value appear exactly as they are in the text. If the value is missing, leave it empty.
+Ensure format is as follows: `key SEPARATOR value >>>`.
+Only provide information explicitly mentioned in the text; do not assume or infer anything that is not directly stated.
+'SEPARATOR' is a constant string that should be used to separate the key and value in the output.
 
 Text:
 {{ text }}
+
+Output:
+key SEPARATOR value >>>
