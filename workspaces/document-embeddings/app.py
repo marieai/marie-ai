@@ -88,11 +88,13 @@ def build_processorXXXX(model_type, model_name_or_path) -> BaseDocumentTaxonomy:
 def build_ocr_engine():
     text_layout = None
     box_processor = BoxProcessorUlimDit(
-        models_dir="../../model_zoo/unilm/dit/text_detection",
+        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
         cuda=use_cuda,
     )
 
-    icr_processor = TrOcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
+    icr_processor = TrOcrProcessor(
+        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=use_cuda
+    )
 
     return box_processor, icr_processor, text_layout
 
