@@ -86,7 +86,7 @@ def meta_to_text(
             lines = result["lines"]
             lines = sorted(lines, key=lambda k: k["line"])
             for i, line in enumerate(lines):
-                f.write(line["text"])
+                f.write(f'{i} | {line["text"]}')
                 if i < len(lines) - 1:
                     f.write("\n")
     tmp_file.close()

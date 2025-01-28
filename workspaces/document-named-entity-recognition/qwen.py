@@ -18,7 +18,6 @@ from transformers import (
 
 # Model and Processor Loading (Done once at startup)
 MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 # MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 
 # Configure BitsAndBytesConfig for 8-bit precision
@@ -26,41 +25,43 @@ bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,  # Enable 8-bit quantization
     bnb_optim='cpu',  # Optional: can specify more configuration options like bnb_optim or other tuning params
 )
-bnb_config = None
-
-
-# model = Qwen2VLForConditionalGeneration.from_pretrained(
-#     MODEL_ID,
-#     trust_remote_code=True,
-#     torch_dtype=torch.float16,
-#     attn_implementation="flash_attention_2",
-#     quantization_config=bnb_config,
-# ).to("cuda").eval()
-
+# bnb_config = None
 
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 256 * 28 * 28
 max_pixels = 1280 * 28 * 28
 # max_pixels = 1800*28*28
+if False:
+    model = (
+        Qwen2VLForConditionalGeneration.from_pretrained(
+            MODEL_ID,
+            trust_remote_code=True,
+            torch_dtype=torch.float16,
+            attn_implementation="flash_attention_2",
+            quantization_config=bnb_config,
+        )
+        .to("cuda")
+        .eval()
+    )
 
-# processor = AutoProcessor.from_pretrained(MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
+    )
+if True:
+    from transformers import (
+        AutoProcessor,
+        Qwen2_5_VLForConditionalGeneration,
+        TextIteratorStreamer,
+    )
 
-
-from transformers import (
-    AutoProcessor,
-    Qwen2_5_VLForConditionalGeneration,
-    TextIteratorStreamer,
-)
-
-# Load model and processor
-ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
-).to("cuda")
-processor = AutoProcessor.from_pretrained(
-    ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
-)
-
+    # Load model and processor
+    ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
+    ).to("cuda")
+    processor = AutoProcessor.from_pretrained(
+        ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
+    )
 
 DESCRIPTION = f"[{MODEL_ID}]"
 

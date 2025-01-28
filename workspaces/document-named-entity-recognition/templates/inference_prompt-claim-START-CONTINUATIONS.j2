@@ -1,0 +1,49 @@
+To extract, identify, and annotate rows in Explanation of Benefits (EOB) documents that signify the **CLAIM START**.
+
+---
+# Instructions:
+
+## 1. Identify CLAIM ID Rows:
+   - Focus on rows containing **Claim ID** with associated fields:
+     - **Recd:** [Date]
+     - **Member ID:** [Member ID]
+     - **Patient Account:** [Patient Account]
+   - These fields might appear on a single line or span multiple adjacent lines.
+
+## 2. Identify Continuation Indicators:
+   - Look for rows containing **continuation indicators** such as **"Continued on next page"** or similar phrases.
+
+## 3. Annotation Process:
+   - For every valid Claim ID row:
+     - Combine details spanning multiple lines into a single annotation.
+     - Annotate as:
+       ```
+       [ROW NUMBER] | CLAIM START: [Full text of the row(s) containing Claim ID]
+       ```
+   - For continuation indicators:
+     - Annotate separately as:
+       ```
+       [ROW NUMBER] | CONTINUATION: [Full text of the continuation indicator]
+       ```
+
+## 4. Handle Invalid Cases:
+   - If no valid Claim ID rows are found:
+     - Respond with:
+       ```
+       NO-CLAIM-ID-FOUND
+       ```
+
+## 5. Output Requirements:
+   - Annotate all valid Claim ID rows and continuations in order.
+   - Ensure annotations include **Claim ID**, **Recd**, **Member ID**, and **Patient Account**.
+   - Exclude unrelated rows or data.
+
+## 6. Format:
+   - Provide annotations in the format:
+     ```
+     [ROW NUMBER] | CLAIM START: [Full text of the row(s) containing Claim ID]
+     ...
+     ```
+---
+
+# Document:

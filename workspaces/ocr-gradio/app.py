@@ -10,6 +10,7 @@ from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
 from marie.executor.ner.utils import normalize_bbox
+from marie.ocr.util import meta_to_text
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.json import store_json_object, to_json
@@ -103,7 +104,7 @@ def process_image(filename):
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
     # dump_bboxes(image, result)
-    text = to_text(result)
+    text = meta_to_text(result)
 
     if True:
         request_id = f"{prefix_text}_{current_milli_time()}"
