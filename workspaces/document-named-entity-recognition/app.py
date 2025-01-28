@@ -197,7 +197,6 @@ def main():
                 print('-' * 50)
 
                 converted_output = generate_output(prompt, snippet, words, boxes)
-                # converted_output = 'Hello World'
 
                 result_json = json.loads(st.session_state.extracted["result_json"])
                 result = {

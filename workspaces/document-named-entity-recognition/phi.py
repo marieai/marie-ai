@@ -21,9 +21,12 @@ from transformers import (
 # token = os.environ["HF_TOKEN"]
 token = None
 # "microsoft/phi-4"
+
 model_id = "microsoft/Phi-3.5-mini-instruct"  # 10GB
-model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
-model_id = "google/gemma-7b-it"  # 16GB
+# model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
+# model_id = "Qwen/Qwen2-2B-Instruct"  # 16GB
+# model_id = "google/gemma-7b-it"  # 16GB
+# model_id = "llava-hf/llava-1.5-7b-hf"  # 16GB
 # model_id = "google/gemma-2-2b-it" # 7GB
 
 # model_id = "mistralai/Mistral-7B-v0.3" # mistral-7B-Instruct-v0.3.
@@ -37,10 +40,10 @@ model_id = "google/gemma-7b-it"  # 16GB
 
 # Configure BitsAndBytesConfig for 8-bit precision
 bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,  # Enable 8-bit quantization
+    load_in_8bit=True,  # Enable 8-bit quantization
     bnb_optim='cpu',  # Optional: can specify more configuration options like bnb_optim or other tuning params
 )
-# bnb_config = None
+bnb_config = None
 
 # Load model in 8-bit precision using bitsandbytes
 model = AutoModelForCausalLM.from_pretrained(
