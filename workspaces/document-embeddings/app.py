@@ -1,6 +1,4 @@
 import os
-import tempfile
-import time
 from typing import List
 
 import gradio as gr
@@ -27,7 +25,6 @@ from marie.components.document_taxonomy.util import (
 from marie.document import TrOcrProcessor
 from marie.executor.ner.utils import normalize_bbox
 from marie.utils.docs import docs_from_image, frames_from_file
-from marie.utils.image_utils import hash_file
 
 use_cuda = torch.cuda.is_available()
 max_input_length = 8192
@@ -91,11 +88,13 @@ def build_processorXXXX(model_type, model_name_or_path) -> BaseDocumentTaxonomy:
 def build_ocr_engine():
     text_layout = None
     box_processor = BoxProcessorUlimDit(
-        models_dir="../../model_zoo/unilm/dit/text_detection",
+        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
         cuda=use_cuda,
     )
 
-    icr_processor = TrOcrProcessor(models_dir="../../model_zoo/trocr", cuda=use_cuda)
+    icr_processor = TrOcrProcessor(
+        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=use_cuda
+    )
 
     return box_processor, icr_processor, text_layout
 
@@ -176,29 +175,13 @@ def process_taxonomies(documents: DocList, metadata: dict):
     )  # table_groups#document_result["groups"]  # , section_result["groups"]
 
 
-def generate_taxonomy_overlay(taxonomy_groups, image, source_key=None):
+def generate_taxonomy_overlay(taxonomy_groups, image):
     image_width = image.size[0]
     aligned_bboxes = [
         [0, bbox[1], image_width, bbox[3]]
         for bbox in (group["bbox"] for group in taxonomy_groups)
     ]
     bbox_labels = [group["label"] for group in taxonomy_groups]
-    # Clip and save groups to temporary folders
-    temp_dir = tempfile.mkdtemp()
-    temp_dir = "~/dev/workflow/grapnel-g5/assets/taxonomy_groups"
-    temp_dir = os.path.expanduser(temp_dir)
-    for group, bbox in zip(taxonomy_groups, aligned_bboxes):
-        # convert from xywh to xyxy
-        bbox = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-        cropped_region = image.crop(bbox)
-        label_folder = os.path.join(temp_dir, group["label"])
-        os.makedirs(label_folder, exist_ok=True)
-        if source_key:
-            name = f"{source_key}_{int(time.time())}_{np.random.randint(0, 100000)}.png"
-        else:
-            name = f"{int(time.time())}_{np.random.randint(0, 100000)}.png"
-        cropped_region.save(os.path.join(label_folder, name))
-
     return visualize_bboxes(
         image, np.array(aligned_bboxes), format="xywh", labels=bbox_labels
     )
@@ -207,8 +190,6 @@ def generate_taxonomy_overlay(taxonomy_groups, image, source_key=None):
 def process_image(filename):
     print("Processing image : ", filename)
     image = Image.open(filename).convert("RGB")
-    key = hash_file(filename)
-    print("key = ", key)
     # image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     (
         boxes,
@@ -236,6 +217,9 @@ def process_image(filename):
         words.append(word["text"])
         boxes_norm.append(normalize_bbox(w_box, (image.size[0], image.size[1])))
 
+    print("len words", len(words))
+    print("len boxes", len(boxes_norm))
+
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
 
@@ -246,12 +230,10 @@ def process_image(filename):
         documents, result
     )
 
-    taxonomy_overlay_image = generate_taxonomy_overlay(taxonomy_groups, image, key)
-    filtered_doc_overlay_image = generate_taxonomy_overlay(
-        filtered_doc_groups, image, key
-    )
+    taxonomy_overlay_image = generate_taxonomy_overlay(taxonomy_groups, image)
+    filtered_doc_overlay_image = generate_taxonomy_overlay(filtered_doc_groups, image)
     filtered_section_overlay_image = generate_taxonomy_overlay(
-        filtered_section_groups, image, key
+        filtered_section_groups, image
     )
 
     return (
@@ -282,7 +264,9 @@ def interface():
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
+
         print("selection", selection)
+        # filename = selection["name"]
         filename = selection[0]
         return process_image(filename)
 

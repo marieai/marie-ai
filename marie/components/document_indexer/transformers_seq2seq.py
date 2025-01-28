@@ -138,6 +138,8 @@ class TransformersSeq2SeqDocumentIndexer(BaseDocumentIndexer):
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
 
+        print("tokenizer.model_max_length", tokenizer.model_max_length)
+        print("tokenizer.model_max_length", tokenizer.model_max_length)
         model.to(device)
         model.eval()
 
