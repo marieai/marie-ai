@@ -344,6 +344,9 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"Processing request: {request}")
         message = request.parameters
 
+        # print message details
+        self.logger.info(f"Message details : {message}")
+
         if "invoke_action" not in message:
             response = Response()
             response.parameters = {"error": "Invalid request, missing invoke_action"}
@@ -716,6 +719,11 @@ class MarieServerGateway(CompositeServer):
                 else:
                     raise TypeError(f"Not recognized event type : {ev_type}")
                 error_counter = 0  # reset error counter on successful processing
+
+                # if there are no more events, update the gateway streamer to reflect the changes
+                if self.event_queue.qsize() == 0:
+                    await self.update_gateway_streamer()
+
             except Exception as ex:
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
@@ -828,7 +836,7 @@ class MarieServerGateway(CompositeServer):
             for node in nodes:
                 self.logger.info(f"\tNode : {node}")
 
-        await self.update_gateway_streamer()
+        # await self.update_gateway_streamer()
 
     async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
@@ -912,7 +920,7 @@ class MarieServerGateway(CompositeServer):
             self.deployment_nodes[executor] = [
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
-        await self.update_gateway_streamer()
+        # await self.update_gateway_streamer()
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):

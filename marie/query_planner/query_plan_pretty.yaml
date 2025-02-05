@@ -1,0 +1,387 @@
+nodes:
+- task_id: '0'
+  query_str: '0: START'
+  dependencies: []
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: null
+- task_id: '1'
+  query_str: '1: Document annotator'
+  dependencies:
+  - '0'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: null
+- task_id: '2'
+  query_str: '2: Annotate frame 0 ROIs'
+  dependencies:
+  - '1'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '3'
+  query_str: '3: ROI_START for frame 0'
+  dependencies:
+  - '2'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: start
+- task_id: '4'
+  query_str: '4: ROI_END for frame 0'
+  dependencies:
+  - '2'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: end
+- task_id: '5'
+  query_str: '5: ROI_RELATION for frame 0'
+  dependencies:
+  - '2'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: relation
+- task_id: '7'
+  query_str: '7: Annotate frame 1 ROIs'
+  dependencies:
+  - '1'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '8'
+  query_str: '8: ROI_START for frame 1'
+  dependencies:
+  - '7'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: start
+- task_id: '9'
+  query_str: '9: ROI_END for frame 1'
+  dependencies:
+  - '7'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: end
+- task_id: '10'
+  query_str: '10: ROI_RELATION for frame 1'
+  dependencies:
+  - '7'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: relation
+- task_id: '12'
+  query_str: '12: Annotate frame 2 ROIs'
+  dependencies:
+  - '1'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '13'
+  query_str: '13: ROI_START for frame 2'
+  dependencies:
+  - '12'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: start
+- task_id: '14'
+  query_str: '14: ROI_END for frame 2'
+  dependencies:
+  - '12'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: end
+- task_id: '15'
+  query_str: '15: ROI_RELATION for frame 2'
+  dependencies:
+  - '12'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: relation
+- task_id: '17'
+  query_str: '17: Annotate frame 3 ROIs'
+  dependencies:
+  - '1'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '18'
+  query_str: '18: ROI_START for frame 3'
+  dependencies:
+  - '17'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: start
+- task_id: '19'
+  query_str: '19: ROI_END for frame 3'
+  dependencies:
+  - '17'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: end
+- task_id: '20'
+  query_str: '20: ROI_RELATION for frame 3'
+  dependencies:
+  - '17'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: relation
+- task_id: '22'
+  query_str: '22: Annotate frame 4 ROIs'
+  dependencies:
+  - '1'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '23'
+  query_str: '23: ROI_START for frame 4'
+  dependencies:
+  - '22'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: start
+- task_id: '24'
+  query_str: '24: ROI_END for frame 4'
+  dependencies:
+  - '22'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: end
+- task_id: '25'
+  query_str: '25: ROI_RELATION for frame 4'
+  dependencies:
+  - '22'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      roi: relation
+- task_id: '6'
+  query_str: '6: Merge frame 0'
+  dependencies:
+  - '3'
+  - '4'
+  - '5'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '11'
+  query_str: '11: Merge frame 1'
+  dependencies:
+  - '8'
+  - '9'
+  - '10'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '16'
+  query_str: '16: Merge frame 2'
+  dependencies:
+  - '13'
+  - '14'
+  - '15'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '21'
+  query_str: '21: Merge frame 3'
+  dependencies:
+  - '18'
+  - '19'
+  - '20'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '26'
+  query_str: '26: Merge frame 4'
+  dependencies:
+  - '23'
+  - '24'
+  - '25'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '27'
+  query_str: '27: Merge all frames'
+  dependencies:
+  - '6'
+  - '11'
+  - '16'
+  - '21'
+  - '26'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'
+- task_id: '28'
+  query_str: '28: SEGMENT extracted data'
+  dependencies:
+  - '27'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: PYTHON_FUNCTION
+    params:
+      layout: '12345'
+      function: segment_data
+- task_id: '29'
+  query_str: '29: DOC VALUE EXTRACT'
+  dependencies:
+  - '28'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - EXTRACTOR
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      extractor: doc
+- task_id: '30'
+  query_str: '30: FIELD VALUE EXTRACT'
+  dependencies:
+  - '28'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - EXTRACTOR
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      extractor: field
+- task_id: '31'
+  query_str: '31: TABLE VALUE EXTRACT'
+  dependencies:
+  - '28'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - EXTRACTOR
+  definition:
+    method: LLM
+    params:
+      layout: '12345'
+      extractor: table
+- task_id: '32'
+  query_str: '32: EXTRACT insights'
+  dependencies:
+  - '29'
+  - '30'
+  - '31'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: PYTHON_FUNCTION
+    params:
+      layout: '12345'
+      function: extract_insights
+- task_id: '33'
+  query_str: '33: COLLATOR: Compile structured output'
+  dependencies:
+  - '32'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - MERGER
+  definition:
+    method: PYTHON_FUNCTION
+    params:
+      layout: '12345'
+      function: data_collator
+- task_id: '34'
+  query_str: '34: END'
+  dependencies:
+  - '33'
+  node_type: !!python/object/apply:marie.query_planner.base.QueryType
+  - COMPUTE
+  definition:
+    method: NOOP
+    params:
+      layout: '12345'

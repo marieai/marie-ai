@@ -12,6 +12,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
     from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
+from fastapi import status as http_status
+
 
 def get_fastapi_app(
     streamer: "GatewayStreamer",
@@ -221,7 +223,10 @@ def get_fastapi_app(
                     status = resp.header.status
 
                     if status.code == jina_pb2.StatusProto.ERROR:
-                        raise HTTPException(status_code=499, detail=status.description)
+                        raise HTTPException(
+                            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=status.description,
+                        )
                     else:
                         result_dict = resp.to_dict()
                         return result_dict

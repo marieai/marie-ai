@@ -68,8 +68,12 @@ class GatewayJobDistributor(JobDistributor):
 
         if "://" in job_info.entrypoint:
             target_executor, req_endpoint = job_info.entrypoint.split("://", 1)
+        if not req_endpoint.startswith("/"):
+            req_endpoint = f"/{req_endpoint}"
 
         for executor, nodes in self.deployment_nodes.items():
+            print('executor:', executor)
+            print('nodes:', nodes)
             if not target_executor or target_executor == executor:
                 for node in nodes:
                     if node['endpoint'] == req_endpoint:
