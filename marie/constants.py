@@ -97,3 +97,5 @@ __model_path__ = _os.path.join(__default_mount_point__, "model_zoo")
 __config_dir__ = _os.path.join(__default_mount_point__, "config")
 
 __marie_home__ = _os.path.join(str(_Path.home()), ".marie")
+
+DEPLOYMENT_STATUS_PREFIX = "deployments/status"

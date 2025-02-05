@@ -19,6 +19,7 @@ import marie.helper
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
+    DEPLOYMENT_STATUS_PREFIX,
     __cache_path__,
     __config_dir__,
     __marie_home__,
@@ -44,6 +45,7 @@ from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 from marie.storage.kv.psql import PostgreSQLKV
@@ -104,6 +106,7 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"Setting up MarieServerGateway")
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
+        self.deployments = {}
         self.event_queue = asyncio.Queue()
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
@@ -658,7 +661,13 @@ class MarieServerGateway(CompositeServer):
                     listen_timeout=watchdog_interval,
                 )
                 self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
+
+                # gateway
                 resolver.watch_service(service_name, self.handle_discovery_event)
+                # deployment status
+                resolver.watch_service(
+                    DEPLOYMENT_STATUS_PREFIX, self.handle_discovery_event
+                )
             except Exception as e:
                 self.logger.error(
                     f"Failed to initialize etcd client on {etcd_host}:{etcd_port}"
@@ -703,28 +712,40 @@ class MarieServerGateway(CompositeServer):
         """
 
         error_counter = 0
+        gateway_changed = False
+
         while True:
             service, event = await self.event_queue.get()
             try:
                 self.logger.info(
                     f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
                 )
+
+                ev_key = event.key
                 ev_type = event.event
                 ev_value = event.value
-                if ev_type == "put":
-                    await self.gateway_server_online(service, ev_value)
-                elif ev_type == "delete":
-                    self.logger.info(f"Service {service} is unavailable")
-                    await self.gateway_server_offline(service, ev_value)
+
+                if ev_key.startswith(DEPLOYMENT_STATUS_PREFIX):
+                    print(f"Deployment status event : {ev_key}, {ev_type}, {ev_value}")
+                    await self.deployment_changed(ev_key, ev_type, ev_value)
                 else:
-                    raise TypeError(f"Not recognized event type : {ev_type}")
-                error_counter = 0  # reset error counter on successful processing
+                    gateway_changed = True
+                    if ev_type == "put":
+                        await self.gateway_server_online(service, ev_value)
+                    elif ev_type == "delete":
+                        self.logger.info(f"Service {service} is unavailable")
+                        await self.gateway_server_offline(service, ev_value)
+                    else:
+                        raise TypeError(f"Not recognized event type : {ev_type}")
+                    error_counter = 0  # reset error counter on successful processing
 
                 # if there are no more events, update the gateway streamer to reflect the changes
-                if self.event_queue.qsize() == 0:
+                if self.event_queue.qsize() == 0 and gateway_changed:
                     await self.update_gateway_streamer()
+                    gateway_changed = False
 
             except Exception as ex:
+                raise ex
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
                 if error_counter >= max_errors:
@@ -733,6 +754,61 @@ class MarieServerGateway(CompositeServer):
                 await asyncio.sleep(1)
             finally:
                 self.event_queue.task_done()
+
+    def parse_deployment_details(self, path_str: str, status: str) -> dict:
+        if not path_str.startswith(DEPLOYMENT_STATUS_PREFIX):
+            raise ValueError("String does not start with the expected prefix.")
+        suffix = path_str[len(DEPLOYMENT_STATUS_PREFIX) :]
+
+        if suffix.startswith("/"):
+            suffix = suffix[1:]
+
+        parts = suffix.split("/", 1)
+        if len(parts) < 2:
+            raise ValueError(
+                f"Invalid format: expected address and executor. got : {path_str}"
+            )
+
+        address = parts[0]
+        executor = parts[1]
+
+        return {
+            "prefix": DEPLOYMENT_STATUS_PREFIX,
+            "address": address,
+            "executor": executor,
+            "status": status,
+        }
+
+    def group_by_executor_and_status(self, deployments) -> dict:
+        grouped = {}
+
+        for item in deployments:
+            print(f"Item : {item}")
+            executor = item["executor"]
+            status = item["status"]
+
+            if executor not in grouped:
+                grouped[executor] = {}
+            if status not in grouped[executor]:
+                grouped[executor][status] = []
+
+            grouped[executor][status].append(item)
+
+        return grouped
+
+    def get_counts_by_executor_and_status(self, deployments):
+        """Returns a dictionary where the top-level keys are executors,
+        and each key maps to a dictionary of status-to-count mappings."""
+        counts = {}
+        for item in deployments:
+            executor = item["executor"]
+            status = item["status"]
+            if executor not in counts:
+                counts[executor] = {}
+            if status not in counts[executor]:
+                counts[executor][status] = 0
+            counts[executor][status] += 1
+        return counts
 
     async def gateway_server_online(self, service, event_value):
         """
@@ -841,9 +917,7 @@ class MarieServerGateway(CompositeServer):
     async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
-
         # TODO : We can only do one Executor for now, need to update this to handle multiple executors
-
         # Graph here is just a simple start-gateway -> executor -> end-gateway representation of the deployment
         # it does not care if the executor is a Flow or a Deployment or if nodes are present in the executor
         # this allows us to use same gateway streamer for all types of deployments
@@ -902,6 +976,7 @@ class MarieServerGateway(CompositeServer):
         self.streamer = streamer
         self.distributor.streamer = streamer
         self.distributor.deployment_nodes = self.deployment_nodes
+        ClusterState.deployment_nodes = self.deployment_nodes
         JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
 
     async def gateway_server_offline(self, service: str, ev_value):
@@ -921,6 +996,27 @@ class MarieServerGateway(CompositeServer):
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
         # await self.update_gateway_streamer()
+
+    async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: str):
+        if ev_key == DEPLOYMENT_STATUS_PREFIX:
+            return  # ignore the root key, need to handle this differently
+
+        print("Deployment changed : ", ev_key, ev_type, ev_value)
+        if ev_type == 'delete':
+            if ev_key in self.deployments:
+                del self.deployments[ev_key]
+        else:
+            deployment = self.parse_deployment_details(ev_key, ev_value)
+            self.deployments[ev_key] = deployment
+
+        ClusterState.deployments = self.deployments
+
+        grouped_result = self.group_by_executor_and_status(self.deployments.values())
+        counts_result = self.get_counts_by_executor_and_status(
+            self.deployments.values()
+        )
+        print("Grouped by executor and status:", grouped_result)
+        print("Counts by executor and status:", counts_result)
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):

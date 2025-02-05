@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 import warnings
@@ -21,21 +22,22 @@ from typing import (
 )
 
 from google.protobuf.struct_pb2 import Struct
+from grpc_health.v1 import health_pb2
 
 from marie._docarray import DocumentArray, docarray_v2
-from marie.constants import __default_endpoint__
+from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.executors import BaseExecutor
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
-from marie.utils.pydantic import patch_pydantic_schema_2x
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -68,6 +70,7 @@ class WorkerRequestHandler:
         meter=None,
         tracer=None,
         deployment_name: str = "",
+        node_info: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """Initialize private parameters and execute private loading functions.
@@ -80,6 +83,7 @@ class WorkerRequestHandler:
         :param meter: meter object from runtime
         :param tracer: tracer object from runtime
         :param deployment_name: name of the deployment to use as Executor name to set in requests
+        :param node_info: optional node info to be passed to the executor
         :param kwargs: extra keyword arguments
         """
         super().__init__()
@@ -89,6 +93,14 @@ class WorkerRequestHandler:
         self.args = args
         self.logger = logger
         self._is_closed = False
+
+        runtime_name = kwargs.get("runtime_name", None)
+        node_info['deployment_name'] = deployment_name
+
+        print('deployment_nameXXXX:', deployment_name)
+        print("runtime_nameXXXX:", runtime_name)
+        print("node_infoXXXX:", node_info)
+        self.node_info = node_info
 
         if self.metrics_registry:
             with ImportExtensions(
@@ -175,6 +187,16 @@ class WorkerRequestHandler:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
 
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
+
+        self._heartbeat_thread = None
+        self._lease_time = 5
+        self._heartbeat_time = 2
+        self._lease = None
+        self._etcd_client = self._init_etcd("localhost", 2379)
+        self._worker_state = None
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        )
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -1470,6 +1492,9 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job failed: {job_id} - {e}")
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
                 # Extract the traceback information from the exception
@@ -1520,9 +1545,11 @@ class WorkerRequestHandler:
         self, job_id: str, requests: List["DataRequest"], params
     ):
         print(f"Record job started: {job_id}")
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.SERVING
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
-
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.RUNNING,
@@ -1543,6 +1570,9 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job success: {job_id}")
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
                 request_attributes = self._request_attributes(requests)
@@ -1571,3 +1601,89 @@ class WorkerRequestHandler:
             "runtime_name": self.args.name,
             "host": get_ip_address(flush_cache=False),
         }
+
+    def _init_etcd(self, etcd_host, etcd_port):
+        etcd_client = EtcdClient(etcd_host, etcd_port, namespace="marie")
+        self.setup_heartbeat()
+
+        return etcd_client
+
+    def _set_deployment_status(
+        self, status: health_pb2.HealthCheckResponse.ServingStatus
+    ):
+        """
+        Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
+        :param status: Status of the worker
+        """
+        self._worker_state = status
+        # {'runtime_name': 'extract_executor/rep-0', 'port': 53144, 'host': '127.0.0.1', 'deployment_name': 'extract_executor'}
+        node_info = self.node_info
+        deployment_name = node_info['deployment_name']
+        address = f"{node_info['host']}:{node_info['port']}"
+
+        from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+        status_str = HealthCheckResponse.ServingStatus.Name(status)
+        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+
+        self._lease = self._etcd_client.lease(self._lease_time)
+        self._etcd_client.put(key, status_str, lease=self._lease)
+        self.logger.info(
+            f"lease: {self._lease} - key: {key} - state: {status_str}  time: {self._lease_time}"
+        )
+
+    def heartbeat(self):
+        """service heartbeat."""
+        if self._lease is None:
+            return
+        self.logger.info(
+            f"Heartbeat : {self._worker_state} - {self._lease.remaining_ttl}"
+        )
+        try:
+            self.logger.debug(f"Refreshing lease for:  {self._lease.remaining_ttl}")
+            ret = self._lease.refresh()[0]
+            if ret.TTL == 0:
+                self.logger.warning(
+                    f"Lease expired, setting status to lost state : {self._worker_state}"
+                )
+                self._set_deployment_status(self._worker_state)
+        except Exception as e:
+            raise e
+
+    def setup_heartbeat(self):
+        """
+        Set up an asynchronous heartbeat process.
+        :return: None
+        """
+
+        self.logger.debug("Calling heartbeat setup")
+        if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            raise RuntimeError(
+                f"A heartbeat with lease {self._lease} is currently in running. Cannot start another."
+            )
+
+        def _heartbeat_setup():
+            print(
+                f"Setting up heartbeat for etcd request handler : {self._heartbeat_time}"
+            )
+            failures = 0
+            max_failures = 3
+
+            time.sleep(self._heartbeat_time)
+
+            while True:
+                try:
+                    self.heartbeat()
+                    failures = 0
+                except Exception as e:
+                    failures += 1
+                    self.logger.error(
+                        f"Error in heartbeat ({failures}/{max_failures}): {e}"
+                    )
+                    if failures >= max_failures:
+                        self.logger.error("Max failures reached, stopping heartbeat.")
+                        break
+                time.sleep(self._heartbeat_time)
+
+        self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
+        self._heartbeat_thread.start()

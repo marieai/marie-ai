@@ -92,6 +92,14 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             monitoring=self.runtime_args.monitoring,
             port_monitoring=self.runtime_args.port_monitoring,
         )
+
+        node_info = {
+            "runtime_name": self.name,
+            "port": self.port,
+            "host": self.host,
+        }
+        print(f"self.add_info: {node_info}")
+
         return self.req_handler_cls(
             args=self.runtime_args,
             logger=self.logger,
@@ -104,6 +112,7 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             aio_tracing_client_interceptors=self.aio_tracing_client_interceptors(),
             tracing_client_interceptor=self.tracing_client_interceptor(),
             deployment_name=self.name.split("/")[0],
+            node_info=node_info,
         )
 
     def _add_gateway_args(self):

@@ -209,9 +209,9 @@ class EtcdServiceRegistry(ServiceRegistry):
             while True:
                 try:
                     self.heartbeat()
-                    time.sleep(self._heartbeat_time)
                 except Exception as e:
                     log.error(f"Error in heartbeat : {str(e)}")
+                time.sleep(self._heartbeat_time)
 
         polling_status_thread = threading.Thread(
             target=_heartbeat_setup,

@@ -270,7 +270,7 @@ async def main():
     ]
     request_kwargs["headers"] = headers
 
-    for i in range(0, 1):
+    for i in range(0, 5):
         print(f"Sending request : {i}")
         start = time.perf_counter()
         async for resp in client.post(
@@ -303,8 +303,9 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
-        asyncio.ensure_future(main())
-        loop.run_forever()
+        # asyncio.ensure_future(main())
+        # loop.run_forever()
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         pass
     finally:
