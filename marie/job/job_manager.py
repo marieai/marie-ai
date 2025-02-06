@@ -46,8 +46,6 @@ class JobManager:
     """
 
     JOB_MONITOR_LOOP_PERIOD_S = 1
-    # number of slots available for job submission (This will be set via service discovery and will change as nodes become available)
-    SLOTS_AVAILABLE = 0
 
     def __init__(
         self,
@@ -434,11 +432,3 @@ class JobManager:
                 await asyncio.sleep(self.LOG_TAIL_SLEEP_S)
             else:
                 yield "".join(lines)
-
-    def has_available_slot(self) -> bool:
-        """
-        Check if there are available slots for submitting a jobs.
-
-        :return: True if there are available slots, False otherwise
-        """
-        return len(self.monitored_jobs) < self.SLOTS_AVAILABLE

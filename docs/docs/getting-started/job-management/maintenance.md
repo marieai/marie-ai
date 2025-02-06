@@ -20,10 +20,12 @@ AND data->'metadata'->>'doc_id' = 'doc_id_0001'
 ## Purge all jobs
 
 ```sql
-DELETE  FROM marie_scheduler.job;
-DELETE  FROM marie_scheduler.job_history;
-DELETE  FROM kv_store_worker;
-DELETE  FROM kv_store_worker_history;
+
+TRUNCATE marie_scheduler.job;
+TRUNCATE marie_scheduler.job_history;
+TRUNCATE kv_store_worker;
+TRUNCATE kv_store_worker_history;
+
 ```
 
 ## Create queue

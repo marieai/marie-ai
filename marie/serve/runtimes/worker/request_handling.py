@@ -1616,7 +1616,6 @@ class WorkerRequestHandler:
         :param status: Status of the worker
         """
         self._worker_state = status
-        # {'runtime_name': 'extract_executor/rep-0', 'port': 53144, 'host': '127.0.0.1', 'deployment_name': 'extract_executor'}
         node_info = self.node_info
         deployment_name = node_info['deployment_name']
         address = f"{node_info['host']}:{node_info['port']}"

@@ -34,6 +34,11 @@ from marie.scheduler.plans import (
     version_table_exists,
 )
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import (
+    get_counts_by_executor_and_status,
+    group_by_executor_and_status,
+)
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
 INIT_POLL_PERIOD = 1.250  # 250ms
@@ -249,9 +254,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         sleep_chunk = 0.250
 
         while self.running:
-            self.logger.info(
-                f"Polling for new jobs : {wait_time}, {self.job_manager.has_available_slot()}"
-            )
+            self.logger.info(f"Polling for new jobs : {wait_time}")
             elapsed_time = 0
             while elapsed_time < wait_time:
                 await asyncio.sleep(sleep_chunk)
@@ -265,31 +268,39 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     break
 
             has_records = False
-            if not self.job_manager.has_available_slot():
-                self.logger.debug(
-                    f"No available slots for work, waiting for slots :{wait_time}"
-                )
-                has_records = False
-            else:
-                records = await self.get_work_items(
-                    limit=5  # self.job_manager.SLOTS_AVAILABLE
-                )
-                if records is not None:
-                    for record in records:
-                        has_records = True
-                        work_item = self.record_to_work_info(record)
-                        job_id = await self.enqueue(work_item)
-                        if job_id is None:
-                            self.logger.error(
-                                f"Error scheduling work item: {work_item.id}"
-                            )
-                        else:
-                            self.logger.info(f"Work item scheduled with ID: {job_id}")
-                        if not self.job_manager.has_available_slot():
-                            self.logger.info(
-                                f"No more available slots for work, waiting for slots :{wait_time}"
-                            )
-                            break
+            records = await self.get_work_items(
+                limit=5  # self.job_manager.SLOTS_AVAILABLE
+            )
+            if records is not None:
+                for record in records:
+                    has_records = True
+                    work_item = self.record_to_work_info(record)
+                    submission_id = work_item.id
+                    entrypoint = work_item.data.get("metadata", {}).get("on")
+
+                    print('------------')
+                    print(f'Work item : {work_item}')
+                    print(f'Work item entrypoint: {entrypoint}')
+
+                    if not entrypoint:
+                        raise ValueError(
+                            "The entrypoint 'on' is not defined in metadata"
+                        )
+                    if not self.has_available_slot(entrypoint):
+                        self.logger.info(
+                            f"No available slots for work, scheduling : {submission_id}, {entrypoint}"
+                        )
+                        continue
+                    job_id = await self.enqueue(work_item)
+                    if job_id is None:
+                        self.logger.error(f"Error scheduling work item: {work_item.id}")
+                    else:
+                        self.logger.info(f"Work item scheduled with ID: {job_id}")
+                    if not self.job_manager.has_available_slot():
+                        self.logger.info(
+                            f"No more available slots for work, waiting for slots :{wait_time}"
+                        )
+                        break
             wait_time = (
                 INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
             )
@@ -322,19 +333,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The information about the work item to be processed.
         :return: The ID of the work item if successfully enqueued, None otherwise.
         """
+        print("Enqueuing work item : ", work_info)
         submission_id = work_info.id
-        if not self.job_manager.has_available_slot():
+
+        entrypoint = work_info.data.get("metadata", {}).get("on")
+        if not entrypoint:
+            raise ValueError("The entrypoint 'on' is not defined in metadata")
+        self.logger.info(f'incoming entrypoint:{entrypoint}')
+
+        if not self.has_available_slot(entrypoint):
             self.logger.info(
                 f"No available slots for work, scheduling : {submission_id}"
             )
             return None
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
-        entrypoint = work_info.data.get("metadata", {}).get("on")
-        if not entrypoint:
-            raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        self.logger.info(f'incoming entrypoint:{entrypoint}')
         try:
             returned_id = await self.job_manager.submit_job(
                 entrypoint=entrypoint,
@@ -948,3 +962,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         partitions = partitioner.partition(work_info)
 
         return partitions
+
+    def has_available_slot(self, entrypoint: str) -> bool:
+        """
+        Determines if job slots are available for the specified entrypoint.
+
+        :param entrypoint: A string in the format "executor://action" indicating
+            which executor should handle the job.
+        :returns: True if there is at least one slot available for the given executor,
+            otherwise False.
+        """
+        executor = entrypoint.split("://")[0]
+        deployments = ClusterState.deployments
+        grouped_by_executor = get_counts_by_executor_and_status(
+            list(deployments.values())
+        )
+
+        ready_workers = 0
+        if executor in grouped_by_executor:
+            worker_status = grouped_by_executor[executor]
+            ready_workers = worker_status.get("NOT_SERVING", 0) + worker_status.get(
+                "SERVICE_UNKNOWN", 0
+            )
+            self.logger.info(
+                "Executor '%s' has %d workers in NOT_SERVING or SERVICE_UNKNOWN state.",
+                executor,
+                ready_workers,
+            )
+
+        return ready_workers > 0

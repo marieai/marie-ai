@@ -4,7 +4,6 @@ import os
 import sys
 import time
 import traceback
-from collections import defaultdict
 from datetime import datetime
 from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -179,6 +178,9 @@ class MarieServerGateway(CompositeServer):
         )  # Call is an alias for stream in GatewayRequestHandler
         GatewayRequestHandler.dry_run = self.custom_dry_run
 
+        # FIXME : The resolver watch_service is not implemented correctly
+        self.resolver = None
+
         def _extend_rest_function(app):
             from fastapi import Request
 
@@ -330,7 +332,6 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"intercepting stream")
         async for request in request_iterator:
             decoded = await self.decode_request(request)
-            print(f"Decoded request GRPC: {decoded}")
             if isinstance(decoded, AsyncIterator):
                 async for response in decoded:
                     yield response
@@ -623,7 +624,7 @@ class MarieServerGateway(CompositeServer):
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        # # task for processing events
+        # task for processing events
         run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
         await asyncio.gather(*run_server_tasks)
 
@@ -652,22 +653,22 @@ class MarieServerGateway(CompositeServer):
             raise BadConfigSource("Service name must be provided for service discovery")
 
         async def _start_watcher():
-            resolver = None
             try:
-                resolver = EtcdServiceResolver(
+                self.resolver = EtcdServiceResolver(
                     etcd_host,
                     etcd_port,
                     namespace="marie",
                     start_listener=False,
                     listen_timeout=watchdog_interval,
                 )
-                self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
 
-                # gateway
-                resolver.watch_service(service_name, self.handle_discovery_event)
-                # deployment status
-                resolver.watch_service(
-                    DEPLOYMENT_STATUS_PREFIX, self.handle_discovery_event
+                self.resolver.watch_service(
+                    service_name, self.handle_discovery_event, notify_on_start=True
+                )
+                self.resolver.watch_service(
+                    DEPLOYMENT_STATUS_PREFIX,
+                    self.handle_discovery_event,
+                    notify_on_start=True,
                 )
             except Exception as e:
                 self.logger.error(
@@ -718,8 +719,8 @@ class MarieServerGateway(CompositeServer):
         while True:
             service, event = await self.event_queue.get()
             try:
-                self.logger.debug(
-                    f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
+                self.logger.info(
+                    f"Queue size : {self.event_queue.qsize()} service = {service}, event = {event}"
                 )
 
                 ev_key = event.key
@@ -741,6 +742,7 @@ class MarieServerGateway(CompositeServer):
 
                 # if there are no more events, update the gateway streamer to reflect the changes
                 if self.event_queue.qsize() == 0 and gateway_changed:
+                    ClusterState.deployment_nodes = self.deployment_nodes
                     await self.update_gateway_streamer()
                     gateway_changed = False
 
@@ -755,22 +757,11 @@ class MarieServerGateway(CompositeServer):
             finally:
                 self.event_queue.task_done()
 
-    def parse_deployment_details(self, path_str: str, status: str) -> dict:
-        if not path_str.startswith(DEPLOYMENT_STATUS_PREFIX):
-            raise ValueError("String does not start with the expected prefix.")
-        suffix = path_str[len(DEPLOYMENT_STATUS_PREFIX) :]
-
-        if suffix.startswith("/"):
-            suffix = suffix[1:]
-
-        parts = suffix.split("/", 1)
-        if len(parts) < 2:
-            raise ValueError(
-                f"Invalid format: expected address and executor. got : {path_str}"
-            )
-
-        address = parts[0]
-        executor = parts[1]
+    def parse_deployment_details(self, address: str, ev_value: dict) -> dict:
+        # get the first executor from ev_value, we might have multiple executors in the future
+        worked_node = list(ev_value.keys())[0]
+        worker_info = ev_value[worked_node]
+        executor, status = next(iter(worker_info.items()))
 
         return {
             "prefix": DEPLOYMENT_STATUS_PREFIX,
@@ -778,31 +769,6 @@ class MarieServerGateway(CompositeServer):
             "executor": executor,
             "status": status,
         }
-
-    def group_by_executor_and_status(self, deployments) -> dict:
-        """Groups deployment objects by their executor and status into a nested dictionary format."""
-        grouped = defaultdict(lambda: defaultdict(list))
-
-        for item in deployments:
-            executor = item["executor"]
-            status = item["status"]
-
-            grouped[executor][status].append(item)
-
-        return {executor: dict(statuses) for executor, statuses in grouped.items()}
-
-    def get_counts_by_executor_and_status(self, deployments):
-        """Returns a dictionary where the top-level keys are executors,
-        and each key maps to a dictionary of status-to-count mappings."""
-        counts = defaultdict(lambda: defaultdict(int))
-
-        for item in deployments:
-            executor = item["executor"]
-            status = item["status"]
-
-            counts[executor][status] += 1
-
-        return {executor: dict(status_cnt) for executor, status_cnt in counts.items()}
 
     async def gateway_server_online(self, service, event_value):
         """
@@ -970,8 +936,8 @@ class MarieServerGateway(CompositeServer):
         self.streamer = streamer
         self.distributor.streamer = streamer
         self.distributor.deployment_nodes = self.deployment_nodes
-        ClusterState.deployment_nodes = self.deployment_nodes
-        JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
+
+        ClusterState.deployments = self.deployments
 
     async def gateway_server_offline(self, service: str, ev_value):
         """
@@ -989,29 +955,25 @@ class MarieServerGateway(CompositeServer):
             self.deployment_nodes[executor] = [
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
-        # await self.update_gateway_streamer()
 
-    async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: str):
+    async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
+        self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
         if ev_key == DEPLOYMENT_STATUS_PREFIX:
             return  # ignore the root key, need to handle this differently
 
-        self.logger.debug("Deployment changed : ", ev_key, ev_type, ev_value)
+        suffix = ev_key[len(DEPLOYMENT_STATUS_PREFIX) :]
+        if suffix.startswith("/"):
+            suffix = suffix[1:]
+        address = suffix.split("/", 1)[0]
+
         if ev_type == 'delete':
-            if ev_key in self.deployments:
-                del self.deployments[ev_key]
+            if address in self.deployments:
+                del self.deployments[address]
         else:
-            deployment = self.parse_deployment_details(ev_key, ev_value)
-            self.deployments[ev_key] = deployment
+            deployment = self.parse_deployment_details(address, ev_value)
+            self.deployments[address] = deployment
 
         ClusterState.deployments = self.deployments
-        ClusterState.deployment_nodes = self.deployment_nodes
-
-        grouped_result = self.group_by_executor_and_status(self.deployments.values())
-        counts_result = self.get_counts_by_executor_and_status(
-            self.deployments.values()
-        )
-        self.logger.debug("Grouped by executor and status:", grouped_result)
-        self.logger.debug("Counts by executor and status:", counts_result)
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):

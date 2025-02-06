@@ -27,10 +27,11 @@ volumes:
   psql_data:
     driver: local
 
-# ############### Networks ###############
+## ############### Networks ###############
 networks:
-  public:
+  marie_default:
     external: true
+
 
 # ############### Docker Compose Commands ###############
 
