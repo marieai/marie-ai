@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -8,10 +8,6 @@ class _ClusterState:
 
     _deployments: Optional[Dict[str, Any]] = None
     _deployment_nodes: Optional[Dict[str, Any]] = None
-
-    # ----------------------------------------------------------------
-    # Properties for managing deployments, nodes, and available slots
-    # ----------------------------------------------------------------
 
     @property
     def deployments(self) -> Dict[str, Any]:

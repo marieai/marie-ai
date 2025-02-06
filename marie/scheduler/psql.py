@@ -73,11 +73,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
-        self.known_queues = set()
         self._reset_on_complete = False
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
-        self.queue_names = config.get("queue_names", [])
+
+        self.known_queues = set(config.get("queue_names", []))
         self.running = False
         self.task = None
         self.sync_task = None
@@ -88,10 +88,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
-        if self.queue_names is None or len(self.queue_names) == 0:
+        if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
 
-        self.logger.info(f"Queue names: {self.queue_names}")
+        self.logger.info(f"Queue names to monitor: {self.known_queues}")
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
@@ -240,7 +240,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
-        # self.task = asyncio.create_task(self._poll())
+        self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
@@ -249,7 +249,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         sleep_chunk = 0.250
 
         while self.running:
-            self.logger.info(f"Polling for new jobs : {wait_time}")
+            self.logger.info(
+                f"Polling for new jobs : {wait_time}, {self.job_manager.has_available_slot()}"
+            )
             elapsed_time = 0
             while elapsed_time < wait_time:
                 await asyncio.sleep(sleep_chunk)
@@ -270,7 +272,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 has_records = False
             else:
                 records = await self.get_work_items(
-                    limit=self.job_manager.SLOTS_AVAILABLE
+                    limit=5  # self.job_manager.SLOTS_AVAILABLE
                 )
                 if records is not None:
                     for record in records:
@@ -356,6 +358,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return:
         """
 
+        # FIXME : Change how we check for known queues
         async with self._lock:
             with self:
                 try:

@@ -25,7 +25,7 @@ class DocumentAnnotator(ABC):
 
     @property
     @abstractmethod
-    def capabilities(self) -> list:
+    def capabilities(self) -> list[AnnotatorCapabilities]:
         """
         Define a list indicating the annotator's supported capabilities.
         Derived classes must override this to declare their capabilities.

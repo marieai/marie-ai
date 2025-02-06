@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import traceback
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
@@ -717,7 +718,7 @@ class MarieServerGateway(CompositeServer):
         while True:
             service, event = await self.event_queue.get()
             try:
-                self.logger.info(
+                self.logger.debug(
                     f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
                 )
 
@@ -726,7 +727,6 @@ class MarieServerGateway(CompositeServer):
                 ev_value = event.value
 
                 if ev_key.startswith(DEPLOYMENT_STATUS_PREFIX):
-                    print(f"Deployment status event : {ev_key}, {ev_type}, {ev_value}")
                     await self.deployment_changed(ev_key, ev_type, ev_value)
                 else:
                     gateway_changed = True
@@ -780,35 +780,29 @@ class MarieServerGateway(CompositeServer):
         }
 
     def group_by_executor_and_status(self, deployments) -> dict:
-        grouped = {}
+        """Groups deployment objects by their executor and status into a nested dictionary format."""
+        grouped = defaultdict(lambda: defaultdict(list))
 
         for item in deployments:
-            print(f"Item : {item}")
             executor = item["executor"]
             status = item["status"]
 
-            if executor not in grouped:
-                grouped[executor] = {}
-            if status not in grouped[executor]:
-                grouped[executor][status] = []
-
             grouped[executor][status].append(item)
 
-        return grouped
+        return {executor: dict(statuses) for executor, statuses in grouped.items()}
 
     def get_counts_by_executor_and_status(self, deployments):
         """Returns a dictionary where the top-level keys are executors,
         and each key maps to a dictionary of status-to-count mappings."""
-        counts = {}
+        counts = defaultdict(lambda: defaultdict(int))
+
         for item in deployments:
             executor = item["executor"]
             status = item["status"]
-            if executor not in counts:
-                counts[executor] = {}
-            if status not in counts[executor]:
-                counts[executor][status] = 0
+
             counts[executor][status] += 1
-        return counts
+
+        return {executor: dict(status_cnt) for executor, status_cnt in counts.items()}
 
     async def gateway_server_online(self, service, event_value):
         """
@@ -1001,7 +995,7 @@ class MarieServerGateway(CompositeServer):
         if ev_key == DEPLOYMENT_STATUS_PREFIX:
             return  # ignore the root key, need to handle this differently
 
-        print("Deployment changed : ", ev_key, ev_type, ev_value)
+        self.logger.debug("Deployment changed : ", ev_key, ev_type, ev_value)
         if ev_type == 'delete':
             if ev_key in self.deployments:
                 del self.deployments[ev_key]
@@ -1010,13 +1004,14 @@ class MarieServerGateway(CompositeServer):
             self.deployments[ev_key] = deployment
 
         ClusterState.deployments = self.deployments
+        ClusterState.deployment_nodes = self.deployment_nodes
 
         grouped_result = self.group_by_executor_and_status(self.deployments.values())
         counts_result = self.get_counts_by_executor_and_status(
             self.deployments.values()
         )
-        print("Grouped by executor and status:", grouped_result)
-        print("Counts by executor and status:", counts_result)
+        self.logger.debug("Grouped by executor and status:", grouped_result)
+        self.logger.debug("Counts by executor and status:", counts_result)
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
