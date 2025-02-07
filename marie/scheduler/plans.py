@@ -191,27 +191,40 @@ def fetch_next_job(schema: str):
         batch_size: int = 1,
         include_metadata: bool = False,
         priority: bool = True,
+        mark_as_active: bool = False,
     ) -> str:
-        return f"""
-        WITH next AS (
-            SELECT id
-            FROM {schema}.job
-            WHERE name = '{name}'
-              AND state < '{WorkState.ACTIVE.value}'
-              AND start_after < now()
-            ORDER BY {'priority DESC, ' if priority else ''}created_on, id
-            LIMIT {batch_size}
-            
-            --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
-        )
-        UPDATE {schema}.job j SET
-            state = '{WorkState.ACTIVE.value}',
-            started_on = now(),
-            retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
-        FROM next
-        WHERE name = '{name}' AND j.id = next.id
-        RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
-        """
+
+        if mark_as_active:
+            return f"""
+            WITH next AS (
+                SELECT id
+                FROM {schema}.job
+                WHERE name = '{name}'
+                  AND state < '{WorkState.ACTIVE.value}'
+                  AND start_after < now()
+                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                LIMIT {batch_size}
+                
+                --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
+            )
+            UPDATE {schema}.job j SET
+                state = '{WorkState.ACTIVE.value}',
+                started_on = now(),
+                retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
+            FROM next
+            WHERE name = '{name}' AND j.id = next.id
+            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
+            """
+        else:
+            return f"""
+                SELECT {'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
+                FROM {schema}.job
+                WHERE name = '{name}'
+                  AND state < '{WorkState.ACTIVE.value}'
+                  AND start_after < now()
+                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                LIMIT {batch_size}
+            """
 
     return query
 

@@ -32,7 +32,7 @@ from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
-from marie.serve.executors import BaseExecutor
+from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
@@ -752,11 +752,12 @@ class WorkerRequestHandler:
                 return requests[0]
 
         requests, params = self._setup_requests(requests, exec_endpoint)
-
-        self.logger.info(f"requests TO MONITOR : {requests}")
+        # self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {requests}")
         job_id = None
         if params is not None:
             job_id = params.get("job_id", None)
+
+        self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {job_id}")
         await self._record_started_job(job_id, requests, params)
 
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
@@ -800,6 +801,8 @@ class WorkerRequestHandler:
                 raised_exception: Exception,
             ):
                 self.logger.info(f"executor_completion_callback : {job_id}")
+                self.logger.info(f"requests FROM MONITOR : {requests}")
+
                 # TODO : add support for handling client disconnect rejects
                 additional_metadata = {"client_disconnected": client_disconnected}
 
@@ -1484,6 +1487,18 @@ class WorkerRequestHandler:
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         return JobInfoStorageClient(storage)
 
+    def is_dry_run(self, requests: List["DataRequest"]) -> bool:
+        """Check if the request is a dry run."""
+        if not requests or not requests[0].header:
+            return False
+        exec_endpoint: str = requests[0].header.exec_endpoint
+        if exec_endpoint not in self._executor.requests:
+            if __default_endpoint__ in self._executor.requests:
+                exec_endpoint = __default_endpoint__
+        if exec_endpoint == __dry_run_endpoint__:
+            return True
+        return False
+
     async def _record_failed_job(
         self,
         job_id: str,
@@ -1492,6 +1507,9 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job failed: {job_id} - {e}")
+        if self.is_dry_run(requests):
+            return
+
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
         )
@@ -1545,6 +1563,9 @@ class WorkerRequestHandler:
         self, job_id: str, requests: List["DataRequest"], params
     ):
         print(f"Record job started: {job_id}")
+        if self.is_dry_run(requests):
+            return
+
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.SERVING
         )
@@ -1570,6 +1591,9 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job success: {job_id}")
+        if self.is_dry_run(requests):
+            return
+
         self._set_deployment_status(
             health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         )

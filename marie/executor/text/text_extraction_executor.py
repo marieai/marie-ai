@@ -447,12 +447,11 @@ class TextExtractionExecutorMock(MarieExecutor):
         # randomly throw an error to test the error handling
         import random
 
-        if random.random() > 0.5:
-            raise Exception("random error in exec")
-        #
+        # if random.random() > 0.5:
+        #     raise Exception("random error in exec")
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 2
+        sec = 5
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
 
