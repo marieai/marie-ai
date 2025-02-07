@@ -54,8 +54,8 @@ def available_slots(entrypoint: str, deployments: dict) -> int:
     ready_workers = 0
     if executor in grouped_by_executor:
         worker_status = grouped_by_executor[executor]
-        ready_workers = worker_status.get("NOT_SERVING", 0) + worker_status.get(
-            "SERVICE_UNKNOWN", 0
+        ready_workers = int(worker_status.get("NOT_SERVING", 0)) + int(
+            worker_status.get("SERVICE_UNKNOWN", 0)
         )
 
     return ready_workers
@@ -71,7 +71,7 @@ def available_slots_by_executor(deployments: dict) -> dict[str, int]:
     """
     grouped_by_executor = get_counts_by_executor_and_status(list(deployments.values()))
     return {
-        executor: worker_status.get("NOT_SERVING", 0)
-        + worker_status.get("SERVICE_UNKNOWN", 0)
+        executor: int(worker_status.get("NOT_SERVING", 0))
+        + int(worker_status.get("SERVICE_UNKNOWN", 0))
         for executor, worker_status in grouped_by_executor.items()
     }

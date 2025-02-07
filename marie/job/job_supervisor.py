@@ -190,6 +190,9 @@ class JobSupervisor:
             request = [requests]
         self.request_info = request_info
 
+        print('self.request_info:', self.request_info)
+        print('requests:', requests)
+
     async def _submit_job_in_background(self, curr_info):
         try:
             response = await self._job_distributor.send(
@@ -199,7 +202,7 @@ class JobSupervisor:
             )
             # printing the whole response will trigger a bug in rich.print with stackoverflow
             # format the response
-            if False:
+            if True:
                 print("Response type: ", type(response))
                 print("Response data: ", response.data)
                 print("Response data: ", response.parameters)

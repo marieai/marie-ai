@@ -800,8 +800,8 @@ class WorkerRequestHandler:
                 return_data: Any,
                 raised_exception: Exception,
             ):
-                self.logger.info(f"executor_completion_callback : {job_id}")
-                self.logger.info(f"requests FROM MONITOR : {requests}")
+                self.logger.debug(f"executor_completion_callback : {job_id}")
+                self.logger.debug(f"requests FROM MONITOR : {requests}")
 
                 # TODO : add support for handling client disconnect rejects
                 additional_metadata = {"client_disconnected": client_disconnected}
