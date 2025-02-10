@@ -683,6 +683,7 @@ class WorkerRequestHandler:
         """
 
         self._record_request_size_monitoring(requests)
+        self.logger.info(f"*** Setup requests: {requests}")
 
         params = self._parse_params(requests[0].parameters, self._executor.metas.name)
         self._setup_req_doc_array_cls(requests, exec_endpoint, is_response=False)
@@ -1212,7 +1213,7 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        self.logger.debug("recv a process_data request")
+        self.logger.info("recv a process_data request")
         with MetricsTimer(
             self._summary, self._receiving_request_seconds, self._metric_attributes
         ):
@@ -1639,6 +1640,8 @@ class WorkerRequestHandler:
         Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
         :param status: Status of the worker
         """
+        print(f"Setting deployment status: {status}")
+
         self._worker_state = status
         node_info = self.node_info
         deployment_name = node_info['deployment_name']

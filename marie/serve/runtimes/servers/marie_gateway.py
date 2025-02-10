@@ -329,7 +329,7 @@ class MarieServerGateway(CompositeServer):
         :return: An asynchronous iterator that yields the response objects.
 
         """
-        self.logger.info(f"intercepting stream")
+        self.logger.debug(f"intercepting stream : custom_stream")
         async for request in request_iterator:
             decoded = await self.decode_request(request)
             if isinstance(decoded, AsyncIterator):
@@ -346,10 +346,7 @@ class MarieServerGateway(CompositeServer):
         :param request: The request to decode.
         :return: The response.
         """
-        self.logger.info(f"Processing request: {request}")
         message = request.parameters
-
-        # print message details
         self.logger.info(f"Message details : {message}")
 
         if "invoke_action" not in message:
@@ -475,8 +472,6 @@ class MarieServerGateway(CompositeServer):
         )
 
         submission_model = JobSubmissionModel(**message)
-        self.logger.info(f"Submission model : {submission_model}")
-
         metadata = submission_model.metadata
         project_id = metadata.get("project_id", None)
         ref_type = metadata.get("ref_type", None)

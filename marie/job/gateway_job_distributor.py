@@ -34,7 +34,9 @@ class GatewayJobDistributor(JobDistributor):
         job_info: JobInfo,
         send_callback: Callable[[List[DataRequest]], DataRequest] = None,
     ) -> DataRequest:
-        self.logger.info(f"Publishing job {job_info} to gateway")
+        self.logger.info(
+            f"Publishing job {job_info.status} to remote endpoint(gateway, executor)"
+        )
         curr_status = job_info.status
         curr_message = job_info.message
 
@@ -72,8 +74,6 @@ class GatewayJobDistributor(JobDistributor):
             req_endpoint = f"/{req_endpoint}"
 
         for executor, nodes in self.deployment_nodes.items():
-            print('executor:', executor)
-            print('nodes:', nodes)
             if not target_executor or target_executor == executor:
                 for node in nodes:
                     if node['endpoint'] == req_endpoint:
@@ -100,9 +100,13 @@ class GatewayJobDistributor(JobDistributor):
         request.parameters = parameters
         request.data.docs = DocList[AssetKeyDoc]([asset_doc])
 
-        return await self.streamer.process_single_data(
+        response = await self.streamer.process_single_data(
             request=request, send_callback=send_callback
         )
+        self.logger.info(
+            f"Job {submission_id} published to remote endpoint(gateway, executor)"
+        )
+        return response
 
     async def close(self):
         """

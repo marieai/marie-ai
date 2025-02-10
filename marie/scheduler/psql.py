@@ -39,7 +39,7 @@ from marie.scheduler.util import available_slots_by_executor, has_available_slot
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
-INIT_POLL_PERIOD = 1.250  # 250ms
+INIT_POLL_PERIOD = 25.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
@@ -255,31 +255,53 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         wait_time = INIT_POLL_PERIOD
         batch_size = 10
         failures = 0
+        _lock = asyncio.Lock()
+
+        last_deployments_timestamp = ClusterState.deployments_last_updated
+        slots_by_entrypoint = available_slots_by_executor(ClusterState.deployments)
+
+        print('last_deployments_timestamp : ', last_deployments_timestamp)
 
         while self.running:
             self.logger.info(
                 f"Checking for new jobs, time = {wait_time}, events = {self._fetch_counter}, set = {self._fetch_event.is_set()}"
             )
             try:
+                self.logger.info(f"Waiting for fetch event : {wait_time}")
                 try:
                     await asyncio.wait_for(self._fetch_event.wait(), timeout=wait_time)
                     self._fetch_event.clear()
-
+                    triggered_by_fetch = False
                     async with self._fetch_lock:
                         while self._fetch_counter > 0:
+                            triggered_by_fetch = True
                             self._fetch_counter -= 1
                             self.logger.debug(
                                 f"Processing job fetch event, remaining: {self._fetch_counter}"
                             )
 
                     wait_time = INIT_POLL_PERIOD
-                    self.logger.info("Immediate fetch triggered by new job submission.")
+                    self.logger.info(
+                        f"Fetch triggered by new job submission: {triggered_by_fetch}"
+                    )
                 except asyncio.TimeoutError:
                     pass  # Proceed normally if timeout happens
 
-                slots_by_entrypoint = available_slots_by_executor(
-                    ClusterState.deployments
-                )
+                self.logger.info(f'----------------------------------------------')
+                self.logger.info(f'----------------------------------------------')
+                deployments_last_updated = ClusterState.deployments_last_updated
+                current_deployments = ClusterState.deployments
+
+                print(current_deployments)
+                if True or deployments_last_updated != last_deployments_timestamp:
+                    self.logger.info(
+                        "Recalculated slots_by_entrypoint due to deployments change."
+                    )
+                    last_deployments_timestamp = deployments_last_updated
+                    slots_by_entrypoint = available_slots_by_executor(
+                        current_deployments
+                    )
+
                 has_any_open_slots = any(
                     slots > 0 for slots in slots_by_entrypoint.values()
                 )
@@ -331,7 +353,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                 self.logger.info(
                                     f"No available slots for work, scheduling : {submission_id}, time = {wait_time}, on = {entrypoint}"
                                 )
-                                continue
+                                break
                             slots_by_entrypoint[executor] -= 1
                             print(
                                 "ClusterState.deployments : ", ClusterState.deployments
@@ -342,6 +364,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             # FIXME: WE NEED  MAKE SURE THAT THE CLUSTER STATE IS UPDATED BEFORE WE SCHEDULE THE JOB
                             await self.mark_as_active(work_info)
                             job_id = await self.enqueue(work_info)
+
                             if job_id is None:
                                 self.logger.error(
                                     f"Error scheduling work item: {work_info.id}"
@@ -351,6 +374,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     f"Work item scheduled with ID: {job_id}"
                                 )
 
+                            if False:
+                                try:
+                                    scheduler_timeout = 100
+                                    self.logger.info(
+                                        f'------------ WAITING FOR SCHEDULED EVENT : {scheduler_timeout}'
+                                    )
+                                    await asyncio.wait_for(
+                                        ClusterState.scheduled_event.wait(),
+                                        timeout=scheduler_timeout,
+                                    )
+                                    ClusterState.scheduled_event.clear()
+                                    self.logger.info(
+                                        f"Scheduled event received, resetting wait time."
+                                    )
+                                except asyncio.TimeoutError:
+                                    print(
+                                        f'------------ TIMEOUT WAITING FOR SCHEDULED EVENT : {scheduler_timeout}'
+                                    )
+                                    pass  # Proceed normally if timeout happens
                 wait_time = (
                     INIT_POLL_PERIOD
                     if has_records
@@ -395,17 +437,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The information about the work item to be processed.
         :return: The ID of the work item if successfully enqueued, None otherwise.
         """
-        print("Enqueuing work item : ", work_info)
+        self.logger.info(f"Enqueuing work item : {work_info.id}")
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")
         if not entrypoint:
             raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        if not has_available_slot(entrypoint, ClusterState.deployments):
-            self.logger.info(
-                f"No available slots for work, scheduling : {submission_id}"
-            )
-            return None
+        if False:
+            if not has_available_slot(entrypoint, ClusterState.deployments):
+                self.logger.info(
+                    f"No available slots for work, scheduling : {submission_id}"
+                )
+                return None
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
 
@@ -656,6 +699,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return submission_id
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
+        print(f"Marking job as active : {work_info.id}")
+
         with self:
             try:
                 cursor = self._execute_sql_gracefully(
@@ -1029,7 +1074,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         return partitions
 
-    async def notify_event(self):
+    async def notify_event(self) -> bool:
         async with self._fetch_lock:
+            print("Setting fetch event : ", self._fetch_counter)
+            # if self._fetch_counter > 0:
+            #     return False
             self._fetch_counter += 1
             self._fetch_event.set()
+            return True

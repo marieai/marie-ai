@@ -6,7 +6,7 @@
     <option name="PARENT_ENVS" value="true" />
     <envs>
       <env name="PYTHONUNBUFFERED" value="1" />
-      <env name="COLUMNS" value="180" />
+      <env name="COLUMNS" value="260" />
       <env name="CUDA_VISIBLE_DEVICES" value="-1" />
       <env name="MARIE_CACHE_LOCK_TIMEOUT" value="10" />
       <env name="MARIE_DEBUG" value="0" />

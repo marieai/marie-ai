@@ -4,14 +4,17 @@ from typing import Dict, List, Optional, Union
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
+from marie.constants import DEPLOYMENT_STATUS_PREFIX
 from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.types_core.request.data import DataRequest
 
 
@@ -39,6 +42,7 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self.request_info = None
+        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
 
     async def ping(self):
         """Used to check the health of the executor/deployment."""
@@ -173,7 +177,7 @@ class JobSupervisor:
                         )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
-        self.logger.debug(f"Job {self._job_id} submitted in the background.")
+        self.logger.info(f"Job {self._job_id} submitted in the background.")
 
     def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
@@ -190,11 +194,45 @@ class JobSupervisor:
             request = [requests]
         self.request_info = request_info
 
-        print('self.request_info:', self.request_info)
-        print('requests:', requests)
+        print('send_callback self.request_info:', self.request_info)
+        print('send_callback requests:', requests)
+
+        # FIXME : This is a hack to trigger the event in Job Scheduler
+        request_id = request_info["request_id"]
+        address = request_info["address"]
+        deployment_name = request_info["deployment"]
+
+        exec_endpoint = request.header.exec_endpoint
+        deployment_nameXX = request.header.target_executor
+
+        self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
+        self.logger.info(
+            f"deployment_nameXX: {deployment_nameXX} exec_endpoint: {exec_endpoint}"
+        )
+
+        if False:
+            from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+            status: HealthCheckResponse.ServingStatus = (
+                HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
+            )
+            status_str = HealthCheckResponse.ServingStatus.Name(status)
+            key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+            #
+
+            _lease_time = 5
+            _lease = self._etcd_client.lease(_lease_time)
+            res = self._etcd_client.put(key, status_str, lease=_lease)
+
+            self.logger.info(f"*** key: {key} - state: {status_str}")
+            print("res:", res)
+            print("ClusterState.scheduled_event:", ClusterState.scheduled_event)
+
+        ClusterState.scheduled_event.set()
 
     async def _submit_job_in_background(self, curr_info):
         try:
+            self.logger.info(f"Submitting job {self._job_id} in the background.")
             response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,

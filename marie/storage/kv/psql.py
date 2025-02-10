@@ -117,7 +117,7 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
         namespace: Optional[bytes],
         timeout: Optional[float] = None,
     ) -> int:
-        self.logger.info(
+        self.logger.debug(
             f"internal_kv_put: {key!r}, {namespace!r}, {overwrite}, {value!r}"
         )
         if key is None:
