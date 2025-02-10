@@ -351,7 +351,7 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     import matplotlib.pyplot as plt
     import networkx as nx
 
-    # Create a directed graph (DiGraph) using NetworkX
+    # Create a directed graph (DiGraph)
     graph = nx.DiGraph()
 
     # Add nodes and edges to the graph in a consistent order

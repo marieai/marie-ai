@@ -542,6 +542,8 @@ class MarieServerGateway(CompositeServer):
             except Exception as e:
                 self.logger.error(f"Failed to mark job as failed: {e}")
             return response
+        finally:
+            self.logger.info(f"Job submission completed")
 
     def error_response(
         self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False

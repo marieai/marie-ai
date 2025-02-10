@@ -49,12 +49,17 @@ class Toast:
         if notification.api_key is None:
             raise ValueError(f"'api_key' not present in notification : {notification}")
 
+        # tasks = [
+        #     asyncio.ensure_future(handler.notify(notification, **kwargs))
+        #     for handler in Toast.__get_event_handlers(event)
+        # ]
+        # # await asyncio.gather(*tasks)
+
+        # Create tasks for each handler.
         tasks = [
-            asyncio.ensure_future(handler.notify(notification, **kwargs))
+            asyncio.create_task(handler.notify(notification, **kwargs))
             for handler in Toast.__get_event_handlers(event)
         ]
-
-        # await asyncio.gather(*tasks)
 
     @staticmethod
     def notify_sync(event: str, notification: EventMessage, **kwargs: Any):

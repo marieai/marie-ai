@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
+import time
 import traceback
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pprint import pprint
 from typing import Any, Dict, Optional
 
 import psycopg2
@@ -15,6 +17,13 @@ from marie.job.partition.job_partitioner import MarieJobPartitioner
 from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.query_planner.planner import (
+    plan_to_yaml,
+    print_sorted_nodes,
+    query_planner,
+    topological_sort,
+    visualize_query_plan_graph,
+)
 from marie.scheduler.fixtures import *
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
@@ -39,7 +48,7 @@ from marie.scheduler.util import available_slots_by_executor, has_available_slot
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
-INIT_POLL_PERIOD = 25.250  # 250ms
+INIT_POLL_PERIOD = 0.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
@@ -88,6 +97,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.task = None
         self.sync_task = None
         self.monitoring_task = None
+
+        self.aqueue: Optional[asyncio.Queue] = None
 
         lock_free = True
         self._lock = (
@@ -255,35 +266,21 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         wait_time = INIT_POLL_PERIOD
         batch_size = 10
         failures = 0
-        _lock = asyncio.Lock()
-
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_entrypoint = available_slots_by_executor(ClusterState.deployments)
-
-        print('last_deployments_timestamp : ', last_deployments_timestamp)
 
         while self.running:
             self.logger.info(
                 f"Checking for new jobs, time = {wait_time}, events = {self._fetch_counter}, set = {self._fetch_event.is_set()}"
             )
             try:
-                self.logger.info(f"Waiting for fetch event : {wait_time}")
                 try:
                     await asyncio.wait_for(self._fetch_event.wait(), timeout=wait_time)
                     self._fetch_event.clear()
-                    triggered_by_fetch = False
-                    async with self._fetch_lock:
-                        while self._fetch_counter > 0:
-                            triggered_by_fetch = True
-                            self._fetch_counter -= 1
-                            self.logger.debug(
-                                f"Processing job fetch event, remaining: {self._fetch_counter}"
-                            )
-
+                    while self._fetch_counter > 0:
+                        self._fetch_counter -= 1
+                    self.logger.info(f"Processing job events: {self._fetch_counter}")
                     wait_time = INIT_POLL_PERIOD
-                    self.logger.info(
-                        f"Fetch triggered by new job submission: {triggered_by_fetch}"
-                    )
                 except asyncio.TimeoutError:
                     pass  # Proceed normally if timeout happens
 
@@ -292,11 +289,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 deployments_last_updated = ClusterState.deployments_last_updated
                 current_deployments = ClusterState.deployments
 
-                print(current_deployments)
-                if True or deployments_last_updated != last_deployments_timestamp:
+                if deployments_last_updated != last_deployments_timestamp:
                     self.logger.info(
                         "Recalculated slots_by_entrypoint due to deployments change."
                     )
+                    self.logger.info(
+                        f"deployments_last_updated   : {deployments_last_updated}"
+                    )
+                    self.logger.info(
+                        f"last_deployments_timestamp : {last_deployments_timestamp}"
+                    )
+
                     last_deployments_timestamp = deployments_last_updated
                     slots_by_entrypoint = available_slots_by_executor(
                         current_deployments
@@ -339,8 +342,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             # this can happen when the executor is not yet deployed or is being redeployed
                             if executor not in slots_by_entrypoint:
                                 self.logger.warning(
-                                    f"Executor not found in slots: {executor}, skipping"
+                                    f"Executor `{executor}` not found in slots_by_entrypoint. Retrying job `{submission_id}` after short delay."
                                 )
+                                await asyncio.sleep(2)  # Retry after a short delay
                                 continue
 
                             print('------------')
@@ -374,25 +378,18 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     f"Work item scheduled with ID: {job_id}"
                                 )
 
-                            if False:
-                                try:
-                                    scheduler_timeout = 100
-                                    self.logger.info(
-                                        f'------------ WAITING FOR SCHEDULED EVENT : {scheduler_timeout}'
-                                    )
-                                    await asyncio.wait_for(
-                                        ClusterState.scheduled_event.wait(),
-                                        timeout=scheduler_timeout,
-                                    )
-                                    ClusterState.scheduled_event.clear()
-                                    self.logger.info(
-                                        f"Scheduled event received, resetting wait time."
-                                    )
-                                except asyncio.TimeoutError:
-                                    print(
-                                        f'------------ TIMEOUT WAITING FOR SCHEDULED EVENT : {scheduler_timeout}'
-                                    )
-                                    pass  # Proceed normally if timeout happens
+                            scheduler_timeout = 100
+                            try:
+                                await asyncio.wait_for(
+                                    ClusterState.scheduled_event.wait(),
+                                    timeout=scheduler_timeout,
+                                )
+                                ClusterState.scheduled_event.clear()
+                                self.logger.info(
+                                    f"Scheduled event received, resetting wait time."
+                                )
+                            except asyncio.TimeoutError:
+                                pass  # Proceed normally if timeout happens
                 wait_time = (
                     INIT_POLL_PERIOD
                     if has_records
@@ -644,7 +641,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :raises ValueError: If the job submission fails or if the job already exists.
         """
 
-        print("Submitting job : ", work_info)
+        self.logger.info(f"Submitting job : {work_info.id}")
         work_queue = work_info.name
         if work_info.name not in self.known_queues:
             self.logger.info(f"Checking for queue: {work_queue}")
@@ -673,7 +670,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"For work item : {work_info}."
             )
 
-        splits = self.calculate_splits(work_info)
+        # splits = self.calculate_splits(work_info)
+        topological_sorted_nodes = query_plan_work_items(work_info)
 
         with self:
             try:
@@ -695,6 +693,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
+        self.logger.info(f"Job NOTIFY START with ID: {submission_id}")
         await self.notify_event()
         return submission_id
 
@@ -1057,9 +1056,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     f"Unhandled terminal status: {job_info.status}"
                                 )
 
-            except Exception as e:
-                logger.error(f"Error syncing jobs: {e}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error syncing jobs: {error}")
                 traceback.print_exc()
+                if self.connection:
+                    self.connection.rollback()  # Ensure rollback on failure
 
     def calculate_splits(self, work_info: WorkInfo) -> list[JobPartition]:
         """
@@ -1075,10 +1076,32 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return partitions
 
     async def notify_event(self) -> bool:
+        self.logger.info(f"notify_event : {self._fetch_counter}")
         async with self._fetch_lock:
-            print("Setting fetch event : ", self._fetch_counter)
-            # if self._fetch_counter > 0:
-            #     return False
+            if self._fetch_counter > 0:
+                return False
+
             self._fetch_counter += 1
             self._fetch_event.set()
             return True
+
+
+def query_plan_work_items(work_info):
+    import numpy as np
+
+    pprint(f"Query planning : {work_info}")
+    frames = []
+    for i in range(3):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frames.append(frame)
+
+    plan = query_planner(frames, layout="12345")
+
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+    yml_str = plan_to_yaml(plan)
+    pprint(yml_str)
+
+    sorted_nodes = topological_sort(plan)
+    print("Topologically sorted nodes:", sorted_nodes)
+    print_sorted_nodes(sorted_nodes, plan)

@@ -96,10 +96,6 @@ class WorkerRequestHandler:
 
         runtime_name = kwargs.get("runtime_name", None)
         node_info['deployment_name'] = deployment_name
-
-        print('deployment_nameXXXX:', deployment_name)
-        print("runtime_nameXXXX:", runtime_name)
-        print("node_infoXXXX:", node_info)
         self.node_info = node_info
 
         if self.metrics_registry:

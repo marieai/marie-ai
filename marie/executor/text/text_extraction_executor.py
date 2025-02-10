@@ -451,7 +451,7 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     raise Exception("random error in exec")
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 50
+        sec = 2
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
 

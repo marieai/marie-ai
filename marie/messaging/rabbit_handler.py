@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, List
 
 from pika.exchange_type import ExchangeType

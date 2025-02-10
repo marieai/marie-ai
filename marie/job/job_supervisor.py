@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Dict, List, Optional, Union
 
 from docarray import BaseDoc, DocList
@@ -16,6 +17,12 @@ from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.types_core.request.data import DataRequest
+
+
+async def fn():
+    print('fn-THAT SLEEPS START')
+    await asyncio.sleep(1.5)
+    print('fn-THAT SLEEPS DONE')
 
 
 class JobSupervisor:
@@ -43,6 +50,8 @@ class JobSupervisor:
         self._event_publisher = event_publisher
         self.request_info = None
         self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+
+        self._active_tasks = set()
 
     async def ping(self):
         """Used to check the health of the executor/deployment."""
@@ -177,6 +186,8 @@ class JobSupervisor:
                         )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
+            # task = asyncio.create_task(fn())
+            print(task)
         self.logger.info(f"Job {self._job_id} submitted in the background.")
 
     def send_callback(
@@ -197,47 +208,40 @@ class JobSupervisor:
         print('send_callback self.request_info:', self.request_info)
         print('send_callback requests:', requests)
 
-        # FIXME : This is a hack to trigger the event in Job Scheduler
+        # FIXME : This is a hack to trigger the event n iJob Scheduler
         request_id = request_info["request_id"]
         address = request_info["address"]
         deployment_name = request_info["deployment"]
 
-        exec_endpoint = request.header.exec_endpoint
-        deployment_nameXX = request.header.target_executor
-
         self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
-        self.logger.info(
-            f"deployment_nameXX: {deployment_nameXX} exec_endpoint: {exec_endpoint}"
+
+        from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+        status: HealthCheckResponse.ServingStatus = (
+            HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
         )
+        status_str = HealthCheckResponse.ServingStatus.Name(status)
+        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
 
-        if False:
-            from grpc_health.v1.health_pb2 import HealthCheckResponse
-
-            status: HealthCheckResponse.ServingStatus = (
-                HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
-            )
-            status_str = HealthCheckResponse.ServingStatus.Name(status)
-            key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
-            #
-
-            _lease_time = 5
-            _lease = self._etcd_client.lease(_lease_time)
-            res = self._etcd_client.put(key, status_str, lease=_lease)
-
-            self.logger.info(f"*** key: {key} - state: {status_str}")
-            print("res:", res)
-            print("ClusterState.scheduled_event:", ClusterState.scheduled_event)
+        _lease_time = 5
+        _lease = self._etcd_client.lease(_lease_time)
+        res = self._etcd_client.put(key, status_str, lease=_lease)
 
         ClusterState.scheduled_event.set()
 
     async def _submit_job_in_background(self, curr_info):
         try:
+            start_time = time.monotonic()
             self.logger.info(f"Submitting job {self._job_id} in the background.")
             response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,
                 send_callback=self.send_callback,
             )
+            self.logger.info(f"Job {self._job_id} submitted successfully.")
+            mid_time = time.monotonic()
+            print(f"Submission took {mid_time - start_time:.2f} seconds")
+
             # printing the whole response will trigger a bug in rich.print with stackoverflow
             # format the response
             if True:
@@ -299,6 +303,9 @@ class JobSupervisor:
                     await self._job_info_client.put_status(
                         self._job_id, JobStatus.FAILED, message=f"{name}"
                     )
+
+            end_time = time.monotonic()
+            print(f"Full background process took {end_time - mid_time:.2f} seconds")
         except Exception as e:
             await self._job_info_client.put_status(
                 self._job_id, JobStatus.FAILED, message=str(e)

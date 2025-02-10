@@ -358,6 +358,7 @@ class JobManager:
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
+            self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
             tb_str = traceback.format_exc()
 
