@@ -13,12 +13,14 @@ import psycopg2
 from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
-from marie.job.job_manager import JobManager
+from marie.job.job_manager import JobManager, generate_job_id
 from marie.job.partition.job_partitioner import MarieJobPartitioner
 from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.query_planner.base import QueryPlan
 from marie.query_planner.planner import (
+    plan_to_json,
     plan_to_yaml,
     print_sorted_nodes,
     query_planner,
@@ -36,6 +38,7 @@ from marie.scheduler.plans import (
     create_queue,
     fail_jobs_by_id,
     fetch_next_job,
+    insert_dag,
     insert_job,
     insert_version,
     mark_as_active_jobs,
@@ -183,6 +186,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             delete_queue_function(schema),
             insert_version(schema, version),
             create_exponential_backoff_function(schema),
+            create_dag_table(schema),
         ]
 
         query = ";\n".join(commands)
@@ -256,6 +260,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         logger.info(f"Tables installed: {installed}")
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
+
+            for work_queue in self.known_queues:
+                self.logger.info(f"Create queue: {work_queue}")
+                await self.create_queue(work_queue)
+                await self.create_queue(f"${work_queue}_dlq")
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
@@ -491,7 +500,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             priority=True,
                             mark_as_active=False,
                         )
-                        # print({query})
+                        # print('----------------')
+                        # print(query)
                         # we can't use named cursors as it will throw an error
                         cursor = self.connection.cursor()
                         cursor.itersize = limit
@@ -670,21 +680,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Job with submission_id {submission_id} already exists."
                 f"For work item : {work_info}."
             )
+        # TODO:
+        dag_id = generate_job_id()
+        dag_name = f"{dag_id}_dag"
+        work_info.dag_id = dag_id
 
         # splits = self.calculate_splits(work_info)
-        topological_sorted_nodes = query_plan_work_items(work_info)
-        print("Topological sorted nodes *********")
+        query_plan, topological_sorted_nodes = query_plan_work_items(work_info)
         for x in topological_sorted_nodes:
             print('------- ', x)
 
+        print("query_plan : ", query_plan)
+
         with self:
             try:
-                root_dep = []
-                if topological_sorted_nodes and len(topological_sorted_nodes) > 0:
-                    root_dep = topological_sorted_nodes[0].dependencies
+                # insert the DAG
+                cursor = self._execute_sql_gracefully(
+                    insert_dag(
+                        DEFAULT_SCHEMA, dag_id, dag_name, query_plan.model_dump()
+                    )
+                )
+                new_dag_key = cursor is not None and cursor.rowcount > 0
+                print('new_dag_key : ', new_dag_key)
 
                 cursor = self._execute_sql_gracefully(
-                    insert_job(DEFAULT_SCHEMA, work_info, dependencies=[])
+                    insert_job(DEFAULT_SCHEMA, work_info)
                 )
                 new_key_added = cursor is not None and cursor.rowcount > 0
 
@@ -694,7 +714,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         insert_job(
                             DEFAULT_SCHEMA,
                             dag_work_info,
-                            dependencies=dag_work_info.dependencies,
                         )
                     )
                     new_dag_key = cursor is not None and cursor.rowcount > 0
@@ -1107,7 +1126,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return True
 
 
-def query_plan_work_items(work_info) -> list[WorkInfo]:
+def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
     import numpy as np
 
     pprint(f"Query planning : {work_info}")
@@ -1120,7 +1139,10 @@ def query_plan_work_items(work_info) -> list[WorkInfo]:
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
+    json_str = plan_to_json(plan)
     pprint(yml_str)
+    print("-----------------")
+    pprint(json_str)
 
     sorted_nodes = topological_sort(plan)
     print("Topologically sorted nodes:", sorted_nodes)
@@ -1133,11 +1155,15 @@ def query_plan_work_items(work_info) -> list[WorkInfo]:
         wi = copy.deepcopy(work_info)
         wi.id = node.task_id
         # wi.data = {}
+        # we need to add the dependencies to the root node
         if i == 0:
-            wi.dependencies = [work_info.id]
+            work_info.dependencies = []  # Root node has no dependencies
+            wi.dependencies = [
+                work_info.id
+            ]  # Generated plan root node has the work_info as dependency
         else:
             wi.dependencies = node.dependencies
         print(f"  -- item : {wi}")
         dag_nodes.append(wi)
 
-    return dag_nodes
+    return plan, dag_nodes

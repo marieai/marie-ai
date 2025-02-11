@@ -55,7 +55,8 @@ def create_job_table(schema: str):
       output jsonb,
       dead_letter text,
       policy text,
-      dependencies JSONB DEFAULT '[]'::jsonb
+      dependencies JSONB DEFAULT '[]'::jsonb,
+      dag_id uuid not null
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
@@ -302,4 +303,24 @@ def create_exponential_backoff_function(schema):
                         retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) * random()) * INTERVAL '1 second';
     END;
     $$ LANGUAGE plpgsql;
+    """
+
+
+def create_dag_table(schema: str):
+    # Possible Values for default_view:
+    #     grid - Shows a grid-based task execution timeline.
+    #     graph - Displays the DAG as a directed acyclic graph (DAG) structure.
+    #     tree - Provides a tree-structured view of task execution history.
+    #     gantt - Displays a Gantt chart for task durations.
+    #     duration - Shows task execution durations in a bar chart.
+    return f"""
+        CREATE TABLE {schema}.dag (
+            id uuid not null default gen_random_uuid(),
+            name VARCHAR(250) NOT NULL,
+            state VARCHAR(50), -- Possible values same as job.state enum
+            root_dag_id VARCHAR(250),
+            is_subdag BOOLEAN DEFAULT FALSE,
+            default_view VARCHAR(50) DEFAULT 'graph', -- Possible values: grid, graph, tree, gantt, duration
+            serialized_dag JSONB
+        );
     """

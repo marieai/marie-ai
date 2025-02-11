@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict
 
 from psycopg2.extras import Json
 
@@ -39,12 +39,15 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
     """
 
 
-def insert_job(schema: str, work_info: WorkInfo, dependencies: list = None) -> str:
-    dependencies_json = Json(dependencies) if dependencies else "'[]'::jsonb"
+def insert_job(schema: str, work_info: WorkInfo) -> str:
+    dependencies_json = (
+        Json(work_info.dependencies) if work_info.dependencies else "'[]'::jsonb"
+    )
 
     return f"""
         INSERT INTO {schema}.job (
           id,
+          dag_id,
           name,
           priority,
           state,    
@@ -60,6 +63,7 @@ def insert_job(schema: str, work_info: WorkInfo, dependencies: list = None) -> s
         )
         SELECT
           id,
+          j.dag_id,
           j.name,
           priority,
           state,         
@@ -88,6 +92,7 @@ def insert_job(schema: str, work_info: WorkInfo, dependencies: list = None) -> s
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
+                '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
@@ -111,6 +116,23 @@ def insert_job(schema: str, work_info: WorkInfo, dependencies: list = None) -> s
         )  j JOIN {schema}.queue q ON j.name = q.name
     ON CONFLICT DO NOTHING
     RETURNING id
+    """
+
+
+def insert_dag(schema: str, dag_id: str, dag_name: str, serialized_dag: dict) -> str:
+    return f"""
+        INSERT INTO {schema}.dag (
+            id,
+            name,
+            state,
+            serialized_dag
+            )
+        VALUES (
+            '{dag_id}'::uuid,
+            '{dag_name}'::text,
+            '{WorkState.CREATED.value}',
+            {Json(serialized_dag)}::jsonb
+            )
     """
 
 
@@ -202,6 +224,12 @@ def fetch_next_job(schema: str):
                   AND state < '{WorkState.ACTIVE.value}'
                   AND start_after < now()
                   AND (dependencies IS NULL OR jsonb_array_length(dependencies) = 0) -- Ensure no pending dependencies
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {schema}.dag AS d
+                      WHERE d.id = j.dag_id
+                      AND d.state = 'completed'
+                  )
                 ORDER BY {'priority DESC, ' if priority else ''} created_on, id
                 LIMIT {batch_size}
             )
@@ -228,6 +256,12 @@ def fetch_next_job(schema: str):
                           FROM jsonb_array_elements_text(j.dependencies)
                       )
                       AND d.state != 'completed'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {schema}.dag AS d
+                      WHERE d.id = j.dag_id
+                      AND d.state = 'completed'
                   )
                 ORDER BY {'priority DESC, ' if priority else ''} created_on, id
                 LIMIT {batch_size}

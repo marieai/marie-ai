@@ -21,6 +21,20 @@ class NoAliasDumper(yaml.Dumper):  # NoAliasDumper promoted outside the function
         return True
 
 
+def plan_to_json(plan: QueryPlan, output_path: str = "query_plan_pretty.json") -> str:
+    """
+    Dumps the QueryPlan to a JSON file with enhanced formatting for better readability.
+    :param plan:
+    :param output_path:
+    :return:
+    """
+
+    plan_to_json_str = plan.model_dump_json()
+    with open(output_path, "w") as json_file:
+        json_file.write(plan_to_json_str)
+    return plan_to_json_str
+
+
 def plan_to_yaml(plan: QueryPlan, output_path: str = "query_plan_pretty.yaml") -> str:
     """
     Dumps the QueryPlan to a YAML file with enhanced formatting for better readability.
