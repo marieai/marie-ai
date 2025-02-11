@@ -22,6 +22,7 @@ class WorkInfo(BaseModel):
     expire_in_seconds: int
     keep_until: datetime
     policy: Optional[str] = None
+    dependencies: Optional[list[str]] = None
 
 
 class JobSubmissionModel(BaseModel):

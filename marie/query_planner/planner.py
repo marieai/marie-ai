@@ -5,6 +5,7 @@ from pprint import pprint
 import numpy as np
 import yaml
 
+from marie.job.job_manager import generate_job_id, increment_uuid7str
 from marie.query_planner.base import (
     LlmQueryDefinition,
     NoopQueryDefinition,
@@ -158,10 +159,12 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     START -> ROOT (Annotator) -> Frame1 -> Frame2 -> MERGE -> COLLATOR -> END
 
     """
+    base_job_id = generate_job_id()
+
     current_id = 0
     # Root node for the entire process
     root = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: START",
         dependencies=[],
         node_type=QueryType.COMPUTE,
@@ -170,7 +173,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     annotator_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: Document annotator",
         dependencies=[root.task_id],
         node_type=QueryType.COMPUTE,
@@ -185,7 +188,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     for i, frame in enumerate(frames):
         # Frame segmentation step
         frame_annotator = Query(
-            task_id=f"{current_id}",
+            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
             query_str=f"{current_id}: Annotate frame {i} ROIs",
             dependencies=[annotator_node.task_id],  # No dependency
             node_type=QueryType.COMPUTE,
@@ -195,7 +198,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         frame_annotators.append(frame_annotator)
 
         step_start = Query(
-            task_id=f"{current_id}",
+            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
             query_str=f"{current_id}: ROI_START for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
@@ -204,7 +207,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         current_id += 1
 
         step_end = Query(
-            task_id=f"{current_id}",
+            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
             query_str=f"{current_id}: ROI_END for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
@@ -213,7 +216,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         current_id += 1
 
         step_relation = Query(
-            task_id=f"{current_id}",
+            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
             query_str=f"{current_id}: ROI_RELATION for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
@@ -225,7 +228,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
 
         # Frame-level joiner now depends on all frame annotations
         joiner = Query(
-            task_id=f"{current_id}",
+            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
             query_str=f"{current_id}: Merge frame {i}",
             dependencies=[step_start.task_id, step_end.task_id, step_relation.task_id],
             node_type=QueryType.MERGER,
@@ -237,7 +240,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
 
     # Global joiner (Merging results from all frames)
     global_joiner = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: Merge all frames",
         dependencies=[
             joiner.task_id for joiner in frame_joiners
@@ -249,7 +252,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
 
     # Additional Processing Steps after Global Joiner
     segment_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: SEGMENT extracted data",
         dependencies=[global_joiner.task_id],  # Depends on global merged results
         node_type=QueryType.COMPUTE,
@@ -260,7 +263,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     document_value_extract_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: DOC VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
@@ -269,7 +272,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     field_value_extract_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: FIELD VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
@@ -278,7 +281,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     table_value_extract_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: TABLE VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
@@ -288,7 +291,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
 
     # EXTRACT node now depends on both field & table extraction steps
     extract_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: EXTRACT insights",
         dependencies=[
             document_value_extract_node.task_id,
@@ -303,7 +306,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     collator_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: COLLATOR: Compile structured output",
         dependencies=[extract_node.task_id],  # Depends on extraction step
         node_type=QueryType.MERGER,
@@ -314,13 +317,12 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     current_id += 1
 
     end_node = Query(
-        task_id=f"{current_id}",
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
         query_str=f"{current_id}: END",
         dependencies=[collator_node.task_id],  # Depends on extraction step
         node_type=QueryType.COMPUTE,
         definition=NoopQueryDefinition(params={'layout': layout}),
     )
-    current_id += 1
 
     return QueryPlan(
         nodes=[root]

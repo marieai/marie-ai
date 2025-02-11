@@ -33,6 +33,32 @@ def generate_job_id() -> str:
     return uuid7str()
 
 
+def increment_uuid7str(uuid_str: str, increment_value: int) -> str:
+    # Remove dashes to get a continuous hex string
+    hex_str = uuid_str.replace('-', '')
+    # Convert hex string to integer
+    int_val = int(hex_str, 16)
+
+    # Add the increment
+    int_val += increment_value
+
+    # Enforce 128-bit (32 hex chars), strip possible sign if negative
+    new_hex_str = format(int_val & ((1 << 128) - 1), '032x')
+
+    # Re-insert the standard dash positions for a UUID
+    return (
+        new_hex_str[0:8]
+        + '-'
+        + new_hex_str[8:12]
+        + '-'
+        + new_hex_str[12:16]
+        + '-'
+        + new_hex_str[16:20]
+        + '-'
+        + new_hex_str[20:]
+    )
+
+
 def get_event_logger():
     # TODO: Implement this
     return None

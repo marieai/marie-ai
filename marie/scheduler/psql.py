@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import time
 import traceback
 from collections import defaultdict
@@ -672,13 +673,33 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # splits = self.calculate_splits(work_info)
         topological_sorted_nodes = query_plan_work_items(work_info)
+        print("Topological sorted nodes *********")
+        for x in topological_sorted_nodes:
+            print('------- ', x)
 
         with self:
             try:
+                root_dep = []
+                if topological_sorted_nodes and len(topological_sorted_nodes) > 0:
+                    root_dep = topological_sorted_nodes[0].dependencies
+
                 cursor = self._execute_sql_gracefully(
-                    insert_job(DEFAULT_SCHEMA, work_info)
+                    insert_job(DEFAULT_SCHEMA, work_info, dependencies=[])
                 )
                 new_key_added = cursor is not None and cursor.rowcount > 0
+
+                for dag_work_info in topological_sorted_nodes:
+                    print('------- ', dag_work_info)
+                    cursor = self._execute_sql_gracefully(
+                        insert_job(
+                            DEFAULT_SCHEMA,
+                            dag_work_info,
+                            dependencies=dag_work_info.dependencies,
+                        )
+                    )
+                    new_dag_key = cursor is not None and cursor.rowcount > 0
+                    print('new_dag_key : ', new_dag_key)
+
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
                 self.connection.rollback()
@@ -1086,7 +1107,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return True
 
 
-def query_plan_work_items(work_info):
+def query_plan_work_items(work_info) -> list[WorkInfo]:
     import numpy as np
 
     pprint(f"Query planning : {work_info}")
@@ -1096,7 +1117,6 @@ def query_plan_work_items(work_info):
         frames.append(frame)
 
     plan = query_planner(frames, layout="12345")
-
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
@@ -1105,3 +1125,19 @@ def query_plan_work_items(work_info):
     sorted_nodes = topological_sort(plan)
     print("Topologically sorted nodes:", sorted_nodes)
     print_sorted_nodes(sorted_nodes, plan)
+
+    print('-----------------XXXX')
+    dag_nodes = []
+    for i, node in enumerate(plan.nodes):
+        print(f"Node : {node} : dependencies : {node.dependencies}")
+        wi = copy.deepcopy(work_info)
+        wi.id = node.task_id
+        # wi.data = {}
+        if i == 0:
+            wi.dependencies = [work_info.id]
+        else:
+            wi.dependencies = node.dependencies
+        print(f"  -- item : {wi}")
+        dag_nodes.append(wi)
+
+    return dag_nodes

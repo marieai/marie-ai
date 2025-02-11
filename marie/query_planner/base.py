@@ -150,7 +150,7 @@ class Query(BaseModel):
     )
 
     def __str__(self):
-        return f"Query {self.task_id}: {self.question}"
+        return f"Query {self.task_id}"
 
 
 class QueryPlan(BaseModel):

@@ -34,3 +34,23 @@ TRUNCATE kv_store_worker_history;
 SELECT marie_scheduler.create_queue('extract', '{"retry_limit":1}'::json)
 SELECT marie_scheduler.create_queue('extract', '{"retry_limit":2}'::json)
 ```
+
+
+## Get the next job in DAG( Directed Acyclic Graph)
+
+```sql
+SELECT j.*
+FROM marie_scheduler.job AS j
+WHERE j.state < 'active'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM marie_scheduler.job AS d
+      WHERE d.id IN (
+          SELECT value::uuid
+          FROM jsonb_array_elements_text(j.dependencies)  -- or jsonb_array_elements() if storing as JSONB
+      )
+      AND d.state != 'completed'
+  )
+ORDER BY j.priority DESC, j.created_on ASC
+LIMIT 1
+```

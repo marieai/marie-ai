@@ -55,7 +55,6 @@ def create_job_table(schema: str):
       output jsonb,
       dead_letter text,
       policy text,
-      parent_job_id uuid,
       dependencies JSONB DEFAULT '[]'::jsonb
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
