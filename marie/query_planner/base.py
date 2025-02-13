@@ -47,7 +47,10 @@ class QueryDefinition(BaseModel):
     """
 
     method: str
-    endpoint: str
+    endpoint: str = Field(
+        ...,
+        description="API endpoint for the query. This coulde a executor endpoint or a model endpoint.",
+    )
     params: dict
 
     def validate_params(self):
@@ -92,6 +95,7 @@ class LlmQueryDefinition(QueryDefinition):
 class PythonFunctionQueryDefinition(QueryDefinition):
     """
     Represents a Python function execution query definition.
+    This is dynamic and can be used to execute any Python function that is registered.
     """
 
     method: str = "PYTHON_FUNCTION"
@@ -106,6 +110,19 @@ class PythonFunctionQueryDefinition(QueryDefinition):
             raise ValueError(
                 "Python function queries must specify the 'function' name as a string."
             )
+
+
+class ExecutorEndpointQueryDefinition(QueryDefinition):
+    """
+    Represents an executor endpoint query definition.
+    This is dynamic and can be used to execute any endpoint that is registered.
+    """
+
+    method: str = "EXECUTOR_ENDPOINT"
+    params: dict = Field(default_factory=lambda: {"layout": None, "function": None})
+
+    def validate_params(self):
+        pass
 
 
 class QueryType(str, enum.Enum):

@@ -7,6 +7,7 @@ import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
 from marie.query_planner.base import (
+    ExecutorEndpointQueryDefinition,
     LlmQueryDefinition,
     NoopQueryDefinition,
     PythonFunctionQueryDefinition,
@@ -217,7 +218,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
-                model_name="qwen2.5_vl",
+                model_name="qwen_v2_5_vl",
                 endpoint="roi",
                 params={"layout": layout, "roi": "start"},
             ),
@@ -230,7 +231,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
-                model_name="qwen2.5_vl",
+                model_name="qwen_v2_5_vl",
                 endpoint="roi",
                 params={"layout": layout, "roi": "end"},
             ),
@@ -243,7 +244,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
-                model_name="qwen2.5_vl",
+                model_name="qwen_v2_5_vl",
                 endpoint="roi",
                 params={"layout": layout, "roi": "relation"},
             ),
@@ -282,8 +283,9 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
         query_str=f"{current_id}: SEGMENT extracted data",
         dependencies=[global_joiner.task_id],  # Depends on global merged results
         node_type=QueryType.COMPUTE,
-        definition=PythonFunctionQueryDefinition(
-            endpoint="evaluator", params={'layout': layout, 'function': 'segment_data'}
+        definition=ExecutorEndpointQueryDefinition(
+            endpoint="extract_executor://segmenter",
+            params={'layout': layout, 'function': 'segment_data'},
         ),
     )
     current_id += 1
@@ -294,8 +296,8 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
         definition=LlmQueryDefinition(
-            model_name="qwen2.5_vl",
-            endpoint="extract_field_doc",
+            model_name="qwen_v2_5_vl",
+            endpoint="extract/field_doc",
             params={'layout': layout, 'extractor': 'doc'},
         ),
     )
@@ -307,8 +309,8 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
         definition=LlmQueryDefinition(
-            model_name="qwen2.5_vl",
-            endpoint="extract_field",
+            model_name="qwen_v2_5_vl",
+            endpoint="extract/field",
             params={'layout': layout, 'extractor': 'field'},
         ),
     )
@@ -320,8 +322,8 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
         definition=LlmQueryDefinition(
-            model_name="qwen2.5_vl",
-            endpoint="extract_table",
+            model_name="qwen_v2_5_vl",
+            endpoint="extract/table",
             params={'layout': layout, 'extractor': 'table'},
         ),
     )
