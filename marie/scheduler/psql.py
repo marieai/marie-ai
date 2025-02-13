@@ -52,7 +52,7 @@ from marie.scheduler.util import available_slots_by_executor, has_available_slot
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
-INIT_POLL_PERIOD = 0.250  # 250ms
+INIT_POLL_PERIOD = 2.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
@@ -152,6 +152,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
                 await self.fail(job_id, work_item)  # Fail-safe
 
+            await self.resolve_dag_status(
+                job_id, work_item, datetime.now(), datetime.now()
+            )
+
             if status.is_terminal():
                 self.logger.info(f"Job {job_id} is in terminal state {status}")
                 await self.notify_event()
@@ -187,6 +191,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             insert_version(schema, version),
             create_exponential_backoff_function(schema),
             create_dag_table(schema),
+            create_dag_table_history(schema),
+            create_dag_history_trigger_function(schema),
+            create_dag_resolve_state_function(schema),
         ]
 
         query = ";\n".join(commands)
@@ -546,7 +553,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                           data,
                           retry_delay,
                           retry_backoff,
-                          keep_until
+                          keep_until,
+                          dag_id
                     FROM {schema}.{table}
                     WHERE id = '{job_id}'
                     """
@@ -628,7 +636,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor.itersize = 10000
                 cursor.execute(
                     f"""
-                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until
+                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id
                     FROM {schema}.{table} 
                     WHERE state IN ('{states}')
                     {f"LIMIT {batch_size}" if batch_size > 0 else ""}
@@ -687,11 +695,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # splits = self.calculate_splits(work_info)
         query_plan, topological_sorted_nodes = query_plan_work_items(work_info)
-        for x in topological_sorted_nodes:
-            print('------- ', x)
-
-        print("query_plan : ", query_plan)
-
         with self:
             try:
                 # insert the DAG
@@ -701,7 +704,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
                 )
                 new_dag_key = cursor is not None and cursor.rowcount > 0
-                print('new_dag_key : ', new_dag_key)
 
                 cursor = self._execute_sql_gracefully(
                     insert_job(DEFAULT_SCHEMA, work_info)
@@ -717,7 +719,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                     )
                     new_dag_key = cursor is not None and cursor.rowcount > 0
-                    print('new_dag_key : ', new_dag_key)
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
@@ -940,6 +941,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_delay=record[8],
             retry_backoff=record[9],
             keep_until=record[10],
+            dag_id=record[11],
         )
 
     async def _monitor(self):
@@ -1125,17 +1127,29 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             self._fetch_event.set()
             return True
 
+    async def resolve_dag_status(
+        self,
+        job_id: str,
+        work_info: WorkInfo,
+        started_on: Optional[datetime] = None,
+        completed_on: Optional[datetime] = None,
+    ):
+        self.logger.info(f"Resolving DAG status : {job_id}, {work_info}")
+
+        with self:
+            try:
+                resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
+                print('resolve_query : ', resolve_query)
+                self._execute_sql_gracefully(resolve_query)
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error handling dag resolution: {error}")
+
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
-    import numpy as np
-
     pprint(f"Query planning : {work_info}")
-    frames = []
-    for i in range(3):
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        frames.append(frame)
+    frames_count = 3
 
-    plan = query_planner(frames, layout="12345")
+    plan = query_planner(frames_count, layout="12345")
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
@@ -1147,9 +1161,8 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
     sorted_nodes = topological_sort(plan)
     print("Topologically sorted nodes:", sorted_nodes)
     print_sorted_nodes(sorted_nodes, plan)
-
-    print('-----------------XXXX')
     dag_nodes = []
+
     for i, node in enumerate(plan.nodes):
         print(f"Node : {node} : dependencies : {node.dependencies}")
         wi = copy.deepcopy(work_info)

@@ -1,5 +1,5 @@
 import enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -47,6 +47,7 @@ class QueryDefinition(BaseModel):
     """
 
     method: str
+    endpoint: str
     params: dict
 
     def validate_params(self):
@@ -61,6 +62,7 @@ class NoopQueryDefinition(QueryDefinition):
     """
 
     method: str = "NOOP"
+    endpoint: str = "noop"
     params: dict = Field(default_factory=lambda: {"layout": None})
 
     def validate_params(self):
@@ -74,6 +76,8 @@ class LlmQueryDefinition(QueryDefinition):
     """
 
     method: str = "LLM"
+    endpoint: str = "extract"
+    model_name: str = Field(..., description="Name of the LLM model to use.")
     params: dict = Field(default_factory=lambda: {"layout": None, "roi": None})
 
     def validate_params(self):
@@ -144,7 +148,7 @@ class Query(BaseModel):
         description=QUERYNODE_TYPE_DESC,
     )
 
-    definition: Optional[QueryDefinition] = Field(
+    definition: Optional[Any] = Field(
         default=None,
         description="Definition of the query to be executed.",
     )

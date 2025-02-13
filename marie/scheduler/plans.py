@@ -239,11 +239,11 @@ def fetch_next_job(schema: str):
                 retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
             FROM next
             WHERE name = '{name}' AND j.id = next.id
-            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
+            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id'}
             """
         else:
             return f"""
-                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until'}
+                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until,j.dag_id'}
                 FROM {schema}.job AS j
                 WHERE j.name = '{name}'
                   AND j.state < '{WorkState.ACTIVE.value}'

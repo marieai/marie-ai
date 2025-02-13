@@ -162,10 +162,10 @@ def topological_sort(plan: QueryPlan) -> list:
     return sorted_nodes
 
 
-def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
+def query_planner(frame_count: int, layout: str) -> QueryPlan:
     """
     Plan a structured query execution graph for document annotation, adding SEGMENT, FIELD & TABLE Extraction, and COLLATOR steps.
-    :param frames: List of frames (images) to process.
+    :param frame_count: Number of frames to process.
     :param layout: The layout of the document.
     :return: The QueryPlan for the structured query execution graph.
 
@@ -199,7 +199,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
     frame_joiners = []
     frame_annotators = []
 
-    for i, frame in enumerate(frames):
+    for i in range(frame_count):
         # Frame segmentation step
         frame_annotator = Query(
             task_id=f"{increment_uuid7str(base_job_id, current_id)}",
@@ -216,7 +216,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
             query_str=f"{current_id}: ROI_START for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(params={"layout": layout, "roi": "start"}),
+            definition=LlmQueryDefinition(
+                model_name="qwen2.5_vl",
+                endpoint="roi",
+                params={"layout": layout, "roi": "start"},
+            ),
         )
         current_id += 1
 
@@ -225,7 +229,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
             query_str=f"{current_id}: ROI_END for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(params={"layout": layout, "roi": "end"}),
+            definition=LlmQueryDefinition(
+                model_name="qwen2.5_vl",
+                endpoint="roi",
+                params={"layout": layout, "roi": "end"},
+            ),
         )
         current_id += 1
 
@@ -234,7 +242,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
             query_str=f"{current_id}: ROI_RELATION for frame {i}",
             dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
             node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(params={"layout": layout, "roi": "relation"}),
+            definition=LlmQueryDefinition(
+                model_name="qwen2.5_vl",
+                endpoint="roi",
+                params={"layout": layout, "roi": "relation"},
+            ),
         )
         current_id += 1
 
@@ -271,7 +283,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         dependencies=[global_joiner.task_id],  # Depends on global merged results
         node_type=QueryType.COMPUTE,
         definition=PythonFunctionQueryDefinition(
-            params={'layout': layout, 'function': 'segment_data'}
+            endpoint="evaluator", params={'layout': layout, 'function': 'segment_data'}
         ),
     )
     current_id += 1
@@ -281,7 +293,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         query_str=f"{current_id}: DOC VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(params={'layout': layout, 'extractor': 'doc'}),
+        definition=LlmQueryDefinition(
+            model_name="qwen2.5_vl",
+            endpoint="extract_field_doc",
+            params={'layout': layout, 'extractor': 'doc'},
+        ),
     )
     current_id += 1
 
@@ -290,7 +306,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         query_str=f"{current_id}: FIELD VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(params={'layout': layout, 'extractor': 'field'}),
+        definition=LlmQueryDefinition(
+            model_name="qwen2.5_vl",
+            endpoint="extract_field",
+            params={'layout': layout, 'extractor': 'field'},
+        ),
     )
     current_id += 1
 
@@ -299,7 +319,11 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         query_str=f"{current_id}: TABLE VALUE EXTRACT",
         dependencies=[segment_node.task_id],  # Depends on segmentation step
         node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(params={'layout': layout, 'extractor': 'table'}),
+        definition=LlmQueryDefinition(
+            model_name="qwen2.5_vl",
+            endpoint="extract_table",
+            params={'layout': layout, 'extractor': 'table'},
+        ),
     )
     current_id += 1
 
@@ -314,7 +338,8 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         ],
         node_type=QueryType.MERGER,
         definition=PythonFunctionQueryDefinition(
-            params={'layout': layout, 'function': 'extract_insights'}
+            endpoint="evaluator",
+            params={'layout': layout, 'function': 'extract_insights'},
         ),
     )
     current_id += 1
@@ -325,7 +350,7 @@ def query_planner(frames: np.ndarray, layout: str) -> QueryPlan:
         dependencies=[extract_node.task_id],  # Depends on extraction step
         node_type=QueryType.MERGER,
         definition=PythonFunctionQueryDefinition(
-            params={'layout': layout, 'function': 'data_collator'}
+            endpoint="evaluator", params={'layout': layout, 'function': 'data_collator'}
         ),
     )
     current_id += 1
@@ -482,8 +507,8 @@ if __name__ == "__main__":
     for i in range(5):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         frames.append(frame)
-
-    plan = query_planner(frames, layout="12345")
+    frame_count = len(frames)
+    plan = query_planner(frame_count, layout="12345")
 
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
