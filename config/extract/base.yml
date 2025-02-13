@@ -1,4 +1,4 @@
 model_executors:
-  qwen_v2_5_vl: executor_qwen_v2_5_vl_default
-  qwen_v2_5: executor_qwen_v2_5_default
+  qwen_v2_5_vl: exec_annotator_qwen_v2_5_vl_default
+  qwen_v2_5: exec_annotator_qwen_v2_5_default
 serverless_executor: serverless_executor_default

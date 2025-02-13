@@ -462,6 +462,15 @@ class TextExtractionExecutorMock(MarieExecutor):
         }
 
 
+class FirstExecutor(Executor):
+    """Example executor for demonstration."""
+
+    @requests
+    def process_one(self, docs: DocList, **kwargs):
+        for doc in docs:
+            doc.tags["processed_by"] = "FirstExecutor"
+
+
 class LLMExtractionExecutorMock(MarieExecutor):
     def __init__(
         self,
@@ -573,5 +582,5 @@ class LLMExtractionExecutorMock(MarieExecutor):
         # invoke the safely_encoded decorator as a function
         meta = get_ip_address()
         #  DocList / Dict / `None`
-        converted = safely_encoded(lambda x: x)(self.runtime_info)
-        return converted
+        # converted = safely_encoded(lambda x: x)(self.runtime_info)
+        # return converted

@@ -120,9 +120,9 @@ def hash_frames_fast_Z(frames: np.ndarray, max_frame_size=1024) -> str:
             hash_src,
             np.ravel(
                 frame[
-                    0 : max_frame_size
-                    if len(frame) > max_frame_size
-                    else 0 : len(frame)
+                    0 : max_frame_size if len(frame) > max_frame_size else 0 : len(
+                        frame
+                    )
                 ]
             ),
         )

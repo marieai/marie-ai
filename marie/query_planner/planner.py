@@ -1,3 +1,5 @@
+import json
+import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
@@ -15,6 +17,7 @@ from marie.query_planner.base import (
     QueryPlan,
     QueryType,
 )
+from marie.query_planner.mapper import JobMetadata
 
 
 class NoAliasDumper(yaml.Dumper):  # NoAliasDumper promoted outside the function
@@ -219,7 +222,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
                 model_name="qwen_v2_5_vl",
-                endpoint="roi",
+                endpoint="annotator/roi",
                 params={"layout": layout, "roi": "start"},
             ),
         )
@@ -232,7 +235,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
                 model_name="qwen_v2_5_vl",
-                endpoint="roi",
+                endpoint="annotator/roi",
                 params={"layout": layout, "roi": "end"},
             ),
         )
@@ -245,7 +248,7 @@ def query_planner(frame_count: int, layout: str) -> QueryPlan:
             node_type=QueryType.COMPUTE,
             definition=LlmQueryDefinition(
                 model_name="qwen_v2_5_vl",
-                endpoint="roi",
+                endpoint="annotator/roi",
                 params={"layout": layout, "roi": "relation"},
             ),
         )
@@ -504,19 +507,29 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
 if __name__ == "__main__":
     question = "Annotate documents with named entities."
-    frames = []
+    frame_count = 3
+    layout = "12345"
 
-    for i in range(5):
-        frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        frames.append(frame)
-    frame_count = len(frames)
-    plan = query_planner(frame_count, layout="12345")
-
+    plan = query_planner(frame_count, layout)
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
-    yml_str = plan_to_yaml(plan)
-    pprint(yml_str)
+    # yml_str = plan_to_yaml(plan)
+    # pprint(yml_str)
 
     sorted_nodes = topological_sort(plan)
-    print("Topologically sorted nodes:", sorted_nodes)
     print_sorted_nodes(sorted_nodes, plan)
+
+    executors = []
+    for node in plan.nodes:
+        print("Node:", node.task_id)
+        try:
+            meta = JobMetadata.from_task(node, layout)
+            executors.append(meta.metadata.on)
+            print(meta.model_dump())
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error creating metadata for node {node.task_id}: {e}")
+
+    print("Executors:", executors)
+    for exec in executors:
+        print(f"Executor: {exec}")

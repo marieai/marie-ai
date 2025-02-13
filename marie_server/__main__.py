@@ -17,6 +17,10 @@ from marie.constants import (
     __marie_home__,
     __model_path__,
 )
+from marie.executor.text.text_extraction_executor import (
+    FirstExecutor,
+    LLMExtractionExecutorMock,
+)
 from marie.importer import ImportExtensions
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
@@ -166,7 +170,7 @@ def __main__(
         "gpu_device_count": gpu_device_count(),
     }
 
-    jemallocpath = "/usr/lib/%s-linux-gnu/ .so.2" % (platform.machine(),)
+    jemallocpath = "/usr/lib/%s-linux-gnu/.so.2" % (platform.machine(),)
 
     if os.path.isfile(jemallocpath):
         logger.info("Found %s, will use" % (jemallocpath,))
@@ -200,11 +204,23 @@ def __main__(
             ],
             substitute=True,
             context=context,
-            include_gateway=True,
+            include_gateway=False,
             noblock_on_start=False,
             prefetch=prefetch,
             external=True,
         ).config_gateway(prefetch=prefetch)
+
+        if False:
+            f = (
+                Flow()
+                .add(name="first_exec", uses=FirstExecutor)
+                .add(name="second_exec", uses=FirstExecutor)
+                .add(
+                    name="replicated_exec",
+                    uses=FirstExecutor,
+                    replicas=2,  # This line runs 2 parallel copies of ReplicatedExecutor
+                )
+            )
 
     if False:
         f = Deployment.load_config(

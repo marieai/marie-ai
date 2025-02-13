@@ -1,4 +1,5 @@
 """Argparser module for hub status"""
+
 import os
 
 from hubble.parsers.helper import add_arg_group

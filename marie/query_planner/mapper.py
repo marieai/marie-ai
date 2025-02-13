@@ -1,105 +1,88 @@
-import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-import yaml
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
+
+from marie.constants import __config_dir__
+from marie.query_planner.base import Query
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 @dataclass
 class LayoutConfig:
+    """
+    Data class for storing layout executor configurations.
+    """
+
     model_executors: Dict[str, str]
     serverless_executor: Optional[str] = field(default=None)
 
 
-# 🎯 Base Operator Model
 class BaseOperator(BaseModel):
-    """Base schema for the operator object."""
+    """
+    Base schema for an operator object.
+    """
 
     name: str
     type: str = "job"
     uri: str = "s3://bucket/key"
-    on: str = Field(..., description="The Executor of the operator.")
+    on: str = Field(..., description="Specifies which executor handles this operator.")
     name: str = Field(..., description="The name of the operator.")
 
 
-# 🎯 Extractor-Specific Operator
 class ExtractorOperatorConfig(BaseOperator):
-    """Operator structure for EXTRACTOR tasks."""
+    """
+    Operator structure for EXTRACTOR tasks.
+    """
 
     pass
 
 
-# 🎯 Compute-Specific Operator
 class ComputeOperatorConfig(BaseOperator):
-    """Operator structure for COMPUTE tasks."""
+    """
+    Operator structure for COMPUTE tasks.
+    """
 
     pass
 
 
-# 🎯 Merger-Specific Operator
 class MergerOperatorConfig(BaseOperator):
-    """Operator structure for MERGER tasks."""
+    """
+    Operator structure for MERGER tasks.
+    """
 
     pass
 
 
-def get_layout_config() -> LayoutConfig:
-    parent_config = {
-        "model_executors": {
-            "qwen_v2_5_vl": "executor_qwen_v2_5_vl_default",
-            "qwen_v2_5": "executor_qwen_v2_5_default",
-        },
-        "serverless_executor": "serverless_executor_default",
-    }
+def get_layout_config(layout_name: str) -> DictConfig:
+    """
+    Generate a configuration dictionary by merging a base configuration file
+    with a layout-specific file. The resulting configuration is made read-only.
 
-    child_config = {
-        "model_executors": {
-            "qwen_v2_5_vl": "executor_qwen_v2_5_vl",
-            "qwen_v2_5": "executor_qwen_v2_5",
-        }
-    }
+    :param layout_name: The identifier for the layout configuration.
+    :return: A read-only merged configuration as a DictConfig.
+    """
+    base_dir = os.path.join(__config_dir__, "extract")
+    base_cfg_path = os.path.join(base_dir, "base.yml")
+    layout_cfg_path = os.path.join(base_dir, layout_name, "layout.yml")
 
-    parent_cfg = OmegaConf.create(parent_config)
-    child_cfg = OmegaConf.create(child_config)
-    merged_cfg = OmegaConf.merge(parent_cfg, child_cfg)
+    parent_cfg = OmegaConf.load(base_cfg_path)
+    layout_cfg = OmegaConf.load(layout_cfg_path)
+    merged_conf = OmegaConf.merge(parent_cfg, layout_cfg)
 
-    print("Merged configuration:")
-    print(OmegaConf.to_yaml(child_cfg))
-
-    os.exit()
-
-    raw_config = {
-        "default": {
-            "model_executors": {
-                "qwen_v2_5_vl": "executor_qwen_v2_5_vl_default",
-                "qwen_v2_5": "executor_qwen_v2_5_default",
-            },
-            "serverless_executor": "serverless_executor_default",
-        },
-        "12345": {
-            "model_executors": {
-                "qwen_v2_5_vl": "executor_qwen_v2_5_vl",
-                "qwen_v2_5": "executor_qwen_v2_5",
-            }
-        },
-    }
-
-    yaml_output = yaml.dump(raw_config)
-    print(yaml_output)
-
-    schema = OmegaConf.structured(LayoutConfig)
-    print(schema)
-
-    return {}
-    # config_model = LayoutConfig.model_validate({"data": raw_config})
-    # return config_model.data
+    OmegaConf.set_readonly(merged_conf, True)
+    return merged_conf
 
 
 class JobMetadata(BaseModel):
-    """Schema for job metadata."""
+    """
+    Schema encapsulating job metadata.
+    """
 
     name: str
     action: str = "submit"
@@ -109,91 +92,92 @@ class JobMetadata(BaseModel):
     action_type: str = "command"
 
     @classmethod
-    def from_task(cls, task: dict, layout: str):
-        """Creates a JobMetadata instance from a task dictionary."""
-        print(f'---------------------------------')
-        print(f"Task: {task}")
+    def from_task(cls, task: Query, layout: str):
+        """
+        Construct a JobMetadata instance from a given Query task object.
 
-        node_type = task.get("node_type", "default")
-        definition = task.get("definition", {})
-        method = definition.get("method", "default")
-        endpoint = definition.get("endpoint", "default")
-        model_name = definition.get("model_name", "default")
-        params = definition.get("params", {})
-        executor_endpoint = f"executor://endpoint"
+        :param task: The Query task instance.
+        :param layout: Designates which layout configuration to apply.
+        :return: A populated JobMetadata object.
+        """
+        logger.info("Processing task: %s", task)
 
-        if node_type is None:
+        task_type = task.node_type
+        task_definition = task.definition
+        method = task_definition.method if task_definition.method else "NOOP"
+        endpoint = (
+            task_definition.endpoint if task_definition.endpoint else "noop://noop"
+        )
+        params = task_definition.params if task_definition.params else {}
+
+        if not endpoint:
+            raise ValueError("Endpoint is not defined in the task.")
+        if not task_type:
             raise ValueError("Node type is not defined in the task.")
 
-        print(f"Node Type: {node_type}")
-        print(f"Definition: {definition}")
-        print(f"endpoint: {endpoint}")
+        layout_conf = get_layout_config(layout)
+        logger.debug("Loaded layout config: %s", layout_conf)
+        logger.debug("Task Type: %s, Method: %s, Params: %s", task_type, method, params)
 
-        layouts_config = get_layout_config()
-        layout_def_base = layouts_config["default"]
-        layout_def = layouts_config.get(layout)
-        print(f"Layout: {layout_def}")
+        executor_endpoint = "executor://endpoint"
+        has_executor = "://" in endpoint
 
-        print(f"Method: {method}")
-        print(f"Params: {params}")
-
-        has_executor = False
-        if "://" in endpoint:
-            has_executor = True
-
-        if method == 'EXECUTOR_ENDPOINT':
+        if method == "EXECUTOR_ENDPOINT":
             executor_endpoint = endpoint
-        elif method == 'PYTHON_FUNCTION':
-            serverless_executor = (
-                layout_def.serverless_executor
-                if layout_def.serverless_executor
-                else "default"
+        elif method == "PYTHON_FUNCTION":
+            serverless_exec = layout_conf.serverless_executor or "default"
+            executor_endpoint = (
+                endpoint if has_executor else f"{serverless_exec}://{endpoint}"
             )
-            if has_executor:
-                executor_endpoint = endpoint
-            else:
-                executor_endpoint = f"{serverless_executor}://{endpoint}"
-        elif method == 'LLM':
-            executor = layout_def.model_executors.get(model_name)
+        elif method == "LLM":
+            model_name = getattr(task_definition, "model_name", None)
+            if not model_name:
+                raise ValueError("model_name is required for an LLM method.")
+            executor = layout_conf.model_executors.get(model_name)
             if not executor:
                 raise ValueError(
-                    f"Executor not found for model: {model_name}. Available executors: {layout_def.model_executors}"
+                    f"Executor not found for model: {model_name}. "
+                    f"Available executors: {layout_conf.model_executors}"
                 )
             executor_endpoint = f"{executor}://{endpoint}"
-        elif method == 'NOOP':
+        elif method == "NOOP":
             executor_endpoint = "noop://noop"
         else:
-            raise ValueError(f"Unsupported node type: {node_type}")
+            raise ValueError(f"Unsupported method type: {method}")
 
-        print('\n\n')
-
-        metadata_class = JobMetadataFactory.get_metadata_class(node_type)
-        metadata_obj = metadata_class(
+        # Determine which operator class to create
+        operator_class = JobMetadataFactory.get_metadata_class(task_type)
+        operator_instance = operator_class(
             on=executor_endpoint,
-            name=task.get('query_str', 'default'),
+            name=task.query_str,
         )
 
         return cls(
-            name=node_type,
-            metadata=metadata_obj,
+            name=task_type,
+            metadata=operator_instance,
         )
 
 
-# 🎯 Job Metadata Factory
 class JobMetadataFactory:
     """
-    Factory class to generate different job metadata models based on the node type.
+    Factory class to generate different job metadata models based on
+    the node type.
     """
 
     @staticmethod
     def get_metadata_class(node_type: str):
-        """Returns the appropriate metadata model based on node type."""
-        metadata_mapping = {
+        """
+        Retrieve the Pydantic model class corresponding to a node type.
+
+        :param node_type: The node type, e.g., "EXTRACTOR", "COMPUTE", "MERGER".
+        :return: The corresponding class derived from BaseOperator.
+        """
+        type_mapping = {
             "EXTRACTOR": ExtractorOperatorConfig,
             "COMPUTE": ComputeOperatorConfig,
             "MERGER": MergerOperatorConfig,
         }
-        return metadata_mapping.get(node_type, BaseOperator)
+        return type_mapping.get(node_type, BaseOperator)
 
 
 # ✅ Example Usage
@@ -236,11 +220,16 @@ if __name__ == "__main__":
 
     layout = "12345"
 
-    extractor_metadata = JobMetadata.from_task(task_fragment_extractor, layout)
-    compute_metadata = JobMetadata.from_task(task_fragment_compute, layout)
+    q1 = Query(**task_fragment_extractor)
+    print(q1.model_dump())
 
-    print("\nExtractor Metadata:")
-    print(extractor_metadata.model_dump_json(indent=4))
+    extractor_metadata = JobMetadata.from_task(Query(**task_fragment_extractor), layout)
+    if False:
+        extractor_metadata = JobMetadata.from_task(task_fragment_extractor, layout)
+        compute_metadata = JobMetadata.from_task(task_fragment_compute, layout)
 
-    print("\nCompute Metadata:")
-    print(compute_metadata.model_dump_json(indent=4))
+        print("\nExtractor Metadata:")
+        print(extractor_metadata.model_dump_json(indent=4))
+
+        print("\nCompute Metadata:")
+        print(compute_metadata.model_dump_json(indent=4))

@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import time
@@ -11,6 +12,15 @@ from transformers import (
     BitsAndBytesConfig,
     TextIteratorStreamer,
 )
+from transformers.utils.logging import (  # Correctly import the DEBUG constant
+    DEBUG,
+    set_verbosity,
+)
+
+logging.basicConfig(level=logging.DEBUG)
+set_verbosity(DEBUG)
+
+torch.set_float32_matmul_precision('high')
 
 # subprocess.run(
 #     "pip install flash-attn --no-build-isolation",
@@ -21,6 +31,7 @@ from transformers import (
 # token = os.environ["HF_TOKEN"]
 token = None
 # "microsoft/phi-4"
+# https://huggingface.co/blog/smolvlm
 
 model_id = "microsoft/Phi-3.5-mini-instruct"  # 10GB
 # model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
@@ -31,8 +42,8 @@ model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
 model_id = "google/gemma-7b-it"  # 16GB
 model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 model_id = "Qwen/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
-model_id = "unsloth/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
-
+# model_id = "unsloth/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
+# model_id = "Qwen/Qwen2.5-14B-Instruct"  # 13GB vram
 # model_id = "Qwen/Qwen2.5-0.5B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 # model_id = "google/gemma-7b-it"  # 16GB
 # model_id = "google/gemma-2-2b-it" # 7GB
@@ -46,6 +57,11 @@ model_id = "unsloth/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 #     torch_dtype=torch.bfloat16
 # )
 
+# https://huggingface.co/docs/transformers/main/en/quantization/hqq
+from transformers import HqqConfig
+
+# Method 1: all linear layers will use the same quantization config
+quant_config = HqqConfig(nbits=8, group_size=64)
 
 # BitsAndBytesConfig int-4 config
 bnb_config = BitsAndBytesConfig(
@@ -54,30 +70,30 @@ bnb_config = BitsAndBytesConfig(
 )
 bnb_config = None
 
-# Load model in 8-bit precision using bitsandbytes
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    device_map="auto",  # Automatically use available GPUs
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-    quantization_config=bnb_config,
-    load_in_4bit=True,  # Enable 8-bit quantization
-    bnb_optim='cpu',  # Optional: can specify more configuration options like bnb_optim or other tuning params
-)
-# bnb_config = None
+# # Load model in 8-bit precision using bitsandbytes
+# model = AutoModelForCausalLM.from_pretrained(
+#     model_id,
+#     device_map="auto",  # Automatically use available GPUs
+#     torch_dtype=torch.bfloat16,
+#     trust_remote_code=True,
+#     quantization_config=bnb_config,
+#     load_in_4bit=True,  # Enable 8-bit quantization
+# )
+# # bnb_config = None
 
 # Load model in 8-bit precision using bitsandbytes
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    device_map="auto",  # Automatically use available GPUs
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-    quantization_config=bnb_config,
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+if False:
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",  # Automatically use available GPUs
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+        quantization_config=bnb_config,
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
 
 bnb_config = BitsAndBytesConfig(
     load_in_8bit=True,
@@ -85,7 +101,7 @@ bnb_config = BitsAndBytesConfig(
     bnb_8bit_compute_dtype=torch.bfloat16,
 )
 
-bnb_config = None
+# bnb_config = None
 
 # # Load model in 4/8-bit precision using bitsandbytes
 # model = AutoModelForCausalLM.from_pretrained(
@@ -95,34 +111,39 @@ bnb_config = None
 #     trust_remote_code=True,
 #     quantization_config=bnb_config,
 # )
+model = None
+if False:
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",  # Automatically use available GPUs
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+        quantization_config=quant_config,
+    )
+    model = torch.compile(model)
+    # model = torchao.autoquant(torch.compile(model, mode='max-autotune'))
+    tok = AutoTokenizer.from_pretrained(model_id, token=token)
 
-# # model = torch.compile(model)
+if False:
+    import torch
+    from unsloth import FastLanguageModel
 
-# tok = AutoTokenizer.from_pretrained(model_id, token=token)
+    max_seq_length = 2048  # Choose any! We auto support RoPE Scaling internally!
+    dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
+    load_in_4bit = False  # Use 4bit quantization to reduce memory usage. Can be False.
 
-import torch
-from unsloth import FastLanguageModel
+    model, tok = FastLanguageModel.from_pretrained(
+        # Can select any from the below:
+        # "unsloth/Qwen2.5-0.5B", "unsloth/Qwen2.5-1.5B", "unsloth/Qwen2.5-3B"
+        # "unsloth/Qwen2.5-14B",  "unsloth/Qwen2.5-32B",  "unsloth/Qwen2.5-72B",
+        # And also all Instruct versions and Math. Coding verisons!
+        model_name=model_id,
+        max_seq_length=max_seq_length,
+        dtype=dtype,
+        load_in_4bit=load_in_4bit,
+    )
 
-max_seq_length = 2048  # Choose any! We auto support RoPE Scaling internally!
-dtype = (
-    None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
-)
-load_in_4bit = False  # Use 4bit quantization to reduce memory usage. Can be False.
-
-
-model, tok = FastLanguageModel.from_pretrained(
-    # Can select any from the below:
-    # "unsloth/Qwen2.5-0.5B", "unsloth/Qwen2.5-1.5B", "unsloth/Qwen2.5-3B"
-    # "unsloth/Qwen2.5-14B",  "unsloth/Qwen2.5-32B",  "unsloth/Qwen2.5-72B",
-    # And also all Instruct versions and Math. Coding verisons!
-    model_name=model_id,
-    max_seq_length=max_seq_length,
-    dtype=dtype,
-    load_in_4bit=load_in_4bit,
-)
-
-model = FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
-
+    model = FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
 
 terminators = [
     tok.eos_token_id,
@@ -148,8 +169,13 @@ def chat(message, history, temperature, do_sample, max_tokens):
             chat.append({"role": "assistant", "content": item[1]})
     chat.append({"role": "user", "content": message})
 
+    # Tokenize the input and measure tokenization speed
+    start_time = time.time()
     messages = tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
     model_inputs = tok([messages], return_tensors="pt").to(device)
+    tokenization_time = time.time() - start_time
+    num_input_tokens = model_inputs.input_ids.size(1)
+
     streamer = TextIteratorStreamer(
         tok, timeout=20.0, skip_prompt=True, skip_special_tokens=True
     )
@@ -188,8 +214,29 @@ def chat(message, history, temperature, do_sample, max_tokens):
         )
 
         end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        print("Execution time:", execution_time)
+        generation_time = end_time - start_time
+        print("Execution time:", generation_time)
+
+        # Count the total number of generated tokens
+        num_output_tokens = len(generated_ids_trimmed[0])
+
+        # Calculate token processing rates
+        tokenization_rate = (
+            num_input_tokens / tokenization_time if tokenization_time > 0 else 0
+        )
+        generation_rate = (
+            num_output_tokens / generation_time if generation_time > 0 else 0
+        )
+
+        # Print results
+        print(f"Number of input tokens: {num_input_tokens}")
+        print(f"Number of output tokens: {num_output_tokens}")
+        print(
+            f"Tokenization time: {tokenization_time:.4f} seconds ({tokenization_rate:.2f} tokens/second)"
+        )
+        print(
+            f"Generation time: {generation_time:.4f} seconds ({generation_rate:.2f} tokens/second)"
+        )
 
         print("-" * 50)
         print(output_text)

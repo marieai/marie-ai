@@ -170,8 +170,11 @@ class Query(BaseModel):
         description="Definition of the query to be executed.",
     )
 
-    def __str__(self):
-        return f"Query {self.task_id}"
+    # def __str__(self):
+    #     return f"Query {self.task_id}"
+    #
+    # def __repr__(self):
+    #     return f"Query {self.task_id}"
 
 
 class QueryPlan(BaseModel):

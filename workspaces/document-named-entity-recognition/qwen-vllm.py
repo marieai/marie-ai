@@ -1,105 +1,47 @@
 import io
 import os
-import subprocess
 import uuid
 from threading import Thread
 
 import gradio as gr
-import numpy as np
 import torch
 from PIL import Image
 from qwen_vl_utils import process_vision_info
-from transformers import (
-    AutoProcessor,
-    BitsAndBytesConfig,
-    Qwen2VLForConditionalGeneration,
-    TextIteratorStreamer,
-)
+from transformers import AutoProcessor
+from vllm import LLM, SamplingParams
 
 # Model and Processor Loading (Done once at startup)
-MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
-# MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 
-# Configure BitsAndBytesConfig for 8-bit precision
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,  # Enable 8-bit quantization
-)
-# bnb_config = None
+# Initialize VLLM
+llm = LLM(MODEL_ID, dtype="bfloat16", trust_remote_code=True)
 
-# https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
+# Load the processor
 min_pixels = 256 * 28 * 28
 max_pixels = 1280 * 28 * 28
-# max_pixels = 1800*28*28
-if False:
-    model = (
-        Qwen2VLForConditionalGeneration.from_pretrained(
-            MODEL_ID,
-            trust_remote_code=True,
-            torch_dtype=torch.float16,
-            attn_implementation="flash_attention_2",
-            quantization_config=bnb_config,
-        )
-        .to("cuda")
-        .eval()
-    )
-
-    processor = AutoProcessor.from_pretrained(
-        MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
-    )
-if True:
-    from transformers import (
-        AutoProcessor,
-        Qwen2_5_VLForConditionalGeneration,
-        TextIteratorStreamer,
-    )
-
-    # Load model and processor
-    ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
-    ).to("cuda")
-    processor = AutoProcessor.from_pretrained(
-        ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
-    )
+processor = AutoProcessor.from_pretrained(
+    MODEL_ID, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
+)
 
 DESCRIPTION = f"[{MODEL_ID}]"
-
 image_extensions = Image.registered_extensions()
-video_extensions = (
-    "avi",
-    "mp4",
-    "mov",
-    "mkv",
-    "flv",
-    "wmv",
-    "mjpeg",
-    "wav",
-    "gif",
-    "webm",
-    "m4v",
-    "3gp",
-)
 
 
 def identify_and_save_blob(blob_path):
     """Identifies if the blob is an image or video and saves it accordingly."""
     try:
-        with open(blob_path, 'rb') as file:
+        with open(blob_path, "rb") as file:
             blob_content = file.read()
 
             # Try to identify if it's an image
             try:
-                Image.open(
-                    io.BytesIO(blob_content)
-                ).verify()  # Check if it's a valid image
-                extension = ".png"  # Default to PNG for saving
+                Image.open(io.BytesIO(blob_content)).verify()
+                extension = ".png"
                 media_type = "image"
             except (IOError, SyntaxError):
-                # If it's not a valid image, assume it's a video
-                extension = ".mp4"  # Default to MP4 for saving
+                extension = ".mp4"
                 media_type = "video"
 
-            # Create a unique filename
             filename = f"temp_{uuid.uuid4()}_media{extension}"
             with open(filename, "wb") as f:
                 f.write(blob_content)
@@ -117,8 +59,6 @@ def process_file_upload(file_path):
     if isinstance(file_path, str):
         if file_path.endswith(tuple([i for i, f in image_extensions.items()])):
             return file_path, Image.open(file_path)
-        elif file_path.endswith(video_extensions):
-            return file_path, None
         else:
             try:
                 media_path, media_type = identify_and_save_blob(file_path)
@@ -134,23 +74,19 @@ def process_file_upload(file_path):
 
 
 def qwen_inference(media_input, text_input=None):
+    """Performs inference using VLLM"""
     if isinstance(media_input, str):  # If it's a filepath
         media_path = media_input
         if media_path.endswith(tuple([i for i, f in image_extensions.items()])):
             media_type = "image"
-        elif media_path.endswith(video_extensions):
-            media_type = "video"
         else:
             try:
                 media_path, media_type = identify_and_save_blob(media_input)
-                print(media_path, media_type)
             except Exception as e:
                 print(e)
                 raise ValueError(
                     "Unsupported media type. Please upload an image or video."
                 )
-
-    print(media_path)
 
     messages = [
         {
@@ -170,6 +106,7 @@ def qwen_inference(media_input, text_input=None):
         messages, tokenize=False, add_generation_prompt=True
     )
     image_inputs, video_inputs = process_vision_info(messages)
+
     inputs = processor(
         text=[text],
         images=image_inputs,
@@ -178,18 +115,11 @@ def qwen_inference(media_input, text_input=None):
         return_tensors="pt",
     ).to("cuda")
 
-    streamer = TextIteratorStreamer(
-        processor, skip_prompt=True, **{"skip_special_tokens": True}
-    )
-    generation_kwargs = dict(inputs, streamer=streamer, max_new_tokens=2048)
+    sampling_params = SamplingParams(max_tokens=2048, temperature=0.7, top_p=0.9)
 
-    thread = Thread(target=model.generate, kwargs=generation_kwargs)
-    thread.start()
-
-    buffer = ""
-    for new_text in streamer:
-        buffer += new_text
-        yield buffer
+    # Run inference with VLLM
+    output = llm.generate(text, sampling_params=sampling_params)
+    yield output[0].outputs[0].text  # Extracting generated text
 
 
 css = """
