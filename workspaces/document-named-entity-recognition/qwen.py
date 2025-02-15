@@ -29,6 +29,7 @@ bnb_config = BitsAndBytesConfig(
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 256 * 28 * 28
 max_pixels = 1280 * 28 * 28
+max_pixels = 1000 * 28 * 28
 # max_pixels = 1800*28*28
 if False:
     model = (
@@ -46,6 +47,7 @@ if False:
     processor = AutoProcessor.from_pretrained(
         MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
     )
+
 if True:
     from transformers import (
         AutoProcessor,
@@ -55,6 +57,7 @@ if True:
 
     # Load model and processor
     ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
+    ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
     ).to("cuda")
