@@ -1,57 +1,66 @@
-__ENGINE_NAME_SHORTCUTS__ = {
-    "together-llama-3-70b": "together-meta-llama/Llama-3-70b-chat-hf",
-    "vllm-llama-3-8b": "vllm-meta-llama/Meta-Llama-3-8B-Instruct",
+from marie.engine.base import EngineLM
+
+MODEL_NAME_MAP = {
+    "qwen2_5_vl_3b": "Qwen/Qwen2.5-VL-3B-Instruct",
+    "qwen2_5_vl_7b": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "qwen2_5_7b": "Qwen/Qwen2.5-7B-Instruct",
+    "qwen2_5_3b": "Qwen/Qwen2.5-3B-Instruct",
+    "meta_llama_11b": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "phi3_5_vl": "microsoft/Phi-3.5-vision-instruct",
+    "pixtral_12b": "mistralai/Pixtral-12B-2409",
+    "mistral_7b": "mistralai/Mistral-7B-Instruct-v0.2",
+    "opt_125m": "facebook/opt-125m",
+    "phi4": "microsoft/phi-4",
+    "llava_mistral_7b": "llava-hf/llava-v1.6-mistral-7b-hf",
 }
 
-# Any better way to do this?
-__MULTIMODAL_ENGINES__ = [
-    "gpt-4-turbo",
-    "gpt-4o",
-]
+# Create a reverse lookup dictionary
+REVERSE_MODEL_NAME_MAP = {v: k for k, v in MODEL_NAME_MAP.items()}
 
-from marie.engine.base import EngineLM
+# the multimodal models list
+__MULTIMODAL_MODELS__ = [
+    MODEL_NAME_MAP["qwen2_5_vl_3b"],
+    MODEL_NAME_MAP["qwen2_5_vl_7b"],
+    MODEL_NAME_MAP["meta_llama_11b"],
+    MODEL_NAME_MAP["phi3_5_vl"],
+    MODEL_NAME_MAP["pixtral_12b"],
+    MODEL_NAME_MAP["llava_mistral_7b"],
+]
 
 
 def _check_if_multimodal(engine_name: str):
-    return any([name == engine_name for name in __MULTIMODAL_ENGINES__])
+    mapped_name = MODEL_NAME_MAP.get(engine_name)
+    return engine_name in __MULTIMODAL_MODELS__ or mapped_name in __MULTIMODAL_MODELS__
 
 
 def validate_multimodal_engine(engine):
     if not _check_if_multimodal(engine.model_string):
         raise ValueError(
-            f"The engine provided is not multimodal. Please provide a multimodal engine, one of the following: {__MULTIMODAL_ENGINES__}"
+            f"The engine provided is not multimodal. Please provide a multimodal engine, one of the following: {__MULTIMODAL_MODELS__}"
         )
 
 
-def get_engine(engine_name: str, **kwargs) -> EngineLM:
-    if engine_name in __ENGINE_NAME_SHORTCUTS__:
-        engine_name = __ENGINE_NAME_SHORTCUTS__[engine_name]
+def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
+    """
+    Get the engine based on the engine name and provider.
+    :param engine_name: The engine name to use for the LLM call.
+    :param provider: The provider to use for the LLM call. Currently only vllm is supported.
+    :param kwargs:
+    :return: The engine to use for the LLM call.
+    """
+    if "vllm" == provider:
+        from .vllm_engine import VLLMEngine
 
-    if (
-        "seed" in kwargs
-        and "gpt-4" not in engine_name
-        and "gpt-3.5" not in engine_name
-        and "gpt-35" not in engine_name
-    ):
-        raise ValueError(
-            f"Seed is currently supported only for OpenAI engines, not {engine_name}"
+        return VLLMEngine(
+            system_prompt="You are a helpful assistant for processing documents.",
+            model_name=engine_name,
+            is_multimodal=_check_if_multimodal(engine_name),
+            cache=False,
+            processor_kwargs={  # All parameters will be passed dynamically to the processor
+                'min_pixels': 1 * 28 * 28,
+                'max_pixels': 1280 * 28 * 28,  # 800, 1000, 1280
+            },
+            **kwargs,
         )
-
-    if "cache" in kwargs and "experimental" not in engine_name:
-        raise ValueError(
-            f"Cache is currently supported only for LiteLLM engines, not {engine_name}"
-        )
-
-    # check if engine_name starts with "experimental:"
-    if engine_name.startswith("experimental:"):
-        engine_name = engine_name.split("experimental:")[1]
-        raise ValueError(
-            f"Experimental engines are not supported in this version of Marie. Please use a stable engine instead."
-        )
-    elif "vllm" in engine_name:
-        from .vllm import ChatVLLM
-
-        engine_name = engine_name.replace("vllm-", "")
-        return ChatVLLM(model_string=engine_name, **kwargs)
     else:
         raise ValueError(f"Engine {engine_name} not supported")

@@ -162,7 +162,6 @@ def qwen_inference(media_input, text_input=None):
                 {
                     "type": media_type,
                     media_type: media_path,
-                    **({"fps": 8.0} if media_type == "video" else {}),
                 },
                 {"type": "text", "text": text_input},
             ],
