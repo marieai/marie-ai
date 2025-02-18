@@ -57,7 +57,7 @@ if True:
 
     # Load model and processor
     ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
-    ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
+    # ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
     ).to("cuda")

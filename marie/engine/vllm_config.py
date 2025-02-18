@@ -73,6 +73,7 @@ def create_llm_instance(
         load_format=load_format,
         enforce_eager=False,
         dtype=_dtype,
+        gpu_memory_utilization=0.80,  # 80% of GPU memory utilization, prevent OOM during CUDA graph compilation
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
         **kwargs
     )

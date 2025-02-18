@@ -49,6 +49,7 @@ model_id = "Qwen/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 # model_id = "google/gemma-2-2b-it" # 7GB
 
 # model_id = "mistralai/Mistral-7B-v0.3" # mistral-7B-Instruct-v0.3.
+# model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # model = AutoModelForCausalLM.from_pretrained(
 #     model_id,
@@ -111,8 +112,9 @@ bnb_config = BitsAndBytesConfig(
 #     trust_remote_code=True,
 #     quantization_config=bnb_config,
 # )
-model = None
-if False:
+
+
+if True:
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         device_map="auto",  # Automatically use available GPUs

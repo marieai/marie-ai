@@ -87,6 +87,7 @@ class VLLMEngine(EngineLM):
         ]  # Returns: "Qwen/Qwen2.5-VL-3B-Instruct"
         engine_config = MODEL_MAP[model_name]  # Returns: config_qwen2_5_vl
 
+        print(engine_config)
         self.llm, self.prompt, self.stop_token_ids = engine_config(
             model_name, "image" if is_multimodal else "text"
         )
@@ -139,6 +140,98 @@ class VLLMEngine(EngineLM):
             conversation=messages, tokenize=False, add_generation_prompt=True
         )
 
+    def batch_generate(
+        self,
+        batch_content: List[Union[str, List[Union[str, bytes, Image.Image]]]],
+        system_prompt=None,
+        **kwargs,
+    ) -> List[str]:
+        """Batch inference function for multiple inputs with improved structure and error handling."""
+        system_prompt = system_prompt or self.system_prompt
+
+        # Ensure batch_content is always a list of lists for consistency
+        if isinstance(batch_content[0], (str, bytes)):
+            batch_content = [[content] for content in batch_content]
+
+        # Convert each input into OpenAI-like format
+        formatted_contents = [
+            open_ai_like_formatting(content) for content in batch_content
+        ]
+
+        # Prepare multiple messages for batch inference
+        messages_list = [
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ]
+            for content in formatted_contents
+        ]
+
+        # Generate prompts for all batch inputs
+        prompts = [
+            self._generate_prompt(messages, system_prompt) for messages in messages_list
+        ]
+
+        sampling_params = SamplingParams(
+            temperature=kwargs.get("temperature", 0.0),
+            top_p=kwargs.get("top_p", 1.0),
+            max_tokens=kwargs.get("max_tokens", 512),
+            stop_token_ids=self.stop_token_ids,
+        )
+
+        # Ensure correct batch structure for VLLM
+        batch_inputs = [
+            {"prompt": prompt, "batch_id": idx} for idx, prompt in enumerate(prompts)
+        ]
+
+        # Process multimodal inputs if necessary
+        if self.is_multimodal:
+            for idx, messages in enumerate(messages_list):
+                image_data = process_vision_info(messages)
+                if image_data:
+                    batch_inputs[idx]["multi_modal_data"] = {"image": image_data[0]}
+
+        self.logger.debug(f"🚀 Batch Input Data: {batch_inputs}")
+
+        # Start batch inference timing
+        start_time = time.time()
+        try:
+            batch_outputs = self.llm.generate(
+                batch_inputs, sampling_params=sampling_params
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Error during batch inference: {e}")
+            return ["ERROR: Inference failed"] * len(batch_content)
+
+        # Ensure correct parsing of batch output
+        generated_texts = {
+            output.request_id: output.outputs[0].text if output.outputs else ""
+            for output in batch_outputs
+        }
+
+        # Sort outputs by batch_id to maintain original order
+        ordered_outputs = [
+            generated_texts.get(idx, "") for idx in range(len(batch_content))
+        ]
+
+        elapsed_time = time.time() - start_time
+        self.logger.info(f"Batch Generation Time: {elapsed_time:.2f} sec")
+
+        # Token statistics
+        token_counts = [len(self.tokenizer.tokenize(text)) for text in ordered_outputs]
+        total_tokens = sum(token_counts)
+        tokens_per_second = total_tokens / elapsed_time if elapsed_time > 0 else 0
+
+        stats = {
+            "num_requests": len(batch_content),
+            "total_tokens": total_tokens,
+            "time_taken": round(elapsed_time, 2),
+            "tokens_per_second": round(tokens_per_second, 2),
+        }
+        self.logger.info(f"Batch Processing Stats: {stats}")
+
+        return ordered_outputs
+
     @torch.inference_mode()
     def vllm_generate(self, content, system_prompt=None, **kwargs) -> str:
         """Generate text using the VLLM model."""
@@ -156,11 +249,10 @@ class VLLMEngine(EngineLM):
         ]
 
         prompt_template = self._generate_prompt(messages, system_prompt)
-
         sampling_params = SamplingParams(
             temperature=kwargs.get("temperature", 0.0),
             top_p=kwargs.get("top_p", 1.0),
-            max_tokens=kwargs.get("max_tokens", 2048),
+            max_tokens=2048,  # kwargs.get("max_tokens", 2048),
             stop_token_ids=self.stop_token_ids,
         )
 
@@ -173,6 +265,10 @@ class VLLMEngine(EngineLM):
         # Inference timing
         start_time = time.time()
         outputs = self.llm.generate(inputs, sampling_params=sampling_params)
+        print('outputs len:', len(outputs))
+        for output in outputs:
+            print('output:', output.outputs[0].text)
+
         generated_text = (
             outputs[0].outputs[0].text if outputs else ""
         )  # Extract generated text
@@ -230,9 +326,7 @@ if __name__ == "__main__":
         },
     )
 
-    image_path = os.path.expanduser(
-        "~/datasets/corr-indexer/testdeck-raw-01/images/corr-indexing/test/152658541_2.png"
-    )
+    image_path = os.path.expanduser("~/tmp/demo/158986821_1.png")
     image = as_bytes(image_path)
     image = Image.open(image_path).convert("RGB")
 

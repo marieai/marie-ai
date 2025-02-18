@@ -1,7 +1,7 @@
 To extract, identify, and annotate rows in Explanation of Benefits (EOB) documents that signify the **CLAIM START**.
 
 ---
-# Instructions
+# Instructions:
 
 ## 1. Identify CLAIM ID Rows:
    - Focus on rows containing **Claim ID** with associated fields:
@@ -34,17 +34,16 @@ To extract, identify, and annotate rows in Explanation of Benefits (EOB) documen
        ```
 
 ## 5. Output Requirements:
-   - Maintain strict **document order**—do not reorder or omit necessary data.
-   - Ensure annotations include **Claim ID, Recd, Member ID, and Patient Account**.
-   - **Exclude duplicate, redundant, or incorrectly identified rows.**  
-   - **Only one annotation per claim.**  
+   - Annotate all valid Claim ID rows and continuations in order.
+   - Ensure annotations include **Claim ID**, **Recd**, **Member ID**, and **Patient Account**.
+   - Exclude unrelated rows or data.
 
+## 6. Format:
+   - Provide annotations in the format:
+     ```
+     [ROW NUMBER] | CLAIM START: [Full text of the row(s) containing Claim ID]
+     ...
+     ```
+---
 
-## 6. Provided OCR Data:
-(Insert extracted OCR data here for reference during inference.)
-
-
-### Final Considerations:
-- **Strictly follow the annotation format.**
-- **Extract only the most relevant row per claim.**
-- **Ensure clarity, accuracy, and consistency** in all annotations.
+# Document:
