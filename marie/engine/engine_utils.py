@@ -26,12 +26,15 @@ def get_image_type_from_bytes(data):
         raise ValueError("Image type not supported, only jpeg and png supported.")
 
 
-def as_bytes(image_path: str) -> bytes:
+def as_bytes(image_src: Union[Image.Image, str]) -> bytes:
     """
     Open an image from image_path, convert it to an RGB PNG, and return its bytes.
     """
     with io.BytesIO() as buffer:
-        Image.open(image_path).convert("RGB").save(buffer, format="PNG")
+        if isinstance(image_src, str):
+            Image.open(image_src).convert("RGB").save(buffer, format="PNG")
+        else:
+            image_src.convert("RGB").save(buffer, format="PNG")
         return buffer.getvalue()
 
 

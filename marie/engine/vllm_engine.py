@@ -294,7 +294,102 @@ class VLLMEngine(EngineLM):
         return generated_text
 
 
+def is_batched_request(
+    content: Union[
+        str,
+        List[str],
+        List[Union[Image.Image, bytes, str]],
+        List[List[Union[Image.Image, bytes, str]]],
+    ]
+) -> bool:
+    """
+    Determines whether the input content is a batched request.
+
+    :param content: The input content, which can be:
+                    - A single string (text prompt)
+                    - A list of strings (batched text requests)
+                    - A multimodal input ([image, text])
+                    - A list of multimodal inputs ([[image, text], [image, text]])
+    :return: True if the request is batched, False otherwise.
+    """
+
+    # **Case 1: Single Text Request (not batched)**
+    if isinstance(content, str):
+        return False  # ❌ Single text prompt
+
+    # **Case 2: Batched Text Requests (list of strings)**
+    if isinstance(content, list) and all(isinstance(item, str) for item in content):
+        return True  # ✅ ["Prompt 1", "Prompt 2"] (Batched text)
+
+    # **Case 3: Single Multimodal Request ([image, text])**
+    if isinstance(content, list):
+        contains_image = any(isinstance(item, (Image.Image, bytes)) for item in content)
+        contains_text = any(isinstance(item, str) for item in content)
+
+        if (
+            contains_image
+            and contains_text
+            and not any(isinstance(sublist, list) for sublist in content)
+        ):
+            return False  # ❌ Single multimodal request
+
+    # **Case 4: Batched Multimodal Requests ([[image, text], [image, text]])**
+    if isinstance(content, list) and all(
+        isinstance(sublist, list)
+        and any(isinstance(el, (Image.Image, bytes)) for el in sublist)
+        and any(isinstance(el, str) for el in sublist)
+        for sublist in content
+    ):
+        return True  # ✅ [[image, prompt], [image, prompt], [as_bytes(image), prompt]] (Batched)
+
+    return False  # Default: Single request
+
+
+def test_batching():
+    image = Image.new('RGB', (100, 100))  # Mock image for testing
+    image_bytes = as_bytes(image)  # Convert image to bytes
+
+    # **Text only**
+    content1: str = "Sample prompt"  # ❌ Single text
+    content2: List[str] = ["Sample prompt 1", "Sample prompt 2"]  # ✅ Batched text
+
+    # **Multimodal**
+    content3: List[Union[Image.Image, str]] = [
+        image,
+        "Sample prompt",
+    ]  # ❌ Single multimodal
+    content4: List[List[Union[Image.Image, str]]] = [
+        [image, "Sample prompt"],
+        [image, "Sample prompt"],
+        [image_bytes, "Sample prompt"],
+    ]  # ✅ Batched multimodal
+
+    # **Invalid Cases (Edge Testing)**
+    content5: List[List[str]] = [
+        ["Sample prompt"],
+        ["Another prompt"],
+    ]  # ❌ Incorrect format
+    content6: List[Union[List[Union[Image.Image, str]], str]] = [
+        [image, "Sample prompt"],
+        "Another prompt",
+    ]  # ❌ Mixed formats
+    content7: List[List[Union[Image.Image, List[str]]]] = [
+        [image, ["Nested prompt"]]
+    ]  # ❌ Incorrect nesting
+
+    # **Testing**
+    print(is_batched_request(content1))  # False
+    print(is_batched_request(content2))  # True
+    print(is_batched_request(content3))  # False
+    print(is_batched_request(content4))  # True
+    print(is_batched_request(content5))  # False
+    print(is_batched_request(content6))  # False
+    print(is_batched_request(content7))  # False
+
+
 if __name__ == "__main__":
+
+    os.exit(1)
     # install vllm from source or use the latest version from PyPI
     # pip install --upgrade vllm
     # pip install --upgrade mistral_common
@@ -362,6 +457,17 @@ Your response **must contain only** the extracted key-value pairs in the format 
 
 {document_context}
 """
+    # Text only
+    content1 = "Sample promp"
+    content2 = ["Sample promp 1", "Sample promp 2"]  # batched request
+
+    # multimodal
+    content3 = [image, prompt]
+    content4 = [
+        [image, prompt],
+        [image, prompt],
+        [as_bytes(image), prompt],
+    ]  # Batched request
 
     for i in range(1):
         print(f"Iteration {i + 1}")
