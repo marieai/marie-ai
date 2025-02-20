@@ -151,9 +151,10 @@ def smart_resize(
 
 
 def open_ai_like_formatting(
-    content: List[Union[str, bytes | Image.Image]], remote: bool = False
+    content: List[Union[str, bytes, Image.Image]], remote: bool = False
 ) -> List[dict]:
     """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API."""
+
     formatted_content = []
     for item in content:
         if isinstance(item, Image.Image):
@@ -199,7 +200,7 @@ def open_ai_like_formatting(
     return formatted_content
 
 
-def convert_openai_to_transformers_format(conversation):
+def convert_openai_to_transformers_format(conversation: List[dict]) -> List[dict]:
     """
     Converts OpenAI-style conversation format into a structure compatible with
     Transformers' `apply_chat_template()`.
@@ -254,3 +255,50 @@ def force_download(model_name):
     except Exception as e:
         print(f"Error loading the model '{model_name}': {e}")
         raise
+
+
+def is_batched_request(
+    content: Union[
+        str,
+        List[str],
+        List[Union[Image.Image, bytes, str]],
+        List[List[Union[Image.Image, bytes, str]]],
+    ]
+) -> bool:
+    """
+    Determines whether the input content is a batched request.
+
+    :param content: The input content, which can be:
+                    - A single string (text prompt)
+                    - A list of strings (batched text requests)
+                    - A multimodal input ([image, text])
+                    - A list of multimodal inputs ([[image, text], [image, text]])
+    :return: True if the request is batched, False otherwise.
+    """
+
+    if isinstance(content, str):
+        return False  # Single text prompt
+
+    if isinstance(content, list) and all(isinstance(item, str) for item in content):
+        return True  # ["Prompt 1", "Prompt 2"] (Batched text)
+
+    if isinstance(content, list):
+        contains_image = any(isinstance(item, (Image.Image, bytes)) for item in content)
+        contains_text = any(isinstance(item, str) for item in content)
+
+        if (
+            contains_image
+            and contains_text
+            and not any(isinstance(sublist, list) for sublist in content)
+        ):
+            return False  # Single multimodal request
+
+    if isinstance(content, list) and all(
+        isinstance(sublist, list)
+        and any(isinstance(el, (Image.Image, bytes)) for el in sublist)
+        and any(isinstance(el, str) for el in sublist)
+        for sublist in content
+    ):
+        return True  # [[image, prompt], [image, prompt], [as_bytes(image), prompt]] (Batched)
+
+    return False  # Default: Single request

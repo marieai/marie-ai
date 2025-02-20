@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Union
+
+FunctionReturnType = Union[str, List[str]]
 
 
 class Function(ABC):
@@ -14,5 +16,5 @@ class Function(ABC):
         return self.forward(*args, **kwargs)
 
     @abstractmethod
-    def forward(self, *args, **kwargs) -> str:
+    def forward(self, *args, **kwargs) -> FunctionReturnType:
         pass

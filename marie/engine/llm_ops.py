@@ -1,8 +1,9 @@
-from typing import Union
+from typing import Dict, List, Union
 
 from marie.engine import EngineLM, get_engine
 from marie.engine.config import validate_engine_or_get_default
-from marie.engine.function import Function
+from marie.engine.function import Function, FunctionReturnType
+from marie.engine.guided import GuidedMode
 from marie.logging_core.predefined import default_logger as logger
 
 
@@ -19,12 +20,18 @@ class LLMCall(Function):
         self.engine = validate_engine_or_get_default(engine)
         self.system_prompt = system_prompt
 
-    def forward(self, input_variable: str) -> str:
+    def forward(
+        self,
+        prompt: Union[str, List[str]],
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+    ) -> FunctionReturnType:
         """
         The LLM call. This function will call the LLM with the input and return the response.
 
-        :param input_variable: The input variable (aka prompt) to use for the LLM call.
-        :type input_variable: Variable
+        :param prompt: The input variable (aka prompt) to use for the LLM call.
+        :param guided_params: guided parameters to use for the LLM call
+        :param guided_mode: guided mode to use for the LLM call
         :return: response sampled from the LLM
 
         :example:
@@ -32,17 +39,28 @@ class LLMCall(Function):
         >>> llm_call = LLMCall(engine)
         >>> prompt = "What is the capital of France?"
         >>> response = llm_call(prompt)
+
+        :example:
+        >>> engine = get_engine("qwen_vl_3b")
+        >>> llm_call = LLMCall(engine)
+        >>> prompt = ["What is the capital of France?", "What is the capital of Germany?"]
+        >>> response = llm_call(prompt)
         """
         # TODO: Should we allow default roles? It will make things less performant.
         system_prompt_value = self.system_prompt
 
         # Make the LLM Call
-        response_text = self.engine(input_variable, system_prompt=system_prompt_value)
+        response_text = self.engine(
+            prompt,
+            system_prompt=system_prompt_value,
+            guided_mode=guided_mode,
+            guided_params=guided_params,
+        )
 
         logger.info(
             f"LLMCall function forward",
             extra={
-                "text": f"System:{system_prompt_value}\nQuery: {input_variable}\nResponse: {response_text}"
+                "text": f"System:{system_prompt_value}\nQuery: {prompt}\nResponse: {response_text}"
             },
         )
 
@@ -81,10 +99,10 @@ if __name__ == "__main__":
 
     {document_context}
     """
+    promptXX = "What is the capital of France?"
 
     engine = get_engine("qwen2_5_3b")
     llm_call = LLMCall(engine)
-    promptXX = "What is the capital of France?"
     response = llm_call(prompt)
     print(response)
 

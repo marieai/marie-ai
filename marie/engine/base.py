@@ -2,11 +2,13 @@ import hashlib
 import os
 from abc import ABC, abstractmethod
 from functools import wraps
-from typing import List, Union
+from typing import Dict, List, Union
 
 import diskcache as dc
 import platformdirs
 from PIL import Image
+
+from marie.engine.guided import GuidedMode
 
 
 def cached(func):
@@ -31,15 +33,17 @@ def cached(func):
 
 
 class EngineLM(ABC):
-    system_prompt: str = "You are a helpful, creative, and smart assistant."
-    model_string: str
-    is_multimodal: bool
-    cache: Union[dc.Cache, bool]
+    """
+    Abstract base class for Language Model (LM) engines.
+    Supports both text-based and multimodal inference.
+    """
+
+    DEFAULT_SYSTEM_PROMPT = "You are a helpful, creative, and intelligent assistant."
 
     def __init__(
         self,
         model_string: str,
-        system_prompt: str = "You are a helpful, creative, and smart assistant.",
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         is_multimodal: bool = False,
         cache: Union[dc.Cache, bool] = False,
     ):
@@ -47,13 +51,9 @@ class EngineLM(ABC):
         Base class for the engines.
 
         :param model_string: The model string to use.
-        :type model_string: str
         :param system_prompt: The system prompt to use. Defaults to "You are a helpful, creative, and smart assistant."
-        :type system_prompt: str
         :param is_multimodal: Whether the model is multimodal. Defaults to False.
-        :type is_multimodal: bool
-        :param cache: The cache to use. Defaults to True. Note that cache can also be a diskcache.Cache object.
-        :type cache: Union[diskcache.Cache, bool]
+        :param cache: The cache to use. Defaults to False. Note that cache can also be a diskcache.Cache object.
         """
 
         root = platformdirs.user_cache_dir("marie")
@@ -77,45 +77,103 @@ class EngineLM(ABC):
 
     @abstractmethod
     def _generate_from_multiple_input(
-        self, prompt, system_prompt=None, **kwargs
-    ) -> str:
+        self,
+        prompt: Union[
+            List[Union[Image.Image, bytes, str]],  # Single multimodal input
+            List[List[Union[Image.Image, bytes, str]]],  # Batch multimodal inputs
+        ],
+        system_prompt: str = None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+        **kwargs,
+    ) -> Union[str, List[str]]:
         pass
 
     @abstractmethod
-    def _generate_from_single_prompt(self, prompt, system_prompt=None, **kwargs) -> str:
+    def _generate_from_single_prompt(
+        self,
+        prompt: Union[str, List[str]],
+        system_prompt: str = None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+        **kwargs,
+    ) -> Union[str, List[str]]:
         pass
 
     def generate(
         self,
-        content: Union[str | List[Union[str, bytes | Image.Image]]],
+        content: Union[
+            str,  # Single text prompt
+            List[str],  # Batch text prompts
+            List[Union[Image.Image, bytes, str]],  # Single multimodal input
+            List[List[Union[Image.Image, bytes, str]]],  # Batch multimodal inputs
+        ],
         system_prompt: Union[str | List[Union[str, bytes]]] = None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
         **kwargs,
     ):
         """
+        Handles both single and batch inference for text and multimodal inputs.
 
-        :param content:
-        :param system_prompt:
-        :param kwargs:
-        :return:
+        :param content: The input prompt(s), which can be text, images, or multimodal inputs.
+        :param system_prompt: Optional system-level instructions.
+        :param guided_mode: Optional guided mode.
+        :param guided_params: Optional guided parameters for the guided mode.
+        :param kwargs: Additional parameters for generation.
+        :return: The generated response(s).
         """
+
         sys_prompt_arg = system_prompt if system_prompt else self.system_prompt
 
-        if isinstance(content, str):
+        # Single or Batch Text Input  (e.g., "prompt" or ["prompt1", "prompt2"])
+        if isinstance(content, str) or (
+            isinstance(content, list) and all(isinstance(item, str) for item in content)
+        ):
             return self._generate_from_single_prompt(
-                content=content, system_prompt=sys_prompt_arg, **kwargs
+                content=content,
+                system_prompt=sys_prompt_arg,
+                guided_mode=guided_mode,
+                guided_params=guided_params,
+                **kwargs,
             )
 
-        elif isinstance(content, list):
-            has_multimodal_input = any(isinstance(item, bytes) for item in content)
-            if has_multimodal_input and not self.is_multimodal:
-                raise NotImplementedError(
-                    "Multimodal generation flag is not set, but multimodal input is provided. "
-                    "Is this model multimodal?"
-                )
+        # Multimodal Inputs
+        is_multimodal_single = (
+            isinstance(content, list)
+            and any(
+                isinstance(item, (Image.Image, bytes)) for item in content
+            )  # At least one image
+            and any(
+                isinstance(item, str) for item in content
+            )  # At least one text input
+            and not any(isinstance(sublist, list) for sublist in content)  # Not a batch
+        )
 
-            return self._generate_from_multiple_input(
-                content=content, system_prompt=sys_prompt_arg, **kwargs
+        is_multimodal_batch = isinstance(content, list) and all(
+            isinstance(sublist, list)
+            and any(
+                isinstance(el, (Image.Image, bytes)) for el in sublist
+            )  # Each sublist has at least one image
+            and any(
+                isinstance(el, str) for el in sublist
+            )  # Each sublist has at least one text input
+            for sublist in content
+        )
+
+        if (is_multimodal_single or is_multimodal_batch) and not self.is_multimodal:
+            raise NotImplementedError(
+                "Multimodal generation flag is not set, but multimodal input is provided. "
+                "Is this model multimodal?"
             )
+
+        return self._generate_from_multiple_input(
+            content=content,
+            system_prompt=sys_prompt_arg,
+            guided_mode=guided_mode,
+            guided_params=guided_params,
+            **kwargs,
+        )
 
     def __call__(self, *args, **kwargs):
         pass

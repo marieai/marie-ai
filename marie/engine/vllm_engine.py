@@ -14,9 +14,11 @@ from marie.engine.engine_utils import (
     as_bytes,
     convert_openai_to_transformers_format,
     extract_text_info,
+    is_batched_request,
     open_ai_like_formatting,
     process_vision_info,
 )
+from marie.engine.guided import GuidedMode
 from marie.engine.vllm_config import VLLM_MODEL_MAP as MODEL_MAP
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
@@ -24,6 +26,7 @@ from marie.models.utils import initialize_device_settings
 # Ensures vLLM and flash-attention are installed
 try:
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 except ImportError as e:
     raise ImportError(
         "vLLM is required to run this module. Install it using:\n"
@@ -86,32 +89,48 @@ class VLLMEngine(EngineLM):
             model_name
         ]  # Returns: "Qwen/Qwen2.5-VL-3B-Instruct"
         engine_config = MODEL_MAP[model_name]  # Returns: config_qwen2_5_vl
-
-        print(engine_config)
-        self.llm, self.prompt, self.stop_token_ids = engine_config(
-            model_name, "image" if is_multimodal else "text"
-        )
+        self.prompt = "HELLO WORLD"
+        if True:
+            self.llm, self.prompt, self.stop_token_ids = engine_config(
+                model_name, "image" if is_multimodal else "text"
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    @cached
-    @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
+    # @cached
+    # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
     def _generate_from_single_prompt(
-        self, content: str, system_prompt: str = None, **kwargs
+        self,
+        content: Union[str, List[str]],
+        system_prompt: str = None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+        **kwargs,
     ):
         return self.vllm_generate(content, system_prompt, **kwargs)
 
-    @cached
-    @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
+    # @cached
+    # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
     def _generate_from_multiple_input(
         self,
-        content: List[Union[str, bytes, Image.Image]],
+        content: Union[
+            List[List[Union[str, bytes, Image.Image]]],
+            List[Union[str, bytes, Image.Image]],
+        ],
         system_prompt=None,
         **kwargs,
     ):
-        formatted_content = open_ai_like_formatting(content)
-        return self.vllm_generate(formatted_content, system_prompt, **kwargs)
+        return self.vllm_generate(content, system_prompt, **kwargs)
 
-    def __call__(self, content, **kwargs):
+    def __call__(
+        self,
+        content: Union[
+            str,
+            List[str],
+            List[Union[Image.Image, bytes, str]],
+            List[List[Union[Image.Image, bytes, str]]],
+        ],
+        **kwargs,
+    ):
         return self.generate(content, **kwargs)
 
     def _generate_prompt(self, messages, system_prompt: str):
@@ -142,84 +161,113 @@ class VLLMEngine(EngineLM):
 
     def batch_generate(
         self,
-        batch_content: List[Union[str, List[Union[str, bytes, Image.Image]]]],
+        batch_content: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
         system_prompt=None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
         **kwargs,
     ) -> List[str]:
-        """Batch inference function for multiple inputs with improved structure and error handling."""
+        """
+        Performs batch inference for multiple inputs, supporting both text-only and multimodal content.
+
+        This function processes input data, constructs formatted prompts, and executes batched inference
+        with optimized error handling and logging.
+
+        :param batch_content: A list of text prompts or multimodal inputs (image, text pairs).
+        :param system_prompt: Optional system-level instructions for the model.
+        :param guided_mode: Optional guided mode for inference.
+        :param guided_params: Optional guided parameters for the guided mode.
+        :param kwargs: Additional inference parameters.
+        :return: A list of generated outputs corresponding to each input in batch_content.
+        """
         system_prompt = system_prompt or self.system_prompt
+        # params to add
+        # json: Optional[Union[str, Dict]] = None
+        # regex: Optional[str] = None
+        # choice: Optional[List[str]] = None
+        # grammar: Optional[str] = None
+        # json_object: Optional[bool] = None
+        # """These are other options that can be set"""
+        # backend: Optional[str] = None
+        # whitespace_pattern: Optional[str] = None
 
-        # Ensure batch_content is always a list of lists for consistency
-        if isinstance(batch_content[0], (str, bytes)):
-            batch_content = [[content] for content in batch_content]
+        # Format content appropriately based on modality
+        if self.is_multimodal:
+            batch_content = [
+                open_ai_like_formatting(content) for content in batch_content
+            ]
 
-        # Convert each input into OpenAI-like format
-        formatted_contents = [
-            open_ai_like_formatting(content) for content in batch_content
-        ]
-
-        # Prepare multiple messages for batch inference
+        # Construct message structures for inference
         messages_list = [
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ]
-            for content in formatted_contents
+            for content in batch_content
         ]
 
-        # Generate prompts for all batch inputs
         prompts = [
             self._generate_prompt(messages, system_prompt) for messages in messages_list
         ]
 
+        # https://docs.vllm.ai/en/latest/features/structured_outputs.html
+        # https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#extra-parameters-for-chat-api
+        # https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
+
+        guided_decoding = self._get_guided_decoding_params(guided_mode, guided_params)
+        print('guided_decoding', guided_decoding)
+        print('guided_decoding.backend', guided_decoding.backend)
+
+        # guided_decoding.backend = 'xgrammar' # 'outlines, 'lm-format-enforcer', 'xgrammar'
+
         sampling_params = SamplingParams(
+            guided_decoding=guided_decoding,
             temperature=kwargs.get("temperature", 0.0),
             top_p=kwargs.get("top_p", 1.0),
             max_tokens=kwargs.get("max_tokens", 512),
-            stop_token_ids=self.stop_token_ids,
+            stop_token_ids=None,  # No specific stop tokens enforced
         )
 
-        # Ensure correct batch structure for VLLM
         batch_inputs = [
             {"prompt": prompt, "batch_id": idx} for idx, prompt in enumerate(prompts)
         ]
 
-        # Process multimodal inputs if necessary
         if self.is_multimodal:
             for idx, messages in enumerate(messages_list):
-                image_data = process_vision_info(messages)
+                image_data, _ = process_vision_info(messages)
                 if image_data:
-                    batch_inputs[idx]["multi_modal_data"] = {"image": image_data[0]}
+                    self.logger.debug(
+                        f"📷 Processed images for batch index {idx}: {image_data}"
+                    )
+                    batch_inputs[idx]["multi_modal_data"] = {"image": image_data}
 
-        self.logger.debug(f"🚀 Batch Input Data: {batch_inputs}")
+        self.logger.info(
+            f"🚀 Initiating batch inference with {len(batch_content)} requests."
+        )
 
-        # Start batch inference timing
         start_time = time.time()
         try:
             batch_outputs = self.llm.generate(
                 batch_inputs, sampling_params=sampling_params
             )
         except Exception as e:
-            self.logger.error(f"❌ Error during batch inference: {e}")
+            self.logger.error(f"❌ Batch inference failed: {e}")
+            raise e
             return ["ERROR: Inference failed"] * len(batch_content)
 
-        # Ensure correct parsing of batch output
         generated_texts = {
             output.request_id: output.outputs[0].text if output.outputs else ""
             for output in batch_outputs
         }
 
-        # Sort outputs by batch_id to maintain original order
         ordered_outputs = [
-            generated_texts.get(idx, "") for idx in range(len(batch_content))
+            generated_texts.get(str(idx), "") for idx in range(len(batch_content))
         ]
 
         elapsed_time = time.time() - start_time
-        self.logger.info(f"Batch Generation Time: {elapsed_time:.2f} sec")
-
-        # Token statistics
-        token_counts = [len(self.tokenizer.tokenize(text)) for text in ordered_outputs]
-        total_tokens = sum(token_counts)
+        total_tokens = sum(
+            len(self.tokenizer.tokenize(text)) for text in ordered_outputs
+        )
         tokens_per_second = total_tokens / elapsed_time if elapsed_time > 0 else 0
 
         stats = {
@@ -228,168 +276,61 @@ class VLLMEngine(EngineLM):
             "time_taken": round(elapsed_time, 2),
             "tokens_per_second": round(tokens_per_second, 2),
         }
-        self.logger.info(f"Batch Processing Stats: {stats}")
+
+        self.logger.info(f"✅ Batch inference completed in {elapsed_time:.2f} sec")
+        self.logger.info(
+            f"📊 Batch Stats: Requests={len(batch_content)}, Tokens={total_tokens}, TPS={tokens_per_second:.2f}"
+        )
 
         return ordered_outputs
 
-    @torch.inference_mode()
-    def vllm_generate(self, content, system_prompt=None, **kwargs) -> str:
+    def vllm_generate(
+        self,
+        content,
+        system_prompt=None,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+        **kwargs,
+    ) -> Union[str, List[str]]:
         """Generate text using the VLLM model."""
-        if not self.is_multimodal and isinstance(content, list):
-            content = [
-                node
-                for node in content
-                if isinstance(node, dict) and node.get("type") == "text"
-            ]
-        system_prompt = system_prompt or self.system_prompt
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ]
-
-        prompt_template = self._generate_prompt(messages, system_prompt)
-        sampling_params = SamplingParams(
-            temperature=kwargs.get("temperature", 0.0),
-            top_p=kwargs.get("top_p", 1.0),
-            max_tokens=2048,  # kwargs.get("max_tokens", 2048),
-            stop_token_ids=self.stop_token_ids,
+        batched = is_batched_request(content)
+        if not batched:
+            content = [content]
+        results = self.batch_generate(
+            content, system_prompt, guided_mode, guided_params, **kwargs
         )
+        if not batched:
+            return results[0]
+        return results
 
-        inputs = {"prompt": prompt_template}
-        if self.is_multimodal:
-            inputs["multi_modal_data"] = {"image": process_vision_info(messages)[0]}
+    def _get_guided_decoding_params(
+        self,
+        guided_mode: GuidedMode = None,
+        guided_params: Union[List[str], str, Dict] = None,
+    ) -> GuidedDecodingParams:
+        """Constructs GuidedDecodingParams based on guided_mode."""
+        # ref : vllm/model_executor/guided_decoding/__init__.py
 
-        self.logger.debug(f"🚀 Input Data: {inputs}")
+        if not guided_mode or not guided_params:
+            return None
 
-        # Inference timing
-        start_time = time.time()
-        outputs = self.llm.generate(inputs, sampling_params=sampling_params)
-        print('outputs len:', len(outputs))
-        for output in outputs:
-            print('output:', output.outputs[0].text)
+        if guided_mode == GuidedMode.CHOICE:
+            return GuidedDecodingParams(choice=guided_params)
 
-        generated_text = (
-            outputs[0].outputs[0].text if outputs else ""
-        )  # Extract generated text
+        elif guided_mode == GuidedMode.REGEX:
+            return GuidedDecodingParams(regex=guided_params)
 
-        elapsed_time = time.time() - start_time
-        self.logger.info(f"Generation Time: {elapsed_time:.2f} sec")
+        elif guided_mode == GuidedMode.JSON:
+            return GuidedDecodingParams(json=guided_params)
 
-        # Tokenize the generated text to determine token count
-        if generated_text:
-            num_tokens_generated = len(self.tokenizer.tokenize(generated_text))
+        elif guided_mode == GuidedMode.GRAMMAR:
+            return GuidedDecodingParams(grammar=guided_params)
+
         else:
-            num_tokens_generated = 0
-        tokens_per_second = (
-            num_tokens_generated / elapsed_time if elapsed_time > 0 else 0
-        )
-        stats = {
-            "num_tokens": num_tokens_generated,
-            "time_taken": round(elapsed_time, 2),
-            "tokens_per_second": round(tokens_per_second, 2),
-        }
-        self.logger.info(f"Processing stats : {stats}")
-
-        return generated_text
-
-
-def is_batched_request(
-    content: Union[
-        str,
-        List[str],
-        List[Union[Image.Image, bytes, str]],
-        List[List[Union[Image.Image, bytes, str]]],
-    ]
-) -> bool:
-    """
-    Determines whether the input content is a batched request.
-
-    :param content: The input content, which can be:
-                    - A single string (text prompt)
-                    - A list of strings (batched text requests)
-                    - A multimodal input ([image, text])
-                    - A list of multimodal inputs ([[image, text], [image, text]])
-    :return: True if the request is batched, False otherwise.
-    """
-
-    # **Case 1: Single Text Request (not batched)**
-    if isinstance(content, str):
-        return False  # ❌ Single text prompt
-
-    # **Case 2: Batched Text Requests (list of strings)**
-    if isinstance(content, list) and all(isinstance(item, str) for item in content):
-        return True  # ✅ ["Prompt 1", "Prompt 2"] (Batched text)
-
-    # **Case 3: Single Multimodal Request ([image, text])**
-    if isinstance(content, list):
-        contains_image = any(isinstance(item, (Image.Image, bytes)) for item in content)
-        contains_text = any(isinstance(item, str) for item in content)
-
-        if (
-            contains_image
-            and contains_text
-            and not any(isinstance(sublist, list) for sublist in content)
-        ):
-            return False  # ❌ Single multimodal request
-
-    # **Case 4: Batched Multimodal Requests ([[image, text], [image, text]])**
-    if isinstance(content, list) and all(
-        isinstance(sublist, list)
-        and any(isinstance(el, (Image.Image, bytes)) for el in sublist)
-        and any(isinstance(el, str) for el in sublist)
-        for sublist in content
-    ):
-        return True  # ✅ [[image, prompt], [image, prompt], [as_bytes(image), prompt]] (Batched)
-
-    return False  # Default: Single request
-
-
-def test_batching():
-    image = Image.new('RGB', (100, 100))  # Mock image for testing
-    image_bytes = as_bytes(image)  # Convert image to bytes
-
-    # **Text only**
-    content1: str = "Sample prompt"  # ❌ Single text
-    content2: List[str] = ["Sample prompt 1", "Sample prompt 2"]  # ✅ Batched text
-
-    # **Multimodal**
-    content3: List[Union[Image.Image, str]] = [
-        image,
-        "Sample prompt",
-    ]  # ❌ Single multimodal
-    content4: List[List[Union[Image.Image, str]]] = [
-        [image, "Sample prompt"],
-        [image, "Sample prompt"],
-        [image_bytes, "Sample prompt"],
-    ]  # ✅ Batched multimodal
-
-    # **Invalid Cases (Edge Testing)**
-    content5: List[List[str]] = [
-        ["Sample prompt"],
-        ["Another prompt"],
-    ]  # ❌ Incorrect format
-    content6: List[Union[List[Union[Image.Image, str]], str]] = [
-        [image, "Sample prompt"],
-        "Another prompt",
-    ]  # ❌ Mixed formats
-    content7: List[List[Union[Image.Image, List[str]]]] = [
-        [image, ["Nested prompt"]]
-    ]  # ❌ Incorrect nesting
-
-    # **Testing**
-    print(is_batched_request(content1))  # False
-    print(is_batched_request(content2))  # True
-    print(is_batched_request(content3))  # False
-    print(is_batched_request(content4))  # True
-    print(is_batched_request(content5))  # False
-    print(is_batched_request(content6))  # False
-    print(is_batched_request(content7))  # False
+            raise ValueError(f"Unsupported guided_mode: {guided_mode}")
 
 
 if __name__ == "__main__":
-
-    os.exit(1)
     # install vllm from source or use the latest version from PyPI
     # pip install --upgrade vllm
     # pip install --upgrade mistral_common
@@ -458,12 +399,14 @@ Your response **must contain only** the extracted key-value pairs in the format 
 {document_context}
 """
     # Text only
-    content1 = "Sample promp"
-    content2 = ["Sample promp 1", "Sample promp 2"]  # batched request
+    content1 = prompt
+    content2 = [content1, content1]  # batched request
 
     # multimodal
     content3 = [image, prompt]
     content4 = [
+        [image, prompt],
+        [image, prompt],
         [image, prompt],
         [image, prompt],
         [as_bytes(image), prompt],
@@ -472,7 +415,7 @@ Your response **must contain only** the extracted key-value pairs in the format 
     for i in range(1):
         print(f"Iteration {i + 1}")
         result = engine(
-            [image, prompt],
+            content4,
             system_prompt="You are a helpful assistant for processing EOB documents.",
         )
         print(result)
