@@ -31,6 +31,10 @@ def load_format_and_quantization(
     load_format = "auto"
     dtype = "bfloat16"
 
+    # https://docs.vllm.ai/en/latest/features/quantization/auto_awq.html
+    # quantization_method = 'awq'
+    # dtype = "auto"
+
     if supports_quantization:
         if quantization_method == "bitsandbytes":
             try:
@@ -46,6 +50,9 @@ def load_format_and_quantization(
         elif quantization_method == "fp8":
             quantization = "fp8"
             dtype = "fp8"
+        elif quantization_method == "awq":
+            quantization = "awq"
+            dtype = "auto"
 
     return load_format, quantization, dtype
 
@@ -64,17 +71,23 @@ def create_llm_instance(
     )
     # Remove 'dtype' from kwargs if it exists, to avoid duplicate keyword argument errors
     _dtype = kwargs.pop("dtype", dtype)
+
+    # https://github.com/vllm-project/vllm/issues/7592
     return LLM(
         model=model_name,
         max_model_len=max_model_len,
-        tensor_parallel_size=1,
+        tensor_parallel_size=kwargs.pop("tensor_parallel_size", 1),
         disable_mm_preprocessor_cache=True,
         quantization=quantization if supports_quantization else None,
         load_format=load_format,
         enforce_eager=False,
         dtype=_dtype,
-        gpu_memory_utilization=0.80,  # 80% of GPU memory utilization, prevent OOM during CUDA graph compilation
+        gpu_memory_utilization=0.80,  # 90% of GPU memory utilization, prevent OOM during CUDA graph compilation
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
+        enable_prefix_caching=True,
+        # enable_chunked_prefill=False,
+        # max_num_batched_tokens=2048 * 8,
+        # max_num_seqs=64,
         **kwargs
     )
 
@@ -197,9 +210,13 @@ def config_qwen2_5(model_name: str, modality: str = "text"):
     return llm, None, None
 
 
+# ---- Model Mapping ----
+# https://github.com/vllm-project/vllm/issues/13344
+# https://docs.vllm.ai/en/latest/models/supported_models.html
 VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["qwen2_5_vl_3b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b"]: config_qwen2_5_vl,
+    MODEL_NAME_MAP["qwen2_5_vl_7b_awq"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_7b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_3b"]: config_qwen2_5,
     MODEL_NAME_MAP["meta_llama_11b"]: config_mllama,

@@ -2,13 +2,12 @@ import hashlib
 import os
 from abc import ABC, abstractmethod
 from functools import wraps
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import diskcache as dc
 import platformdirs
 from PIL import Image
-
-from marie.engine.guided import GuidedMode
+from pydantic import BaseModel
 
 
 def cached(func):
@@ -83,8 +82,13 @@ class EngineLM(ABC):
             List[List[Union[Image.Image, bytes, str]]],  # Batch multimodal inputs
         ],
         system_prompt: str = None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ) -> Union[str, List[str]]:
         pass
@@ -94,8 +98,13 @@ class EngineLM(ABC):
         self,
         prompt: Union[str, List[str]],
         system_prompt: str = None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ) -> Union[str, List[str]]:
         pass
@@ -109,8 +118,13 @@ class EngineLM(ABC):
             List[List[Union[Image.Image, bytes, str]]],  # Batch multimodal inputs
         ],
         system_prompt: Union[str | List[Union[str, bytes]]] = None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -118,8 +132,13 @@ class EngineLM(ABC):
 
         :param content: The input prompt(s), which can be text, images, or multimodal inputs.
         :param system_prompt: Optional system-level instructions.
-        :param guided_mode: Optional guided mode.
-        :param guided_params: Optional guided parameters for the guided mode.
+        :param guided_json: Optional JSON schema for guided generation.
+        :param guided_regex: Optional regex pattern for guided generation.
+        :param guided_choice: Optional list of choices for guided generation.
+        :param guided_grammar: Optional CFG for guided generation.
+        :param guided_json_object: Optional flag for JSON object generation.
+        :param guided_backend: Optional backend for guided generation.
+        :param guided_whitespace_pattern: Optional whitespace pattern for guided generation.
         :param kwargs: Additional parameters for generation.
         :return: The generated response(s).
         """
@@ -133,8 +152,13 @@ class EngineLM(ABC):
             return self._generate_from_single_prompt(
                 content=content,
                 system_prompt=sys_prompt_arg,
-                guided_mode=guided_mode,
-                guided_params=guided_params,
+                guided_json=guided_json,
+                guided_regex=guided_regex,
+                guided_choice=guided_choice,
+                guided_grammar=guided_grammar,
+                guided_json_object=guided_json_object,
+                guided_backend=guided_backend,
+                guided_whitespace_pattern=guided_whitespace_pattern,
                 **kwargs,
             )
 
@@ -170,8 +194,13 @@ class EngineLM(ABC):
         return self._generate_from_multiple_input(
             content=content,
             system_prompt=sys_prompt_arg,
-            guided_mode=guided_mode,
-            guided_params=guided_params,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
             **kwargs,
         )
 

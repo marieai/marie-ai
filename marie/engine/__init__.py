@@ -3,6 +3,7 @@ from marie.engine.base import EngineLM
 MODEL_NAME_MAP = {
     "qwen2_5_vl_3b": "Qwen/Qwen2.5-VL-3B-Instruct",
     "qwen2_5_vl_7b": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "qwen2_5_vl_7b_awq": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
     "qwen2_5_7b": "Qwen/Qwen2.5-7B-Instruct",
     "qwen2_5_3b": "Qwen/Qwen2.5-3B-Instruct",
     "meta_llama_11b": "meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -21,6 +22,7 @@ REVERSE_MODEL_NAME_MAP = {v: k for k, v in MODEL_NAME_MAP.items()}
 __MULTIMODAL_MODELS__ = [
     MODEL_NAME_MAP["qwen2_5_vl_3b"],
     MODEL_NAME_MAP["qwen2_5_vl_7b"],
+    MODEL_NAME_MAP["qwen2_5_vl_7b_awq"],
     MODEL_NAME_MAP["meta_llama_11b"],
     MODEL_NAME_MAP["phi3_5_vl"],
     MODEL_NAME_MAP["pixtral_12b"],

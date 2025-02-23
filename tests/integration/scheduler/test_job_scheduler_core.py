@@ -46,7 +46,7 @@ async def check_job_scheduler_succeeded(
     job_scheduler: JobScheduler, job_id: str
 ) -> bool:
     data = await job_scheduler.get_job(job_id)
-    status = data.state
+    status = data._worker_state
     if status == WorkState.FAILED:
         raise RuntimeError(f"Job failed! {data}")
     assert status in {WorkState.CREATED, WorkState.COMPLETED, WorkState.ACTIVE}
@@ -172,10 +172,10 @@ async def test_list_work_items(job_scheduler: JobScheduler):
 
     jobs_info = await job_scheduler.list_jobs()
     assert "1" in jobs_info
-    assert jobs_info["1"].state == WorkState.COMPLETED
+    assert jobs_info["1"]._worker_state == WorkState.COMPLETED
 
     assert "2" in jobs_info
-    assert jobs_info["2"].state == WorkState.COMPLETED
+    assert jobs_info["2"]._worker_state == WorkState.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -269,7 +269,7 @@ async def test_job_scheduler_submission(
 
     assert work_info.id == job_id
     assert job_info.status == JobStatus.RUNNING
-    assert work_info.state == WorkState.CREATED
+    assert work_info._worker_state == WorkState.CREATED
 
 
 @pytest.mark.asyncio
@@ -296,4 +296,4 @@ async def test_job_scheduler_completion(
 
     assert work_info.id == job_id
     assert job_info.status == JobStatus.RUNNING
-    assert work_info.state == WorkState.CREATED
+    assert work_info._worker_state == WorkState.CREATED

@@ -1,10 +1,11 @@
 import os.path
 import time
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import diskcache as dc
 import torch
 from PIL import Image
+from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 from transformers import AutoTokenizer
 
@@ -18,7 +19,6 @@ from marie.engine.engine_utils import (
     open_ai_like_formatting,
     process_vision_info,
 )
-from marie.engine.guided import GuidedMode
 from marie.engine.vllm_config import VLLM_MODEL_MAP as MODEL_MAP
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
@@ -89,11 +89,9 @@ class VLLMEngine(EngineLM):
             model_name
         ]  # Returns: "Qwen/Qwen2.5-VL-3B-Instruct"
         engine_config = MODEL_MAP[model_name]  # Returns: config_qwen2_5_vl
-        self.prompt = "HELLO WORLD"
-        if True:
-            self.llm, self.prompt, self.stop_token_ids = engine_config(
-                model_name, "image" if is_multimodal else "text"
-            )
+        self.llm, self.prompt, self.stop_token_ids = engine_config(
+            model_name, "image" if is_multimodal else "text"
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # @cached
@@ -102,11 +100,27 @@ class VLLMEngine(EngineLM):
         self,
         content: Union[str, List[str]],
         system_prompt: str = None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
-        return self.vllm_generate(content, system_prompt, **kwargs)
+        return self.vllm_generate(
+            content,
+            system_prompt,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
+            **kwargs,
+        )
 
     # @cached
     # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
@@ -117,9 +131,27 @@ class VLLMEngine(EngineLM):
             List[Union[str, bytes, Image.Image]],
         ],
         system_prompt=None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
-        return self.vllm_generate(content, system_prompt, **kwargs)
+        return self.vllm_generate(
+            content,
+            system_prompt,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
+            **kwargs,
+        )
 
     def __call__(
         self,
@@ -129,9 +161,26 @@ class VLLMEngine(EngineLM):
             List[Union[Image.Image, bytes, str]],
             List[List[Union[Image.Image, bytes, str]]],
         ],
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
-        return self.generate(content, **kwargs)
+        return self.generate(
+            content,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
+            **kwargs,
+        )
 
     def _generate_prompt(self, messages, system_prompt: str):
         """
@@ -163,8 +212,13 @@ class VLLMEngine(EngineLM):
         self,
         batch_content: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
         system_prompt=None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ) -> List[str]:
         """
@@ -175,22 +229,10 @@ class VLLMEngine(EngineLM):
 
         :param batch_content: A list of text prompts or multimodal inputs (image, text pairs).
         :param system_prompt: Optional system-level instructions for the model.
-        :param guided_mode: Optional guided mode for inference.
-        :param guided_params: Optional guided parameters for the guided mode.
         :param kwargs: Additional inference parameters.
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
         system_prompt = system_prompt or self.system_prompt
-        # params to add
-        # json: Optional[Union[str, Dict]] = None
-        # regex: Optional[str] = None
-        # choice: Optional[List[str]] = None
-        # grammar: Optional[str] = None
-        # json_object: Optional[bool] = None
-        # """These are other options that can be set"""
-        # backend: Optional[str] = None
-        # whitespace_pattern: Optional[str] = None
-
         # Format content appropriately based on modality
         if self.is_multimodal:
             batch_content = [
@@ -214,17 +256,23 @@ class VLLMEngine(EngineLM):
         # https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#extra-parameters-for-chat-api
         # https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
 
-        guided_decoding = self._get_guided_decoding_params(guided_mode, guided_params)
+        guided_decoding = self._get_guided_decoding_params(
+            guided_json,
+            guided_regex,
+            guided_choice,
+            guided_grammar,
+            guided_json_object,
+            guided_backend,
+            guided_whitespace_pattern,
+        )
         print('guided_decoding', guided_decoding)
-        print('guided_decoding.backend', guided_decoding.backend)
-
         # guided_decoding.backend = 'xgrammar' # 'outlines, 'lm-format-enforcer', 'xgrammar'
-
+        # https://github.com/vllm-project/vllm/issues/7592
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
             temperature=kwargs.get("temperature", 0.0),
             top_p=kwargs.get("top_p", 1.0),
-            max_tokens=kwargs.get("max_tokens", 512),
+            max_tokens=kwargs.get("max_tokens", 2048),
             stop_token_ids=None,  # No specific stop tokens enforced
         )
 
@@ -244,7 +292,6 @@ class VLLMEngine(EngineLM):
         self.logger.info(
             f"🚀 Initiating batch inference with {len(batch_content)} requests."
         )
-
         start_time = time.time()
         try:
             batch_outputs = self.llm.generate(
@@ -255,13 +302,17 @@ class VLLMEngine(EngineLM):
             raise e
             return ["ERROR: Inference failed"] * len(batch_content)
 
-        generated_texts = {
-            output.request_id: output.outputs[0].text if output.outputs else ""
-            for output in batch_outputs
-        }
+        # generated_texts = {
+        #     output.request_id: output.outputs[0].text if output.outputs else ""
+        #     for output in batch_outputs
+        # }
+        #
+        # ordered_outputs = [
+        #     generated_texts.get(str(idx), "") for idx in range(len(batch_content))
+        # ]
 
         ordered_outputs = [
-            generated_texts.get(str(idx), "") for idx in range(len(batch_content))
+            output.outputs[0].text if output.outputs else "" for output in batch_outputs
         ]
 
         elapsed_time = time.time() - start_time
@@ -288,8 +339,13 @@ class VLLMEngine(EngineLM):
         self,
         content,
         system_prompt=None,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ) -> Union[str, List[str]]:
         """Generate text using the VLLM model."""
@@ -297,7 +353,16 @@ class VLLMEngine(EngineLM):
         if not batched:
             content = [content]
         results = self.batch_generate(
-            content, system_prompt, guided_mode, guided_params, **kwargs
+            content,
+            system_prompt,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
+            **kwargs,
         )
         if not batched:
             return results[0]
@@ -305,117 +370,22 @@ class VLLMEngine(EngineLM):
 
     def _get_guided_decoding_params(
         self,
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
     ) -> GuidedDecodingParams:
         """Constructs GuidedDecodingParams based on guided_mode."""
         # ref : vllm/model_executor/guided_decoding/__init__.py
-
-        if not guided_mode or not guided_params:
-            return None
-
-        if guided_mode == GuidedMode.CHOICE:
-            return GuidedDecodingParams(choice=guided_params)
-
-        elif guided_mode == GuidedMode.REGEX:
-            return GuidedDecodingParams(regex=guided_params)
-
-        elif guided_mode == GuidedMode.JSON:
-            return GuidedDecodingParams(json=guided_params)
-
-        elif guided_mode == GuidedMode.GRAMMAR:
-            return GuidedDecodingParams(grammar=guided_params)
-
-        else:
-            raise ValueError(f"Unsupported guided_mode: {guided_mode}")
-
-
-if __name__ == "__main__":
-    # install vllm from source or use the latest version from PyPI
-    # pip install --upgrade vllm
-    # pip install --upgrade mistral_common
-
-    model_name = REVERSE_MODEL_NAME_MAP.get("Qwen/Qwen2.5-VL-3B-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("Qwen/Qwen2.5-VL-7B-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("Qwen/Qwen2.5-VL-3B-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("meta-llama/Llama-3.2-11B-Vision-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("microsoft/Phi-3.5-vision-instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("Qwen/Qwen2.5-7B-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("Qwen/Qwen2.5-3B-Instruct")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("mistralai/Pixtral-12B-2409")  # OOM
-    # model_name = REVERSE_MODEL_NAME_MAP.get("facebook/opt-125m") # poor
-    # model_name = REVERSE_MODEL_NAME_MAP.get("mistralai/Mistral-7B-Instruct-v0.2")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("microsoft/phi-4")
-    # model_name = REVERSE_MODEL_NAME_MAP.get("llava-hf/llava-v1.6-mistral-7b-hf")
-
-    # force_download(model_name_or_path)
-    is_multimodal = _check_if_multimodal(model_name)
-
-    engine = VLLMEngine(
-        system_prompt="You are a helpful assistant for processing EOB documents.",
-        model_name=model_name,
-        is_multimodal=is_multimodal,
-        cache=False,
-        processor_kwargs={  # All parameters will be passed dynamically to the processor
-            'min_pixels': 1 * 28 * 28,
-            'max_pixels': 1280 * 28 * 28,  # 800, 1000, 1280
-        },
-    )
-
-    image_path = os.path.expanduser("~/tmp/demo/158986821_1.png")
-    image = as_bytes(image_path)
-    image = Image.open(image_path).convert("RGB")
-
-    # some sample text
-    document_context = ""
-    if not is_multimodal:
-        document_context = """
-        ### **Input Text:**
-        Patient Greg Bugaj, born 12/31/1980
-        Policy Number: 123456789
-        Claim Number: 987654321
-        """
-
-    prompt = f"""
-### Task: Extract Key-Value Pairs
-
-Extract structured key-value pairs from the given text while maintaining accuracy and formatting.
-
-### **Rules:**
-1 **Extract only key-value pairs** — Do not include explanations, summaries, or extra text.  
-2 **Preserve key names exactly as they appear** — No modifications, abbreviations, or rewording.  
-3 **Ensure values are extracted accurately** — No truncation or paraphrasing.  
-4 **If a key has no value, return:** `KeyName: [MISSING]`  
-5 **If no key-value pairs are found, return exactly:** `"No key-value pairs found."`  
-
-### **Strict Output Format:**
-Key1: Value1;
-Key2: Value2;
-Key3: Value3;
-...
-
-Your response **must contain only** the extracted key-value pairs in the format above. No additional text.
-
-{document_context}
-"""
-    # Text only
-    content1 = prompt
-    content2 = [content1, content1]  # batched request
-
-    # multimodal
-    content3 = [image, prompt]
-    content4 = [
-        [image, prompt],
-        [image, prompt],
-        [image, prompt],
-        [image, prompt],
-        [as_bytes(image), prompt],
-    ]  # Batched request
-
-    for i in range(1):
-        print(f"Iteration {i + 1}")
-        result = engine(
-            content4,
-            system_prompt="You are a helpful assistant for processing EOB documents.",
+        return GuidedDecodingParams.from_optional(
+            json=guided_json,
+            regex=guided_regex,
+            choice=guided_choice,
+            grammar=guided_grammar,
+            json_object=guided_json_object,
+            backend=guided_backend,
+            whitespace_pattern=guided_whitespace_pattern,
         )
-        print(result)

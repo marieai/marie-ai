@@ -48,6 +48,7 @@ def meta_to_text(
     meta_or_path: Union[dict | list | str | PathLike],
     text_output_path: str = None,
     collapsed_text: bool = False,
+    decorator: callable(str) = None,
 ) -> str:
     """
     Convert meta data to text.
@@ -86,7 +87,11 @@ def meta_to_text(
             lines = result["lines"]
             lines = sorted(lines, key=lambda k: k["line"])
             for i, line in enumerate(lines):
-                f.write(f'{i} | {line["text"]}')
+                if decorator:
+                    line["text"] = decorator(line["text"])
+                else:
+                    line["text"] = line["text"].strip()
+                # f.write(f'{i} | {line["text"]}')
                 if i < len(lines) - 1:
                     f.write("\n")
     tmp_file.close()

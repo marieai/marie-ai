@@ -1,9 +1,10 @@
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
+
+from pydantic import BaseModel
 
 from marie.engine import EngineLM, get_engine
 from marie.engine.config import validate_engine_or_get_default
 from marie.engine.function import Function, FunctionReturnType
-from marie.engine.guided import GuidedMode
 from marie.logging_core.predefined import default_logger as logger
 
 
@@ -23,15 +24,27 @@ class LLMCall(Function):
     def forward(
         self,
         prompt: Union[str, List[str]],
-        guided_mode: GuidedMode = None,
-        guided_params: Union[List[str], str, Dict] = None,
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
+        **kwargs,
     ) -> FunctionReturnType:
         """
         The LLM call. This function will call the LLM with the input and return the response.
 
         :param prompt: The input variable (aka prompt) to use for the LLM call.
-        :param guided_params: guided parameters to use for the LLM call
-        :param guided_mode: guided mode to use for the LLM call
+        :param guided_json: guided parameters to use for the LLM call
+        :param guided_regex: guided regex pattern to use for the LLM call
+        :param guided_choice: guided choice to use for the LLM call
+        :param guided_grammar: guided grammar to use for the LLM call
+        :param guided_json_object: guided JSON object to use for the LLM call
+        :param guided_backend: guided backend to use for the LLM call
+        :param guided_whitespace_pattern: guided whitespace pattern to use for the LLM call
+        :param kwargs: Additional parameters for generation.
         :return: response sampled from the LLM
 
         :example:
@@ -53,8 +66,14 @@ class LLMCall(Function):
         response_text = self.engine(
             prompt,
             system_prompt=system_prompt_value,
-            guided_mode=guided_mode,
-            guided_params=guided_params,
+            guided_json=guided_json,
+            guided_regex=guided_regex,
+            guided_choice=guided_choice,
+            guided_grammar=guided_grammar,
+            guided_json_object=guided_json_object,
+            guided_backend=guided_backend,
+            guided_whitespace_pattern=guided_whitespace_pattern,
+            **kwargs,
         )
 
         logger.info(
