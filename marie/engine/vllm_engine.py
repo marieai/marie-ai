@@ -233,13 +233,11 @@ class VLLMEngine(EngineLM):
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
         system_prompt = system_prompt or self.system_prompt
-        # Format content appropriately based on modality
         if self.is_multimodal:
             batch_content = [
                 open_ai_like_formatting(content) for content in batch_content
             ]
 
-        # Construct message structures for inference
         messages_list = [
             [
                 {"role": "system", "content": system_prompt},
@@ -275,6 +273,7 @@ class VLLMEngine(EngineLM):
             max_tokens=kwargs.get("max_tokens", 2048),
             stop_token_ids=None,  # No specific stop tokens enforced
         )
+        return_stats = kwargs.get("return_stats", False)
 
         batch_inputs = [
             {"prompt": prompt, "batch_id": idx} for idx, prompt in enumerate(prompts)
@@ -299,21 +298,13 @@ class VLLMEngine(EngineLM):
             )
         except Exception as e:
             self.logger.error(f"❌ Batch inference failed: {e}")
-            raise e
             return ["ERROR: Inference failed"] * len(batch_content)
-
-        # generated_texts = {
-        #     output.request_id: output.outputs[0].text if output.outputs else ""
-        #     for output in batch_outputs
-        # }
-        #
-        # ordered_outputs = [
-        #     generated_texts.get(str(idx), "") for idx in range(len(batch_content))
-        # ]
 
         ordered_outputs = [
             output.outputs[0].text if output.outputs else "" for output in batch_outputs
         ]
+
+        print(ordered_outputs)
 
         elapsed_time = time.time() - start_time
         total_tokens = sum(
@@ -380,6 +371,14 @@ class VLLMEngine(EngineLM):
     ) -> GuidedDecodingParams:
         """Constructs GuidedDecodingParams based on guided_mode."""
         # ref : vllm/model_executor/guided_decoding/__init__.py
+        print(f'guided_json  {guided_json}')
+        print(f'guided_regex  {guided_regex}')
+        print(f'guided_choice {guided_choice}')
+        print(f'guided_grammar {guided_grammar}')
+        print(f'guided_json_object {guided_json_object}')
+        print(f'guided_backend {guided_backend}')
+        print(f'guided_whitespace_pattern {guided_whitespace_pattern}')
+
         return GuidedDecodingParams.from_optional(
             json=guided_json,
             regex=guided_regex,

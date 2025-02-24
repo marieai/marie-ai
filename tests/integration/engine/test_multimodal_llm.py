@@ -47,7 +47,7 @@ def engine_setup(request):
 
 @pytest.fixture
 def test_image() -> Image.Image:
-    image_path = os.path.expanduser("~/tmp/demo/159861652_2.png")
+    image_path = os.path.expanduser("~/tmp/demo/merged-001_00001.png")
     return Image.open(image_path).convert("RGB")
 
 
