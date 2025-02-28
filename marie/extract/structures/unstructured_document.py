@@ -1,4 +1,6 @@
-from typing import Any, Dict, List
+import re
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional
 
 from rtree import index
 
@@ -18,6 +20,8 @@ class UnstructuredDocument:
 
     def insert(self, lines: List[LineWithMeta]) -> None:
 
+        if True:
+            return None
         id_set = set()
         for i, line in enumerate(lines):
             page_id = line.metadata.page_id
@@ -68,3 +72,62 @@ class UnstructuredDocument:
     @property
     def page_count(self) -> int:
         return len(set(line.metadata.page_id for line in self.lines))
+
+    def to_text(
+        self,
+        collapsed_text: bool = False,
+        decorator: Optional[Callable[[str, int], str]] = None,
+        page_number: Optional[int] = None,
+    ) -> str:
+        """
+        Convert document lines to a text string, grouped by page.
+
+        :param collapsed_text: Collapse multiple empty lines into one (True) or leave as-is (False).
+        :param decorator: A function applied to each line’s text (if provided).
+        :param page_number: If provided, only lines from this page are converted. Otherwise, all pages are included.
+        :return: Combined text of the document (one or all pages) with optional modifications.
+        """
+
+        # Group lines by page ID
+        lines_by_page = defaultdict(list)
+        for line in self.lines:
+            pid = line.metadata.page_id
+            lines_by_page[pid].append(line)
+
+        # Determine which pages to process
+        if page_number is not None:
+            if page_number in lines_by_page:
+                pages_to_process = [page_number]
+            else:
+                return ""
+        else:
+            pages_to_process = sorted(
+                lines_by_page.keys(), key=lambda x: (x is None, x)
+            )
+
+        # Build text for each page, then combine
+        all_pages_text = []
+        for pid in pages_to_process:
+            sorted_lines = sorted(
+                lines_by_page[pid], key=lambda ln: ln.metadata.line_id
+            )
+
+            text_lines = []
+            for row_number, ln_with_meta in enumerate(sorted_lines):
+                line_text = ln_with_meta.line
+                if decorator:
+                    line_text = decorator(line_text, row_number)
+                else:
+                    line_text = line_text.strip()
+                text_lines.append(line_text)
+
+            page_text = "\n".join(text_lines)
+            all_pages_text.append(page_text)
+
+        combined_text = "\n\n".join(all_pages_text)
+
+        #  collapse extra blank lines
+        if collapsed_text:
+            combined_text = re.sub(r'\n\s*\n+', '\n', combined_text)
+
+        return combined_text

@@ -266,6 +266,12 @@ class VLLMEngine(EngineLM):
         print('guided_decoding', guided_decoding)
         # guided_decoding.backend = 'xgrammar' # 'outlines, 'lm-format-enforcer', 'xgrammar'
         # https://github.com/vllm-project/vllm/issues/7592
+        # https://github.com/vllm-project/vllm/issues/542
+        # https://github.com/vllm-project/vllm/blob/main/vllm/sampling_params.py
+        # https://huggingface.co/docs/transformers/v4.30.0/en/main_classes/text_generation#transformers.GenerationMixin.generate
+
+        # Modified vllm/model_executor/models/qwen2_5_vl.py
+
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
             temperature=kwargs.get("temperature", 0.0),

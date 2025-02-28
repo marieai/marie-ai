@@ -32,8 +32,8 @@ def load_format_and_quantization(
     dtype = "bfloat16"
 
     # https://docs.vllm.ai/en/latest/features/quantization/auto_awq.html
-    # quantization_method = 'awq'
-    # dtype = "auto"
+    quantization_method = 'awq'
+    dtype = "auto"
 
     if supports_quantization:
         if quantization_method == "bitsandbytes":
@@ -59,7 +59,7 @@ def load_format_and_quantization(
 
 def create_llm_instance(
     model_name: str,
-    max_model_len: int = 4096,
+    max_model_len: int = 4096 + 1024,
     supports_quantization: bool = True,
     quantization_method: str = "bitsandbytes",
     mm_processor_kwargs=None,
@@ -71,6 +71,7 @@ def create_llm_instance(
     )
     # Remove 'dtype' from kwargs if it exists, to avoid duplicate keyword argument errors
     _dtype = kwargs.pop("dtype", dtype)
+    supports_quantization = False
 
     # https://github.com/vllm-project/vllm/issues/7592
     return LLM(
@@ -82,12 +83,12 @@ def create_llm_instance(
         load_format=load_format,
         enforce_eager=False,
         dtype=_dtype,
-        gpu_memory_utilization=0.80,  # 90% of GPU memory utilization, prevent OOM during CUDA graph compilation
+        gpu_memory_utilization=0.85,  # 90% of GPU memory utilization, prevent OOM during CUDA graph compilation
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
-        enable_prefix_caching=True,
+        enable_prefix_caching=False,
+        max_num_seqs=5,
         # enable_chunked_prefill=False,
         # max_num_batched_tokens=2048 * 8,
-        # max_num_seqs=64,
         **kwargs
     )
 
@@ -96,6 +97,15 @@ def create_llm_instance(
 def config_qwen2_5_vl(model_name: str, modality: str = "image"):
     """Configures Qwen2.5-VL model."""
     assert modality == "image"
+    try:
+        from qwen_vl_utils import process_vision_info
+    except ModuleNotFoundError:
+        print(
+            'WARNING: `qwen-vl-utils` not installed, input images will not '
+            'be automatically resized. You can enable this functionality by '
+            '`pip install qwen-vl-utils`.'
+        )
+        process_vision_info = None
 
     mm_processor_kwargs = {
         "min_pixels": 1 * 28 * 28,
