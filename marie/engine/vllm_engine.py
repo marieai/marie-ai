@@ -263,21 +263,25 @@ class VLLMEngine(EngineLM):
             guided_backend,
             guided_whitespace_pattern,
         )
-        print('guided_decoding', guided_decoding)
         # guided_decoding.backend = 'xgrammar' # 'outlines, 'lm-format-enforcer', 'xgrammar'
         # https://github.com/vllm-project/vllm/issues/7592
         # https://github.com/vllm-project/vllm/issues/542
         # https://github.com/vllm-project/vllm/blob/main/vllm/sampling_params.py
         # https://huggingface.co/docs/transformers/v4.30.0/en/main_classes/text_generation#transformers.GenerationMixin.generate
 
+        # the output is not equals compare to huggingface . #1128
+        # https://github.com/vllm-project/vllm/pull/1424
+
         # Modified vllm/model_executor/models/qwen2_5_vl.py
 
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=kwargs.get("temperature", 0.0),
+            temperature=0.1,  # kwargs.get("temperature", 0.0), # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
+            top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_tokens", 2048),
             stop_token_ids=None,  # No specific stop tokens enforced
+            # repetition_penalty=1.2,
         )
         return_stats = kwargs.get("return_stats", False)
 

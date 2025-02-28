@@ -28,9 +28,9 @@ bnb_config = BitsAndBytesConfig(
 
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 256 * 28 * 28
-max_pixels = 1280 * 28 * 28
-max_pixels = 1000 * 28 * 28
-# max_pixels = 1800*28*28
+max_pixels = 1400 * 28 * 28
+# max_pixels = 1000 * 28 * 28
+max_pixels = 2000 * 28 * 28
 if False:
     model = (
         Qwen2VLForConditionalGeneration.from_pretrained(
@@ -48,7 +48,7 @@ if False:
         MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
     )
 
-if True:
+if False:
     from transformers import (
         AutoProcessor,
         Qwen2_5_VLForConditionalGeneration,
@@ -64,6 +64,22 @@ if True:
     processor = AutoProcessor.from_pretrained(
         ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
     )
+
+if True:
+    from unsloth import FastVisionModel  # FastLanguageModel for LLMs
+
+    ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+    model, tokenizer = FastVisionModel.from_pretrained(
+        "unsloth/Qwen2.5-VL-7B-Instruct",
+        load_in_4bit=True,  # Use 4bit to reduce memory use. False for 16bit LoRA.
+        use_gradient_checkpointing="unsloth",  # True or "unsloth" for long context
+    )
+
+    processor = AutoProcessor.from_pretrained(
+        ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
+    )
+
 
 DESCRIPTION = f"[{MODEL_ID}]"
 

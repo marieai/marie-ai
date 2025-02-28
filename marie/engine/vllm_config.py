@@ -87,8 +87,7 @@ def create_llm_instance(
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
         enable_prefix_caching=False,
         max_num_seqs=5,
-        # enable_chunked_prefill=False,
-        # max_num_batched_tokens=2048 * 8,
+        enable_chunked_prefill=False,
         **kwargs
     )
 
