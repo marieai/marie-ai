@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from rtree import index
 
+import marie.check as check
 from marie.extract.structures.line_with_meta import LineWithMeta
 
 
@@ -17,6 +18,19 @@ class UnstructuredDocument:
         self.lines = lines
         self.rtree_by_page = {}
         self.insert(lines)
+
+        self._lines_by_page = defaultdict(list)
+        for line in lines:
+            self._lines_by_page[line.metadata.page_id].append(line)
+
+    @property
+    def lines_by_page(self) -> Dict[int, List[LineWithMeta]]:
+        """
+        Retrieve lines grouped by their page ID.
+        Returns:
+            Dict[int, List[LineWithMeta]]: A dictionary mapping page IDs to their associated lines.
+        """
+        return self._lines_by_page
 
     def insert(self, lines: List[LineWithMeta]) -> None:
 
@@ -88,13 +102,7 @@ class UnstructuredDocument:
         :return: Combined text of the document (one or all pages) with optional modifications.
         """
 
-        # Group lines by page ID
-        lines_by_page = defaultdict(list)
-        for line in self.lines:
-            pid = line.metadata.page_id
-            lines_by_page[pid].append(line)
-
-        # Determine which pages to process
+        lines_by_page = self.lines_by_page
         if page_number is not None:
             if page_number in lines_by_page:
                 pages_to_process = [page_number]
@@ -116,7 +124,7 @@ class UnstructuredDocument:
             for row_number, ln_with_meta in enumerate(sorted_lines):
                 line_text = ln_with_meta.line
                 if decorator:
-                    line_text = decorator(line_text, row_number)
+                    line_text = decorator(line_text, ln_with_meta.metadata.line_id)
                 else:
                     line_text = line_text.strip()
                 text_lines.append(line_text)
@@ -136,8 +144,14 @@ class UnstructuredDocument:
         """
         Retrieve all lines belonging to the specified page_id.
         """
-        lines_for_page = [
-            line for line in self.lines if line.metadata.page_id == page_id
-        ]
+        check.int_param(page_id, "page_id")
+        return self._lines_by_page[page_id]
 
-        return lines_for_page
+    @property
+    def page_ids(self) -> List[int]:
+        """
+        Retrieve all unique page IDs from an UnstructuredDocument instance, sorted in ascending order.
+        Returns:
+            List[int]: A sorted list of unique page IDs.
+        """
+        return sorted(set(line.metadata.page_id for line in self.lines))

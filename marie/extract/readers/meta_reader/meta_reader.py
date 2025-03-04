@@ -51,6 +51,11 @@ class MetaReader(BaseReader):
             print(
                 f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
             )
+            # doc 226749569   00003  shows this behaviour
+            if len(unique_line_ids) != len(line_bboxes):
+                print(
+                    f"WARNING : Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
+                )
 
             for line_idx in unique_line_ids:
                 lines_bbox = line_bboxes[line_idx - 1]
@@ -62,7 +67,7 @@ class MetaReader(BaseReader):
                 ]
 
                 if not meta_line or len(meta_line) == 0:
-                    print(f"No meta line found")
+                    print(f"No meta line found for : {line_idx}")
                     continue
 
                 meta_line = meta_line[0]
