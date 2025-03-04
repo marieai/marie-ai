@@ -72,7 +72,7 @@ def create_llm_instance(
     # Remove 'dtype' from kwargs if it exists, to avoid duplicate keyword argument errors
     _dtype = kwargs.pop("dtype", dtype)
     supports_quantization = False
-
+    _dtype = 'bfloat16'
     # https://github.com/vllm-project/vllm/issues/7592
     return LLM(
         model=model_name,

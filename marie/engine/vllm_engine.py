@@ -1,4 +1,3 @@
-import os.path
 import time
 from typing import Dict, List, Optional, Union
 
@@ -6,13 +5,11 @@ import diskcache as dc
 import torch
 from PIL import Image
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_random_exponential
 from transformers import AutoTokenizer
 
-from marie.engine import MODEL_NAME_MAP, REVERSE_MODEL_NAME_MAP, _check_if_multimodal
-from marie.engine.base import EngineLM, cached
+from marie.engine import MODEL_NAME_MAP
+from marie.engine.base import EngineLM
 from marie.engine.engine_utils import (
-    as_bytes,
     convert_openai_to_transformers_format,
     extract_text_info,
     is_batched_request,
@@ -276,7 +273,7 @@ class VLLMEngine(EngineLM):
 
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=0.1,  # kwargs.get("temperature", 0.0), # 0 = GREEDY
+            temperature=0,  # kwargs.get("temperature", 0.0), # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_tokens", 2048),
