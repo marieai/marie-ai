@@ -57,7 +57,7 @@ class MetaReader(BaseReader):
                     f"WARNING : Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
                 )
 
-            for line_idx in unique_line_ids:
+            for k, line_idx in enumerate(unique_line_ids):
                 lines_bbox = line_bboxes[line_idx - 1]
 
                 meta_line = [
@@ -81,8 +81,14 @@ class MetaReader(BaseReader):
                 # print(f"Line / Words : {line_idx}, {len(meta_words)}")
                 # print(meta_line)
 
+                # Due to the bug in how Unique Line ID don't aligh with all bboxes
+                # (doc 226749569  00003 shows this behaviour)
+                # we will use an index K+1 instead of the line_idx
+                # This is a bug in the upstream code and need to be fixed first
+                # we can always use the line_idx from the meta_line if needed
+
                 data = meta_line.model_dump()
-                lmd = LineMetadata(page_id=page_id, line_id=line_idx, model=meta_line)
+                lmd = LineMetadata(page_id=page_id, line_id=k + 1, model=meta_line)
 
                 lwm = LineWithMeta(
                     line=meta_line.text,
