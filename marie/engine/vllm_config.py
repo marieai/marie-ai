@@ -32,8 +32,8 @@ def load_format_and_quantization(
     dtype = "bfloat16"
 
     # https://docs.vllm.ai/en/latest/features/quantization/auto_awq.html
-    quantization_method = 'awq'
-    dtype = "auto"
+    # quantization_method = 'fp8'
+    # dtype = "auto"
 
     if supports_quantization:
         if quantization_method == "bitsandbytes":
@@ -48,6 +48,10 @@ def load_format_and_quantization(
                     "❌ BitsAndBytes is NOT installed. Install it using:\n  pip install bitsandbytes"
                 )
         elif quantization_method == "fp8":
+            # https://www.restack.io/p/vllm-answer-fp8-quantization-techniques-cat-ai
+            # git clone https://github.com/neuralmagic/AutoFP8.git
+            # pip install -e AutoFP8
+            # pip install git+https://github.com/neuralmagic/AutoFP8.git
             quantization = "fp8"
             dtype = "fp8"
         elif quantization_method == "awq":
@@ -59,7 +63,7 @@ def load_format_and_quantization(
 
 def create_llm_instance(
     model_name: str,
-    max_model_len: int = 4096 + 1024,
+    max_model_len: int = 4096 * 2,
     supports_quantization: bool = True,
     quantization_method: str = "bitsandbytes",
     mm_processor_kwargs=None,
@@ -71,8 +75,8 @@ def create_llm_instance(
     )
     # Remove 'dtype' from kwargs if it exists, to avoid duplicate keyword argument errors
     _dtype = kwargs.pop("dtype", dtype)
-    supports_quantization = False
-    _dtype = 'bfloat16'
+    # supports_quantization = False
+
     # https://github.com/vllm-project/vllm/issues/7592
     return LLM(
         model=model_name,
@@ -155,7 +159,10 @@ def config_phi4(model_name: str, modality: str = "text"):
     assert modality == "text"
 
     llm = create_llm_instance(
-        model_name, supports_quantization=True, quantization_method="fp8", dtype="fp8"
+        model_name,
+        supports_quantization=True,
+        quantization_method="bitsandbytes",
+        dtype="bfloat16",
     )
 
     return llm, None, None
@@ -226,8 +233,9 @@ VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["qwen2_5_vl_3b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b"]: config_qwen2_5_vl,
     MODEL_NAME_MAP["qwen2_5_vl_7b_awq"]: config_qwen2_5_vl,
-    MODEL_NAME_MAP["qwen2_5_7b"]: config_qwen2_5,
     MODEL_NAME_MAP["qwen2_5_3b"]: config_qwen2_5,
+    MODEL_NAME_MAP["qwen2_5_7b"]: config_qwen2_5,
+    MODEL_NAME_MAP["qwen2_5_14b"]: config_qwen2_5,
     MODEL_NAME_MAP["meta_llama_11b"]: config_mllama,
     MODEL_NAME_MAP["phi3_5_vl"]: config_phi3v,
     MODEL_NAME_MAP["pixtral_12b"]: None,  # Not supported due to OOM

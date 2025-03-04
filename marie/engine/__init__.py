@@ -6,6 +6,7 @@ MODEL_NAME_MAP = {
     "qwen2_5_vl_7b_awq": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
     "qwen2_5_7b": "Qwen/Qwen2.5-7B-Instruct",
     "qwen2_5_3b": "Qwen/Qwen2.5-3B-Instruct",
+    "qwen2_5_14b": "Qwen/Qwen2.5-14B-Instruct",
     "meta_llama_11b": "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "phi3_5_vl": "microsoft/Phi-3.5-vision-instruct",
     "pixtral_12b": "mistralai/Pixtral-12B-2409",

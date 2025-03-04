@@ -38,18 +38,22 @@ model_id = "microsoft/Phi-3.5-mini-instruct"  # 10GB
 # model_id = "Qwen/Qwen2-2B-Instruct"  # 16GB
 # model_id = "google/gemma-7b-it"  # 16GB
 # model_id = "llava-hf/llava-1.5-7b-hf"  # 16GB
-model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
+# model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB
 model_id = "google/gemma-7b-it"  # 16GB
-model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
-model_id = "Qwen/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
+model_id = "google/gemma-2-9b-it"  #
+# model_id = "Qwen/Qwen2-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
+# model_id = "Qwen/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 # model_id = "unsloth/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
-# model_id = "Qwen/Qwen2.5-14B-Instruct"  # 13GB vram
+model_id = "Qwen/Qwen2.5-14B-Instruct"  # 13GB vram EXCELLENT
 # model_id = "Qwen/Qwen2.5-0.5B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 # model_id = "google/gemma-7b-it"  # 16GB
 # model_id = "google/gemma-2-2b-it" # 7GB
 
 # model_id = "mistralai/Mistral-7B-v0.3" # mistral-7B-Instruct-v0.3.
-# model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+# model_id = "mmeta-llama/Llama-3.1-8B-Instruct" # NOT FOUND  # huggingface-cli download meta-llama/Meta-Llama-3.1-8B-Instruct --include "original/*" --local-dir Meta-Llama-3.1-8B-Instruct
+
+model_id = "microsoft/phi-4"
 
 # model = AutoModelForCausalLM.from_pretrained(
 #     model_id,
@@ -57,12 +61,6 @@ model_id = "Qwen/Qwen2.5-7B-Instruct"  # 16GB 4-bit quantization 8GBVRAM
 #     trust_remote_code=True,
 #     torch_dtype=torch.bfloat16
 # )
-
-# https://huggingface.co/docs/transformers/main/en/quantization/hqq
-from transformers import HqqConfig
-
-# Method 1: all linear layers will use the same quantization config
-quant_config = HqqConfig(nbits=8, group_size=64)
 
 # BitsAndBytesConfig int-4 config
 bnb_config = BitsAndBytesConfig(
@@ -118,21 +116,40 @@ if True:
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         device_map="auto",  # Automatically use available GPUs
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        quantization_config=quant_config,
+        quantization_config=bnb_config,
+        # attn_implementation="eager",
     )
-    model = torch.compile(model)
+    # model = torch.compile(model)
     # model = torchao.autoquant(torch.compile(model, mode='max-autotune'))
-    tok = AutoTokenizer.from_pretrained(model_id, token=token)
+tok = AutoTokenizer.from_pretrained(model_id, token=token)
+
+
+# model_id = "google/gemma-2-9b-it"
+# dtype = torch.bfloat16
+
+# tok = AutoTokenizer.from_pretrained(model_id)
+# model = AutoModelForCausalLM.from_pretrained(
+#     model_id,
+#     device_map="auto",
+#     torch_dtype=torch.bfloat16,
+#     attn_implementation="flash_attention_2",
+# )
+
+# torch._dynamo.config.capture_dynamic_output_shape_ops = False
+# torch._dynamo.config.suppress_errors = True
+
 
 if False:
+    # https://docs.unsloth.ai/basics/running-and-saving-models/saving-to-vllm
     import torch
     from unsloth import FastLanguageModel
 
     max_seq_length = 2048  # Choose any! We auto support RoPE Scaling internally!
     dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
     load_in_4bit = False  # Use 4bit quantization to reduce memory usage. Can be False.
+    model_id = "unsloth/Qwen2.5-14B"
 
     model, tok = FastLanguageModel.from_pretrained(
         # Can select any from the below:
@@ -147,6 +164,7 @@ if False:
 
     model = FastLanguageModel.for_inference(model)  # Enable native 2x faster inference
 
+
 terminators = [
     tok.eos_token_id,
 ]
@@ -159,10 +177,6 @@ else:
     print("Using CPU")
 
 
-# model = model.to(device)
-# Dispatch Errors
-
-
 def chat(message, history, temperature, do_sample, max_tokens):
     chat = []
     for item in history:
@@ -173,7 +187,9 @@ def chat(message, history, temperature, do_sample, max_tokens):
 
     # Tokenize the input and measure tokenization speed
     start_time = time.time()
+
     messages = tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+
     model_inputs = tok([messages], return_tensors="pt").to(device)
     tokenization_time = time.time() - start_time
     num_input_tokens = model_inputs.input_ids.size(1)
@@ -193,7 +209,7 @@ def chat(message, history, temperature, do_sample, max_tokens):
     )
 
     # Generate output using the model
-    if True:
+    if False:
         start_time = time.perf_counter()
         generated_ids = model.generate(
             **model_inputs,
