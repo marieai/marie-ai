@@ -276,10 +276,10 @@ class VLLMEngine(EngineLM):
 
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=0.1,  # kwargs.get("temperature", 0.0), # 0 = GREEDY
+            temperature=kwargs.get("temperature", 0.1),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
-            max_tokens=kwargs.get("max_tokens", 2048),
+            max_tokens=kwargs.get("max_tokens", 4096),
             stop_token_ids=None,  # No specific stop tokens enforced
             # repetition_penalty=1.2,
         )

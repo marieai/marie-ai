@@ -131,3 +131,13 @@ class UnstructuredDocument:
             combined_text = re.sub(r'\n\s*\n+', '\n', combined_text)
 
         return combined_text
+
+    def lines_for_page(self, page_id: int) -> List[LineWithMeta]:
+        """
+        Retrieve all lines belonging to the specified page_id.
+        """
+        lines_for_page = [
+            line for line in self.lines if line.metadata.page_id == page_id
+        ]
+
+        return lines_for_page
