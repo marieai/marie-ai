@@ -1,15 +1,20 @@
+# DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf
+# DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf
+
+# DeepSeek-R1-Distill-Qwen-7B-Q6_K_L.gguf
 docker run --gpus all \
     --shm-size 32g \
     -p 30000:30000 \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
-    -v /home/gbugaj/Downloads/DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf:/model/DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf \
+    -v /home/greg/Downloads/DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf:/model/DeepSeek-R1-Distill-Qwen.gguf \
     --ipc=host \
     lmsysorg/sglang:latest \
-    python3 -m sglang.launch_server --model-path /model/DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf --load-format gguf \
-    --quantization gguf  --tokenizer-path deepseek-ai/DeepSeek-R1-Distill-Qwen-14B   --host 0.0.0.0 --port 30000 --enable-torch-compile
+    python3 -m sglang.launch_server --model-path /model/DeepSeek-R1-Distill-Qwen.gguf --load-format gguf \
+    --quantization gguf  --tokenizer-path deepseek-ai/DeepSeek-R1-Distill-Qwen-14B   --host 0.0.0.0 --port 30000 \
+    --reasoning-parser deepseek-r1
+#    --grammar-backend xgrammar
 
-
-
+# --enable-torch-compile --enable-dp-attention
 
 # launch_server.py: error: argument --quantization: invalid choice: 'eetq' (choose from 'awq', 'fp8', 'gptq', 'marlin', 'gptq_marlin', 'awq_marlin', 'bitsandbytes', 'gguf', 'modelopt', 'w8a8_int8')
 # https://github.com/sgl-project/sglang/pull/2215/files#diff-19c9f69429f350e2828dfc8b02381630b7b03067678731e726c5c26c57d9be87
