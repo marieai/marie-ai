@@ -273,7 +273,7 @@ class VLLMEngine(EngineLM):
 
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=kwargs.get("temperature", 0.1),  # 0 = GREEDY
+            temperature=kwargs.get("temperature", 0),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_tokens", 4096),

@@ -1,0 +1,18 @@
+
+==================================
+== Triton Inference Server Base ==
+==================================
+
+NVIDIA Release 24.04 (build 90085237)
+
+Copyright (c) 2018-2023, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+INFO 03-05 17:03:26 __init__.py:190] Automatically detected platform cuda.
+INFO 03-05 17:03:30 __init__.py:190] Automatically detected platform cuda.
+INFO 03-05 17:03:30 __init__.py:190] Automatically detected platform cuda.

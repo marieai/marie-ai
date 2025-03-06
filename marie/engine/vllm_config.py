@@ -90,7 +90,7 @@ def create_llm_instance(
         gpu_memory_utilization=0.85,  # 90% of GPU memory utilization, prevent OOM during CUDA graph compilation
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
         enable_prefix_caching=False,
-        max_num_seqs=5,
+        max_num_seqs=1,
         enable_chunked_prefill=False,
         **kwargs
     )
@@ -226,6 +226,17 @@ def config_qwen2_5(model_name: str, modality: str = "text"):
     return llm, None, None
 
 
+def config_deepseek_r1(model_name: str, modality: str = "text"):
+    """Configures deepseek-ai/DeepSeek-R1-Distill-Qwen-XXB  models."""
+    assert modality == "text"
+
+    llm = create_llm_instance(
+        model_name, supports_quantization=True, quantization_method="bitsandbytes"
+    )
+
+    return llm, None, None
+
+
 # ---- Model Mapping ----
 # https://github.com/vllm-project/vllm/issues/13344
 # https://docs.vllm.ai/en/latest/models/supported_models.html
@@ -242,5 +253,7 @@ VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["mistral_7b"]: config_mistral,
     MODEL_NAME_MAP["opt_125m"]: config_opt125,
     MODEL_NAME_MAP["phi4"]: config_phi4,
+    MODEL_NAME_MAP["phi4"]: config_phi4,
     MODEL_NAME_MAP["llava_mistral_7b"]: config_llava_next,
+    MODEL_NAME_MAP["deepseek_r1_qwen_14b"]: config_deepseek_r1,
 }

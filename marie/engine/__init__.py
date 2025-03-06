@@ -14,6 +14,7 @@ MODEL_NAME_MAP = {
     "opt_125m": "facebook/opt-125m",
     "phi4": "microsoft/phi-4",
     "llava_mistral_7b": "llava-hf/llava-v1.6-mistral-7b-hf",
+    "deepseek_r1_qwen_14b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
 }
 
 # Create a reverse lookup dictionary
