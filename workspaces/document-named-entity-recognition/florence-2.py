@@ -7,8 +7,8 @@ from transformers import AutoModelForCausalLM, AutoProcessor
 # subprocess.run('pip install flash-attn --no-build-isolation', env={'FLASH_ATTENTION_SKIP_CUDA_BUILD': "TRUE"},shell=True)
 
 # HuggingFaceM4/Florence-2-DocVQA
-MODEL_ID = "HuggingFaceM4/Florence-2-DocVQA"
-# MODEL_ID = "microsoft/Florence-2-large"
+# MODEL_ID = "HuggingFaceM4/Florence-2-DocVQA"
+MODEL_ID = "microsoft/Florence-2-large"
 model = (
     AutoModelForCausalLM.from_pretrained(MODEL_ID, trust_remote_code=True)
     .to("cuda")

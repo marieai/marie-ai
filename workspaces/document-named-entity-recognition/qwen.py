@@ -30,7 +30,7 @@ bnb_config = BitsAndBytesConfig(
 min_pixels = 256 * 28 * 28
 max_pixels = 1200 * 28 * 28
 # max_pixels = 1000 * 28 * 28
-# max_pixels = 2000 * 28 * 28
+max_pixels = 2000 * 28 * 28
 if False:
     model = (
         Qwen2VLForConditionalGeneration.from_pretrained(
@@ -59,7 +59,10 @@ if True:
     ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
     # ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        ckpt, torch_dtype=torch.bfloat16, trust_remote_code=True
+        ckpt,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+        quantization_config=bnb_config,
     ).to("cuda")
     processor = AutoProcessor.from_pretrained(
         ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels

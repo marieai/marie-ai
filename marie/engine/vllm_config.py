@@ -253,7 +253,6 @@ VLLM_MODEL_MAP = {
     MODEL_NAME_MAP["mistral_7b"]: config_mistral,
     MODEL_NAME_MAP["opt_125m"]: config_opt125,
     MODEL_NAME_MAP["phi4"]: config_phi4,
-    MODEL_NAME_MAP["phi4"]: config_phi4,
     MODEL_NAME_MAP["llava_mistral_7b"]: config_llava_next,
     MODEL_NAME_MAP["deepseek_r1_qwen_14b"]: config_deepseek_r1,
 }

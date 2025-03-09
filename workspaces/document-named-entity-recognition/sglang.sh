@@ -1,14 +1,13 @@
 # DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf
 # DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf
 
-# DeepSeek-R1-Distill-Qwen-7B-Q6_K_L.gguf
 docker run --gpus all \
     --shm-size 32g \
     -p 30000:30000 \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     -v /home/greg/Downloads/DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf:/model/DeepSeek-R1-Distill-Qwen.gguf \
     --ipc=host \
-    lmsysorg/sglang:latest \
+    lmsysorg/sglang:v0.4.3.post3-cu124 \
     python3 -m sglang.launch_server --model-path /model/DeepSeek-R1-Distill-Qwen.gguf --load-format gguf \
     --quantization gguf  --tokenizer-path deepseek-ai/DeepSeek-R1-Distill-Qwen-14B   --host 0.0.0.0 --port 30000 \
     --reasoning-parser deepseek-r1

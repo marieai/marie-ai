@@ -3,7 +3,6 @@ import os
 from urllib.request import urlopen
 
 import requests
-import soundfile as sf
 import torch
 from PIL import Image
 from transformers import AutoModelForCausalLM, AutoProcessor, GenerationConfig
