@@ -250,6 +250,7 @@ class VLLMEngine(EngineLM):
         # https://docs.vllm.ai/en/latest/features/structured_outputs.html
         # https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#extra-parameters-for-chat-api
         # https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
+        guided_backend = "xgrammar:disable-any-whitespace"
 
         guided_decoding = self._get_guided_decoding_params(
             guided_json,
@@ -271,14 +272,28 @@ class VLLMEngine(EngineLM):
 
         # Modified vllm/model_executor/models/qwen2_5_vl.py
 
+        # temperature = 0,
+        # top_p = 1,
+        # frequency_penalty = 0,
+        # presence_penalty = 0,
+        # n = 1,
+        # messages = messages,
+        # stream = False,
+        # extra_body = {
+        #     "separate_reasoning": True,
+        #     # "guided_json": json_schema
+        # },
+        #
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=kwargs.get("temperature", 0),  # 0 = GREEDY
+            temperature=kwargs.get("temperature", 0.6),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_tokens", 4096),
             stop_token_ids=None,  # No specific stop tokens enforced
-            # repetition_penalty=1.2,
+            presence_penalty=0,  # (not necessary for extraction)
+            frequency_penalty=0,  # not necessary for extraction)
+            n=1,
         )
         return_stats = kwargs.get("return_stats", False)
 

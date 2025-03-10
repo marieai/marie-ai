@@ -1,3 +1,5 @@
+from flatbuffers.number_types import enforce_number
+
 from marie.engine import MODEL_NAME_MAP
 
 # Ensure vLLM is installed before proceeding
@@ -75,7 +77,7 @@ def create_llm_instance(
     )
     # Remove 'dtype' from kwargs if it exists, to avoid duplicate keyword argument errors
     _dtype = kwargs.pop("dtype", dtype)
-    # supports_quantization = False
+    enforce_eager = kwargs.pop("enforce_eager", False)
 
     # https://github.com/vllm-project/vllm/issues/7592
     return LLM(
@@ -85,7 +87,7 @@ def create_llm_instance(
         disable_mm_preprocessor_cache=True,
         quantization=quantization if supports_quantization else None,
         load_format=load_format,
-        enforce_eager=False,
+        enforce_eager=enforce_eager,
         dtype=_dtype,
         gpu_memory_utilization=0.85,  # 90% of GPU memory utilization, prevent OOM during CUDA graph compilation
         mm_processor_kwargs=mm_processor_kwargs if mm_processor_kwargs else {},
@@ -229,9 +231,15 @@ def config_qwen2_5(model_name: str, modality: str = "text"):
 def config_deepseek_r1(model_name: str, modality: str = "text"):
     """Configures deepseek-ai/DeepSeek-R1-Distill-Qwen-XXB  models."""
     assert modality == "text"
+    # https://github.com/vllm-project/vllm/issues/12468
 
     llm = create_llm_instance(
-        model_name, supports_quantization=True, quantization_method="bitsandbytes"
+        model_name,
+        supports_quantization=True,
+        quantization_method="bitsandbytes",
+        enable_reasoning=True,
+        # guided_backend="xgrammar:disable-any-whitespace"
+        enforce_eager=True,  # Slower but better results
     )
 
     return llm, None, None

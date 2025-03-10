@@ -50,8 +50,9 @@ model_id = "Qwen/Qwen2.5-14B-Instruct"  # 13GB vram EXCELLENT
 # model_id = "google/gemma-2-2b-it" # 7GB
 
 # model_id = "mistralai/Mistral-7B-v0.3" # mistral-7B-Instruct-v0.3.
-model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+# model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 # model_id = "mmeta-llama/Llama-3.1-8B-Instruct" # NOT FOUND  # huggingface-cli download meta-llama/Meta-Llama-3.1-8B-Instruct --include "original/*" --local-dir Meta-Llama-3.1-8B-Instruct
+
 
 model_id = "microsoft/phi-4"
 
@@ -209,7 +210,7 @@ def chat(message, history, temperature, do_sample, max_tokens):
     )
 
     # Generate output using the model
-    if False:
+    if True:
         start_time = time.perf_counter()
         generated_ids = model.generate(
             **model_inputs,
@@ -268,8 +269,8 @@ def chat(message, history, temperature, do_sample, max_tokens):
 
     generate_kwargs["do_sample"] = False
 
-    t = Thread(target=model.generate, kwargs=generate_kwargs)
-    t.start()
+    # t = Thread(target=model.generate, kwargs=generate_kwargs)
+    # t.start()
 
     partial_text = ""
     for new_text in streamer:

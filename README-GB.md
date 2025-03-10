@@ -537,7 +537,12 @@ pip install bump-pydantic
 ./bump.sh
 ```
 
-To patch JINA AI apply changes from the commits.
 
-https://github.com/marieai/marie-ai/commit/7f760ce0999bd8d2f69f45621ab99c1cceecc75c
-https://github.com/marieai/marie-ai/commit/e3de063ba71f37c2590fd5078c5ee72e2b65ecf4
+NEW AI BASED OCR - VERY POOR, HALLUCINATIONS 
+https://olmocr.allenai.org/
+https://paperswithcode.com/paper/olmocr-unlocking-trillions-of-tokens-in-pdfs
+GOD_OCR2
+
+https://github.com/infiniflow/ragflow
+
+https://www.upstage.ai/
