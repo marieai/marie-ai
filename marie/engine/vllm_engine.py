@@ -286,13 +286,11 @@ class VLLMEngine(EngineLM):
         #
         sampling_params = SamplingParams(
             guided_decoding=guided_decoding,
-            temperature=kwargs.get("temperature", 0.6),  # 0 = GREEDY
+            temperature=kwargs.get("temperature", 0),  # 0 = GREEDY
             top_p=kwargs.get("top_p", 1.0),
             top_k=kwargs.get("top_k", -1),
             max_tokens=kwargs.get("max_tokens", 4096),
             stop_token_ids=None,  # No specific stop tokens enforced
-            presence_penalty=0,  # (not necessary for extraction)
-            frequency_penalty=0,  # not necessary for extraction)
             n=1,
         )
         return_stats = kwargs.get("return_stats", False)
@@ -393,13 +391,6 @@ class VLLMEngine(EngineLM):
     ) -> GuidedDecodingParams:
         """Constructs GuidedDecodingParams based on guided_mode."""
         # ref : vllm/model_executor/guided_decoding/__init__.py
-        print(f'guided_json  {guided_json}')
-        print(f'guided_regex  {guided_regex}')
-        print(f'guided_choice {guided_choice}')
-        print(f'guided_grammar {guided_grammar}')
-        print(f'guided_json_object {guided_json_object}')
-        print(f'guided_backend {guided_backend}')
-        print(f'guided_whitespace_pattern {guided_whitespace_pattern}')
 
         return GuidedDecodingParams.from_optional(
             json=guided_json,

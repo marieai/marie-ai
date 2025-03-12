@@ -210,7 +210,7 @@ def chat(message, history, temperature, do_sample, max_tokens):
     )
 
     # Generate output using the model
-    if True:
+    if False:
         start_time = time.perf_counter()
         generated_ids = model.generate(
             **model_inputs,
@@ -269,8 +269,8 @@ def chat(message, history, temperature, do_sample, max_tokens):
 
     generate_kwargs["do_sample"] = False
 
-    # t = Thread(target=model.generate, kwargs=generate_kwargs)
-    # t.start()
+    t = Thread(target=model.generate, kwargs=generate_kwargs)
+    t.start()
 
     partial_text = ""
     for new_text in streamer:
