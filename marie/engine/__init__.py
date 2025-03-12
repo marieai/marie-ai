@@ -1,5 +1,7 @@
 from marie.engine.base import EngineLM
 
+# TODO add  Gemma 3 (Based on v4.49.0)
+# https://github.com/huggingface/transformers/releases/tag/v4.49.0-Gemma-3
 MODEL_NAME_MAP = {
     "qwen2_5_vl_3b": "Qwen/Qwen2.5-VL-3B-Instruct",
     "qwen2_5_vl_7b": "Qwen/Qwen2.5-VL-7B-Instruct",
