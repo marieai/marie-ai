@@ -1,6 +1,7 @@
 import dataclasses
 import io
 import json
+import logging
 import os.path
 from typing import Any
 
@@ -30,13 +31,22 @@ def store_json_object(results, json_path) -> None:
         )
 
 
-def load_json_file(filename) -> Any:
+def load_json_file(filename, safe_parse: bool = False) -> Any:
     """Read JSON File"""
     if filename is not None:
         filename = os.path.expanduser(filename)
 
     with io.open(filename, "r", encoding="utf-8") as json_file:
-        data = json.load(json_file)
+        try:
+            data = json.load(json_file)
+        except json.JSONDecodeError as e:
+            if safe_parse:
+                logging.warning(
+                    f"Failed to parse JSON file {filename}. Returning None. Error: {e}"
+                )
+                return None
+            else:
+                raise e
         return data
 
 
