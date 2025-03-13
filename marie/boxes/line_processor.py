@@ -67,7 +67,8 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
 
         # now we check each overlap against each other
         # for each item that overlaps our box check to make sure that the ray back is valid
-        exp_count = len(overlaps)
+        # exp_count = len(overlaps)
+        exp_count = sum(x >= min_iou for x in scores)
         idx_to_merge = [idx]
 
         idx_to_remove = []
@@ -77,8 +78,9 @@ def __line_merge(image, bboxes, min_iou=0.5) -> List[Any]:
             # check if we have candidates that are overlapping the source
             bi_overlaps, bi_indexes, bi_scores = find_overlap_vertical(overlap, bboxes)
 
-            # if source is overlapping the candidate and the candidate is overlapping the source
-            if len(bi_overlaps) == exp_count:
+            # # if source is overlapping the candidate and the candidate is overlapping the source
+            # # if len(bi_overlaps) == exp_count:
+            if sum(x >= min_iou for x in bi_scores) == exp_count:
                 idx_to_merge.append(index)
                 visited[index] = True
 
