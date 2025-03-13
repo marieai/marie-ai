@@ -13,7 +13,9 @@ class UnstructuredDocument:
     A document that contains a list of lines with metadata.
     """
 
-    def __init__(self, lines: List[LineWithMeta], metadata: Dict[str, Any]) -> None:
+    def __init__(
+        self, lines: List[LineWithMeta], metadata: Dict[str, Any] = None
+    ) -> None:
         self.metadata = metadata
         self.lines = lines
         self.rtree_by_page = {}
