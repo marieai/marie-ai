@@ -324,8 +324,6 @@ class VLLMEngine(EngineLM):
             output.outputs[0].text if output.outputs else "" for output in batch_outputs
         ]
 
-        print(ordered_outputs)
-
         elapsed_time = time.time() - start_time
         total_tokens = sum(
             len(self.tokenizer.tokenize(text)) for text in ordered_outputs
