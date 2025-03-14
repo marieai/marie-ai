@@ -167,6 +167,9 @@ def visualize_icr(
 
     for page_idx, (image, result) in enumerate(zip(frames, results)):
         # convert from numpy to PIL
+        if page_idx != 8:
+            continue
+
         img = image.copy()
         # we can have frames as both PIL and CV images
         if not isinstance(img, Image.Image):
@@ -182,34 +185,40 @@ def visualize_icr(
         words_all = []
         words = np.array(result["words"])
         lines_bboxes = np.array(result["meta"]["lines_bboxes"])
+        if False:
+            for i, item in enumerate(words):
+                box = item["box"]
+                text = f'({i}){item["text"]}'
+                words_all.append(text)
 
-        for i, item in enumerate(words):
-            box = item["box"]
-            text = f'({i}){item["text"]}'
-            words_all.append(text)
+                # get text size
+                # text_size = font.getsize(text) #  Use getbbox or getlength instead.
+                text_size = font.getbbox(text)
+                text_w = text_size[2] - text_size[0]
+                text_h = text_size[3] - text_size[1]
 
-            # get text size
-            # text_size = font.getsize(text) #  Use getbbox or getlength instead.
-            text_size = font.getbbox(text)
-            text_w = text_size[2] - text_size[0]
-            text_h = text_size[3] - text_size[1]
+                button_size = (text_w + 8, text_h + 8)
+                # button_size = (text_size[0] + 8, text_size[1] + 8)
 
-            button_size = (text_w + 8, text_h + 8)
-            # button_size = (text_size[0] + 8, text_size[1] + 8)
-
-            # create image with correct size and black background
-            button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
-            # put text on button with 10px margins
-            button_draw = ImageDraw.Draw(button_img, "RGBA")
-            button_draw.text(
-                (4, 4), text=text, font=font, stroke_width=0, fill=(0, 0, 0, 0), width=1
-            )
-            # draw.rectangle(box, outline="red", width=1)
-            # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
-            # put button on source image in position (0, 0)
-            viz_img.paste(button_img, (box[0], box[1]))
+                # create image with correct size and black background
+                button_img = Image.new("RGBA", button_size, color=(150, 255, 150, 150))
+                # put text on button with 10px margins
+                button_draw = ImageDraw.Draw(button_img, "RGBA")
+                button_draw.text(
+                    (4, 4),
+                    text=text,
+                    font=font,
+                    stroke_width=0,
+                    fill=(0, 0, 0, 0),
+                    width=1,
+                )
+                # draw.rectangle(box, outline="red", width=1)
+                # draw.text((box[0], box[1]), text=text, fill="blue", font=font, stroke_width=0)
+                # put button on source image in position (0, 0)
+                viz_img.paste(button_img, (box[0], box[1]))
 
         for i, box in enumerate(lines_bboxes):
+            print(f' line box {i}: {box}')
             draw_box(
                 draw,
                 box,

@@ -44,9 +44,12 @@ class MetaReader(BaseReader):
             lines = frame_meta["meta"]["lines"]
             page_id = frame_meta["meta"]["page"]
             unique_line_ids = sorted(np.unique(lines))
-            line_bboxes = frame_meta["meta"]["lines_bboxes"]
+            # line_bboxes = frame_meta["meta"]["lines_bboxes"]
+            line_bboxes = np.array(frame_meta["meta"]["lines_bboxes"])
             # FIXME : This fails sometimes, need to fix this upstream
-            # assert len(unique_line_ids) == len(line_bboxes) , f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
+            assert len(unique_line_ids) == len(
+                line_bboxes
+            ), f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
 
             print(
                 f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
@@ -57,6 +60,8 @@ class MetaReader(BaseReader):
                     f"WARNING : Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
                 )
 
+            print('unique_line_ids -------------------')
+            print(unique_line_ids)
             for k, line_idx in enumerate(unique_line_ids):
                 lines_bbox = line_bboxes[line_idx - 1]
 
@@ -88,7 +93,7 @@ class MetaReader(BaseReader):
                 # we can always use the line_idx from the meta_line if needed
 
                 data = meta_line.model_dump()
-                lmd = LineMetadata(page_id=page_id, line_id=k + 1, model=meta_line)
+                lmd = LineMetadata(page_id=page_id, line_id=line_idx, model=meta_line)
 
                 lwm = LineWithMeta(
                     line=meta_line.text,
@@ -96,11 +101,6 @@ class MetaReader(BaseReader):
                     metadata=lmd,
                 )
                 unstructured_lines.append(lwm)
-            # pprint(result)
-            # meta = result.get("meta", {})
-            # pprint(meta)
-            # lines.append(cls.transform(frame, result))
-
         return UnstructuredDocument(lines=unstructured_lines, metadata={})
 
     @classmethod
