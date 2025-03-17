@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 import warnings
@@ -21,21 +22,22 @@ from typing import (
 )
 
 from google.protobuf.struct_pb2 import Struct
+from grpc_health.v1 import health_pb2
 
 from marie._docarray import DocumentArray, docarray_v2
-from marie.constants import __default_endpoint__
+from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
-from marie.serve.executors import BaseExecutor
+from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
 from marie.utils.network import get_ip_address
-from marie.utils.pydantic import patch_pydantic_schema_2x
 from marie.utils.types import strtobool
 
 if docarray_v2:
@@ -68,6 +70,7 @@ class WorkerRequestHandler:
         meter=None,
         tracer=None,
         deployment_name: str = "",
+        node_info: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """Initialize private parameters and execute private loading functions.
@@ -80,6 +83,7 @@ class WorkerRequestHandler:
         :param meter: meter object from runtime
         :param tracer: tracer object from runtime
         :param deployment_name: name of the deployment to use as Executor name to set in requests
+        :param node_info: optional node info to be passed to the executor
         :param kwargs: extra keyword arguments
         """
         super().__init__()
@@ -89,6 +93,10 @@ class WorkerRequestHandler:
         self.args = args
         self.logger = logger
         self._is_closed = False
+
+        runtime_name = kwargs.get("runtime_name", None)
+        node_info['deployment_name'] = deployment_name
+        self.node_info = node_info
 
         if self.metrics_registry:
             with ImportExtensions(
@@ -175,6 +183,16 @@ class WorkerRequestHandler:
             self._hot_reload_task = asyncio.create_task(self._hot_reload())
 
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
+
+        self._heartbeat_thread = None
+        self._lease_time = 5
+        self._heartbeat_time = 2
+        self._lease = None
+        self._etcd_client = self._init_etcd("localhost", 2379)
+        self._worker_state = None
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        )
 
     def _http_fastapi_default_app(self, **kwargs):
         from marie.serve.runtimes.worker.http_fastapi_app import (  # For Gateway, it works as for head
@@ -310,17 +328,22 @@ class WorkerRequestHandler:
                 func.fn.__name__: [] for func in self._executor.requests.values()
             }
             for endpoint, func in self._executor.requests.items():
-                func_endpoints[func.fn.__name__].append(endpoint)
+                if func.fn.__name__ in func_endpoints:
+                    # For SageMaker, not all endpoints are there
+                    func_endpoints[func.fn.__name__].append(endpoint)
             for func_name, dbatch_config in dbatch_functions:
-                for endpoint in func_endpoints[func_name]:
-                    if endpoint not in self._batchqueue_config:
-                        self._batchqueue_config[endpoint] = dbatch_config
-                    else:
-                        # we need to eventually copy the `custom_metric`
-                        if dbatch_config.get("custom_metric", None) is not None:
-                            self._batchqueue_config[endpoint]["custom_metric"] = (
-                                dbatch_config.get("custom_metric")
-                            )
+                if (
+                    func_name in func_endpoints
+                ):  # For SageMaker, not all endpoints are there
+                    for endpoint in func_endpoints[func_name]:
+                        if endpoint not in self._batchqueue_config:
+                            self._batchqueue_config[endpoint] = dbatch_config
+                        else:
+                            # we need to eventually copy the `custom_metric`
+                            if dbatch_config.get('custom_metric', None) is not None:
+                                self._batchqueue_config[endpoint]['custom_metric'] = (
+                                    dbatch_config.get('custom_metric')
+                                )
 
             keys_to_remove = []
             for k, batch_config in self._batchqueue_config.items():
@@ -656,6 +679,7 @@ class WorkerRequestHandler:
         """
 
         self._record_request_size_monitoring(requests)
+        self.logger.info(f"*** Setup requests: {requests}")
 
         params = self._parse_params(requests[0].parameters, self._executor.metas.name)
         self._setup_req_doc_array_cls(requests, exec_endpoint, is_response=False)
@@ -725,11 +749,12 @@ class WorkerRequestHandler:
                 return requests[0]
 
         requests, params = self._setup_requests(requests, exec_endpoint)
-
-        self.logger.info(f"requests TO MONITOR : {requests}")
+        # self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {requests}")
         job_id = None
         if params is not None:
             job_id = params.get("job_id", None)
+
+        self.logger.info(f"requests TO MONITOR : {exec_endpoint} -- {job_id}")
         await self._record_started_job(job_id, requests, params)
 
         len_docs = len(requests[0].docs)  # TODO we can optimize here and access the
@@ -772,7 +797,9 @@ class WorkerRequestHandler:
                 return_data: Any,
                 raised_exception: Exception,
             ):
-                self.logger.info(f"executor_completion_callback : {job_id}")
+                self.logger.debug(f"executor_completion_callback : {job_id}")
+                self.logger.debug(f"requests FROM MONITOR : {requests}")
+
                 # TODO : add support for handling client disconnect rejects
                 additional_metadata = {"client_disconnected": client_disconnected}
 
@@ -1182,7 +1209,7 @@ class WorkerRequestHandler:
         :param is_generator: whether the request should be handled with streaming
         :returns: the response request
         """
-        self.logger.debug("recv a process_data request")
+        self.logger.info("recv a process_data request")
         with MetricsTimer(
             self._summary, self._receiving_request_seconds, self._metric_attributes
         ):
@@ -1457,6 +1484,18 @@ class WorkerRequestHandler:
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         return JobInfoStorageClient(storage)
 
+    def is_dry_run(self, requests: List["DataRequest"]) -> bool:
+        """Check if the request is a dry run."""
+        if not requests or not requests[0].header:
+            return False
+        exec_endpoint: str = requests[0].header.exec_endpoint
+        if exec_endpoint not in self._executor.requests:
+            if __default_endpoint__ in self._executor.requests:
+                exec_endpoint = __default_endpoint__
+        if exec_endpoint == __dry_run_endpoint__:
+            return True
+        return False
+
     async def _record_failed_job(
         self,
         job_id: str,
@@ -1465,6 +1504,12 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job failed: {job_id} - {e}")
+        if self.is_dry_run(requests):
+            return
+
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
                 # Extract the traceback information from the exception
@@ -1515,9 +1560,14 @@ class WorkerRequestHandler:
         self, job_id: str, requests: List["DataRequest"], params
     ):
         print(f"Record job started: {job_id}")
+        if self.is_dry_run(requests):
+            return
+
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.SERVING
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
-
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.RUNNING,
@@ -1538,6 +1588,12 @@ class WorkerRequestHandler:
         metadata_attributes: Optional[Dict],
     ):
         print(f"Record job success: {job_id}")
+        if self.is_dry_run(requests):
+            return
+
+        self._set_deployment_status(
+            health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
+        )
         if job_id is not None and self._job_info_client is not None:
             try:
                 request_attributes = self._request_attributes(requests)
@@ -1566,3 +1622,90 @@ class WorkerRequestHandler:
             "runtime_name": self.args.name,
             "host": get_ip_address(flush_cache=False),
         }
+
+    def _init_etcd(self, etcd_host, etcd_port):
+        etcd_client = EtcdClient(etcd_host, etcd_port, namespace="marie")
+        self.setup_heartbeat()
+
+        return etcd_client
+
+    def _set_deployment_status(
+        self, status: health_pb2.HealthCheckResponse.ServingStatus
+    ):
+        """
+        Set the status of a deployment address in etcd. This will refresh lease for the deployment address.
+        :param status: Status of the worker
+        """
+        print(f"Setting deployment status: {status}")
+
+        self._worker_state = status
+        node_info = self.node_info
+        deployment_name = node_info['deployment_name']
+        address = f"{node_info['host']}:{node_info['port']}"
+
+        from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+        status_str = HealthCheckResponse.ServingStatus.Name(status)
+        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+
+        self._lease = self._etcd_client.lease(self._lease_time)
+        self._etcd_client.put(key, status_str, lease=self._lease)
+        self.logger.info(
+            f"lease: {self._lease} - key: {key} - state: {status_str}  time: {self._lease_time}"
+        )
+
+    def heartbeat(self):
+        """service heartbeat."""
+        if self._lease is None:
+            return
+        self.logger.info(
+            f"Heartbeat : {self._worker_state} - {self._lease.remaining_ttl}"
+        )
+        try:
+            self.logger.debug(f"Refreshing lease for:  {self._lease.remaining_ttl}")
+            ret = self._lease.refresh()[0]
+            if ret.TTL == 0:
+                self.logger.warning(
+                    f"Lease expired, setting status to lost state : {self._worker_state}"
+                )
+                self._set_deployment_status(self._worker_state)
+        except Exception as e:
+            raise e
+
+    def setup_heartbeat(self):
+        """
+        Set up an asynchronous heartbeat process.
+        :return: None
+        """
+
+        self.logger.debug("Calling heartbeat setup")
+        if self._lease and self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            raise RuntimeError(
+                f"A heartbeat with lease {self._lease} is currently in running. Cannot start another."
+            )
+
+        def _heartbeat_setup():
+            print(
+                f"Setting up heartbeat for etcd request handler : {self._heartbeat_time}"
+            )
+            failures = 0
+            max_failures = 3
+
+            time.sleep(self._heartbeat_time)
+
+            while True:
+                try:
+                    self.heartbeat()
+                    failures = 0
+                except Exception as e:
+                    failures += 1
+                    self.logger.error(
+                        f"Error in heartbeat ({failures}/{max_failures}): {e}"
+                    )
+                    if failures >= max_failures:
+                        self.logger.error("Max failures reached, stopping heartbeat.")
+                        break
+                time.sleep(self._heartbeat_time)
+
+        self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
+        self._heartbeat_thread.start()

@@ -2,8 +2,7 @@ import json
 import math
 import os
 import warnings
-from argparse import Namespace
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 from marie.orchestrate.deployments.config.k8slib import kubernetes_tools
 from marie.serve.networking import GrpcConnectionPool

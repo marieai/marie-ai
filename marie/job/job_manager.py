@@ -33,6 +33,32 @@ def generate_job_id() -> str:
     return uuid7str()
 
 
+def increment_uuid7str(uuid_str: str, increment_value: int) -> str:
+    # Remove dashes to get a continuous hex string
+    hex_str = uuid_str.replace('-', '')
+    # Convert hex string to integer
+    int_val = int(hex_str, 16)
+
+    # Add the increment
+    int_val += increment_value
+
+    # Enforce 128-bit (32 hex chars), strip possible sign if negative
+    new_hex_str = format(int_val & ((1 << 128) - 1), '032x')
+
+    # Re-insert the standard dash positions for a UUID
+    return (
+        new_hex_str[0:8]
+        + '-'
+        + new_hex_str[8:12]
+        + '-'
+        + new_hex_str[12:16]
+        + '-'
+        + new_hex_str[16:20]
+        + '-'
+        + new_hex_str[20:]
+    )
+
+
 def get_event_logger():
     # TODO: Implement this
     return None
@@ -46,8 +72,6 @@ class JobManager:
     """
 
     JOB_MONITOR_LOOP_PERIOD_S = 1
-    # number of slots available for job submission (This will be set via service discovery and will change as nodes become available)
-    SLOTS_AVAILABLE = 0
 
     def __init__(
         self,
@@ -171,7 +195,6 @@ class JobManager:
                             err_msg += (
                                 " This may be because the job entrypoint's specified "
                                 "resources (entrypoint_num_cpus, entrypoint_num_gpus, "
-                                "entrypoint_resources, entrypoint_memory)"
                                 "aren't available on the cluster."
                                 " Try checking the cluster's available resources with "
                                 "`marie nodes status` and specifying fewer resources for the "
@@ -361,6 +384,7 @@ class JobManager:
             run_background_task(
                 self._monitor_job(submission_id, job_supervisor=supervisor)
             )
+            self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
             tb_str = traceback.format_exc()
 
@@ -435,11 +459,3 @@ class JobManager:
                 await asyncio.sleep(self.LOG_TAIL_SLEEP_S)
             else:
                 yield "".join(lines)
-
-    def has_available_slot(self) -> bool:
-        """
-        Check if there are available slots for submitting a jobs.
-
-        :return: True if there are available slots, False otherwise
-        """
-        return len(self.monitored_jobs) < self.SLOTS_AVAILABLE

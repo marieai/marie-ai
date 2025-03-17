@@ -25,7 +25,8 @@ fi
 # create number of jobs based on the input from the user
 metadata=$(cat <<EOF
 {
-    "on": "/extract",
+    "on__": "/extract",
+    "on": "extract_executor://extract",
     "project_id": "project_id_000001",
     "doc_idXXXX": "doc_id_$RANDOM",
     "ref_id": "doc_id_0001",
@@ -92,7 +93,11 @@ echo "$metadata"
 
 for i in $(seq 1 "$2"); do
     echo "Submitting job $i"
-    python ./send_request_to_gateway.py job submit extract --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key"
+    python ./send_request_to_gateway.py job submit extract --metadata-json "$metadata" --address "$host" --protocol "$protocol" --api_key "$api_key" &
     echo "Job $i submitted"
     sleep 1
 done
+
+wait
+
+echo "All requests have completed!"

@@ -1,19 +1,32 @@
 import asyncio
 import contextlib
+import copy
+import time
 import traceback
+from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from pprint import pprint
+from typing import Any, Dict, Optional
 
 import psycopg2
-from sympy.functions.combinatorial.numbers import partition
 
+from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
-from marie.job.job_manager import JobManager
+from marie.job.job_manager import JobManager, generate_job_id
 from marie.job.partition.job_partitioner import MarieJobPartitioner
 from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
+from marie.query_planner.base import QueryPlan
+from marie.query_planner.planner import (
+    plan_to_json,
+    plan_to_yaml,
+    print_sorted_nodes,
+    query_planner,
+    topological_sort,
+    visualize_query_plan_graph,
+)
 from marie.scheduler.fixtures import *
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
@@ -25,6 +38,7 @@ from marie.scheduler.plans import (
     create_queue,
     fail_jobs_by_id,
     fetch_next_job,
+    insert_dag,
     insert_job,
     insert_version,
     mark_as_active_jobs,
@@ -34,9 +48,11 @@ from marie.scheduler.plans import (
     version_table_exists,
 )
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import available_slots_by_executor, has_available_slot
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
-INIT_POLL_PERIOD = 1.250  # 250ms
+INIT_POLL_PERIOD = 2.250  # 250ms
 MAX_POLL_PERIOD = 16.0  # 16s
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
@@ -72,22 +88,31 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
     def __init__(self, config: Dict[str, Any], job_manager: JobManager):
         super().__init__()
-        self.known_queues = set()
-        self._reset_on_complete = False
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         if job_manager is None:
-            raise ValueError("Job manager is required for JobScheduler")
+            raise BadConfigSource("job_manager argument is required for JobScheduler")
 
+        self._fetch_lock = asyncio.Lock()
+        self._fetch_event = asyncio.Event()
+        self._fetch_counter = 0
+
+        self.known_queues = set(config.get("queue_names", []))
         self.running = False
         self.task = None
         self.sync_task = None
         self.monitoring_task = None
+
+        self.aqueue: Optional[asyncio.Queue] = None
 
         lock_free = True
         self._lock = (
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
+        if self.known_queues is None or len(self.known_queues) == 0:
+            raise BadConfigSource("Queue names are required for JobScheduler")
+
+        self.logger.info(f"Queue names to monitor: {self.known_queues}")
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
@@ -124,11 +149,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.info(f"Job running : {job_id}")
                 await self.put_status(job_id, work_state, datetime.now(), None)
             else:
-                self.logger.error(f"Unhandled status : {status}")
+                self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
+                await self.fail(job_id, work_item)  # Fail-safe
+
+            await self.resolve_dag_status(
+                job_id, work_item, datetime.now(), datetime.now()
+            )
 
             if status.is_terminal():
                 self.logger.info(f"Job {job_id} is in terminal state {status}")
-                self._reset_on_complete = True
+                await self.notify_event()
 
     def create_tables(self, schema: str):
         """
@@ -160,6 +190,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             delete_queue_function(schema),
             insert_version(schema, version),
             create_exponential_backoff_function(schema),
+            create_dag_table(schema),
+            create_dag_table_history(schema),
+            create_dag_history_trigger_function(schema),
+            create_dag_resolve_state_function(schema),
         ]
 
         query = ";\n".join(commands)
@@ -234,59 +268,160 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not installed:
             self.create_tables(DEFAULT_SCHEMA)
 
+            for work_queue in self.known_queues:
+                self.logger.info(f"Create queue: {work_queue}")
+                await self.create_queue(work_queue)
+                await self.create_queue(f"${work_queue}_dlq")
+
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
-        # self.task = asyncio.create_task(self._poll())
+        self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
 
     async def _poll(self):
-        self.logger.info("Starting database scheduler")
+        self.logger.info("Starting database job scheduler")
         wait_time = INIT_POLL_PERIOD
-        sleep_chunk = 0.250
+        batch_size = 10
+        failures = 0
+        last_deployments_timestamp = ClusterState.deployments_last_updated
+        slots_by_entrypoint = available_slots_by_executor(ClusterState.deployments)
 
         while self.running:
-            self.logger.info(f"Polling for new jobs : {wait_time}")
-            elapsed_time = 0
-            while elapsed_time < wait_time:
-                await asyncio.sleep(sleep_chunk)
-                elapsed_time += sleep_chunk
-                if self._reset_on_complete:
-                    self.logger.info(
-                        f"Elapsed time : {elapsed_time} > {wait_time} : {self._reset_on_complete}"
-                    )
+            self.logger.info(
+                f"Checking for new jobs, time = {wait_time}, events = {self._fetch_counter}, set = {self._fetch_event.is_set()}"
+            )
+            try:
+                try:
+                    await asyncio.wait_for(self._fetch_event.wait(), timeout=wait_time)
+                    self._fetch_event.clear()
+                    while self._fetch_counter > 0:
+                        self._fetch_counter -= 1
+                    self.logger.info(f"Processing job events: {self._fetch_counter}")
                     wait_time = INIT_POLL_PERIOD
-                    self._reset_on_complete = False
-                    break
+                except asyncio.TimeoutError:
+                    pass  # Proceed normally if timeout happens
 
-            has_records = False
-            if not self.job_manager.has_available_slot():
-                self.logger.debug(
-                    f"No available slots for work, waiting for slots :{wait_time}"
+                self.logger.info(f'----------------------------------------------')
+                self.logger.info(f'----------------------------------------------')
+                deployments_last_updated = ClusterState.deployments_last_updated
+                current_deployments = ClusterState.deployments
+
+                if deployments_last_updated != last_deployments_timestamp:
+                    self.logger.info(
+                        "Recalculated slots_by_entrypoint due to deployments change."
+                    )
+                    self.logger.info(
+                        f"deployments_last_updated   : {deployments_last_updated}"
+                    )
+                    self.logger.info(
+                        f"last_deployments_timestamp : {last_deployments_timestamp}"
+                    )
+
+                    last_deployments_timestamp = deployments_last_updated
+                    slots_by_entrypoint = available_slots_by_executor(
+                        current_deployments
+                    )
+
+                has_any_open_slots = any(
+                    slots > 0 for slots in slots_by_entrypoint.values()
                 )
                 has_records = False
-            else:
-                records = await self.get_work_items(
-                    limit=self.job_manager.SLOTS_AVAILABLE
+                self.logger.info(
+                    f"Slots by entrypoint [{has_any_open_slots}]: {slots_by_entrypoint}"
                 )
-                if records is not None:
-                    for record in records:
-                        has_records = True
-                        work_item = self.record_to_work_info(record)
-                        job_id = await self.enqueue(work_item)
-                        if job_id is None:
-                            self.logger.error(
-                                f"Error scheduling work item: {work_item.id}"
+
+                if has_any_open_slots:
+                    # TODO: Allow contronlling how many jobs to fetch per queue
+                    records_by_queue = await self.get_work_items_by_queue(
+                        limit=batch_size
+                    )
+                    records_by_entrypoint = defaultdict(list)
+
+                    for queue, records in records_by_queue.items():
+                        self.logger.info(f"Records for queue: {queue}")
+                        for record in records:
+                            work_info = self.record_to_work_info(record)
+                            entrypoint = work_info.data.get("metadata", {}).get("on")
+                            records_by_entrypoint[entrypoint].append(work_info)
+
+                    for entrypoint, records in records_by_entrypoint.items():
+                        print('------------')
+                        print(
+                            f'Work items for entrypoint: {entrypoint} : {len(records)}'
+                        )
+
+                        for work_info in records:
+                            print(f'Work item : {work_info}')
+                            has_records = True
+                            submission_id = work_info.id
+                            entrypoint = work_info.data.get("metadata", {}).get("on")
+                            executor = entrypoint.split("://")[0]
+                            # this can happen when the executor is not yet deployed or is being redeployed
+                            if executor not in slots_by_entrypoint:
+                                self.logger.warning(
+                                    f"Executor `{executor}` not found in slots_by_entrypoint. Retrying job `{submission_id}` after short delay."
+                                )
+                                await asyncio.sleep(2)  # Retry after a short delay
+                                continue
+
+                            print('------------')
+                            print(f'Work item : {work_info}')
+                            print(
+                                f'Work item entrypoint: {entrypoint} : slots : {slots_by_entrypoint[executor]}'
                             )
-                        else:
-                            self.logger.info(f"Work item scheduled with ID: {job_id}")
-                        if not self.job_manager.has_available_slot():
-                            self.logger.info(
-                                f"No more available slots for work, waiting for slots :{wait_time}"
+                            print(f'slots : {slots_by_entrypoint[executor]}')
+                            if slots_by_entrypoint[executor] <= 0:
+                                self.logger.info(
+                                    f"No available slots for work, scheduling : {submission_id}, time = {wait_time}, on = {entrypoint}"
+                                )
+                                break
+                            slots_by_entrypoint[executor] -= 1
+                            print(
+                                "ClusterState.deployments : ", ClusterState.deployments
                             )
-                            break
-            wait_time = (
-                INIT_POLL_PERIOD if has_records else min(wait_time * 2, MAX_POLL_PERIOD)
-            )
+                            print(
+                                f'slots after decrement : {slots_by_entrypoint[executor]}'
+                            )
+                            # FIXME: WE NEED  MAKE SURE THAT THE CLUSTER STATE IS UPDATED BEFORE WE SCHEDULE THE JOB
+                            await self.mark_as_active(work_info)
+                            job_id = await self.enqueue(work_info)
+
+                            if job_id is None:
+                                self.logger.error(
+                                    f"Error scheduling work item: {work_info.id}"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"Work item scheduled with ID: {job_id}"
+                                )
+
+                            scheduler_timeout = 100
+                            try:
+                                await asyncio.wait_for(
+                                    ClusterState.scheduled_event.wait(),
+                                    timeout=scheduler_timeout,
+                                )
+                                ClusterState.scheduled_event.clear()
+                                self.logger.info(
+                                    f"Scheduled event received, resetting wait time."
+                                )
+                            except asyncio.TimeoutError:
+                                pass  # Proceed normally if timeout happens
+                wait_time = (
+                    INIT_POLL_PERIOD
+                    if has_records
+                    else min(wait_time * 2, MAX_POLL_PERIOD)
+                )
+            except Exception as e:
+                self.logger.error(f"Error fetching jobs: {e}")
+                self.logger.error(traceback.format_exc())
+                failures += 1
+                if failures > 5:
+                    self.logger.error(
+                        f"Too many failures, entering cooldown (sleeping for 60s)"
+                    )
+                    await asyncio.sleep(60)
+                    failures = 0
 
     async def stop(self, timeout: float = 2.0) -> None:
         self.logger.info("Stopping job scheduling agent")
@@ -314,29 +449,22 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         Enqueues a work item for processing on the next available executor.
 
         :param work_info: The information about the work item to be processed.
-        :return: A tuple containing a boolean indicating whether the work item was successfully enqueued and the ID of the work item.
+        :return: The ID of the work item if successfully enqueued, None otherwise.
         """
-        if not self.job_manager.has_available_slot():
-            self.logger.info(
-                f"No available slots for work, scheduling : {work_info.id}"
-            )
-            return None
-
+        self.logger.info(f"Enqueuing work item : {work_info.id}")
         submission_id = work_info.id
+        entrypoint = work_info.data.get("metadata", {}).get("on")
+        if not entrypoint:
+            raise ValueError("The entrypoint 'on' is not defined in metadata")
+
+        if False:
+            if not has_available_slot(entrypoint, ClusterState.deployments):
+                self.logger.info(
+                    f"No available slots for work, scheduling : {submission_id}"
+                )
+                return None
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
-
-        # FIXME : This is a hack for now
-        # extract entrypoint from work_info
-        # this need to be configurable from db as projects can have different entrypoints
-        name = work_info.name
-        entrypoint = "/extract"
-        if name == "extract":
-            entrypoint = "/extract"
-        elif name == "template-matching":
-            entrypoint = "/template-matching"
-        elif name == "classify":
-            entrypoint = "/classify"
 
         try:
             returned_id = await self.job_manager.submit_job(
@@ -349,34 +477,52 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             return None
         return returned_id
 
-    async def get_work_items(
+    async def get_work_items_by_queue(
         self,
         limit: int = 1,
         stop_event: asyncio.Event = None,
-    ) -> List[Any]:
+    ) -> dict[str, list[Any]]:
         """Get the Jobs from the PSQL database.
 
         :param limit: the maximal number records to get
         :param stop_event: an event to signal when to stop iterating over the records
         :return:
         """
+
+        records_by_queue = {}
+        # FIXME : Change how we check for known queues
+        if not self.known_queues:
+            self.logger.info("No known queues, skipping fetching jobs.")
+            return records_by_queue
+
         async with self._lock:
             with self:
                 try:
                     fetch_query_def = fetch_next_job(DEFAULT_SCHEMA)
-                    query = fetch_query_def(
-                        name="extract",  # TODO this is a placeholder
-                        batch_size=limit,
-                        include_metadata=False,
-                        priority=True,
-                    )
-                    # we can't use named cursors as it will throw an error
-                    cursor = self.connection.cursor()
-                    cursor.itersize = limit
-                    cursor.execute(f"{query}")
-                    records = [record for record in cursor]
+                    for queue in self.known_queues:
+                        query = fetch_query_def(
+                            name=queue,
+                            batch_size=limit,
+                            include_metadata=False,
+                            priority=True,
+                            mark_as_active=False,
+                        )
+                        # print('----------------')
+                        # print(query)
+                        # we can't use named cursors as it will throw an error
+                        cursor = self.connection.cursor()
+                        cursor.itersize = limit
+                        cursor.execute(f"{query}")
+                        records = [record for record in cursor]
+                        if records:
+                            records_by_queue[queue] = records
+                            self.logger.info(
+                                f"Fetched {len(records)} jobs from queue: {queue}"
+                            )
+                        else:
+                            self.logger.info(f"No jobs found in queue: {queue}")
 
-                    return records
+                    return records_by_queue
                 except (Exception, psycopg2.Error) as error:
                     self.logger.error(f"Error fetching next job: {error}")
                     self.connection.rollback()
@@ -407,7 +553,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                           data,
                           retry_delay,
                           retry_backoff,
-                          keep_until
+                          keep_until,
+                          dag_id
                     FROM {schema}.{table}
                     WHERE id = '{job_id}'
                     """
@@ -489,7 +636,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor.itersize = 10000
                 cursor.execute(
                     f"""
-                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until
+                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id
                     FROM {schema}.{table} 
                     WHERE state IN ('{states}')
                     {f"LIMIT {batch_size}" if batch_size > 0 else ""}
@@ -513,6 +660,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :raises ValueError: If the job submission fails or if the job already exists.
         """
 
+        self.logger.info(f"Submitting job : {work_info.id}")
         work_queue = work_info.name
         if work_info.name not in self.known_queues:
             self.logger.info(f"Checking for queue: {work_queue}")
@@ -540,15 +688,38 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Job with submission_id {submission_id} already exists."
                 f"For work item : {work_info}."
             )
+        # TODO:
+        dag_id = generate_job_id()
+        dag_name = f"{dag_id}_dag"
+        work_info.dag_id = dag_id
 
-        splits = self.calculate_splits(work_info)
-
+        # splits = self.calculate_splits(work_info)
+        query_plan, topological_sorted_nodes = query_plan_work_items(work_info)
         with self:
             try:
+                # insert the DAG
+                cursor = self._execute_sql_gracefully(
+                    insert_dag(
+                        DEFAULT_SCHEMA, dag_id, dag_name, query_plan.model_dump()
+                    )
+                )
+                new_dag_key = cursor is not None and cursor.rowcount > 0
+
                 cursor = self._execute_sql_gracefully(
                     insert_job(DEFAULT_SCHEMA, work_info)
                 )
                 new_key_added = cursor is not None and cursor.rowcount > 0
+
+                for dag_work_info in topological_sorted_nodes:
+                    print('------- ', dag_work_info)
+                    cursor = self._execute_sql_gracefully(
+                        insert_job(
+                            DEFAULT_SCHEMA,
+                            dag_work_info,
+                        )
+                    )
+                    new_dag_key = cursor is not None and cursor.rowcount > 0
+
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
                 self.connection.rollback()
@@ -563,30 +734,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        # this is not needed when the scheduler is polling for jobs, as the job will be picked up by the scheduler
-        # and marked as active in the fetch_next_job query
-        job_id = await self.enqueue(work_info)
-        if job_id is None:
-            self.logger.error(f"Delaying scheduling work item: {work_info.id}")
-        else:
-            self.logger.info(f"Work item scheduled with ID: {job_id}")
-            with self:
-                try:
-                    cursor = self._execute_sql_gracefully(
-                        mark_as_active_jobs(
-                            DEFAULT_SCHEMA, work_info.name, [work_info.id]
-                        )
-                    )
-                    key_updated = cursor is not None and cursor.rowcount > 0
-                except (Exception, psycopg2.Error) as error:
-                    self.logger.error(f"Error updating job: {error}")
-                    self.connection.rollback()
-                    raise ValueError(
-                        f"Job update for submission_id {submission_id} failed. "
-                        f"Please check the logs for more information. {error}"
-                    )
-
+        self.logger.info(f"Job NOTIFY START with ID: {submission_id}")
+        await self.notify_event()
         return submission_id
+
+    async def mark_as_active(self, work_info: WorkInfo) -> bool:
+        print(f"Marking job as active : {work_info.id}")
+
+        with self:
+            try:
+                cursor = self._execute_sql_gracefully(
+                    mark_as_active_jobs(DEFAULT_SCHEMA, work_info.name, [work_info.id])
+                )
+                key_updated = cursor is not None and cursor.rowcount > 0
+                return key_updated
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error updating job: {error}")
+                self.connection.rollback()
+                return False
 
     async def is_valid_submission(
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
@@ -776,6 +941,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_delay=record[8],
             retry_backoff=record[9],
             keep_until=record[10],
+            dag_id=record[11],
         )
 
     async def _monitor(self):
@@ -932,9 +1098,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                                     f"Unhandled terminal status: {job_info.status}"
                                 )
 
-            except Exception as e:
-                logger.error(f"Error syncing jobs: {e}")
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error syncing jobs: {error}")
                 traceback.print_exc()
+                if self.connection:
+                    self.connection.rollback()  # Ensure rollback on failure
 
     def calculate_splits(self, work_info: WorkInfo) -> list[JobPartition]:
         """
@@ -948,3 +1116,67 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         partitions = partitioner.partition(work_info)
 
         return partitions
+
+    async def notify_event(self) -> bool:
+        self.logger.info(f"notify_event : {self._fetch_counter}")
+        async with self._fetch_lock:
+            if self._fetch_counter > 0:
+                return False
+
+            self._fetch_counter += 1
+            self._fetch_event.set()
+            return True
+
+    async def resolve_dag_status(
+        self,
+        job_id: str,
+        work_info: WorkInfo,
+        started_on: Optional[datetime] = None,
+        completed_on: Optional[datetime] = None,
+    ):
+        self.logger.info(f"Resolving DAG status : {job_id}, {work_info}")
+
+        with self:
+            try:
+                resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
+                print('resolve_query : ', resolve_query)
+                self._execute_sql_gracefully(resolve_query)
+            except (Exception, psycopg2.Error) as error:
+                self.logger.error(f"Error handling dag resolution: {error}")
+
+
+def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
+    pprint(f"Query planning : {work_info}")
+    frames_count = 3
+
+    plan = query_planner(frames_count, layout="12345")
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+    yml_str = plan_to_yaml(plan)
+    json_str = plan_to_json(plan)
+    pprint(yml_str)
+    print("-----------------")
+    pprint(json_str)
+
+    sorted_nodes = topological_sort(plan)
+    print("Topologically sorted nodes:", sorted_nodes)
+    print_sorted_nodes(sorted_nodes, plan)
+    dag_nodes = []
+
+    for i, node in enumerate(plan.nodes):
+        print(f"Node : {node} : dependencies : {node.dependencies}")
+        wi = copy.deepcopy(work_info)
+        wi.id = node.task_id
+        # wi.data = {}
+        # we need to add the dependencies to the root node
+        if i == 0:
+            work_info.dependencies = []  # Root node has no dependencies
+            wi.dependencies = [
+                work_info.id
+            ]  # Generated plan root node has the work_info as dependency
+        else:
+            wi.dependencies = node.dependencies
+        print(f"  -- item : {wi}")
+        dag_nodes.append(wi)
+
+    return plan, dag_nodes

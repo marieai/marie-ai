@@ -99,7 +99,7 @@ def load_template_matching_definitions(
     template_matching_request = TemplateMatchingRequestDoc(
         asset_key="TEMPLATE",
         pages=[],
-        id=-1,
+        id='',
         score_threshold=0.8,
         scoring_strategy="weighted",
         max_overlap=0.5,

@@ -165,7 +165,7 @@ EventMessage = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         'DESCRIPTOR': _EVENTMESSAGE,
-        '__module__': 'event_stream_pb2'
+        '__module__': 'event_stream_pb2',
         # @@protoc_insertion_point(class_scope:marieai.EventMessage)
     },
 )

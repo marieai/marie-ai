@@ -46,13 +46,8 @@ def find_overlap_vertical(box, data):
     overlaps = []
     indexes = []
     scores = []
-
     if len(data) == 0:
         return [], [], []
-
-    # print("overlap ***********")
-    # print(data)
-
     x, y, w, h = box
     y1min = y
     y1max = y + h
@@ -99,7 +94,6 @@ def find_overlap_vertical(box, data):
             scores.append(iou)
             overlaps.append(bb)
             indexes.append(i)
-
     return overlaps, indexes, scores
 
 
@@ -207,28 +201,32 @@ def merge_bboxes_as_block(bboxes) -> list[int]:
 def compute_iou(box1, box2):
     """
     Compute the intersection over union of two set of boxes, each box is [x1, y1, x2, y2]
-    @param box1:
-    @param box2:
-    @return:
+    @param box1: list of four integers [x1, y1, x2, y2]
+    @param box2: list of four integers [x1, y1, x2, y2]
+    @return: float IoU value
     """
 
     x1, y1, x2, y2 = box1
     x3, y3, x4, y4 = box2
 
-    # get the center of the box
+    # Calculate the (x, y) coordinates of the intersection rectangle
     x_overlap = max(0, min(x2, x4) - max(x1, x3))
     y_overlap = max(0, min(y2, y4) - max(y1, y3))
-    #
-    # print(
-    #     f"x_overlap: {y_overlap} y_overlap: {y_overlap}  : box1: {box1} box2: {box2}"
-    # )
 
+    # Calculate the area of intersection rectangle
     intersection = x_overlap * y_overlap
-    area1 = (x2 - x1) * ((y2 - y1) // 4)  # box1 area
-    area2 = (x4 - x3) * ((y4 - y3) // 4)  # box2 area
+
+    # Calculate the area of both the prediction and ground-truth rectangles
+    area1 = (x2 - x1) * (y2 - y1)  # box1 area
+    area2 = (x4 - x3) * (y4 - y3)  # box2 area
+
+    # Calculate the union area
     union = area1 + area2 - intersection
-    iou = intersection / union
-    return iou
+
+    # Compute the IoU
+    iou = intersection / union if union != 0 else 0
+
+    return max(iou, 0)  # Ensure IoU is not negative
 
 
 def merge_boxes_by_iou(bboxes, iou_threshold: float = 0.5):

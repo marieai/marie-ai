@@ -19,6 +19,7 @@ import marie.helper
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
+    DEPLOYMENT_STATUS_PREFIX,
     __cache_path__,
     __config_dir__,
     __marie_home__,
@@ -44,6 +45,7 @@ from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.serve.runtimes.servers.composite import CompositeServer
 from marie.serve.runtimes.servers.grpc import GRPCServer
 from marie.storage.kv.psql import PostgreSQLKV
@@ -104,6 +106,7 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"Setting up MarieServerGateway")
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
+        self.deployments = {}
         self.event_queue = asyncio.Queue()
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
@@ -157,7 +160,9 @@ class MarieServerGateway(CompositeServer):
             )
 
         self.distributor = GatewayJobDistributor(
-            gateway_streamer=None, logger=self.logger
+            gateway_streamer=None,
+            deployment_nodes=None,
+            logger=self.logger,
         )
 
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
@@ -172,6 +177,9 @@ class MarieServerGateway(CompositeServer):
             self.custom_stream
         )  # Call is an alias for stream in GatewayRequestHandler
         GatewayRequestHandler.dry_run = self.custom_dry_run
+
+        # FIXME : The resolver watch_service is not implemented correctly
+        self.resolver = None
 
         def _extend_rest_function(app):
             from fastapi import Request
@@ -199,7 +207,6 @@ class MarieServerGateway(CompositeServer):
                     start_after=datetime.now(),
                     expire_in_seconds=0,
                     keep_until=datetime.now(),
-                    on_complete=False,
                 )
 
                 result = await self.job_scheduler.submit_job(work_info)
@@ -322,10 +329,9 @@ class MarieServerGateway(CompositeServer):
         :return: An asynchronous iterator that yields the response objects.
 
         """
-        self.logger.info(f"intercepting stream")
+        self.logger.debug(f"intercepting stream : custom_stream")
         async for request in request_iterator:
             decoded = await self.decode_request(request)
-            print(f"Decoded request GRPC: {decoded}")
             if isinstance(decoded, AsyncIterator):
                 async for response in decoded:
                     yield response
@@ -340,8 +346,8 @@ class MarieServerGateway(CompositeServer):
         :param request: The request to decode.
         :return: The response.
         """
-        self.logger.info(f"Processing request: {request}")
         message = request.parameters
+        self.logger.info(f"Message details : {message}")
 
         if "invoke_action" not in message:
             response = Response()
@@ -466,8 +472,6 @@ class MarieServerGateway(CompositeServer):
         )
 
         submission_model = JobSubmissionModel(**message)
-        self.logger.info(f"Submission model : {submission_model}")
-
         metadata = submission_model.metadata
         project_id = metadata.get("project_id", None)
         ref_type = metadata.get("ref_type", None)
@@ -495,7 +499,6 @@ class MarieServerGateway(CompositeServer):
             start_after=datetime.now(),
             expire_in_seconds=0,
             keep_until=datetime.now(),
-            on_complete=False,
             policy=submission_policy,
         )
 
@@ -539,6 +542,8 @@ class MarieServerGateway(CompositeServer):
             except Exception as e:
                 self.logger.error(f"Failed to mark job as failed: {e}")
             return response
+        finally:
+            self.logger.info(f"Job submission completed")
 
     def error_response(
         self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False
@@ -616,7 +621,7 @@ class MarieServerGateway(CompositeServer):
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        # # task for processing events
+        # task for processing events
         run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
         await asyncio.gather(*run_server_tasks)
 
@@ -625,7 +630,7 @@ class MarieServerGateway(CompositeServer):
         etcd_host: str,
         etcd_port: int,
         service_name: str,
-        watchdog_interval: int = 5,
+        watchdog_interval: int = 1,
     ):
         """
          Setup service discovery for the gateway.
@@ -637,24 +642,31 @@ class MarieServerGateway(CompositeServer):
         :return: None
 
         """
-        self.logger.info(f"Setting up service discovery : {service_name}")
-        self.logger.info(f"ETCD host : {etcd_host}:{etcd_port}")
+        self.logger.info(
+            f"Setting up service discovery : {etcd_host}:{etcd_port}/{service_name}"
+        )
 
         if not service_name:
             raise BadConfigSource("Service name must be provided for service discovery")
 
         async def _start_watcher():
-            resolver = None
             try:
-                resolver = EtcdServiceResolver(
+                self.resolver = EtcdServiceResolver(
                     etcd_host,
                     etcd_port,
                     namespace="marie",
                     start_listener=False,
                     listen_timeout=watchdog_interval,
                 )
-                self.logger.debug(f"etcd checking : {resolver.resolve(service_name)}")
-                resolver.watch_service(service_name, self.handle_discovery_event)
+
+                self.resolver.watch_service(
+                    service_name, self.handle_discovery_event, notify_on_start=True
+                )
+                self.resolver.watch_service(
+                    DEPLOYMENT_STATUS_PREFIX,
+                    self.handle_discovery_event,
+                    notify_on_start=True,
+                )
             except Exception as e:
                 self.logger.error(
                     f"Failed to initialize etcd client on {etcd_host}:{etcd_port}"
@@ -699,23 +711,40 @@ class MarieServerGateway(CompositeServer):
         """
 
         error_counter = 0
+        gateway_changed = False
+
         while True:
             service, event = await self.event_queue.get()
             try:
                 self.logger.info(
-                    f"Queue size : {self.event_queue.qsize()} event =  {service}, {event}"
+                    f"Queue size : {self.event_queue.qsize()} service = {service}, event = {event}"
                 )
+
+                ev_key = event.key
                 ev_type = event.event
                 ev_value = event.value
-                if ev_type == "put":
-                    await self.gateway_server_online(service, ev_value)
-                elif ev_type == "delete":
-                    self.logger.info(f"Service {service} is unavailable")
-                    await self.gateway_server_offline(service, ev_value)
+
+                if ev_key.startswith(DEPLOYMENT_STATUS_PREFIX):
+                    await self.deployment_changed(ev_key, ev_type, ev_value)
                 else:
-                    raise TypeError(f"Not recognized event type : {ev_type}")
-                error_counter = 0  # reset error counter on successful processing
+                    gateway_changed = True
+                    if ev_type == "put":
+                        await self.gateway_server_online(service, ev_value)
+                    elif ev_type == "delete":
+                        self.logger.info(f"Service {service} is unavailable")
+                        await self.gateway_server_offline(service, ev_value)
+                    else:
+                        raise TypeError(f"Not recognized event type : {ev_type}")
+                    error_counter = 0  # reset error counter on successful processing
+
+                # if there are no more events, update the gateway streamer to reflect the changes
+                if self.event_queue.qsize() == 0 and gateway_changed:
+                    ClusterState.deployment_nodes = self.deployment_nodes
+                    await self.update_gateway_streamer()
+                    gateway_changed = False
+
             except Exception as ex:
+                raise ex
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
                 if error_counter >= max_errors:
@@ -724,6 +753,19 @@ class MarieServerGateway(CompositeServer):
                 await asyncio.sleep(1)
             finally:
                 self.event_queue.task_done()
+
+    def parse_deployment_details(self, address: str, ev_value: dict) -> dict:
+        # get the first executor from ev_value, we might have multiple executors in the future
+        worked_node = list(ev_value.keys())[0]
+        worker_info = ev_value[worked_node]
+        executor, status = next(iter(worker_info.items()))
+
+        return {
+            "prefix": DEPLOYMENT_STATUS_PREFIX,
+            "address": address,
+            "executor": executor,
+            "status": status,
+        }
 
     async def gateway_server_online(self, service, event_value):
         """
@@ -827,18 +869,38 @@ class MarieServerGateway(CompositeServer):
             for node in nodes:
                 self.logger.info(f"\tNode : {node}")
 
-        await self.update_gateway_streamer()
+        # await self.update_gateway_streamer()
 
     async def update_gateway_streamer(self):
         """Update the gateway streamer with the discovered executors."""
         self.logger.info("Updating gateway streamer")
+        # TODO : We can only do one Executor for now, need to update this to handle multiple executors
+        # Graph here is just a simple start-gateway -> executor -> end-gateway representation of the deployment
+        # it does not care if the executor is a Flow or a Deployment or if nodes are present in the executor
+        # this allows us to use same gateway streamer for all types of deployments
+
+        # {
+        #     "start-gateway": ["executor0","extract_executor"],
+        #     "executor0": ["end-gateway"],
+        #     "extract_executor": ["end-gateway"]
+        # }
+
+        executors_ = list(self.deployment_nodes.keys())
+        graph_description = {
+            "start-gateway": executors_,
+        }
+        for executor in executors_:
+            graph_description[executor] = ["end-gateway"]
+
+        print(f"graph_description: {graph_description}")
 
         # FIXME: testing with only one executor
         deployments_addresses = {}
-        graph_description = {
+        graph_descriptionXXXX = {
             "start-gateway": ["executor0"],
             "executor0": ["end-gateway"],
         }
+
         deployments_metadata = {"deployment0": {"key": "value"}}
         for i, (executor, nodes) in enumerate(self.deployment_nodes.items()):
             connections = []
@@ -870,7 +932,9 @@ class MarieServerGateway(CompositeServer):
 
         self.streamer = streamer
         self.distributor.streamer = streamer
-        JobManager.SLOTS_AVAILABLE = load_balancer.connection_count()
+        self.distributor.deployment_nodes = self.deployment_nodes
+
+        ClusterState.deployments = self.deployments
 
     async def gateway_server_offline(self, service: str, ev_value):
         """
@@ -888,7 +952,25 @@ class MarieServerGateway(CompositeServer):
             self.deployment_nodes[executor] = [
                 node for node in nodes if node["gateway"] != ctrl_address
             ]
-        await self.update_gateway_streamer()
+
+    async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
+        self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
+        if ev_key == DEPLOYMENT_STATUS_PREFIX:
+            return  # ignore the root key, need to handle this differently
+
+        suffix = ev_key[len(DEPLOYMENT_STATUS_PREFIX) :]
+        if suffix.startswith("/"):
+            suffix = suffix[1:]
+        address = suffix.split("/", 1)[0]
+
+        if ev_type == 'delete':
+            if address in self.deployments:
+                del self.deployments[address]
+        else:
+            deployment = self.parse_deployment_details(address, ev_value)
+            self.deployments[address] = deployment
+
+        ClusterState.deployments = self.deployments
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
@@ -932,6 +1014,3 @@ class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):
         :return:
         """
         return self.active_connection
-
-
-# clear;for i in {0..10};do curl localhost:51000/endpoint?text=x_${i} ;done;

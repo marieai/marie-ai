@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict
 
 from psycopg2.extras import Json
 
@@ -39,10 +39,15 @@ def try_set_timestamp(schema: str, column: str, interval: int) -> str:
     """
 
 
-def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> str:
+def insert_job(schema: str, work_info: WorkInfo) -> str:
+    dependencies_json = (
+        Json(work_info.dependencies) if work_info.dependencies else "'[]'::jsonb"
+    )
+
     return f"""
         INSERT INTO {schema}.job (
           id,
+          dag_id,
           name,
           priority,
           state,    
@@ -54,10 +59,11 @@ def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> s
           retry_delay,
           retry_backoff,
           policy,
-          parent_job_id     
+          dependencies     
         )
         SELECT
           id,
+          j.dag_id,
           j.name,
           priority,
           state,         
@@ -71,39 +77,37 @@ def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> s
           END as expire_in,
           CASE
             WHEN right(keep_until, 1) = 'Z' THEN CAST(keep_until as timestamp with time zone)
-            --ELSE start_after + CAST(COALESCE(keep_until, (q.retention_minutes * 60)::text, keep_until_default, '14 days') as interval)
-            -- ELSE start_after + COALESCE(keep_until::interval, (q.retention_minutes * 60) * interval '1 second', keep_until_default, interval '14 days')
           END as keep_until,
-          
+
           COALESCE(j.retry_limit, q.retry_limit, retry_limit_default, 2) as retry_limit,
           CASE
             WHEN COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false)
             THEN GREATEST(COALESCE(j.retry_delay, q.retry_delay, retry_delay_default), 1)
             ELSE COALESCE(j.retry_delay, q.retry_delay, retry_delay_default, 0)
           END as retry_delay,
-          
+
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
-          q.policy,
-          {'NULL' if parent_job_id is None else f"'{parent_job_id}'::uuid"} as parent_job_id
+          q.policy,          
+          {dependencies_json} as dependencies
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
+                '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
-                --'{to_timestamp_with_tz(work_info.start_after)}'::text as start_after,
                 CASE
                   WHEN right('{to_timestamp_with_tz(work_info.start_after)}', 1) = 'Z' THEN CAST('{to_timestamp_with_tz(work_info.start_after)}' as timestamp with time zone)
                   ELSE now() + CAST(COALESCE('{to_timestamp_with_tz(work_info.start_after)}','0') as interval)
                 END as start_after,
-            
+
                 CAST('{work_info.expire_in_seconds}' as interval) as expire_in,
                 {Json(work_info.data)}::jsonb as data,
                 {work_info.retry_delay}::int as retry_delay,
                 {work_info.retry_backoff}::bool as retry_backoff,
                 '{to_timestamp_with_tz(work_info.keep_until)}'::text as keep_until,
-                
+
                 2::int as retry_limit_default,
                 2::int as retry_delay_default,
                 False::boolean as retry_backoff_default,
@@ -112,6 +116,23 @@ def insert_job(schema: str, work_info: WorkInfo, parent_job_id: str = None) -> s
         )  j JOIN {schema}.queue q ON j.name = q.name
     ON CONFLICT DO NOTHING
     RETURNING id
+    """
+
+
+def insert_dag(schema: str, dag_id: str, dag_name: str, serialized_dag: dict) -> str:
+    return f"""
+        INSERT INTO {schema}.dag (
+            id,
+            name,
+            state,
+            serialized_dag
+            )
+        VALUES (
+            '{dag_id}'::uuid,
+            '{dag_name}'::text,
+            '{WorkState.CREATED.value}',
+            {Json(serialized_dag)}::jsonb
+            )
     """
 
 
@@ -151,7 +172,7 @@ def count_states(schema: str):
     """
 
 
-def cancel_jobs(schema, name: str, ids: list):
+def cancel_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
     return f"""
@@ -168,7 +189,7 @@ def cancel_jobs(schema, name: str, ids: list):
     """
 
 
-def resume_jobs(schema, name: str, ids: list):
+def resume_jobs(schema: str, name: str, ids: list):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
     return f"""
@@ -191,27 +212,60 @@ def fetch_next_job(schema: str):
         batch_size: int = 1,
         include_metadata: bool = False,
         priority: bool = True,
+        mark_as_active: bool = False,
     ) -> str:
-        return f"""
-        WITH next AS (
-            SELECT id
-            FROM {schema}.job
-            WHERE name = '{name}'
-              AND state < '{WorkState.ACTIVE.value}'
-              AND start_after < now()
-            ORDER BY {'priority DESC, ' if priority else ''}created_on, id
-            LIMIT {batch_size}
-            
-            --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
-        )
-        UPDATE {schema}.job j SET
-            state = '{WorkState.ACTIVE.value}',
-            started_on = now(),
-            retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
-        FROM next
-        WHERE name = '{name}' AND j.id = next.id
-        RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
-        """
+
+        if mark_as_active:
+            return f"""
+            WITH next AS (
+                SELECT id
+                FROM {schema}.job
+                WHERE name = '{name}'
+                  AND state < '{WorkState.ACTIVE.value}'
+                  AND start_after < now()
+                  AND (dependencies IS NULL OR jsonb_array_length(dependencies) = 0) -- Ensure no pending dependencies
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {schema}.dag AS d
+                      WHERE d.id = j.dag_id
+                      AND d.state = 'completed'
+                  )
+                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                LIMIT {batch_size}
+            )
+            UPDATE {schema}.job j SET
+                state = '{WorkState.ACTIVE.value}',
+                started_on = now(),
+                retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
+            FROM next
+            WHERE name = '{name}' AND j.id = next.id
+            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id'}
+            """
+        else:
+            return f"""
+                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until,j.dag_id'}
+                FROM {schema}.job AS j
+                WHERE j.name = '{name}'
+                  AND j.state < '{WorkState.ACTIVE.value}'
+                  AND j.start_after < now()
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {schema}.job AS d
+                      WHERE d.id IN (
+                          SELECT value::uuid
+                          FROM jsonb_array_elements_text(j.dependencies)
+                      )
+                      AND d.state != 'completed'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {schema}.dag AS d
+                      WHERE d.id = j.dag_id
+                      AND d.state = 'completed'
+                  )
+                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                LIMIT {batch_size}
+            """
 
     return query
 
@@ -252,6 +306,35 @@ def _complete_jobs_query(
       RETURNING *
     )
     SELECT COUNT(*) FROM results
+    """
+
+
+def _complete_jobs_queryXXXXXXXX(
+    schema: str, name: str, ids: list, output: dict, state_condition: str
+):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    return f"""
+    WITH completed AS (
+        UPDATE {schema}.job
+        SET completed_on = now(),
+            state = '{WorkState.COMPLETED.value}',
+            output = {Json(output)}::jsonb
+        WHERE name = '{name}'
+          AND id IN ({','.join(f"'{_id}'" for _id in ids)})
+          AND {state_condition}
+        RETURNING id
+    ), update_dependencies AS (
+        UPDATE {schema}.job AS j
+        --SET dependencies = j.dependencies - jsonb_build_array(j.id)
+        SET dependencies = (
+            SELECT jsonb_agg(elem)
+            FROM jsonb_array_elements(j.dependencies) elem
+            WHERE elem != to_jsonb(j.id)
+        )
+        FROM completed AS c
+        WHERE j.dependencies @> jsonb_build_array(c.id)
+    )
+    SELECT COUNT(*) FROM completed
     """
 
 

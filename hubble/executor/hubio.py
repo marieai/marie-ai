@@ -209,9 +209,11 @@ Metadata helps other users identify, search and reuse your Executor on Jina Clou
                         )
                         .replace(
                             '{{exec_keywords}}',
-                            str(exec_keywords.split(','))
-                            if exec_keywords != '{{}}'
-                            else '[]',
+                            (
+                                str(exec_keywords.split(','))
+                                if exec_keywords != '{{}}'
+                                else '[]'
+                            ),
                         )
                         .replace('{{exec_url}}', exec_url if exec_url != '{{}}' else '')
                     )
@@ -529,9 +531,9 @@ metas:
                 # upload the archived package
                 form_data = {
                     'public': 'True' if getattr(self.args, 'public', None) else 'False',
-                    'private': 'True'
-                    if getattr(self.args, 'private', None)
-                    else 'False',
+                    'private': (
+                        'True' if getattr(self.args, 'private', None) else 'False'
+                    ),
                     'md5sum': md5_digest,
                 }
 
@@ -1184,9 +1186,11 @@ metas:
             self._client = docker.from_env()
             # low-level client
             self._raw_client = APIClient(
-                base_url=docker.constants.DEFAULT_NPIPE
-                if __windows__
-                else docker.constants.DEFAULT_UNIX_SOCKET
+                base_url=(
+                    docker.constants.DEFAULT_NPIPE
+                    if __windows__
+                    else docker.constants.DEFAULT_UNIX_SOCKET
+                )
             )
         except docker.errors.DockerException:
             self.logger.critical(

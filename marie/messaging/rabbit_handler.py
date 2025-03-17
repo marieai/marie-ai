@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, List
 
 from pika.exchange_type import ExchangeType
@@ -37,7 +38,7 @@ class RabbitMQToastHandler(ToastHandler):
                 raise ValueError(
                     f"'api_key' not present in notification : {notification}"
                 )
-
+            silence_exceptions = True
             msg_config = self.config
             api_key = notification.api_key
 
@@ -68,6 +69,8 @@ class RabbitMQToastHandler(ToastHandler):
                 exchange=exchange, routing_key=routing_key, message=notification
             )
         except Exception as e:
+            if True:
+                return
             if silence_exceptions:
                 self.logger.warning(
                     "Toast enabled but config not setup correctly", exc_info=1

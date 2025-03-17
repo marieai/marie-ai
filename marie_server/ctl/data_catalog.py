@@ -37,9 +37,9 @@ class SeparatorBar(Horizontal):
 class NodeInfoWidget(Vertical, can_focus=True):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.connection_status = "Connected"
-        self.app_version = "3.0.30"
-        self.host = "localhost:8000"
+        self.connection_status = "Unknown"
+        self.app_version = "X.X.XXX"
+        self.host = "localhost:0000"
 
     def compose(self) -> ComposeResult:
         with Vertical():

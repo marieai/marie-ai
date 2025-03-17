@@ -80,20 +80,11 @@ Enable encryption
 python ./app.py --enable-crypto  --tls-cert ./cert.pem
 ```
 
-
-Starting in Production mode with `gunicorn`. Config
-[gunicorn]settings (https://docs.gunicorn.org/en/stable/settings.html#settings)
-
-```sh
-gunicorn -c gunicorn.conf.py wsgi:app  --log-level=debug
-```
-
 Activate the environment as we used `PIP` to install `docker-compose` (python -m pip install docker-compose)
 
 ```sh
     source  ~/environments/pytorch/bin/activate
 ```
-
 
 ## Starting the Control Plane
 
@@ -114,24 +105,25 @@ ln -s ./config/.env.dev ./.env
 docker compose down --volumes --remove-orphans && DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml  --project-directory . up --build --remove-orphans
 ```
 
-Start consul server
-```sh
-docker compose -f ./Dockerfiles/docker-compose.yml --project-directory . up consul-server  --build  --remove-orphans
+### Start storage
+Adding `--remove-orphans` will remove any orphaned containers
+
+```shell
+docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build -d
+```
+### Start monitoring
+
+```shell
+docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.monitoring.yml --project-directory . up  --build -d  
 ```
 
-Start storage
-```shell
-docker compose  --env-file ./config/.env -f  ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
-```
 ## Docker 
 
-
-Start Marie-AI with minimal dependencies (s3, redis, consul, traefik, postgres, minio)
+Start Marie-AI with minimal dependencies (s3, redis, postgres, minio)
 
 ```sh 
 docker compose  --env-file ./config/.env -f ./Dockerfiles/docker-compose.yml -f ./Dockerfiles/docker-compose.s3.yml -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans 
 ```
-
 
 
 ### CPU
@@ -186,7 +178,7 @@ Overwrite the container `ENTRYPOINT` by using `--entrypoint` from command line a
 `nvidia-smi`
 
 ```sh
-docker run -it --rm  --gpus all --entrypoint /bin/bash marieai/marie:3.0.31-cuda
+docker run -it --rm  --gpus all --entrypoint /bin/bash marieai/marie:3.0.30-cuda
 ```
  
 Remove dangling containers
@@ -545,6 +537,12 @@ pip install bump-pydantic
 ./bump.sh
 ```
 
-To patch JINA AI apply changes from the commits.
 
+NEW AI BASED OCR - VERY POOR, HALLUCINATIONS 
+https://olmocr.allenai.org/
+https://paperswithcode.com/paper/olmocr-unlocking-trillions-of-tokens-in-pdfs
+GOD_OCR2
 
+https://github.com/infiniflow/ragflow
+
+https://www.upstage.ai/

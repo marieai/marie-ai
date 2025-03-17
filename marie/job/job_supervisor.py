@@ -1,18 +1,28 @@
 import asyncio
+import time
 from typing import Dict, List, Optional, Union
 
 from docarray import BaseDoc, DocList
 from docarray.documents import TextDoc
 
+from marie.constants import DEPLOYMENT_STATUS_PREFIX
 from marie.job.common import ActorHandle, JobInfoStorageClient, JobStatus
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.networking import _NetworkingHistograms, _NetworkingMetrics
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
+from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.types_core.request.data import DataRequest
+
+
+async def fn():
+    print('fn-THAT SLEEPS START')
+    await asyncio.sleep(1.5)
+    print('fn-THAT SLEEPS DONE')
 
 
 class JobSupervisor:
@@ -39,6 +49,9 @@ class JobSupervisor:
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
         self.request_info = None
+        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+
+        self._active_tasks = set()
 
     async def ping(self):
         """Used to check the health of the executor/deployment."""
@@ -67,7 +80,7 @@ class JobSupervisor:
                 histograms=_NetworkingHistograms(),
             )
 
-            doc = TextDoc(text=f"ping : _jina_dry_run_")
+            doc = TextDoc(text=f"ping : {deployment_name}@_jina_dry_run_")
             request = DataRequest()
             request.document_array_cls = DocList[BaseDoc]()
             request.header.exec_endpoint = "_jina_dry_run_"
@@ -173,7 +186,9 @@ class JobSupervisor:
                         )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
-        self.logger.debug(f"Job {self._job_id} submitted in the background.")
+            # task = asyncio.create_task(fn())
+            print(task)
+        self.logger.info(f"Job {self._job_id} submitted in the background.")
 
     def send_callback(
         self, requests: Union[List[DataRequest] | DataRequest], request_info: Dict
@@ -190,20 +205,51 @@ class JobSupervisor:
             request = [requests]
         self.request_info = request_info
 
+        print('send_callback self.request_info:', self.request_info)
+        print('send_callback requests:', requests)
+
+        # FIXME : This is a hack to trigger the event n iJob Scheduler
+        request_id = request_info["request_id"]
+        address = request_info["address"]
+        deployment_name = request_info["deployment"]
+
+        self.logger.info(f"Sent request to {address} on deployment {deployment_name}")
+
+        from grpc_health.v1.health_pb2 import HealthCheckResponse
+
+        status: HealthCheckResponse.ServingStatus = (
+            HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN
+        )
+        status_str = HealthCheckResponse.ServingStatus.Name(status)
+        key = f"{DEPLOYMENT_STATUS_PREFIX}/{address}/{deployment_name}"
+
+        _lease_time = 5
+        _lease = self._etcd_client.lease(_lease_time)
+        res = self._etcd_client.put(key, status_str, lease=_lease)
+
+        ClusterState.scheduled_event.set()
+
     async def _submit_job_in_background(self, curr_info):
         try:
+            start_time = time.monotonic()
+            self.logger.info(f"Submitting job {self._job_id} in the background.")
             response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=curr_info,
                 send_callback=self.send_callback,
             )
+            self.logger.info(f"Job {self._job_id} submitted successfully.")
+            mid_time = time.monotonic()
+            print(f"Submission took {mid_time - start_time:.2f} seconds")
+
             # printing the whole response will trigger a bug in rich.print with stackoverflow
             # format the response
-            print("Response type: ", type(response))
-            print("Response data: ", response.data)
-            print("Response data: ", response.parameters)
-            print("Response docs: ", response.data.docs)
-            print("Response status: ", response.status)
+            if True:
+                print("Response type: ", type(response))
+                print("Response data: ", response.data)
+                print("Response data: ", response.parameters)
+                print("Response docs: ", response.data.docs)
+                print("Response status: ", response.status)
 
             # This monitoring strategy allows us to have Floating Executors that can be used to run jobs outside of the main
             # deployment. This is useful for running jobs that are not part of the main deployment, but are still part of the
@@ -215,12 +261,6 @@ class JobSupervisor:
             # or while the job was marked from the EXECUTOR worker node as "STOPPED", "SUCCEEDED", "FAILED".
 
             job_status = await self._job_info_client.get_status(self._job_id)
-            print(
-                "Job status from  _submit_job_in_background: ",
-                job_status,
-                job_status.is_terminal(),
-            )
-
             if response.status.code == jina_pb2.StatusProto.SUCCESS:
                 if job_status.is_terminal():
                     self.logger.warning(
@@ -263,6 +303,9 @@ class JobSupervisor:
                     await self._job_info_client.put_status(
                         self._job_id, JobStatus.FAILED, message=f"{name}"
                     )
+
+            end_time = time.monotonic()
+            print(f"Full background process took {end_time - mid_time:.2f} seconds")
         except Exception as e:
             await self._job_info_client.put_status(
                 self._job_id, JobStatus.FAILED, message=str(e)

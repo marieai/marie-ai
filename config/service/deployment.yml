@@ -6,6 +6,7 @@ with:
       py_modules:
         - marie.executor.text
   replicas: 1
+
   name: ext_dep
   protocol: [grpc]
 

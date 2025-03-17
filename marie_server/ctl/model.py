@@ -2,10 +2,9 @@ from pydantic import BaseModel
 
 
 class ConnectionStatus(BaseModel):
+    connected: str = "CONNECTED"
     connecting: str = "CONNECTING"
     disconnected: str = "DISCONNECTED"
-    read_write: str = "R/W"
-    read_only: str = "RO"
 
 
 class Config(BaseModel):
@@ -13,3 +12,4 @@ class Config(BaseModel):
     password: str = None
     etcd_host: str = "localhost"
     etcd_port: int = 2379
+    service_name: str = "gateway/marie"

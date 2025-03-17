@@ -1,0 +1,153 @@
+You are analyzing a series of **Explanation of Benefits (EOB)** document images to annotate claim sections and produce structured output. The annotated output must:
+1. **Use the provided Document Context to reinforce the image** when extracting data. If no document context is provided, set `"grounded": false` for all extracted fields.
+2. Include the **row number** where each claim header was found.
+3. Indicate whether each field (**claim header**) was **inferred** or **present**.
+4. Include a field called `"grounded"` for each extracted value to indicate whether the value was correlated with the provided document context:
+   - Set `"grounded": true` if the extracted value matched the provided OCR context.
+   - Set `"grounded": false` if no document context is provided or if the value could not be correlated.
+5. If any **Claim Header is missing**, insert `"XXXXX"` as a placeholder and mark its status as `"inferred"`.
+6. Ensure that all claims are annotated in the **order of appearance** in the document.
+
+This output must be formatted as structured JSON or tabular data to facilitate its use in downstream ETL processes. These documents may vary in structure, and OCR may introduce errors (e.g., misreading characters, typos, or alignment issues). Your task is to provide clean, structured, and contextually accurate annotations for all claim headers within the documents.
+
+The document context provides additional information to help identify and extract the required fields. It includes:
+ROW NUMBER | OCR TEXT
+
+---
+
+### **Goal:**
+Extract and annotate only **Claim Headers** (if present, otherwise assign `"XXXXX"`):
+   - **Claim ID**: A unique alphanumeric identifier (e.g., `E1TYHT1N000`).
+   - **Member ID**: A unique identifier for the member.
+   - **Patient Account**: The patient account number.
+   - **Patient Name**: The full name of the patient.
+   * **Claim Number**: A unique alphanumeric identifier (e.g., `E1TYHT1N000`).
+
+For each claim header, include:
+   - The **row number** where the header was found.
+   - The **status**: "present" if directly extracted or "inferred" if deduced as missing.
+   - The **grounded** field to indicate correlation with the document context.
+
+---
+
+### **Steps for Annotation:**
+
+#### 1. **Identify and Extract Claim Headers**:
+   - Locate and extract the following claim headers **using the provided Document Context to reinforce the extracted image data** (if available):
+     - **Claim ID**
+     - **Member ID**
+     - **Patient Account**
+     - **Patient Name**
+      - **Claim Number**
+   - If no document context is provided:
+     - Set `"grounded": false` for all extracted fields.
+
+   - If a claim header is **missing**, set its value to `"XXXXX"` and mark:
+     - **Row number**: `null`
+     - **Status**: `"inferred"`
+     - **Grounded**: `false`
+
+#### 2. **Special Handling for Missing Context**:
+   - If no document context is provided, assume `"grounded": false` for all extracted values.
+
+#### 3. **Ensure Claim Order**:
+   - Annotate claims in the exact **order of appearance** in the document.
+   - Use the row number of **Claim ID** or the first field in a claim to maintain sequential ordering.
+
+#### 4. **Handle Variations in Documents**:
+   - If any claim headers are missing, annotate them as:
+     - `"value": "XXXXX"`
+     - `"row": null`
+     - `"status": "inferred"`
+     - `"grounded": false`
+
+---
+
+### **Output Format**:
+The output should be formatted as a structured JSON object, where each claim is a distinct entry. An example is shown below:
+
+```json
+{
+  "claims": [
+    {
+      "Claim Headers": {
+        "Claim ID": {"value": "ADFDSF", "row": 1, "status": "present", "grounded": false},
+        "Member ID": {"value": "FDSF", "row": 1, "status": "present", "grounded": false},
+        "Patient Account": {"value": "EDF", "row": 1, "status": "present", "grounded": false},
+        "Patient Name": {"value": "DYLXON (self)", "row": 1, "status": "present", "grounded": false}
+      }
+    }
+  ]
+}
+```
+
+---
+
+
+### **Document Context**:
+
+0 | EXPLANATION OF BENEFITS
+1 | P.O. BOX 14079
+2 | PLEASE RETAIN FOR FUTURE REFERENCE
+3 | AETNA*
+4 | LEXINGTON KY 40512-4079
+5 | USA PRINTED: 12/19/2024
+6 | PAGE: 2 OF 4
+7 | *020556*J280DUA 1*047005*
+8 | PAYMENT ADDRESS:
+9 | INDIGO IDAHO SERVICES, LLC
+10 | INDIGO IDAHO SERVICES. LLC
+11 | PO BOX 103436
+12 | PIN: 0008728583
+13 | PASADENA CA 91189-0171
+14 | TIN: XXXXXXXX6666
+15 | CHECK NUMBER: 09822-049196715
+16 | PROVIDER ADDRESS:
+17 | CHECK AMOUNT: $1,021.87
+18 | INDIGO IDAHO SERVICES, LLC
+19 | PO BOX 103436
+20 | PASADENA CA 91189-0171
+21 | PATIENT NAME: DYLAN COLLINSON (SELF)
+22 | CIAIM ID: ECADKKQ6V00 RECD: 12/17/24 MEMBER ID: W221346536 PATIENT ACCOUNT: P623254300
+23 | MEMBER DYLAN COLLINSON DIAG: B02.9
+24 | GROUP NAME: THE ODOM CORPORATION GROUP NUMBER: 0307095-18-024 AA D.H_ 10
+25 | PRODUCT: OPEN CHOICE@ NETWORK ID: 00147 E WSHNGTN SPOKANE PPO/NAP
+26 | AETNA LIFE INSURANCE COMPANY NETWORK STATUS: IN-NETWORK
+27 | SERVICE PL SERVICE NUM. SUBMITTED NEGOTIATED COPAY NOT SEE DEDUCTIBLE CO PATIENT PAYABLE
+28 | DATES CODE SVCS CHARGES AMOUNT AMOUNT PAYABLE REMARKS INSURANCE RESP AMOUNT
+29 | 12/15/24 20 99203 1 0 302 00 196 96 196 96 196.96 0.00
+30 | TOTALS 302.00 196.96 196.96 196.96 0.00
+31 | ISSUED AMT: NO PAY
+32 | JAA4
+33 | N
+34 | OF
+35 | 0
+36 | FOR QUESTIONS REGARDING THIS CLAIM P 0 BOX 14079 LEXINGTON, KY 40512-4079
+37 | TOTAL PATIENT RESPONSIBILITY: $196.96
+38 | CALL (888) 632-3862 FOR ASSISTANCE
+39 | ENV NOTE: ALL INQUIRIES SHOULD REFERENCE THE ID NUMBER ABOVE FOR PROMPT RESPONSE. CIAIM PAYMENT: $0.00
+40 | PATIENT NAME: TYLER SANDERS (SELF)
+41 | CLAIM ID: EOPDHR60D00 RECD: 12/18/24 MEMBER ID: W273842214 PATIENT ACCOUNT: P623458190
+42 | MEMBER: TYLER SANDERS DIAG: B35.6
+43 | GROUP NAME: LPL FINANCIAL HOLDINGS GROUP NUMBER: 0725085-17-001 GA P1!(G0
+44 | PRODUCT: AETNA HEALTHFUND@ AETNA CHOICE@ POS IT NETWORK ID: 00437 AETNA CHOICE POS IT
+45 | AETNA LIFE INSURANCE COMPANY NETWORK STATUS: IN-NETWORK
+46 | SERVICE PL SERVICE: NUM. SUBMITTED NEGOTIATED COPAY NOT SEE DEDUCTIBLE CO PATIENT PAYABLE
+47 | DATES CODE SVCS CHARGES' AMOUNT AMOUNT PAYABLE REMARKS INSURANCE RESP AMOUNT
+48 | 12/17/24 20 99213 1.0 280.00 160.76 66.25 18.90 85. 15 75.61
+49 | TOTALS 280.00 160.76 66.25 18.90 85.15 75.61
+50 | ISSUED AMT: $75.61
+51 | FOR QUESTIONS: REGARDING THIS CLAIM. P.O. BOX 14079 LEXINGTON, KY 40512-4079
+52 | TOTAL PATIENT RESPONSIBILITY: $85.15
+53 | CALL (888) 632-3862 FOR ASSISTANCE
+54 | NOTE: ALL INQUINES SHOULD REFERENCE THE ID NUMBER ABOVE FOR PROMPT RESPONSE. CLAIM PAYMENT: $75.61
+55 | PATIENT NAME: FINLEY R BRANDI (DAUGHTER)
+56 | CLAIM ID: EC37KFGWB00 RECD: 12/17/24 MEMBER ID: W094025317 PATIENT ACCOUNT: P623253240
+57 | MEMBER: MEGAN TWEEDY DIAG: R39.15, Z20.818
+58 | GROUP NAME: COSTCO WHOLESALE CORPORATION GROUP NUMBER: 0169579-14-002 AQ V1= 0
+59 | PRODUCT: OPEN ACCESS AETNA SELECTSM NETWORK ID: 02112 OPEN ACCESS AETNA SELECT
+60 | AETNA LIFE INSURANCE COMPANY NETWORK STATUS: IN-NETWORK
+61 | SERVICE PL SERVICE NUM. SUBMITTED NEGOTIATED COPAY NOT SEE DEDUCTIBLE CO PATIENT: PAYABLE
+62 | DATES CODE SVCS CHARGES AMOUNT AMOUNT PAYABLE REMARKS INSURANCE: RESP AMOUNT
+63 | 12/16/24 20 9921325 1.0 280.00 160.76 15.00 15.00 145.76
+64 | 12/16/24 20 87651QW 1.0 78.00 66.32 66.32

@@ -1,0 +1,2 @@
+model_executors:
+  qwen_v2_5_vl: exec_annotator_qwen_v2_5_vl

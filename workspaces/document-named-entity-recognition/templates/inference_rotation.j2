@@ -1,0 +1,18 @@
+
+Determine whether the document is rotated relative to its intended orientation. If a rotation is detected, specify the angle of rotation (e.g., "90°", "180°") along with any relevant details regarding the misalignment.
+
+### Structured Output Requirement:
+
+Return the analysis in the following JSON format:
+
+```json
+{
+  "is_rotated": <true or false>,
+  "rotation_angle": "<angle in degrees, e.g., '90°', or null if not applicable>",
+  "details": "<additional details regarding the rotation>"
+}
+```
+
+- **is_rotated:** Indicates whether the document is rotated (`true`) or not (`false`).
+- **rotation_angle:** Specifies the angle of rotation if applicable; otherwise, use `null`.
+- **details:** Provides any extra details about the rotation or misalignment.

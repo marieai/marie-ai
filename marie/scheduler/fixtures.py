@@ -55,7 +55,8 @@ def create_job_table(schema: str):
       output jsonb,
       dead_letter text,
       policy text,
-      parent_job_id uuid
+      dependencies JSONB DEFAULT '[]'::jsonb,
+      dag_id uuid not null
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
@@ -302,4 +303,224 @@ def create_exponential_backoff_function(schema):
                         retry_delay * (2 ^ LEAST(16, retry_count + 1) / 2) * random()) * INTERVAL '1 second';
     END;
     $$ LANGUAGE plpgsql;
+    """
+
+
+def create_dag_table(schema: str):
+    # Possible Values for default_view:
+    #     grid - Shows a grid-based task execution timeline.
+    #     graph - Displays the DAG as a directed acyclic graph (DAG) structure.
+    #     tree - Provides a tree-structured view of task execution history.
+    #     gantt - Displays a Gantt chart for task durations.
+    #     duration - Shows task execution durations in a bar chart.
+    return f"""
+        CREATE TABLE {schema}.dag (
+            id uuid not null default gen_random_uuid(),
+            name VARCHAR(250) NOT NULL,
+            state VARCHAR(50), -- Possible values same as job.state enum
+            root_dag_id VARCHAR(250),
+            is_subdag BOOLEAN DEFAULT FALSE,
+            default_view VARCHAR(50) DEFAULT 'graph', -- Possible values: grid, graph, tree, gantt, duration
+            serialized_dag JSONB,
+            completed_on timestamp with time zone,
+            created_on timestamp with time zone not null default now(),
+            updated_on timestamp with time zone not null default now()
+        );
+    """
+
+
+def create_dag_table_history(schema: str):
+    return f"""
+        CREATE TABLE {schema}.dag_history (
+          -- Primary key for the history record.
+          history_id       BIGSERIAL PRIMARY KEY,
+        
+          -- Columns mirroring the dag table:
+          id               UUID NOT NULL,  -- References dag.id
+          name             VARCHAR(250) NOT NULL,
+          state            VARCHAR(50),    -- Possible values same as job.state enum
+          root_dag_id      VARCHAR(250),
+          is_subdag        BOOLEAN DEFAULT FALSE,
+          default_view     VARCHAR(50) DEFAULT 'graph',  -- e.g., grid, graph, tree, gantt, duration
+          serialized_dag   JSONB,
+          completed_on     TIMESTAMP WITH TIME ZONE,
+          created_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          updated_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        
+          -- Timestamp for when this row was added to the history:
+          history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        );
+    """
+
+
+def create_dag_history_trigger_function(schema: str):
+    return f"""
+        -- 1. Create or replace the trigger function that populates dag_history
+        CREATE OR REPLACE FUNCTION {schema}.dag_history_trigger_func()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          IF TG_OP = 'INSERT' THEN
+            INSERT INTO {schema}.dag_history (
+              id,
+              name,
+              state,
+              root_dag_id,
+              is_subdag,
+              default_view,
+              serialized_dag,
+              completed_on,
+              created_on,
+              updated_on
+            )
+            VALUES (
+              NEW.id,
+              NEW.name,
+              NEW.state,
+              NEW.root_dag_id,
+              NEW.is_subdag,
+              NEW.default_view,
+              NEW.serialized_dag,
+              NEW.completed_on,
+              NEW.created_on,
+              NEW.updated_on
+            );
+            RETURN NEW;
+        
+          ELSIF TG_OP = 'UPDATE' THEN
+            INSERT INTO {schema}.dag_history (
+              id,
+              name,
+              state,
+              root_dag_id,
+              is_subdag,
+              default_view,
+              serialized_dag,
+              completed_on,
+              created_on,
+              updated_on
+            )
+            VALUES (
+              NEW.id,
+              NEW.name,
+              NEW.state,
+              NEW.root_dag_id,
+              NEW.is_subdag,
+              NEW.default_view,
+              NEW.serialized_dag,
+              NEW.completed_on,
+              NEW.created_on,
+              NEW.updated_on
+            );
+            RETURN NEW;
+        
+          ELSIF TG_OP = 'DELETE' THEN
+            INSERT INTO {schema}.dag_history (
+              id,
+              name,
+              state,
+              root_dag_id,
+              is_subdag,
+              default_view,
+              serialized_dag,
+              completed_on,
+              created_on,
+              updated_on
+            )
+            VALUES (
+              OLD.id,
+              OLD.name,
+              OLD.state,
+              OLD.root_dag_id,
+              OLD.is_subdag,
+              OLD.default_view,
+              OLD.serialized_dag,
+              OLD.completed_on,
+              OLD.created_on,
+              OLD.updated_on
+            );
+            RETURN OLD;
+          END IF;
+        
+          RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+        
+        -- 2. Create the trigger that calls dag_history_trigger_func after modifications on dag
+        CREATE TRIGGER dag_history_trigger
+        AFTER INSERT OR UPDATE OR DELETE
+        ON {schema}.dag
+        FOR EACH ROW
+        EXECUTE FUNCTION {schema}.dag_history_trigger_func();
+    """
+
+
+def create_dag_resolve_state_function(schema: str):
+    # 1. Marks the DAG as “failed” if any of its jobs has “failed.”
+    # 2. Marks the DAG as “completed” if all of its jobs are “completed.”
+    # 3. Otherwise marks the DAG as “active.”
+
+    return f"""
+        CREATE OR REPLACE FUNCTION {schema}.resolve_dag_state(
+            p_dag_id UUID
+        )
+        RETURNS TEXT
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            v_any_failed    BOOLEAN;
+            v_all_completed BOOLEAN;
+            v_updated_rows  INT;
+            v_new_state     TEXT := NULL;
+        BEGIN
+            -- 1) If any job is "failed," mark the DAG as "failed."
+            SELECT EXISTS (
+                SELECT 1
+                FROM marie_scheduler.job
+                WHERE dag_id = p_dag_id
+                  AND state = 'failed'
+            )
+            INTO v_any_failed;
+        
+            IF v_any_failed THEN
+                v_new_state := 'failed';
+        
+            ELSE
+                -- 2) If all jobs are "completed," mark the DAG as "completed."
+                SELECT NOT EXISTS (
+                    SELECT 1
+                    FROM marie_scheduler.job
+                    WHERE dag_id = p_dag_id
+                      AND state <> 'completed'
+                )
+                INTO v_all_completed;
+        
+                IF v_all_completed THEN
+                    v_new_state := 'completed';
+                ELSE
+                    -- 3) Otherwise, mark the DAG as "active."
+                    v_new_state := 'active';
+                END IF;
+            END IF;
+        
+            -- Update the DAG state if it differs from the current one:
+            UPDATE marie_scheduler.dag
+            SET state = v_new_state
+            WHERE id = p_dag_id
+              AND state <> v_new_state;
+        
+            GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+        
+            IF v_updated_rows > 0 THEN
+                RETURN v_new_state;
+            END IF;
+        
+            -- No update was made; return the current state.
+            RETURN (
+                SELECT state
+                FROM marie_scheduler.dag
+                WHERE id = p_dag_id
+            );
+        END;
+        $$;
+        
     """

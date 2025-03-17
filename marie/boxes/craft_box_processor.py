@@ -36,7 +36,7 @@ from .line_processor import find_line_number, line_merge
 
 # FIXME : Rework package import
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+# warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
 
 def crop_poly_low(img, poly):

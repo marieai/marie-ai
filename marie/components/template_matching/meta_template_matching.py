@@ -4,7 +4,6 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 import torch
-from joblib import Parallel, delayed
 from PIL import Image
 from torch import nn
 
@@ -275,7 +274,6 @@ class MetaTemplateMatcher(BaseTemplateMatcher):
         template_snippet: np.ndarray,
     ) -> float:
         from Levenshtein import distance
-        from numpy.linalg import norm
 
         d = distance(ngram_words, template_text)
         sim_val = 1 - d / max(len(ngram_words), len(template_text))

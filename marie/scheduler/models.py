@@ -11,6 +11,7 @@ from marie.scheduler.state import WorkState
 # https://cs.android.com/androidx/platform/frameworks/support/+/androidx-main:work/work-runtime/src/main/java/androidx/work/WorkInfo.kt
 class WorkInfo(BaseModel):
     id: str = Field(default_factory=lambda: uuid7str())
+    dag_id: Optional[str] = None  # dag_id is used to group multiple jobs
     name: str
     priority: int
     data: Dict[str, Any]
@@ -22,6 +23,7 @@ class WorkInfo(BaseModel):
     expire_in_seconds: int
     keep_until: datetime
     policy: Optional[str] = None
+    dependencies: Optional[list[str]] = None
 
 
 class JobSubmissionModel(BaseModel):

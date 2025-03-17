@@ -14,7 +14,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/examples/batch_document_ocr.py" />
-    <option name="PARAMETERS" value="--config config.dev.json --pipeline default --input $USER_HOME$/tmp/analysis/oda-research/204019943/PID_900_6705_0_204019943.tif  --output_dir $USER_HOME$/tmp/analysis/oda-research/204019943/300dpi" />
+    <option name="PARAMETERS" value="--config config.prod.json --pipeline default --input $PROJECT_DIR$/../../relation-extraction/dataset/fragments/TABLE_SECTION/images --output_dir $PROJECT_DIR$/../../relation-extraction/dataset/fragments/TABLE_SECTION/meta" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

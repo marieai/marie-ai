@@ -1,0 +1,46 @@
+To identify and annotate rows in Explanation of Benefits (EOB) documents that contain the **Claim ID**. This will ensure only valid rows with **Claim ID** are identified.
+
+
+### CLAIM ID Definition:
+A valid Claim ID row contains the following structure:
+- **"Claim ID: [Claim ID]"**
+- May also include other fields like:
+  - **"Recd: [Date]"**
+  - **"Member ID: [Member ID]"**
+  - **"Patient Account: [Patient Account]"**
+
+These fields may appear on a single line or span adjacent lines.
+
+---
+
+### Instructions:
+
+#### 1. Identify CLAIM ID Rows:
+   - Look for rows starting with **"Claim ID: [Claim ID]"**.
+   - Include additional fields like **Recd**, **Member ID**, and **Patient Account**, if present.
+
+#### 2. Annotation Process:
+   - If a valid Claim ID row is found:
+     - Annotate it as:
+       ```
+       CLAIM START: [Full text of the row containing Claim ID and additional fields]
+       ```
+   - If Claim ID details span multiple lines, combine them into a single annotation.
+
+#### 3. Handle Invalid Cases:
+   - If the document does not contain any rows matching the Claim ID structure:
+     - Respond with:
+       ```
+       NO-CLAIM-ID-FOUND
+       ```
+   - Skip rows containing:
+     - Administrative fields like **PIN**, **TIN**, **CHECK AMOUNT**, or **Trace Number**.
+     - Headers or footers like **"Please Retain for Future Reference"**, **"Payment Address"**, or **"Continued on Next Page"**.
+
+#### 4. Repeat for All Rows:
+   - Process the document line by line.
+   - Annotate each valid Claim ID row and ensure unrelated rows are excluded.
+
+#### 5. Final Output:
+   - Annotate all valid Claim ID rows as per the format specified above.
+   - Ensure the annotations are accurate and cover all relevant information.

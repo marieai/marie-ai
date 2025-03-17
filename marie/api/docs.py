@@ -1,3 +1,4 @@
+from enum import Enum, auto
 from typing import Any, List, Optional
 
 from docarray import BaseDoc
@@ -5,7 +6,6 @@ from docarray.documents import ImageDoc
 from docarray.typing import AnyTensor
 
 # from marie._core.definitions.events import AssetKey
-
 
 # It is important to note that if the documents are not serializable we can get number or wierd exceptions
 
@@ -35,6 +35,7 @@ class MarieDoc(ImageDoc):
 class BatchableMarieDoc(MarieDoc):
     words: List
     boxes: List
+    text: Optional[str] = None
 
 
 class OutputDoc(BaseDoc):

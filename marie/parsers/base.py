@@ -1,4 +1,5 @@
 """Module containing the base parser for arguments of Marie."""
+
 import argparse
 
 from marie.parsers.helper import _chf

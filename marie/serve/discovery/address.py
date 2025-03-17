@@ -79,6 +79,14 @@ class JsonAddress(Address):
 
     @classmethod
     def from_value(cls, val, deserializer=json.loads):
+        # print('---------------------')
+        # print('val:', val)
+        # print('type(val):', type(val))
+        # get the address value from dictionary
+        if not isinstance(val, dict):
+            raise ValueError("invalid address value. Expected dictionary.")
+        # getting thr first value from the dictionary
+        val = list(val.values())[0]
         addr_val = deserializer(b2str(val))
         addr_val["Metadata"] = deserializer(addr_val["Metadata"])
         addr_op = addr_val["Op"]
@@ -87,7 +95,6 @@ class JsonAddress(Address):
                 return True, addr_val["Addr"]
             elif addr_op == cls.delete_op:
                 return False, addr_val["Addr"]
-
             raise ValueError("invalid address value.")
 
         return JsonAddress(addr_val["Addr"], addr_val["Metadata"])

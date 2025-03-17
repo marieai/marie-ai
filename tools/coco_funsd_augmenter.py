@@ -3,6 +3,7 @@ import concurrent.futures
 import distutils.util
 import glob
 import hashlib
+import io
 import json
 import logging
 import multiprocessing as mp
@@ -25,10 +26,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from marie.boxes import BoxProcessorUlimDit
 from marie.boxes.box_processor import PSMode
-from marie.boxes.craft_box_processor import BoxProcessorCraft
 from marie.boxes.line_processor import find_line_number
 from marie.document.trocr_ocr_processor import TrOcrProcessor
 from marie.numpyencoder import NumpyEncoder
+from marie.utils.overlap import compute_iou, find_overlap_horizontal
 from marie.utils.utils import ensure_exists
 
 # FUNSD format can be found here
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 # setup data aug
 fake = Faker()
 fake_names_only = Faker(["it_IT", "en_US", "es_MX", "en_IN"])  # 'de_DE',
+
 
 # create new provider class
 
@@ -153,6 +155,7 @@ def __convert_coco_to_funsd(
             img["file_name"] = file_name.split("/")[-1]
         images_by_id[int(img["id"])] = img
 
+    print(f"images_by_id : {len(images_by_id)}")
     cat_id_name = {}
     cat_name_id = {}
 
@@ -183,6 +186,9 @@ def __convert_coco_to_funsd(
         ano_groups[ano["image_id"]].append(ano)
 
     errors = []
+    print("Total images : ", len(images_by_id))
+    print("Total groups : ", len(ano_groups))
+    continue_on_missing_mapping = True
 
     for group_id in ano_groups:
         grouping = ano_groups[group_id]
@@ -219,16 +225,21 @@ def __convert_coco_to_funsd(
                 if debug_found_pair:
                     print(f"Pair found : {question} [{qid}] -> {answer} [{aid}]")
 
-        if len(errors) > 0:
-            payload = "\n".join(errors)
-            raise Exception(f"Missing mapping \n {payload}")
-
         # start conversion
         img_data = images_by_id[group_id]
         file_name = img_data["file_name"]
         filename = file_name.split("/")[-1].split(".")[0]
         src_img_path = os.path.join(src_dir, "images", file_name)
         src_img, size = load_image(src_img_path)
+
+        if len(errors) > 0:
+            payload = "\n".join(errors)
+            errors = []
+            if continue_on_missing_mapping:
+                print(f"Missing mapping [{file_name}] \n {payload}")
+                continue
+            else:
+                raise Exception(f"Missing mapping \n {payload}")
 
         form_dict = {"form": []}
 
@@ -250,6 +261,7 @@ def __convert_coco_to_funsd(
                 "box": bbox,
                 "linking": [link_map[category_name]],
                 "label": label,
+                "line_number": -1,
                 "words": [
                     {"text": "POPULATE_VIA_ICR_WORD", "box": [0, 0, 0, 0]},
                 ],
@@ -302,11 +314,6 @@ def normalize_bbox(bbox, size):
     ]
 
 
-import io
-
-from PIL import Image
-
-
 def from_json_file(filename):
     with io.open(filename, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
@@ -318,6 +325,89 @@ def image_to_byte_array(image: Image) -> bytes:
     image.save(imgByteArr, format=image.format)
     imgByteArr = imgByteArr.getvalue()
     return imgByteArr
+
+
+def extract_icr_from_meta(snippet, scr_box_xyxy, ocr_meta_results):
+    """
+    TODO: Move this to ta separate module
+    Extract ICR from the snippet using the OCR meta results
+    :param snippet:
+    :param scr_box_xyxy:
+    :param ocr_meta_results:
+    :return:
+    """
+    results = {
+        "words": [],
+        "lines": [],
+    }
+
+    # scr_box -> x0,y0,x1,y1
+    # words -> xywh
+    # convert scr_box to xywh
+    box_xywh = [
+        scr_box_xyxy[0],
+        scr_box_xyxy[1],
+        scr_box_xyxy[2] - scr_box_xyxy[0],
+        scr_box_xyxy[3] - scr_box_xyxy[1],
+    ]
+
+    h, w = snippet.shape[0], snippet.shape[1]
+    scr_box_xyxy = [int(x) for x in scr_box_xyxy]
+
+    # print("**************************")
+    # print(f"scr_box_xyxy : {scr_box_xyxy}   : box_xywh : {box_xywh}")
+
+    # find all the intersections of bounding boxes with the snippet box from ocr_meta
+    # there is only one page we are processing so we will only have one entry
+    ocr_meta = ocr_meta_results[0]
+    words = ocr_meta["words"]
+    lines = ocr_meta["lines"]
+
+    found_words = []
+    found_boxes = []
+    has_found_line = False
+
+    for line in lines:
+        bbox = line["bbox"]
+        line_number = line["line"]
+
+        bbox_xyxy = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+        iou = compute_iou(bbox_xyxy, scr_box_xyxy)
+        # print(f"iou: {iou}  : box: {box_xywh}  : line : {line}")
+        if iou > 0.0:
+            # has_found_line = True
+            # print(f"iou : {iou}  : box: {box_xywh}  : line : {line}")
+            wordids = line["wordids"]
+            aligned_words = [w for w in words if w["id"] in wordids]
+            word_boxes = [w["box"] for w in aligned_words]
+            if False:
+                for w in aligned_words:
+                    print(f"word : {w}")
+
+            overlaps, indexes, scores = find_overlap_horizontal(box_xywh, word_boxes)
+            found_boxes.extend([word_boxes[i] for i in indexes])
+            found_words.extend([aligned_words[i] for i in indexes])
+
+    for word in found_words:
+        results["words"].append(word)
+
+    # group words by line
+    lines = {}
+    for word in results["words"]:
+        line_number = word["line"]
+        if line_number not in lines:
+            lines[line_number] = []
+        lines[line_number].append(word)
+
+    results["lines"] = []
+    for line_number in lines:
+        line = {
+            "line_number": line_number,
+            "text": " ".join([word["text"] for word in lines[line_number]]),
+            "words": lines[line_number],
+        }
+        results["lines"].append(line)
+    return found_boxes, results
 
 
 def extract_icr(image, boxp, icrp):
@@ -380,31 +470,36 @@ def extract_icr(image, boxp, icrp):
 def decorate_funsd(src_dir: str, debug_fragments=False):
     work_dir_boxes = ensure_exists("/tmp/boxes")
     work_dir_icr = ensure_exists("/tmp/icr")
-    output_ann_dir = ensure_exists(os.path.join(src_dir, "annotations"))
+    output_ann_dir = ensure_exists(
+        os.path.expanduser(os.path.join(src_dir, "annotations"))
+    )
+    ocr_annotations_dir = os.path.expanduser(
+        "~/datasets/private/corr-indexer/ocr_annotations"
+    )  # TODO : Change this to a config value
+    if not os.path.exists(ocr_annotations_dir):
+        raise Exception(f"OCR Annotations not found : {ocr_annotations_dir}")
 
     logger.info("⏳ Decorating examples from = %s", src_dir)
-    ann_dir = os.path.join(src_dir, "annotations_tmp")
-    img_dir = os.path.join(src_dir, "images")
+    ann_dir = os.path.expanduser(os.path.join(src_dir, "annotations_tmp"))
+    img_dir = os.path.expanduser(os.path.join(src_dir, "images"))
 
-    if False:
-        boxp = BoxProcessorCraft(
-            work_dir=work_dir_boxes, models_dir="./model_zoo/craft", cuda=True
+    if True:
+        boxp = BoxProcessorUlimDit(
+            work_dir=work_dir_boxes,
+            models_dir="./model_zoo/unilm/dit/text_detection",
+            cuda=True,
         )
 
-    boxp = BoxProcessorUlimDit(
-        work_dir=work_dir_boxes,
-        models_dir="./model_zoo/unilm/dit/text_detection",
-        cuda=True,
-    )
-
-    icrp = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
+        icrp = TrOcrProcessor(work_dir=work_dir_icr, cuda=True)
 
     for guid, file in enumerate(sorted(os.listdir(ann_dir))):
         print(f"guid = {guid}")
-        # if guid == 5:
-        #     break
+        if guid == -1:
+            print("BREAKING")
+            break
 
         file_path = os.path.join(ann_dir, file)
+        print("Processing : ", file_path)
         with open(file_path, "r", encoding="utf8") as f:
             data = json.load(f)
 
@@ -424,28 +519,43 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         image_path = os.path.join(img_dir, file)
         image_path = image_path.replace("json", "png")
         image, size = load_image(image_path)
-        # line_numbers : line number associated with bounding box
-        # lines : raw line boxes that can be used for further processing
-        _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
-            file, "lines", image, PSMode.MULTI_LINE
-        )
+        ocr_json_path = os.path.join(ocr_annotations_dir, file)
+
+        print(f"Processing : {guid} : {file}")
+        if not os.path.exists(ocr_json_path):
+            raise Exception(
+                f"Skipping document : {guid} : {file}, missing ocr annotations : {ocr_json_path}"
+            )
+
+        ocr_meta_results = from_json_file(ocr_json_path)
+        ocr_meta = ocr_meta_results[0]
+        lines = ocr_meta["meta"]["lines"]
+        unique_line_ids = sorted(np.unique(lines))
+        line_bboxes = ocr_meta["meta"]["lines_bboxes"]
+
+        if False:
+            # line_numbers : line number associated with bounding box
+            # lines : raw line boxes that can be used for further processing
+            _, _, line_numbers, _, line_bboxes = boxp.extract_bounding_boxes(
+                file, "lines", image, PSMode.MULTI_LINE
+            )
 
         for i, item in enumerate(data["form"]):
+            debug_fragments = False
+
             # format : x0,y0,x1,y1
             box = np.array(item["box"]).astype(np.int32)
             x0, y0, x1, y1 = box
             snippet = image[y0:y1, x0:x1, :]
             line_number = find_line_number(line_bboxes, [x0, y0, x1 - x0, y1 - y0])
-
             # each snippet could be on multiple lines
-            print(f"line_number = {line_number}")
             # export cropped region
             if debug_fragments:
                 file_path = os.path.join("/tmp/snippet", f"{guid}-snippet_{i}.png")
                 cv2.imwrite(file_path, snippet)
 
-            boxes, results = extract_icr(snippet, boxp, icrp)
-            results.pop("meta", None)
+            boxes, results = extract_icr_from_meta(snippet, box, ocr_meta_results)
+            # results.pop("meta", None)
 
             if (
                 results is None
@@ -461,32 +571,21 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
                 cv2.imwrite(file_path, snippet)
 
             words = []
-            text = ""
-
-            try:
-                text = " ".join([line["text"] for line in results["lines"]])
-            except Exception as ex:
-                # raise ex
-                print(ex)
-                # pass
+            text = " ".join([line["text"] for line in results["lines"]])
 
             # boxes are in stored in x0,y0,x1,y1 where x0,y0 is upper left corner and x1,y1 if bottom/right
             # we need to account for offset from the snippet box
             # results["word"] are in a xywh format in local position and need to be converted to relative position
-            print("-------------------------------")
-            print(results["words"])
             for word in results["words"]:
                 w_text = word["text"]
                 x, y, w, h = word["box"]
-                w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-                adj_word = {"text": w_text, "box": w_box}
+                word_box = [x, y, x + w, y + h]
+                adj_word = {"text": w_text, "box": word_box}
                 words.append(adj_word)
 
             item["words"] = words
             item["text"] = text
             item["line_number"] = line_number
-
-            print(item)
 
         # create masked image for OTHER label
         image_masked, _ = load_image(image_path)
@@ -501,6 +600,7 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
             )
             index = i + 1
 
+        debug_fragments = True
         if debug_fragments:
             file_path = os.path.join("/tmp/snippet", f"{guid}-masked.png")
             cv2.imwrite(file_path, image_masked)
@@ -512,65 +612,72 @@ def decorate_funsd(src_dir: str, debug_fragments=False):
         y0 = 0
 
         print("-------- MASKED ----------")
-        for i, word in enumerate(results_masked["words"]):
-            w_text = word["text"]
-            x, y, w, h = word["box"]
-            line_number = find_line_number(line_bboxes, [x, y, w, h])
-            w_box = [x0 + x, y0 + y, x0 + x + w, y0 + y + h]
-            adj_word = {"text": w_text, "box": w_box}
+        current_max_index = data["form"][-1]["id"]
+        # Add masked boxes to the end of the list of annotations, with the same line number as the original box
+        # some of the boxes may be empty, so we will filter them out
+        if results_masked is not None and len(results_masked["words"]) > 0:
+            for i, word in enumerate(results_masked["words"]):
+                x, y, w, h = word["box"]
 
-            item = {
-                "id": index + i,
-                "text": w_text,
-                "box": w_box,
-                "line_number": line_number,
-                "linking": [],
-                "label": "other",
-                "words": [adj_word],
-            }
+                # check if the word is same as image size if so skip it
+                if w == image_masked.shape[1] and h == image_masked.shape[0]:
+                    print(f"Skipping word due to masked image constrain : {word}")
+                    continue
 
-            data["form"].append(item)
+                line_number = find_line_number(line_bboxes, [x, y, w, h])
+                word_box = [x, y, x + w, y + h]
 
-        # need to reorder items, so they are sorted in proper order Y then X
-        lines_unsorted = []
-        for i, item in enumerate(data["form"]):
-            lines_unsorted.append(item["line_number"])
+                item = {
+                    "id": current_max_index + i,
+                    "text": word["text"],
+                    "box": word_box,
+                    "line_number": line_number,
+                    "linking": [],  # TODO: Not in use.
+                    "label": "other",
+                    "words": [{"text": word["text"], "box": word_box}],
+                }
 
-        lines_unsorted = np.array(lines_unsorted)
-        unique_line_ids = sorted(np.unique(lines_unsorted))
-        data_form_sorted = []
+                data["form"].append(item)
+
+        # remove all the text nodes that are placeholders for ICR "text": "POPULATE_VIA_ICR"
+        data["form"] = [
+            item for item in data["form"] if item["text"] != "POPULATE_VIA_ICR"
+        ]
+
+        # Find all annotations by line number
+        items_by_line = {}
+        form_data = []
+        for item in data["form"]:
+            if "line_number" not in item:
+                print(f"skipping item = {item}")
+                continue
+            if item["line_number"] not in items_by_line:
+                items_by_line[item["line_number"]] = []
+            items_by_line[item["line_number"]].append(item)
+            form_data.append(item)
+
+        data["form"] = form_data
+        # Order by line number
+        unique_line_numbers = list(items_by_line.keys())
+        unique_line_numbers.sort()
+        items_by_line = {
+            line: np.array(items_by_line[line]) for line in unique_line_numbers
+        }
+
         word_index = 0
+        data_form_sorted = []
+        # Order annotations by X value (left to right) per line
+        for line_number, items_on_line in items_by_line.items():
+            boxes_on_line = np.array([item["box"] for item in items_on_line])
+            items_on_line = items_on_line[np.argsort(boxes_on_line[:, 0])]
 
-        for i, line_numer in enumerate(unique_line_ids):
-            # print(f'line_numer =>  {line_numer}')
-            item_pics = []
-            box_picks = []
-
-            for j, item in enumerate(data["form"]):
-                word_line_number = item["line_number"]
-                if line_numer == word_line_number:
-                    item_pics.append(item)
-                    box_picks.append(item["box"])
-
-            item_pics = np.array(item_pics)
-            box_picks = np.array(box_picks)
-
-            indices = np.argsort(box_picks[:, 0])
-            item_pics = item_pics[indices]
-
-            for k, item in enumerate(item_pics):
+            for item in items_on_line:
                 item["word_index"] = word_index
                 data_form_sorted.append(item)
                 word_index += 1
 
-        data["form"] = []
-
-        for i, item in enumerate(data_form_sorted):
-            data["form"].append(item)
-            # print(f"\t=>  {item}")
-
+        data["form"] = data_form_sorted
         json_path = os.path.join(output_ann_dir, file)
-        print(json_path)
         with open(json_path, "w") as json_file:
             json.dump(
                 data,
@@ -598,6 +705,7 @@ def generate_pan(num_char):
 @lru_cache(maxsize=20)
 def get_cached_font(font_path, font_size):
     # return ImageFont.truetype(font_path, font_size, layout_engine=ImageFont.Layout.BASIC)
+    # print(f"Loading font : {font_path}")
     return ImageFont.truetype(font_path, font_size)
 
 
@@ -613,9 +721,10 @@ def generate_text(label, width, height, font_path):
     font = get_cached_font(font_path, font_size)
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    space_w, _ = draw.textsize(" ", font=font)
+    # space_w, _ = draw.textsize(" ", font=font)
+    space_w, _ = draw.textbbox((0, 0), " ", font=font)[2:4]
 
-    dec = 2
+    dec = 1
     index = 0
     label_text = ""
 
@@ -638,9 +747,13 @@ def generate_text(label, width, height, font_path):
     while True:
         if index > 5:
             font_size = font_size - dec
+            # print(f"Reducing font size : {font_size}")
             font = get_cached_font(font_path, font_size)
+            if font_size < 10:
+                break
             index = 0
-            space_w, _ = draw.textsize(" ", font=font)
+            # space_w, _ = draw.textsize(" ", font=font)
+            space_w, _ = draw.textbbox((0, 0), " ", font=font)[2:4]
 
         if (
             label == "dos_answer"
@@ -704,6 +817,7 @@ def generate_text(label, width, height, font_path):
                 label_text = "".join(random.choices(string.digits, k=N))
             else:
                 label_text = "".join(random.choices(string.ascii_letters, k=N))
+            label_text = label_text.upper()
 
         if label == "url":
             label_text = fake.domain_name()
@@ -737,7 +851,9 @@ def generate_text(label, width, height, font_path):
             segments = []
             # partition data into boxes splitting on blank spaces
             text_chunks = local_text.split(" ")
-            _text_width, text_height = draw.textsize(local_text, font=font)
+            # _text_width, text_height = draw.textsize(local_text, font=font)
+            _text_width, text_height = draw.textbbox((0, 0), local_text, font=font)[2:4]
+
             line_heights[k] = text_height
 
             if _text_width > text_width:
@@ -751,7 +867,10 @@ def generate_text(label, width, height, font_path):
                 segments.append({"text": local_text, "box": box})
             else:
                 for i, chunk in enumerate(text_chunks):
-                    chunk_width, chunk_height = draw.textsize(chunk, font=font)
+                    # chunk_width, chunk_height = draw.textsize(chunk, font=font)
+                    chunk_width, chunk_height = draw.textbbox((0, 0), chunk, font=font)[
+                        2:4
+                    ]
                     # x0, y0, x1, y1
                     end_x = min(start_x + chunk_width + padding_x, width)
                     box = [start_x, 0, end_x, text_height]
@@ -1046,13 +1165,32 @@ def visualize_funsd(src_dir: str, dst_dir: str, config: dict):
         for i, item in enumerate(data["form"]):
             predicted_label = item["label"].lower()
             color = label2color[predicted_label]
+            box_xyxy = item["box"]
+            box_xywh = [
+                box_xyxy[0],
+                box_xyxy[1],
+                box_xyxy[2] - box_xyxy[0],
+                box_xyxy[3] - box_xyxy[1],
+            ]
 
+            # print("---------------------------------")
+            # print(f"predicted_label : {predicted_label}")
+            # print(f"  **  : {box_xyxy}  : {box_xywh}")
+            # print(item["text"])
+
+            #  (x0, y0, x1, y1)
             for word in item["words"]:
-                box = word["box"]
-                draw.rectangle(box, outline=color, width=1)
+                box_xyxy = word["box"]
+                box_xywh = [
+                    box_xyxy[0],
+                    box_xyxy[1],
+                    box_xyxy[2] - box_xyxy[0],
+                    box_xyxy[3] - box_xyxy[1],
+                ]
+                # print(f"  >> {word['text']} : {box_xyxy}  : {box_xywh}")
+                # draw.rectangle(box_xyxy, outline=color, width=1)
 
             box = item["box"]
-
             if predicted_label != "other":
                 draw.rectangle(
                     box,
@@ -1123,8 +1261,8 @@ def rescale_annotation_frame(src_json_path: str, src_image_path: str):
 def __rescale_annotate_frames(
     ann_dir_dest, img_dir_dest, filename, json_path, image_path
 ):
-    if False and filename != "152618378_2":
-        return
+    # if False and filename != "152618378_2":
+    #     return
 
     # 152630220_3  152618378_2 152618400  152624795_3
     print(f"filename : {filename}")
@@ -1157,8 +1295,7 @@ def __rescale_annotate_frames(
 
 
 def rescale_annotate_frames(src_dir: str, dest_dir: str):
-
-    if True:
+    if False:
         print("Skipping rescale_annotate_frames")
         return
 
@@ -1228,8 +1365,12 @@ def split_dataset(src_dir, output_path, split_percentage):
     if not os.path.exists(img_dir):
         raise Exception("Source directory missing expected 'images' sub-directory")
 
+    # shuffle the dataset
+    ann_files = os.listdir(ann_dir)
+    random.shuffle(ann_files)
     file_set = []
-    for guid, file in enumerate(sorted(os.listdir(ann_dir))):
+
+    for guid, file in enumerate(ann_files):
         json_path = os.path.join(ann_dir, file)
         image_path = os.path.join(img_dir, file).replace("json", "png")
         filename = image_path.split("/")[-1].split(".")[0]
@@ -1261,7 +1402,6 @@ def split_dataset(src_dir, output_path, split_percentage):
     os.makedirs(ann_dir_out_test, exist_ok=True)
     os.makedirs(img_dir_out_test, exist_ok=True)
 
-    np.random.shuffle(file_set)
     train_set = file_set[0:sample_count]
     test_set = file_set[sample_count:-1]
 
@@ -1311,10 +1451,10 @@ def default_augment(args: object):
     print("Default augment")
     print(args)
     print("*" * 180)
-
     # This should be our dataset folder
     mode = args.mode
     aug_count = args.count
+    args.dir = os.path.expanduser(args.dir)
     root_dir = args.dir
     src_dir = os.path.join(args.dir, f"{mode}")
     dst_dir = (
@@ -1361,8 +1501,9 @@ def default_visualize(args: object):
     print(args)
     print("*" * 180)
 
-    src_dir = args.dir
-    dst_dir = args.dir_output
+    src_dir = os.path.expanduser(args.dir)
+    dst_dir = os.path.expanduser(args.dir_output)
+    args.config = os.path.expanduser(args.config)
 
     print(f"src_dir   = {src_dir}")
     print(f"dst_dir   = {dst_dir}")
@@ -1378,6 +1519,7 @@ def default_convert(args: object):
     print(args)
     print("*" * 180)
     mode = args.mode
+    args.dir = os.path.expanduser(args.dir)
     suffix = args.mode_suffix
     strip_file_name_path = args.strip_file_name_path
     src_dir = os.path.join(args.dir, f"{mode}{suffix}")

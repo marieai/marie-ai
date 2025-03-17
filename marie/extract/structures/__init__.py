@@ -1,0 +1,2 @@
+from marie.extract.structures.serialization_manager import SerializationManager
+from marie.extract.structures.unstructured_document import UnstructuredDocument

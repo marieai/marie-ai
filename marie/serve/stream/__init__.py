@@ -190,7 +190,6 @@ class RequestStreamer:
                         prefetch = int(metadatum.value)
                     except:
                         self.logger.debug(f"Couldn't parse prefetch to int value!")
-
         try:
             async_iter: AsyncIterator = self._stream_requests(
                 request_iterator=request_iterator,
@@ -199,9 +198,12 @@ class RequestStreamer:
                 return_type=return_type,
                 send_callback=send_callback,
             )
+            print("async_iter", async_iter)
             async for response in async_iter:
+                print("response ::: ", response)
                 yield response
         except InternalNetworkError as err:
+            print("err", err)
             if (
                 context is not None
             ):  # inside GrpcGateway we can handle the error directly here through the grpc context

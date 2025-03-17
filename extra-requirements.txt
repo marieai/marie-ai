@@ -66,7 +66,7 @@ pathspec:                   standard,devel
 filelock:                   standard,devel
 requests:                   standard,devel
 websockets:                 standard,devel
-pydantic<2.0.0:             core
+pydantic:                   core
 python-multipart:           standard,devel
 aiofiles:                   standard,devel
 aiohttp:                    standard,devel
@@ -117,7 +117,7 @@ PyPDF4:                       standard,core
 reportlab:                    standard,core
 pycocotools:                  standard,core
 nltk:                         standard,core
-timm==0.6.12:                 standard,core
+timm==1.0.11:                 standard,core
 #segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
@@ -133,11 +133,11 @@ munch:                        standard,core
 
 # opentelemetry-api:          standard,core
 
-onnx==1.15.0:                 standard,core
-onnxruntime==1.16.3:          standard,core
+onnx:                         standard,core
+onnxruntime:                  standard,core
 onnxruntime-gpu:              standard,core
-onnxconverter_common==1.13.0: standard,core
-onnxmltools:                  standard,core
+# onnxconverter_common==1.13.0: standard,core
+# onnxmltools:                  standard,core
 
 pika:                         standard,core
 sentencepiece:                standard,core
@@ -169,3 +169,10 @@ textual:                      standard,core
 textual_textarea:             standard,core
 textual_fastdatatable:        standard,core
 etcd3:                        standard,core
+
+typing_extensions>=4.12.2:    standard,core
+#vllm:                         standard,core
+rtree:                        standard,core
+scikit-image:                  standard,core
+filetype:                      standard,core
+dataclasses_json:              standard,core

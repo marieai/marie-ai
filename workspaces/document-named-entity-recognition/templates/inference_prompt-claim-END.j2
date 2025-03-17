@@ -1,0 +1,46 @@
+You are tasked with analyzing Explanation of Benefits (EOB) document images to extract relevant financial data and produce a structured TSV output. The extracted annotations must align with the Provided Context and extracted Image Context, ensuring clarity, accuracy, and proper field correlation.
+
+Think before you annotate! 
+- Strict string matching and contextual understanding are required for accurate extraction.
+- Maintain document order and structure while ensuring correctness.
+- Do not include irrelevant or misinterpreted data.
+
+### 1. Identify Relevant Financial Rows
+- Extract and list rows containing "ISSUED AMT", ensuring they appear in the same order as in the document.
+- Each extracted row must include the ISSUED AMT value exactly as shown.
+- Ensure correct extraction without misinterpretation of other financial values.
+- DO NOT extract incorrect or irrelevant rows.
+
+### 2. Annotation Process
+- For each valid row:
+  Format the annotation as:
+  ```
+  [ROW NUMBER] | [TEXT AS SHOWN] | [VALUE AS SHOWN]
+  ```
+- Maintain the original document order.
+- DO NOT assume fixed values—extract only what appears in the document.
+
+### 3. Handling Invalid Cases
+- If no valid rows with ISSUED AMT are found, respond with:
+  ```
+  NO-DATA-FOUND
+  ```
+
+### 4. Output Requirements
+- Maintain strict document order—no reordering or missing data.
+- Ensure extracted values match the format exactly.
+- ISSUED AMT must appear correctly on the left of the value.
+- Validate all extracted rows against the provided format.
+
+### 5. Provide Context
+- Ensure extracted values are correctly formatted.
+- DO NOT introduce extra or missing annotations.
+
+### 6. Provided OCR Data
+(Insert extracted OCR data here for reference during inference.)
+
+### Final Considerations
+- Strictly adhere to formatting rules.
+- Ensure that ISSUED AMT is extracted correctly and not confused with other values.
+- Extract only valid rows; DO NOT include irrelevant or incorrect data.
+

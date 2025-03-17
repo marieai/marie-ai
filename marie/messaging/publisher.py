@@ -51,6 +51,9 @@ async def mark_as_scheduled(
     :return:
     """
 
+    if True:
+        logger.info(f"Executing mark_as_scheduled DISABLED : {job_id} : {timestamp}")
+        return True
     logger.debug(f"Executing mark_as_scheduled : {job_id} : {timestamp}")
     event = f"{event_name}.scheduled"
     await Toast.notify(
@@ -81,6 +84,10 @@ async def mark_as_started(
     :return:
     """
 
+    if True:
+        logger.info(f"Executing mark_as_scheduled DISABLED : {job_id} : {timestamp}")
+        return True
+
     logger.debug(f"Executing mark_request_as_started : {job_id} : {timestamp}")
     event = f"{event_name}.started"
     await Toast.notify(
@@ -110,6 +117,9 @@ async def mark_as_failed(
     :param payload:
     :return:
     """
+    if True:
+        logger.info(f"Executing mark_as_scheduled DISABLED : {job_id} : {timestamp}")
+        return True
 
     logger.debug(f"Executing mark_request_as_failed : {job_id} : {timestamp}")
     event = f"{event_name}.failed"
@@ -140,6 +150,11 @@ async def mark_as_complete(
     :param payload:
     :return:
     """
+
+    if True:
+        logger.info(f"Executing mark_as_scheduled DISABLED : {job_id} : {timestamp}")
+        return True
+
     logger.debug(f"Executing mark_request_as_complete : {job_id} : {timestamp}")
     event = f"{event_name}.completed"
     await Toast.notify(

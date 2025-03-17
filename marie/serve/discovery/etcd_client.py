@@ -190,6 +190,7 @@ class EtcdClient(object):
         log.info(
             f"Watching raw key: {raw_key}",
         )
+        return_type = 'dict'
 
         def _watch_callback(response: etcd3.watch.WatchResponse):
             if isinstance(response, grpc.RpcError):
@@ -211,11 +212,22 @@ class EtcdClient(object):
                 else:
                     raise TypeError("Not recognized etcd event type.")
                 # etcd3 library uses a separate thread for its watchers.
-                event = Event(
-                    self._demangle_key(ev.key),
-                    ev_type,
-                    ev.value.decode(self.encoding),
-                )
+                key = self._demangle_key(ev.key)
+                value = ev.value.decode(self.encoding)
+
+                if return_type == 'dict':
+                    scope_prefix = ""
+                    raw_key_str = raw_key.decode("utf-8")
+                    key_prefix = self._demangle_key(
+                        f"{_slash(scope_prefix)}{raw_key_str}"
+                    )
+                    pair_sets = {key: value}
+                    pairs = make_dict_from_pairs(
+                        f"{_slash(scope_prefix)}{key_prefix}", pair_sets, "/"
+                    )
+                    value = pairs
+
+                event = Event(key, ev_type, value)
                 event_callback(self._demangle_key(ev.key), event)
 
         try:

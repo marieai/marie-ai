@@ -239,9 +239,9 @@ class K8sDeploymentConfig:
                     shard_id=i,
                     common_args=self.args,
                     deployment_args=args,
-                    pod_type=PodRoleType.WORKER
-                    if name != 'gateway'
-                    else PodRoleType.GATEWAY,
+                    pod_type=(
+                        PodRoleType.WORKER if name != 'gateway' else PodRoleType.GATEWAY
+                    ),
                     jina_deployment_name=self.name,
                     k8s_namespace=self.k8s_namespace,
                 )
@@ -264,9 +264,9 @@ class K8sDeploymentConfig:
                 )
                 parsed_args['head_deployment'].gpus = None
                 parsed_args['head_deployment'].port = GrpcConnectionPool.K8S_PORT
-                parsed_args[
-                    'head_deployment'
-                ].port_monitoring = GrpcConnectionPool.K8S_PORT_MONITORING
+                parsed_args['head_deployment'].port_monitoring = (
+                    GrpcConnectionPool.K8S_PORT_MONITORING
+                )
                 parsed_args['head_deployment'].uses = None
                 parsed_args['head_deployment'].uses_metas = None
                 parsed_args['head_deployment'].uses_with = None
@@ -280,24 +280,20 @@ class K8sDeploymentConfig:
                         if shards > 1
                         else f'{to_compatible_name(self.name)}'
                     )
-                    connection_list[
-                        str(i)
-                    ] = f'{name}.{self.k8s_namespace}.svc:{GrpcConnectionPool.K8S_PORT}'
+                    connection_list[str(i)] = (
+                        f'{name}.{self.k8s_namespace}.svc:{GrpcConnectionPool.K8S_PORT}'
+                    )
 
                 parsed_args['head_deployment'].connection_list = json.dumps(
                     connection_list
                 )
 
                 if uses_before:
-                    parsed_args[
-                        'head_deployment'
-                    ].uses_before_address = (
+                    parsed_args['head_deployment'].uses_before_address = (
                         f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_BEFORE}'
                     )
                 if uses_after:
-                    parsed_args[
-                        'head_deployment'
-                    ].uses_after_address = (
+                    parsed_args['head_deployment'].uses_after_address = (
                         f'127.0.0.1:{GrpcConnectionPool.K8S_PORT_USES_AFTER}'
                     )
 

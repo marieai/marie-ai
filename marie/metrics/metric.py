@@ -1,6 +1,7 @@
 """
 Metric class for model server
 """
+
 import socket
 import time
 from builtins import str

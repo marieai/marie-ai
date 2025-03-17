@@ -148,13 +148,33 @@ class EtcdServiceResolver(ServiceResolver):
             time.sleep(self._listen_timeout)
 
     def watch_service(
-        self, service_name: str, event_callback: callable, notify_on_start=True
+        self,
+        service_name: str,
+        event_callback: callable,
+        notify_on_start=True,
+        max_retries: int = 3,
     ):
-        """Watch service event."""
+        """
+        Watch service event.
+
+        example :/marie/deployments/status/127.0.0.1:57090/extract_executor/NOT_SERVING
+        marie is the namespace
+        deployments/status is the service_name
+        127.0.0.1:57090 is the service address
+        extract_executor/NOT_SERVING is the metadata stuffed in dict
+
+        :param service_name: The service name to watch.
+        :param event_callback: The callback function to call when event occurs.
+        :param notify_on_start: Notify on start.
+        :param max_retries: Maximum retries.
+        :return: None
+        """
         log.info(f"Watching service : {service_name} for changes.")
         log.info(f"Notify on start : {notify_on_start}")
         watch_id = self._client.add_watch_prefix_callback(service_name, event_callback)
         self.watched_services[service_name] = watch_id
+        # this fires the event callback for the current state of the service at the time of starting the watch
+
         if notify_on_start:
             resolved = self._client.get_prefix(service_name)
             for val, metadata in resolved.items():
@@ -162,12 +182,28 @@ class EtcdServiceResolver(ServiceResolver):
                     f"Resolved service: {service_name}, {val}, {metadata}",
                 )
                 key = form_service_key(service_name, val)
+                value = resolved.get(val)
                 event = Event(
-                    service_name,
+                    key,
                     "put",
-                    metadata,
+                    {key: value},
                 )
                 event_callback(service_name, event)
+
+            if False:
+                resolved = self._client.get_prefix(service_name)
+                for val, metadata in resolved.items():
+                    log.info(
+                        f"Resolved service: {service_name}, {val}, {metadata}",
+                    )
+                    key = form_service_key(service_name, val)
+                    event = Event(
+                        # service_name,
+                        key,
+                        "put",
+                        metadata,
+                    )
+                    event_callback(service_name, event)
 
     def stop_watch_service(self, service_name: str = None) -> None:
         """Stop watching services."""

@@ -1,0 +1,19 @@
+Extract all relations from the text. For each relation, reason through the text to identify the key, KEY_FOR, and value, then format them as:
+`key KEY_FOR value >>>`
+
+Steps:
+1. **Reasoning**: First, analyze the text and identify the entities and relationships between them.
+2. **Extraction**: Once the relationships are clear, extract each one in the format: `key KEY_FOR value >>>`
+3. **Format**:
+   - Use the exact wording from the text for `key`, `KEY_FOR`, and `value`.
+   - Ensure that there are no duplicate `KEY_FOR` values without a different key.
+4. **Validation**: Ensure the integrity of the format by checking for these rules during extraction.
+
+- Exclude address-related entries such as "PO BOX" and other address fields (e.g., "CINCINNATI", "OH", "45263-2110").
+- Only provide information that is explicitly mentioned in the text.
+- Do not make any assumptions or add information that is not in the provided input.
+- There should be no duplicate `KEY_FOR` values without a different key.
+- If two keys appear together without clear separation, resolve this condition by ensuring they are processed as distinct entries using a valid separator or context.
+
+Text:
+{{ text }}

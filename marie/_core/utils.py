@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Coroutine
 
 from marie.helper import get_or_reuse_loop
@@ -33,3 +34,14 @@ def run_background_task(coroutine: Coroutine) -> asyncio.Task:
     # completion:
     task.add_done_callback(background_tasks.discard)
     return task
+
+
+def concat_dirs(dirname: str, basename: str) -> str:
+    """
+    Append basename to dirname, avoiding backslashes when running on windows.
+
+    os.path.join(dirname, basename) will add a backslash before dirname if
+    basename does not end with a slash, so we make sure it does.
+    """
+    dirname += "/" if dirname[-1] != "/" else ""
+    return os.path.join(dirname, basename)

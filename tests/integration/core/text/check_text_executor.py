@@ -7,10 +7,10 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Client
+from marie.api import parse_payload_to_docs_sync
 from marie.executor.text import TextExtractionExecutorMock
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.json import load_json_file, store_json_object
-from marie_server.rest_extension import parse_payload_to_docs_sync
 
 
 def setup_storage():

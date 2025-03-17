@@ -32,8 +32,7 @@ def get_fastapi_app(
         import pydantic
         from fastapi import FastAPI, HTTPException, Request
         from fastapi.middleware.cors import CORSMiddleware
-        from pydantic import BaseModel, Field
-        from pydantic.config import BaseConfig, inherit_config
+        from pydantic import BaseModel, Field, ConfigDict
 
     import os
 
@@ -44,20 +43,25 @@ def get_fastapi_app(
         logger.warning("Only docarray v2 is supported with CSP. ")
         return
 
+    # Manually set the configurations
+    class InnerConfig(ConfigDict):
+        def __init__(self):
+            super().__init__()
+            self.alias_generator = _to_camel_case
+            self.populate_by_name = True
+
+    # Use InnerConfig directly instead of inherit_config
+    _config = InnerConfig
+
     class Header(BaseModel):
         request_id: Optional[str] = Field(
             None, description="Request ID", example=os.urandom(16).hex()
         )
+        target_executor: Optional[str] = Field(default=None, example="")
 
         # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
-        class Config(BaseConfig):
-            alias_generator = _to_camel_case
-            allow_population_by_field_name = True
-
-    class InnerConfig(BaseConfig):
-        alias_generator = _to_camel_case
-        allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     app = FastAPI()
 
@@ -184,14 +188,15 @@ def get_fastapi_app(
                         # Handle list of nested models
                         elif get_origin(field_type) is list:
                             list_item_type = get_args(field_type)[0]
-                            parsed_list = json.loads(field_str)
-                            if issubclass(list_item_type, BaseModel):
-                                parsed_fields[field_name] = parse_obj_as(
-                                    List[list_item_type], parsed_list
-                                )
-                            else:
-                                parsed_fields[field_name] = parsed_list
-                        # Handle direct assignment for basic types
+                            if field_str:
+                                parsed_list = json.loads(field_str)
+                                if issubclass(list_item_type, BaseModel):
+                                    parsed_fields[field_name] = parse_obj_as(
+                                        List[list_item_type], parsed_list
+                                    )
+                                else:
+                                    parsed_fields[field_name] = parsed_list
+                        # General parsing attempt for other types
                         else:
                             if field_str:
                                 try:
@@ -259,7 +264,7 @@ def get_fastapi_app(
                 parameters_model = Optional[Dict]
                 default_parameters = None
 
-            _config = inherit_config(InnerConfig, BaseDoc.__config__)
+            # _config = inherit_config(InnerConfig, BaseDoc.__config__)
             endpoint_input_model = pydantic.create_model(
                 f'{endpoint.strip("/")}_input_model',
                 data=(Union[List[input_doc_model], input_doc_model], ...),

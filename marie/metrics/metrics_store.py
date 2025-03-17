@@ -1,6 +1,7 @@
 """
 Metrics collection module
 """
+
 from builtins import str
 
 from metrics.dimension import Dimension

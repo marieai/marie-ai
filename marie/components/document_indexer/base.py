@@ -33,6 +33,7 @@ class BaseDocumentIndexer(BaseHandler):
         words: Optional[List[List[str]]],
         boxes: Optional[List[List[List[int]]]],
         batch_size: Optional[int] = None,
+        **kwargs,
     ) -> DocList[MarieDoc]:
         pass
 
@@ -42,6 +43,7 @@ class BaseDocumentIndexer(BaseHandler):
         words: List[List[str]] = None,
         boxes: List[List[List[int]]] = None,
         batch_size: Optional[int] = None,
+        **kwargs,
     ) -> DocList[MarieDoc]:
         """
         Run the document indexer on the given documents.
@@ -50,11 +52,16 @@ class BaseDocumentIndexer(BaseHandler):
         :param words: List of word tokens for each document.
         :param boxes: List of bounding boxes for each word token in each document.
         :param batch_size: Optional batch size for processing the documents.
+        :param kwargs: Additional keyword arguments (e.g. model-specific parameters like prompts).
         :return: List of MarieDoc objects representing the indexed documents.
         """
         if documents:
             results = self.predict(
-                documents=documents, words=words, boxes=boxes, batch_size=batch_size
+                documents=documents,
+                words=words,
+                boxes=boxes,
+                batch_size=batch_size,
+                **kwargs,
             )
         else:
             results = DocList[MarieDoc]()

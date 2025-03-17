@@ -1,0 +1,45 @@
+To extract, identify, and annotate rows in Explanation of Benefits (EOB) documents that signify the **CLAIM START**.
+
+### Key Considerations:
+- **Use strict string matching and contextual understanding** for accurate extraction.
+- **Preserve document order**—do not modify the structure.
+- **Extract only the most relevant row per claim**—omit duplicate or unnecessary data.
+
+---
+# Instructions
+
+## 1. Identify CLAIM ID Rows:
+   - Extract a **single** row per claim that contains **Claim ID** and the following fields:
+     - **Recd:** [Date]
+     - **Member ID:** [Member ID]
+     - **Patient Account:** [Patient Account]
+   - These fields may appear in a **single line** or span **multiple adjacent lines**.
+   - **Do not extract multiple rows for the same claim.** Only retain the first relevant row.
+
+## 2. Annotation Process:
+   - **For each valid Claim Start row:**
+     - Extract **only one** row per claim, combining necessary fields into a **single annotation**.
+     - Annotate it as:
+       ```
+       [ROW NUMBER] | CLAIM-START | [Full text of the row containing Claim ID]
+       ```
+
+## 3. Handling Invalid Cases:
+   - If no valid **Claim ID** rows are found, return:
+     ```
+     NO-CLAIM-ID-FOUND
+     ```
+
+## 4. Output Requirements:
+   - Maintain strict **document order**—do not reorder or omit necessary data.
+   - Ensure annotations include **Claim ID, Recd, Member ID, and Patient Account**.
+   - **Exclude duplicate, redundant, or incorrectly identified rows.**  
+   - **Only one annotation per claim.**  
+
+## 5. Provided OCR Data:
+(Insert extracted OCR data here for reference during inference.)
+
+### Final Considerations:
+- **Strictly follow the annotation format.**
+- **Extract only the most relevant row per claim.**
+- **Ensure clarity, accuracy, and consistency** in all annotations.

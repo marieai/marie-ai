@@ -1,0 +1,41 @@
+To accurately locate the **Remarks** section header and extract all the associated remarks listed below it, ensuring that the remarks are captured in their entirety.
+
+---
+
+# Instructions:
+
+## 1. Locate the Remarks Header:
+   - Identify the **Remarks:** header in the document.
+   - Use it as a starting point for extracting associated remarks.
+
+## 2. Extract Associated Remarks:
+   - Capture all numbered remarks listed directly under the **Remarks** header.
+   - Each remark typically starts with a number (e.g., **1-**, **2-**) and ends with a bracketed reference (e.g., **[M52]**, **[P80]**).
+   - Ensure multiline remarks are combined into a single remark without losing any context.
+
+## 3. Annotation Process:
+   - Annotate each remark as:
+     ```
+     [ROW NUMBER] | REMARK_START HEADER
+     [ROW NUMBER] | REMARK_DATA REMARK [NUMBER]: [Full text of the remark]
+     ```
+
+## 4. Handle Invalid Cases:
+   - If the **Remarks** header is not found or there are no associated remarks:
+     - Respond with:
+       ```
+       NO-REMARKS-FOUND
+       ```
+
+#### 5. Output Requirements:
+   - Provide all extracted remarks in order.
+   - Ensure remarks are complete and properly formatted.
+
+---
+
+### Example Output:
+   ```
+   12 | REMARK_START Remarks:
+   13 | REMARK_DATA Remark 1: This is the first remark. [M52]
+   14 | REMARK_DATA Remark 2: This is the second remark. [P80]
+   ```

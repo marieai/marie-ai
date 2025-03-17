@@ -1,6 +1,8 @@
 import inspect
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
+from pydantic import ConfigDict
+
 from marie import Document, DocumentArray
 from marie._docarray import docarray_v2
 from marie.importer import ImportExtensions
@@ -32,31 +34,35 @@ def get_fastapi_app(
     :return: fastapi app
     """
     with ImportExtensions(required=True):
-        from fastapi import FastAPI, Response, HTTPException
+        from fastapi import FastAPI, Response, HTTPException, status as http_status
         import pydantic
         from fastapi.middleware.cors import CORSMiddleware
     import os
 
-    from pydantic import BaseModel, Field
-    from pydantic.config import BaseConfig, inherit_config
+    from pydantic import BaseModel, ConfigDict, Field
 
     from marie.proto import jina_pb2
     from marie.serve.runtimes.gateway.models import _to_camel_case
+
+    # Manually set the configurations
+    class InnerConfig(ConfigDict):
+        def __init__(self):
+            super().__init__()
+            self.alias_generator = _to_camel_case
+            self.populate_by_name = True
+
+    # Use InnerConfig directly instead of inherit_config
+    _config = InnerConfig
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
             None, description="Request ID", example=os.urandom(16).hex()
         )
+        target_executor: Optional[str] = Field(default=None, example="")
 
         # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
-        class Config(BaseConfig):
-            alias_generator = _to_camel_case
-            allow_population_by_field_name = True
-
-    class InnerConfig(BaseConfig):
-        alias_generator = _to_camel_case
-        allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     app = FastAPI()
 
@@ -119,13 +125,17 @@ def get_fastapi_app(
             resp = await caller(req)
             status = resp.header.status
             if status.code == jina_pb2.StatusProto.ERROR:
-                raise HTTPException(status_code=499, detail=status.description)
+                raise HTTPException(
+                    status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=status.description,
+                )
             else:
                 if not docarray_v2:
                     docs_response = resp.docs.to_dict()
                 else:
                     docs_response = resp.docs
                 ret = output_model(data=docs_response, parameters=resp.parameters)
+
                 return ret
 
     def add_streaming_routes(
@@ -184,7 +194,9 @@ def get_fastapi_app(
                 default_parameters = None
 
             if docarray_v2:
-                _config = inherit_config(InnerConfig, BaseDoc.__config__)
+                # _config = inherit_config(InnerConfig, BaseDoc.__config__)
+                # Use InnerConfig directly instead of inherit_config
+                _config = InnerConfig
             else:
                 _config = input_doc_model.__config__
 

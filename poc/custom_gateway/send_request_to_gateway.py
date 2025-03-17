@@ -219,7 +219,6 @@ async def main():
     mock_args = None
     args = parse_args(mock_args)
     print(args)
-
     parameters = None
     if args.command == "job":
         if args.action == "submit":
@@ -304,8 +303,9 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
-        asyncio.ensure_future(main())
-        loop.run_forever()
+        # asyncio.ensure_future(main())
+        # loop.run_forever()
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         pass
     finally:

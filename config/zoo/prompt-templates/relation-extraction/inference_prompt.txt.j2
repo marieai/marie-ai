@@ -1,0 +1,19 @@
+Extract the following relations from the text. Each relation should be returned in the format: "key predicate value >>>". Ensure the key, predicate, and value appear exactly as they are in the text. If the value is missing, leave it empty.
+**Do not hallucinate or invent details** that are not present in the text.
+Key should always before the predicate and the value should always come after the predicate.
+
+Text:
+{{ text }}
+
+Expected format:
+key predicate value >>>
+
+Example output:
+GROUP ID #: KEY_FOR 2231333 >>>
+PATIENT NAME: KEY_FOR GREG BROWN >>>
+PATIENT ID#: KEY_FOR 200155538-00 >>>
+PROVIDER #: KEY_FOR 3242686 >>>
+PRODUCT: KEY_FOR PREFERRED  VALUE >>>
+PATIENT ACCT #: KEY_FOR ZZZZ0747 >>>
+CLAIM #: KEY_FOR 00021704100 >>>
+NPI #: KEY_FOR >>>

@@ -20,6 +20,7 @@ from marie.utils.utils import ensure_exists
 bbox_cache = {}
 
 
+# TODO: this needs to be moved to a more appropriate location
 def reset_bbox_cache():
     global bbox_cache
     bbox_cache = {}

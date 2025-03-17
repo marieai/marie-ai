@@ -12,9 +12,10 @@ import platform as _platform
 import signal as _signal
 import sys as _sys
 import warnings as _warnings
-from distutils.util import strtobool as strtobool
 
 import docarray as _docarray
+
+from marie.utils.types import strtobool
 
 if _sys.version_info < (3, 10, 0):
     raise OSError(f"Marie requires Python >= 3.10, but yours is {_sys.version_info}")
@@ -100,7 +101,7 @@ __version__ = '3.0.30'
 
 # do not change this line manually
 # this is managed by proto/build-proto.sh and updated on every execution
-__proto_version__ = '0.1.27'
+__proto_version__ = '0.1.28'
 
 try:
     __docarray_version__ = _docarray.__version__

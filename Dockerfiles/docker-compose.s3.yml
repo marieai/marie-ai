@@ -13,7 +13,7 @@ services:
       - ENDPOINT=s3.host.local
 
     networks:
-      - public
+      - marie_default
     volumes:
       - ./config/zenko/authdata.json:/usr/src/app/conf/authdata.json
       - ./config/zenko/locationConfig.json:/usr/src/app/locationConfig.json
@@ -27,9 +27,9 @@ services:
 # docker network create --driver=bridge public
 # sysctl net.ipv4.conf.all.forwarding=1
 
-# ############### Networks ###############
+## ############### Networks ###############
 networks:
-  public:
+  marie_default:
     external: true
 
 # Reference:

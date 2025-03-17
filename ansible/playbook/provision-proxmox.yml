@@ -4,15 +4,12 @@
 
 
   vars:
-    proxmox_api_urlX: "{{ lookup('env', 'PROXMOX_API_URL') }}"
-    proxmox_api_userX: "{{ lookup('env', 'PROXMOX_API_USER') }}"
-    proxmox_api_tokenX: "{{ lookup('env', 'PROXMOX_API_TOKEN') }}"
+    env_vars: "{{ lookup('file', '.env') | from_ini }}"
 
-
-    proxmox_api_url: "pve.marieai.lab"
-    proxmox_api_user: "ansible@pve"
-    proxmox_api_token_id: "automation"
-    proxmox_api_token: "1162f99e-2f34-4827-8065-31407e7a0d98"
+    proxmox_api_url: "{{ env_vars.PROXMOX_API_URL }}"
+    proxmox_api_user: "{{ env_vars.PROXMOX_API_USER }}"
+    proxmox_api_token: "{{ env_vars.PROXMOX_API_TOKEN }}"
+    proxmox_api_token_id: "{{ env_vars.PROXMOX_API_TOKEN_ID }}"
 
     proxmox_node: "pve"
     vm_id: 100

@@ -12,6 +12,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
     from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 
+from fastapi import status as http_status
+
 
 def get_fastapi_app(
     streamer: "GatewayStreamer",
@@ -93,7 +95,7 @@ def get_fastapi_app(
         def __init__(self):
             super().__init__()
             self.alias_generator = _to_camel_case
-            self.allow_population_by_field_name = True
+            self.populate_by_name = True
 
     # Use InnerConfig directly instead of inherit_config
     _config = InnerConfig
@@ -106,17 +108,7 @@ def get_fastapi_app(
 
         # TODO[pydantic]: The `Config` class inherits from another class, please create the `model_config` manually.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
-        class Config(ConfigDict):
-            def __init__(self):
-                super().__init__()
-                self.alias_generator = _to_camel_case
-                self.allow_population_by_field_name = True
-
-    class InnerConfig(ConfigDict):
-        def __init__(self):
-            super().__init__()
-            self.alias_generator = _to_camel_case
-            self.allow_population_by_field_name = True
+        model_config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     @app.get(
         path="/dry_run",
@@ -231,7 +223,10 @@ def get_fastapi_app(
                     status = resp.header.status
 
                     if status.code == jina_pb2.StatusProto.ERROR:
-                        raise HTTPException(status_code=499, detail=status.description)
+                        raise HTTPException(
+                            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=status.description,
+                        )
                     else:
                         result_dict = resp.to_dict()
                         return result_dict

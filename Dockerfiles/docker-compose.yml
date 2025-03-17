@@ -10,57 +10,6 @@ version: "3.9"
 # Consul accessible via `http://localhost:8500/`
 
 services:
-  consul-server:
-    image: consul:1.15.1
-    container_name: consul_marie_server
-    restart: unless-stopped
-    volumes:
-     - ./config/consul/server.json:/consul/config/server.json:ro
-     - ./config/consul:/etc/consul.d
-#    network_mode: host
-    networks:
-      - public
-    ports:
-      - "8500:8500"
-      - "8300:8300"
-      - "8600:8600/tcp"
-      - "8600:8600/udp"
-    command: "agent -server -bootstrap-expect 1 -ui -client=0.0.0.0 -config-dir=/etc/consul.d/"
- # https://doc.traefik.io/traefik/https/tls/#default-certificate
-  traefik:
-    image: traefik:v2.9.4
-    container_name: "traefik"
-    restart: unless-stopped
-    command:
-      - --api
-      - --api.statistics
-      - --docker
-      - --log.level=DEBUG
-      # Optionally uncomment the following lines if you want to test/debug:
-#      - --certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
-    networks:
-      - public
-    ports:
-      - "7777:7777"
-      - "5000:5000"
-      - "7000:7000"
-      - "443:443"
-    depends_on:
-      - consul-server
-    labels:
-        - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
-        - "traefik.http.routers.dashboard.entrypoints=traefik"
-        - "traefik.http.routers.dashboard.service=api@internal"
-    volumes:
-      - ./config/traefik:/etc/traefik
-      - ./config/traefik/traefik.yml:/traefik.yml
-      - ./config/traefik/certs:/certs
-      - letsencrypt_data:/letsencrypt
-      - "./config/traefik/user-credentials:/user-credentials:ro"
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "/etc/localtime:/etc/localtime:ro"
-
-
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -69,8 +18,6 @@ services:
      - prometheus_data:/prometheus
     command: "--web.enable-lifecycle --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus"
     links:
-    - traefik
-    - consul-server
     - alertmanager
     networks:
       - public
@@ -123,27 +70,6 @@ services:
     networks:
       - public
 
-  # Test with >  curl -H Host:whoami.localhost http://127.0.0.1:7000
-  whoami:
-    image: "traefik/whoami"
-    container_name: "whoami"
-    command:   # It tells whoami to start listening on 2001 instead of 80
-       - --port=2001
-       - --name=whoami
-    ports:
-      - "2001:2001"
-    depends_on:
-      - traefik
-    networks:
-      - public
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)" # Apply a host rule specifying the domain the service will respond to
-      - "traefik.http.routers.whoami.tls=true"            # Force TLS
-      - "traefik.http.routers.whoami.entrypoints=https"   # Create a router called whoami listening on the 'https' entrypoint
-#      - "traefik.http.routers.whoami.service=whoami" # We use docker provider so this is registed twice
-      - "traefik.http.services.whoami-service.loadbalancer.server.port=8080" # Send traffic to the container via port 8080
-
   rabbitmq:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
@@ -169,8 +95,6 @@ volumes:
   loki_data:
     driver: local
   alertmanager_data:
-    driver: local
-  letsencrypt_data:
     driver: local
   rabbitmq_data:
     driver: local

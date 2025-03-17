@@ -2,7 +2,7 @@ import argparse
 import copy
 import os
 import time
-from typing import Any, Tuple, Union, Optional
+from typing import Any, Tuple, Union, Optional, List
 
 import PIL
 import cv2
@@ -81,12 +81,16 @@ def visualize_bboxes(
     format="xyxy",
     blackout=False,
     blackout_color=(0, 0, 0, 255),
+    labels: Optional[List[str]] = None
 ) -> PIL.Image:
-    """Visualize bounding boxes on the image#
+    """Visualize bounding boxes on the image
     Args:
         image(Union[np.ndarray | PIL.Image.Image]): numpy array of shape (H, W), where H is the image height and W is the image width.
         bboxes(np.ndarray): Bounding boxes for image (xmin,ymin,xmax,ymax)
         format(xyxy|xywh): format of the bboxes, defaults to `xyxy`
+        blackout(bool): whether to blackout the bounding boxes, defaults to False
+        blackout_color(tuple): color to use for blackout, defaults to (0, 0, 0, 255)
+        labels(Optional[List[str]]): optional labels for the bounding boxes, defaults to None
     """
 
     if image is None:
@@ -102,7 +106,7 @@ def visualize_bboxes(
     draw = ImageDraw.Draw(viz_img, "RGBA")
     idx = 0
 
-    for box in bboxes:
+    for i, box in enumerate(bboxes):
         if format == "xywh":
             box = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
 
@@ -119,15 +123,16 @@ def visualize_bboxes(
 
         draw.rectangle(
             box,
-            outline="#993300",
+            outline="#FF0000",
             fill=fill_color_rgbaa,
             width=width,
         )
 
         if not blackout:
+            label = labels[i] if labels and i < len(labels) else str(idx)
             draw.text(
                 (box[0] + 10, box[1] - 10),
-                text=f"{idx}",
+                text=label,
                 fill="red",
                 width=1,
             )

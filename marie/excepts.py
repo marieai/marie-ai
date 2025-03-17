@@ -1,4 +1,5 @@
 """This modules defines all kinds of exceptions raised in Marie."""
+
 from typing import Any, List, Optional, Set, Union
 
 import grpc.aio

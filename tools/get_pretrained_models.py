@@ -236,7 +236,7 @@ def main():
                 "https://layoutlm.blob.core.windows.net/trocr/dictionaries/gpt2_with_mask.dict.txt?sv=2022-11-02&ss=b&srt=o&sp=r&se=2033-06-08T16:48:15Z&st=2023-06-08T08:48:15Z&spr=https&sig=a9VXrihTzbWyVfaIDlIT1Z0FoR1073VB0RLQUMuudD4%3D"
             ],
             "filename": "trocr-small-printed.pt",
-        }
+        },
         # Add more models and their assets here as needed
     }
 

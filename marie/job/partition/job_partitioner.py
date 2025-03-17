@@ -23,5 +23,5 @@ class MarieJobPartitioner(JobPartitioner):
         parameters, asset_doc = parse_payload_to_docs_sync(
             metadata, clear_payload=False
         )
-        print(f"Partitioning document : {asset_doc.asset_key}")
+        # print(f"Partitioning document : {asset_doc.asset_key}")
         return partitions

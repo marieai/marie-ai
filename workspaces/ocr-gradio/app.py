@@ -9,12 +9,11 @@ from PIL import Image
 from marie.boxes import BoxProcessorUlimDit, PSMode
 from marie.boxes.dit.ulim_dit_box_processor import visualize_bboxes
 from marie.document import TrOcrProcessor
-from marie.document.layoutreader import TextLayout
 from marie.executor.ner.utils import normalize_bbox
+from marie.ocr.util import meta_to_text
 from marie.renderer import TextRenderer
 from marie.utils.docs import frames_from_file
 from marie.utils.json import store_json_object, to_json
-from marie.utils.ocr_debug import dump_bboxes
 from marie.utils.utils import current_milli_time, ensure_exists
 
 use_cuda = torch.cuda.is_available()
@@ -74,7 +73,6 @@ def to_text(result):
 def process_image(filename):
     print("Processing image : ", filename)
     image = Image.open(filename).convert("RGB")
-    # image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     (
         boxes,
         fragments,
@@ -87,7 +85,6 @@ def process_image(filename):
         "gradio ", "00000", image, boxes, fragments, lines, return_overlay=True
     )
 
-    print(result)
     # get boxes and words from the result
     words = []
     boxes_norm = []
@@ -107,7 +104,7 @@ def process_image(filename):
     bboxes_img = visualize_bboxes(image, boxes, format="xywh")
     lines_img = visualize_bboxes(overlay_image, lines_bboxes, format="xywh")
     # dump_bboxes(image, result)
-    text = to_text(result)
+    text = meta_to_text(result)
 
     if True:
         request_id = f"{prefix_text}_{current_milli_time()}"
@@ -132,14 +129,14 @@ def process_image(filename):
         for idx, line in enumerate(result["lines"]):
             line_text = line["text"]
             confidence = line["confidence"]
-            # convert form xywh to xyxy
+            # convert from xywh to xyxy
             converted = [
-                line["bbox"][0],
-                line["bbox"][1],
-                line["bbox"][0] + line["bbox"][2],
-                line["bbox"][1] + line["bbox"][3],
+                int(line["bbox"][0]),
+                int(line["bbox"][1]),
+                int(line["bbox"][0] + line["bbox"][2]),
+                int(line["bbox"][1] + line["bbox"][3]),
             ]
-            print("line bbox", line["bbox"], converted, line_text)
+            print("line bbox", converted, line_text)
             line_image = image.crop(converted)
 
             with open(
@@ -151,7 +148,7 @@ def process_image(filename):
                 f"/tmp/icr/{request_id}/lines/{prefix_text}_{idx}_{confidence}.png"
             )
 
-    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result), text
+    return bboxes_img, overlay_image, lines_img, to_json(result), to_text(result)
 
 
 def image_to_gallery(image_src):
@@ -176,7 +173,10 @@ def interface():
 
     def gallery_click_handler(src_gallery, evt: gr.SelectData):
         selection = src_gallery[evt.index]
-        filename = selection["name"]
+
+        print("selection", selection)
+        # filename = selection["name"]
+        filename = selection[0]
         return process_image(filename)
 
     with gr.Blocks() as iface:
@@ -185,7 +185,9 @@ def interface():
         with gr.Row(variant="compact"):
             with gr.Column():
                 src = gr.components.File(
-                    type="file", source="upload", label="Multi-page TIFF/PDF file"
+                    type="filepath",  # Corrected type parameter
+                    label="Multi-page TIFF/PDF file",
+                    file_count="single",
                 )
                 with gr.Row():
                     btn_reset = gr.Button("Clear")
@@ -194,28 +196,28 @@ def interface():
             with gr.Column():
                 chk_store_info = gr.Checkbox(
                     label="Store filtered data in temp directory",
-                    default=True,
+                    value=True,
                     interactive=True,
                 )
 
                 chk_filter_results = gr.Checkbox(
                     label="Filter results",
-                    default=False,
+                    value=False,
                     interactive=True,
                 )
 
                 gr.Number(
                     label="Threshold",
-                    min=0,
-                    max=1,
+                    minimum=0,
+                    maximum=1,
                     step=0.1,
-                    default=0.95,
+                    value=0.95,
                     interactive=True,
                     precision=2,
                 )
 
                 txt_prefix = gr.Textbox(
-                    "Prefix", label="Prefix", default="filtered", interactive=True
+                    "Prefix", label="Prefix", value="filtered", interactive=True
                 )
                 txt_prefix.change(fn=print_textbox, inputs=[txt_prefix])
 
@@ -225,13 +227,13 @@ def interface():
                 #     outputs=[],
                 # )
 
-        with gr.Row(live=True):
+        with gr.Row():
             gallery = gr.Gallery(
                 label="Image frames",
                 show_label=False,
                 elem_id="gallery",
                 interactive=True,
-            ).style(columns=4, object_fit="contain", height="auto")
+            )  # .style(columns=4, object_fit="contain", height="auto")
 
         btn_grid.click(image_to_gallery, inputs=[src], outputs=gallery)
         btn_reset.click(lambda: src.clear())

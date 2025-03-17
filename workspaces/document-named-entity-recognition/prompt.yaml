@@ -1,0 +1,25 @@
+Extract key value pairs, output as CVS, with key, value and label use tab as delimeter. Do not infer any relationships that are not explicitly given in the text.
+No additional text or symbols should be included in the output.
+
+Schema:
+key_name\tvalue_name\tlabel_name
+
+Do not infer any relationships that are not explicitly given in the text.
+No additional text or symbols should be included in the output.
+The text capitalization should not be altered.
+
+
+### Text:
+
+MEMBER NAME: GREG BUGAJ XYZ
+MEMBER ID: 10129701010
+MEMBER DATE OF BIRTH: 12/17/1999
+REFERENCE NUMBER: 130823080114
+REQUESTING PROVIDER: ST. 1 LUKE'S HOSPITAL-BETHLEHEM
+REQUESTED PROVIDER(S): ST. LUKE'S HOSPITAL-BETHLEHEM
+WILFREDO S LUKBAN
+
+CLAIM: NUMBER: 1285BGL2323 GROUP ID: OdCINSzzO CHECK NUMBER: 123454257-1
+PROVIDER: TERENCE F MAHER PATIENT NAME: BASKIN, MICHAEL SUBSCRIBER NAME: BASKING, MICHAEL
+PATIENT ACCT #: 223\8038437 SUBSCRIBER ID: OSC77690011111
+

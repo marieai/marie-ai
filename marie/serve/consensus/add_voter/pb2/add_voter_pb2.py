@@ -27,7 +27,7 @@ AwaitResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         'DESCRIPTOR': _AWAITRESPONSE,
-        '__module__': 'add_voter_pb2'
+        '__module__': 'add_voter_pb2',
         # @@protoc_insertion_point(class_scope:AwaitResponse)
     },
 )
@@ -38,7 +38,7 @@ ForgetResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         'DESCRIPTOR': _FORGETRESPONSE,
-        '__module__': 'add_voter_pb2'
+        '__module__': 'add_voter_pb2',
         # @@protoc_insertion_point(class_scope:ForgetResponse)
     },
 )
@@ -49,7 +49,7 @@ Future = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         'DESCRIPTOR': _FUTURE,
-        '__module__': 'add_voter_pb2'
+        '__module__': 'add_voter_pb2',
         # @@protoc_insertion_point(class_scope:Future)
     },
 )
@@ -60,7 +60,7 @@ AddVoterRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         'DESCRIPTOR': _ADDVOTERREQUEST,
-        '__module__': 'add_voter_pb2'
+        '__module__': 'add_voter_pb2',
         # @@protoc_insertion_point(class_scope:AddVoterRequest)
     },
 )

@@ -1,4 +1,5 @@
 import os
+import time
 import warnings
 from typing import Any, Optional, Union
 
@@ -8,8 +9,9 @@ from docarray import DocList
 
 from marie import Executor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
-from marie.api.docs import AssetKeyDoc, StorageDoc
+from marie.api.docs import AssetKeyDoc, OutputDoc, StorageDoc
 from marie.boxes import PSMode
+from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -149,7 +151,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
         job_id = parameters.get("job_id")
         MDC.put("request_id", job_id)
 
-        self.logger.info("Starting ICR processing request")
+        self.logger.info("Starting OCR request")
         for key, value in parameters.items():
             self.logger.info("The value of {} is {}".format(key, value))
 
@@ -305,7 +307,7 @@ class TextExtractionExecutor(Executor, StorageMixin):
             )
 
 
-class TextExtractionExecutorMock(Executor):
+class TextExtractionExecutorMock(MarieExecutor):
     def __init__(
         self,
         name: str = "",
@@ -392,6 +394,8 @@ class TextExtractionExecutorMock(Executor):
         print(f"{frame_len=}")
         # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
 
+        return DocList[AssetKeyDoc]()
+        #
         # return DocList[OutputDoc](
         #     [
         #         OutputDoc(
@@ -428,3 +432,155 @@ class TextExtractionExecutorMock(Executor):
         #  DocList / Dict / `None`
         converted = safely_encoded(lambda x: x)(self.runtime_info)
         return converted
+
+    @requests(on="/extract")
+    async def func_extract(
+        self,
+        docs: DocList[AssetKeyDoc],
+        parameters=None,
+        *args,
+        **kwargs,
+    ):
+        if parameters is None:
+            parameters = {}
+        print(f"func called : {len(docs)}, {parameters}")
+        # randomly throw an error to test the error handling
+        import random
+
+        # if random.random() > 0.5:
+        #     raise Exception("random error in exec")
+        # for doc in docs:
+        #     doc.text += " First Exec"
+        sec = 2
+        print(f"Sleeping for {sec} seconds : ", time.time())
+        time.sleep(sec)
+
+        print(f"Sleeping for {sec} seconds - done : ", time.time())
+        return {
+            "parameters": parameters,
+            "data": "Data reply",
+        }
+
+
+class FirstExecutor(Executor):
+    """Example executor for demonstration."""
+
+    @requests
+    def process_one(self, docs: DocList, **kwargs):
+        for doc in docs:
+            doc.tags["processed_by"] = "FirstExecutor"
+
+
+class LLMExtractionExecutorMock(MarieExecutor):
+    def __init__(
+        self,
+        name: str = "",
+        device: Optional[str] = None,
+        num_worker_preprocess: int = 4,
+        pipeline: Optional[dict[str, any]] = None,
+        dtype: Optional[Union[str, torch.dtype]] = None,
+        **kwargs,
+    ):
+        """
+        :param device: 'cpu' or 'cuda'. Default is None, which auto-detects the device.
+        :param num_worker_preprocess: The number of CPU workers to preprocess images and texts. Default is 4.
+        :param minibatch_size: The size of the minibatch for preprocessing and encoding. Default is 32. Reduce this
+            number if you encounter OOM errors.
+        :param dtype: inference data type, if None defaults to torch.float32 if device == 'cpu' else torch.float16.
+        """
+        super().__init__(**kwargs)
+        import time
+
+        logger.info(f"Starting mock executor : {time.time()}")
+        setup_torch_optimizations()
+
+        self.show_error = True  # show prediction errors
+        # sometimes we have CUDA/GPU support but want to only use CPU
+        use_cuda = torch.cuda.is_available()
+        if os.environ.get("MARIE_DISABLE_CUDA"):
+            use_cuda = False
+        self.logger = MarieLogger(context=self.__class__.__name__)
+
+        if not device:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not use_cuda:
+            device = "cpu"
+        self.device = device
+
+        self.runtime_info = {
+            "name": self.__class__.__name__,
+            "instance_name": kwargs.get("runtime_args", {}).get("name", "not_defined"),
+            "model": "",
+            "host": get_ip_address(),
+            "workspace": self.workspace,
+            "use_cuda": use_cuda,
+            "device": self.device.__str__() if self.device is not None else "",
+        }
+
+        logger.info(f"Runtime info: {self.runtime_info}")
+        logger.info(f"Pipeline : {pipeline}")
+
+    # @requests(on="/document/status")
+    # def status(self, parameters, **kwargs):
+    #     use_cuda = torch.cuda.is_available()
+    #     print(f"{use_cuda=}")
+    #     return {"index": "complete", "use_cuda": use_cuda}
+    #
+    # @requests(on="/document/validate")
+    # def validate(self, parameters, **kwargs):
+    #     return {"valid": True}
+
+    @requests(on="/document/llm-annotate")
+    def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+        print("LLM-TEXT-EXTRACT")
+        print(parameters)
+        print(docs)
+
+        logger.info(kwargs)
+        logger.info(parameters)
+
+        if len(docs) == 0:
+            return {"error": "empty payload"}
+        if len(docs) > 1:
+            return {"error": "expected single document"}
+
+        doc = docs[0]
+        # load documents from specified document asset key
+        docs = docs_from_asset(doc.asset_key, doc.pages)
+
+        for doc in docs:
+            print(doc.id)
+
+        frames = frames_from_docs(docs)
+        frame_len = len(frames)
+
+        print(f"{frame_len=}")
+        # this value will be stuffed in the  resp.parameters["__results__"] as we are using raw Responses
+
+        import time
+
+        if "payload" not in parameters or parameters["payload"] is None:
+            return {"error": "empty payload"}
+        else:
+            payload = parameters["payload"]
+
+        # https://github.com/marieai/marie-ai/issues/51
+
+        regions = payload["regions"] if "regions" in payload else []
+        for region in regions:
+            region["id"] = int(region["id"])
+            region["pageIndex"] = int(region["pageIndex"])
+
+        np_arr = np.array([1, 2, 3])
+
+        out = [
+            {"sample": 112, "complex": ["a", "b"]},
+            {"sample": 112, "complex": ["a", "b"], "np_arr": np_arr},
+        ]
+
+        time.sleep(1)
+        # invoke the safely_encoded decorator as a function
+        meta = get_ip_address()
+        #  DocList / Dict / `None`
+        # converted = safely_encoded(lambda x: x)(self.runtime_info)
+        # return converted

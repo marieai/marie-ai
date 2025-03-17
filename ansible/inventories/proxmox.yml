@@ -1,6 +1,6 @@
 pve:
   hosts:
     proxmox-local:
-      ansible_host: "pve.marieai.local"
+      ansible_host: "pve.marieai.lab"
       ansibel_user: "root"
 
