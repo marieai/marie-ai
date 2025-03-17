@@ -38,6 +38,59 @@ def find_overlap(box, data, overlap_ratio=0.75):
 
     return overlaps, indexes
 
+def find_overlap_total(box, data):
+    """Find overlap between a box and a data set
+    expected box format in [x, y, w, h]
+    """
+    overlaps, indexes, scores = [], [], []
+
+    if len(data) == 0:
+        return overlaps, indexes, scores
+
+    x, y, w, h = box
+    y1min = y
+    y1max = y + h
+    x1min = x
+    x1max = x + w
+
+    for i, bb in enumerate(data):
+        _x, _y, _w, _h = bb
+        y2min = _y
+        y2max = _y + _h
+        x2min = _x
+        x2max = _x + _w
+
+        if h <= 0 or _h <= 0 or w <= 0 or _w <= 0:
+            continue
+        # don't overlap exactly same boxes as target
+        if box[0] == bb[0] and box[1] == bb[1] and box[2] == bb[2] and box[3] == bb[3]:
+            continue
+
+        y_bottom = min(y1max, y2max)
+        y_top = max(y1min, y2min)
+        x_right = min(x1max, x2max)
+        x_left = max(x1min, x2min)
+
+        if y_top < y_bottom and x_left < x_right:
+            intersection_area = (x_right - x_left) * (y_bottom - y_top)
+
+            # compute the area of both AABBs
+            bb1_area = w * h
+            bb2_area = _w * _h
+
+            # clamping the iou to 0.0 - 1.0 to avoid any weirdness with floating point precision failing the assert
+            iou = max(
+                min(
+                    intersection_area / float(bb1_area + bb2_area - intersection_area),
+                    1.0,
+                    ),
+                0.0,
+            )
+            scores.append(iou)
+            overlaps.append(bb)
+            indexes.append(i)
+    return overlaps, indexes, scores
+
 
 def find_overlap_vertical(box, data):
     """Find overlap between a box and a data set
