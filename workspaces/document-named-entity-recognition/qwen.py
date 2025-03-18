@@ -19,6 +19,7 @@ from transformers import (
 # Model and Processor Loading (Done once at startup)
 MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
 # MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 # Configure BitsAndBytesConfig for 8-bit precision
 bnb_config = BitsAndBytesConfig(
@@ -29,8 +30,8 @@ bnb_config = BitsAndBytesConfig(
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 256 * 28 * 28
 max_pixels = 1200 * 28 * 28
-# max_pixels = 1000 * 28 * 28
-max_pixels = 2000 * 28 * 28
+max_pixels = 1000 * 28 * 28
+
 if False:
     model = (
         Qwen2VLForConditionalGeneration.from_pretrained(
@@ -56,16 +57,15 @@ if True:
     )
 
     # Load model and processor
-    ckpt = "Qwen/Qwen2.5-VL-7B-Instruct"
     # ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        ckpt,
+        MODEL_ID,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         quantization_config=bnb_config,
     ).to("cuda")
     processor = AutoProcessor.from_pretrained(
-        ckpt, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
+        MODEL_ID, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
     )
 
 if False:
@@ -87,20 +87,7 @@ if False:
 DESCRIPTION = f"[{MODEL_ID}]"
 
 image_extensions = Image.registered_extensions()
-video_extensions = (
-    "avi",
-    "mp4",
-    "mov",
-    "mkv",
-    "flv",
-    "wmv",
-    "mjpeg",
-    "wav",
-    "gif",
-    "webm",
-    "m4v",
-    "3gp",
-)
+video_extensions = ()
 
 
 def identify_and_save_blob(blob_path):
@@ -117,9 +104,7 @@ def identify_and_save_blob(blob_path):
                 extension = ".png"  # Default to PNG for saving
                 media_type = "image"
             except (IOError, SyntaxError):
-                # If it's not a valid image, assume it's a video
-                extension = ".mp4"  # Default to MP4 for saving
-                media_type = "video"
+                raise ValueError("The file is not a valid image.")
 
             # Create a unique filename
             filename = f"temp_{uuid.uuid4()}_media{extension}"
@@ -171,7 +156,6 @@ def qwen_inference(media_input, text_input=None):
                 raise ValueError(
                     "Unsupported media type. Please upload an image or video."
                 )
-
     print(media_path)
 
     messages = [
@@ -198,6 +182,12 @@ def qwen_inference(media_input, text_input=None):
         padding=True,
         return_tensors="pt",
     ).to("cuda")
+
+    input_height = inputs['image_grid_thw'][0][1] * 14
+    input_width = inputs['image_grid_thw'][0][2] * 14
+
+    print('input_height =', input_height)
+    print('input_width =', input_width)
 
     streamer = TextIteratorStreamer(
         processor, skip_prompt=True, **{"skip_special_tokens": True}
