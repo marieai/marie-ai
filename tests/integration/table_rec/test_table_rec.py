@@ -1,3 +1,6 @@
+import os.path
+import random
+
 from PIL import Image, ImageDraw
 
 
@@ -20,6 +23,17 @@ def test_table_rec(table_rec_predictor):
         for col_id in range(3):
             cell = [c for c in cells if c.row_id == row_id and c.col_id == col_id]
             assert len(cell) == 1, f"Missing cell at row {row_id}, col {col_id}"
+
+    test_image.save(os.path.expanduser("~/tmp/test_image.png"))
+    cols = results[0].cols
+    draw = ImageDraw.Draw(test_image)
+    for item in cols:
+        print(item)
+        bbox = (item.bbox[0], 0, item.bbox[2], test_image.size[1])
+        color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255), 128)  # Random RGBA color
+        draw.rectangle(bbox, fill=color, outline=color)
+    test_image.save(os.path.expanduser("~/tmp/test_image_col.png"))
+
 
 def draw_table(data, cell_width=100, cell_height=40):
     rows = len(data)

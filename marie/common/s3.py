@@ -107,15 +107,13 @@ class S3DownloaderMixin:
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
-        print(pretrained_model_name_or_path)
-        if True:
-            raise NotImplementedError
         # Allow loading models directly from the hub, or using s3
         if not pretrained_model_name_or_path.startswith("s3://"):
             return super().from_pretrained(
                 pretrained_model_name_or_path, *args, **kwargs
             )
-
+        if True:
+            raise NotImplementedError("S3 download is not implemented yet")
         pretrained_model_name_or_path = pretrained_model_name_or_path.replace(
             "s3://", ""
         )

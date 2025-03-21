@@ -6,11 +6,13 @@ import pytest
 from PIL import Image, ImageDraw
 
 from marie.components.table_rec import TableRecPredictor
+from marie.constants import __model_path__
 
 
 @pytest.fixture(scope="session")
 def table_rec_predictor() -> TableRecPredictor:
-    table_rec_predictor = TableRecPredictor()
+    model_path = os.path.join(__model_path__, "table_recognition", "2025_02_18")
+    table_rec_predictor = TableRecPredictor(checkpoint=model_path)
     yield table_rec_predictor
     del table_rec_predictor
 

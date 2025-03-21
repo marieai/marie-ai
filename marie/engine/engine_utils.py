@@ -155,22 +155,27 @@ def open_ai_like_formatting(
 ) -> List[dict]:
     """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API."""
 
+    min_pixels = 512 * 28 * 28
+    max_pixels = 2048 * 28 * 28
+
     formatted_content = []
     for item in content:
         if isinstance(item, Image.Image):
             if remote:
                 with io.BytesIO() as buffer:
-                    Image.open(item).convert("RGB").save(buffer, format="PNG")
+                    item.convert("RGB").save(buffer, format="PNG")
+                    # Image.open(item).convert("RGB").save(buffer, format="PNG")
                     bytes_data = buffer.getvalue()
                 image_type = get_image_type_from_bytes(bytes_data)
                 base64_image = base64.b64encode(bytes_data).decode('utf-8')
                 formatted_content.append(
                     {
-                        "type": "image",
-                        "image": f"data:image/{image_type};base64,{base64_image}",
-                        "image_urlXXX": {
-                            "url": f"data:image/{image_type};base64,{base64_image}"
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}",
                         },
+                        "min_pixels": min_pixels,
+                        "max_pixels": max_pixels,
                     }
                 )
             else:

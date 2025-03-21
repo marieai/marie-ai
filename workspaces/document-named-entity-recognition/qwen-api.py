@@ -1,63 +1,34 @@
 import ast
+import base64
 import io
-import json
 import os
-import random
-import subprocess
 import uuid
 from threading import Thread
+from typing import List
 
 import gradio as gr
-import numpy as np
-import torch
+import tiktoken
+from dotenv import load_dotenv
+from openai import OpenAI
 from PIL import Image, ImageColor, ImageDraw, ImageFont
-from qwen_vl_utils import process_vision_info, smart_resize
-from transformers import (
-    AutoProcessor,
-    BitsAndBytesConfig,
-    Qwen2VLForConditionalGeneration,
-    TextIteratorStreamer,
-)
+
+load_dotenv()  # Loads environment variables from a .env
+
+api_key = os.getenv("OPENAI_API_KEY", "EMPTY")
+base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
+
+print(f"API Key: {api_key}")
+print(f"Base URL: {base_url}")
 
 additional_colors = [
     colorname for (colorname, colorcode) in ImageColor.colormap.items()
 ]
 
-MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
-
-# Configure BitsAndBytesConfig for 8-bit precision
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,  # Enable 8-bit quantization
-)
-# bnb_config = None
-
 # https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
 min_pixels = 512 * 28 * 28
 max_pixels = 2048 * 28 * 28
-
-from transformers import (
-    AutoProcessor,
-    Qwen2_5_VLForConditionalGeneration,
-    TextIteratorStreamer,
-)
-
-# Load model and processor
-# ckpt = "Qwen/Qwen2.5-VL-3B-Instruct"
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-    # quantization_config=bnb_config,
-    attn_implementation="flash_attention_2",
-    quantization_config=bnb_config,
-).to("cuda")
-
-processor = AutoProcessor.from_pretrained(
-    MODEL_ID, trust_remote_code=True, min_pixels=min_pixels, max_pixels=max_pixels
-)
-
-DESCRIPTION = f"[{MODEL_ID}]"
+MODEL_ID = ""
+DESCRIPTION = f"[QWEN 2.5VL API]"
 
 image_extensions = Image.registered_extensions()
 video_extensions = ()
@@ -211,6 +182,102 @@ def plot_bounding_boxes(im, bounding_boxes, input_width, input_height):
     img.show()
 
 
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+def estimate_token_count(prompt: str, model_name: str = "gpt-3.5-turbo-0301") -> int:
+    """
+    Estimates the number of tokens in the given prompt using tiktoken.
+
+    Args:
+        prompt: The text input for which to estimate token count.
+        model_name: The model name from OpenAI to select the tokenizer. Defaults to "gpt-3.5-turbo-0301".
+
+    Returns:
+        The estimated number of tokens in the prompt.
+    """
+    try:
+        tokenizer = tiktoken.encoding_for_model(model_name)
+        tokens = tokenizer.encode(prompt)
+        return len(tokens)
+    except Exception as e:
+        raise ValueError(f"An error occurred while estimating tokens: {e}")
+
+
+# Qwen/Qwen2.5-VL-7B-Instruct  Qwen/Qwen2.5-VL-72B-Instruct-AWQ"
+def inference_with_api(
+    image_path,
+    prompt,
+    sys_prompt="You are a helpful assistant.",
+    model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+    min_pixels=1280 * 28 * 28,
+    max_pixels=2400 * 28 * 28,
+):
+    # base64_image = encode_image(image_path)
+    with io.BytesIO() as buffer:
+        Image.open(image_path).convert("RGB").save(buffer, format="PNG")
+        bytes_data = buffer.getvalue()
+    image_type = "png"
+    base64_image = base64.b64encode(bytes_data).decode('utf-8')
+    estimated_tokens = estimate_token_count(prompt)
+    estimated_tokens = estimated_tokens + 512  #
+    # --max-batch-prefill-tokens 4096 --max-total-tokens 4096 --max-input-tokens 2048
+
+    print('estimated_tokens : ', estimated_tokens)
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+    )
+    sys_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": sys_prompt},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_image}",
+                    },
+                    "min_pixels": min_pixels,
+                    "max_pixels": max_pixels,
+                },
+                {"type": "text", "text": prompt},
+            ],
+        },
+    ]
+
+    # 1. **temperature=0.0** – Minimizes randomness by always picking the highest probability token.
+    # 2. **top_p=1.0** – Disables nucleus sampling, ensuring no additional probability mass is truncated.
+    # 3. **frequency_penalty=0.0** and **presence_penalty=0.0** – Ensures no penalization that would otherwise alter token probabilities
+
+    max_tokens: int = estimated_tokens  # 2048
+    frequency_penalty = 0.0  # Turns off frequency penalty
+    presence_penalty = 0.0  # Turns off presence penalty
+    stop: List[str] = []
+
+    completion = client.chat.completions.create(
+        model=model_id,
+        messages=messages,
+        temperature=0.0,
+        top_p=1.0,  # 1.0 Ensures the full distribution is considered
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
+        max_tokens=max_tokens,
+        stop=stop,
+    )
+
+    return completion.choices[0].message.content
+
+
 def qwen_inference(media_input, text_input=None):
     if isinstance(media_input, str):  # If it's a filepath
         media_path = media_input
@@ -230,6 +297,9 @@ def qwen_inference(media_input, text_input=None):
     print(media_path)
     image = Image.open(media_path)
 
+    result = inference_with_api(media_path, text_input)
+    print('result')
+    print(result)
     messages = [
         {
             "role": "user",
@@ -243,43 +313,13 @@ def qwen_inference(media_input, text_input=None):
         }
     ]
 
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    # image_inputs, video_inputs = process_vision_info(messages)
-    inputs = processor(
-        text=[text],
-        images=[image],
-        videos=None,
-        padding=True,
-        return_tensors="pt",
-    ).to("cuda")
-
-    input_height = inputs['image_grid_thw'][0][1] * 14
-    input_width = inputs['image_grid_thw'][0][2] * 14
-
-    print('input_height =', input_height)
-    print('input_width =', input_width)
-
-    streamer = TextIteratorStreamer(
-        processor, skip_prompt=True, **{"skip_special_tokens": True}
-    )
-    generation_kwargs = dict(inputs, streamer=streamer, max_new_tokens=2048)
-
-    thread = Thread(target=model.generate, kwargs=generation_kwargs)
-    thread.start()
-
-    buffer = ""
-    for new_text in streamer:
-        buffer += new_text
-        yield buffer
-
     print("done")
-    print(buffer)
-
-    json_output = parse_json(buffer)
-    print(json_output)
-    plot_bounding_boxes(image, buffer, input_width, input_height)
+    return result
+    # print(buffer)
+    #
+    # json_output = parse_json(buffer)
+    # print(json_output)
+    # plot_bounding_boxes(image, buffer, input_width, input_height)
 
 
 css = """

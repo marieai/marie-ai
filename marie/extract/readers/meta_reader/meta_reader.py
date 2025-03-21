@@ -58,7 +58,6 @@ class MetaReader(BaseReader):
         unstructured_lines = []
 
         for frame, frame_meta in zip(frames, ocr_meta):
-            # Extract relevant metadata
             meta = frame_meta[META_KEY]
             lines = meta[LINES_KEY]
             page_id = meta[PAGE_KEY]

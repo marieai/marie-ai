@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     COMPILE_ALL: bool = False
 
+    RECOGNITION_PAD_VALUE: int = 255  # Should be 0 or 255
+    COMPILE_RECOGNITION: bool = False  # Static cache for torch compile
+
     @computed_field
     def DETECTOR_STATIC_CACHE(self) -> bool:
         return (

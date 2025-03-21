@@ -28,6 +28,7 @@ class TableRecModelLoader(ModelLoader):
         if dtype is None:
             dtype = settings.MODEL_DTYPE
 
+        print('self.checkpoint = ', self.checkpoint)
         config = SuryaTableRecConfig.from_pretrained(self.checkpoint)
         decoder_config = config.decoder
         decoder = SuryaTableRecDecoderConfig(**decoder_config)

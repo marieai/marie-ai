@@ -15,6 +15,7 @@ import uuid
 from typing import Dict, List, Optional, Union
 
 import diskcache as dc
+import tiktoken
 from PIL import Image
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_random_exponential
@@ -24,8 +25,28 @@ from marie.engine.engine_utils import (
     convert_openai_to_transformers_format,
     extract_text_info,
     is_batched_request,
+    open_ai_like_formatting,
 )
 from marie.logging_core.logger import MarieLogger
+
+
+def estimate_token_count(prompt: str, model_name: str = "gpt-3.5-turbo-0301") -> int:
+    """
+    Estimates the number of tokens in the given prompt using tiktoken.
+
+    Args:
+        prompt: The text input for which to estimate token count.
+        model_name: The model name from OpenAI to select the tokenizer. Defaults to "gpt-3.5-turbo-0301".
+
+    Returns:
+        The estimated number of tokens in the prompt.
+    """
+    try:
+        tokenizer = tiktoken.encoding_for_model(model_name)
+        tokens = tokenizer.encode(prompt)
+        return len(tokens)
+    except Exception as e:
+        raise ValueError(f"An error occurred while estimating tokens: {e}")
 
 
 class BatchProcessor:
@@ -79,22 +100,36 @@ class BatchProcessor:
                 f"Request {request_id} - Task {task_id} - Starting inference."
             )
             print(f'guided_json = {guided_json}')
+
+            # estimated_tokens = estimate_token_count(prompt)
+            # estimated_tokens = estimated_tokens + 512  #
+            estimated_tokens = 4096
+            max_tokens: int = estimated_tokens  # 2048
+            frequency_penalty = 0.0  # Turns off frequency penalty
+            presence_penalty = 0.0  # Turns off presence penalty
+            stop: List[str] = []
+
             # The results are being returned in reasoning_content and not in content
             # [BUG] DeepSeek V3 Does Not Support Structured Output in LangChain with ChatOpenAI() #302
             # Until this is address we will parse the results from reasoning_content manually.
             # https://github.com/deepseek-ai/DeepSeek-V3/issues/302
             # https://docs.vllm.ai/en/latest/features/structured_outputs.html#experimental-automatic-parsing-openai-api
             # examples/online_serving/openai_chat_completion_structured_outputs_with_reasoning.py
+
+            # 1. **temperature=0.0** – Minimizes randomness by always picking the highest probability token.
+            # 2. **top_p=1.0** – Disables nucleus sampling, ensuring no additional probability mass is truncated.
+            # 3. **frequency_penalty=0.0** and **presence_penalty=0.0** – Ensures no penalization that would otherwise alter token probabilities
+
             completion = await self.client.chat.completions.create(
                 model=self.model_string,
                 messages=messages,
-                frequency_penalty=0,
-                presence_penalty=0,
-                stop=None,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                stop=stop,
                 stream=False,
-                temperature=0.1,
-                max_tokens=4096 * 2,
-                top_p=0.95,
+                temperature=0.0,
+                max_tokens=max_tokens,
+                top_p=1,
                 n=1,
                 # extra_body={"guided_json": guided_json} # this will cause issues with DeepSeek and reasoning
             )
@@ -375,9 +410,11 @@ class OpenAIEngine(EngineLM):
         """
         system_prompt = system_prompt or self.system_prompt
         if self.is_multimodal:
-            raise NotImplemented('Implement multimodal inference on first use.')
+            batch_content = [
+                open_ai_like_formatting(content, True) for content in batch_content
+            ]
 
-        reasoning_model = True
+        reasoning_model = kwargs.get("reasoning_model", False)
 
         # https://huggingface.co/deepseek-ai/DeepSeek-Coder-V2-Instruct-0724
         # https://github.com/trustsight-io/deepseek-go/issues/2
@@ -404,23 +441,10 @@ class OpenAIEngine(EngineLM):
 
         return_stats = kwargs.get("return_stats", False)
 
-        if self.is_multimodal:
-            raise NotImplemented('Implement multimodal inference on first use.')
-
         self.logger.info(
             f"🚀 Initiating batch inference with {len(batch_content)} requests."
         )
         start_time = time.time()
-        messages = [
-            {"role": "system", "content": "You are a creative assistants"},
-            {
-                "role": "user",
-                "content": f"Tell me an animal fact, for animal from Poland. {uuid.uuid4()}",
-            },
-        ]
-
-        print("Batched request have completed")
-
         try:
             ordered_outputs = self.batch_processor.batch_generate(
                 messages_list, guided_json=guided_json
@@ -482,8 +506,7 @@ if __name__ == "__main__":
         is_multimodal=False,
         cache=False,
         processor_kwargs=None,
-        base_url="http://184.105.87.211:8000/v1",
-        # base_url="http://localhost:8090/v1",
+        base_url="http://localhost:8090/v1",
     )
 
     class Animal(BaseModel):

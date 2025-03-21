@@ -40,17 +40,55 @@ def parse_json_markdown(text: str) -> Any:
         json_obj = json.loads(json_string)
     except json.JSONDecodeError as e_json:
         try:
-            # NOTE: parsing again with pyyaml
-            #       pyyaml is less strict, and allows for trailing commas
-            #       right now we rely on this since guidance program generates
-            #       trailing commas
-            json_obj = yaml.safe_load(json_string)
-        except yaml.YAMLError as e_yaml:
-            raise Exception(
-                f"Got invalid JSON object. Error: {e_json} {e_yaml}. "
-                f"Got JSON string: {json_string}"
-            )
-        except NameError as exc:
-            raise ImportError("Please pip install PyYAML.") from exc
+            import json5
+
+            return json5.loads(text)
+        except ValueError:
+            try:
+                # NOTE: parsing again with pyyaml
+                #       pyyaml is less strict, and allows for trailing commas
+                #       right now we rely on this since guidance program generates
+                #       trailing commas
+                json_obj = yaml.safe_load(json_string)
+            except yaml.YAMLError as e_yaml:
+                raise Exception(
+                    f"Got invalid JSON object. Error: {e_json} {e_yaml}. "
+                    f"Got JSON string: {json_string}"
+                )
+            except NameError as exc:
+                raise ImportError("Please pip install PyYAML.") from exc
 
     return json_obj
+
+
+def parse_markdown_markdown(text: str) -> str:
+    """
+    Extracts the content enclosed in the first ```markdown ... ``` code block
+    from the given text, even if there's a preceding block labeled ```plain text
+    or similar.
+
+    If no ```markdown block is found, returns an empty string.
+    """
+    if "```markdown" not in text:
+        return ""
+    text = text.split("```markdown")[1].strip().strip("```").strip()
+    return text
+
+
+def check_content_type(text: str) -> str:
+    """
+    Checks if the given text has code blocks with
+    ```json or
+    ```markdown.
+
+    Returns:
+        "json" if a code block labeled ```json is found.
+        "markdown" if ```markdown is found.
+        "none" otherwise.
+    """
+    if "```json" in text:
+        return "json"
+    elif "```markdown" in text:
+        return "markdown"
+    else:
+        return "none"

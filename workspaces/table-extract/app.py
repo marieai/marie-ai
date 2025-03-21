@@ -234,10 +234,16 @@ def recognize_table(image):
     cells = outputs_to_objects(outputs, image.size, id2label)
 
     header_cells = []
-    for cell in cells:
+    for ui_idx, cell in enumerate(cells):
         if cell["label"] not in ["table header", "table column"]:
             continue
         header_cells.append(cell)
+
+        bbox = cell["bbox"]
+        cell_image = np.array(image.crop(bbox))
+        # # save the cell image
+        cell_image_pil = Image.fromarray(cell_image)
+        cell_image_pil.save(f"./debug/cell_{ui_idx}.png")
 
     print("----------")
     for i, cell in enumerate(header_cells):
@@ -359,13 +365,12 @@ def process_document(image):
     cropped_table = detect_and_crop_table(image)
     # dump cropped_table to disk
     cropped_table.save("./debug/cropped_table.png")
-
     image, cells = recognize_table(cropped_table)
-    cell_coordinates = get_cell_coordinates_by_row(cells)
 
-    dump_cells(cropped_table, cells)
-    data = apply_ocr(cell_coordinates, image)
-
+    # cell_coordinates = get_cell_coordinates_by_row(cells)
+    # dump_cells(cropped_table, cells)
+    # data = apply_ocr(cell_coordinates, image)
+    data = {}
     return image, data
 
 
