@@ -1,12 +1,13 @@
 from datetime import datetime
+from typing import Any, Dict
 
 from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie import Executor, requests
-from marie.constants import __default_endpoint__
 from marie.logging_core.logger import MarieLogger
 from marie.serve.executors import __dry_run_endpoint__
+from marie.utils.server_runtime import setup_storage, setup_toast_events
 
 try:
     import pynvml
@@ -17,46 +18,77 @@ except ModuleNotFoundError:
 
 
 class MarieExecutor(Executor):
+    """Base executor class for Marie AI framework providing core functionality.
+
+    This executor handles basic setup, configuration management and provides
+    default endpoints for execution and dry runs. It supports toast notifications,
+    storage configuration and GPU monitoring capabilities.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logger = MarieLogger(self.__class__.__name__)
+        self.logger.info("MarieExecutor initialized")
+        self.logger.info(f"Kwargs : {kwargs}")
+
+        config = {
+            "toast": kwargs.get("toast", {}),
+            "storage": kwargs.get("storage", {}),
+        }
+        self.setup_executor(config)
+
+    def setup_executor(self, config: Dict[str, Any]) -> None:
+        """Configure and initialize the executor with provided settings.
+
+        Args:
+            config: Configuration dictionary containing toast notifications and storage settings
+        """
+        setup_toast_events(config.get("toast", {}))
+        setup_storage(config.get("storage", {}))
 
     # @requests(on=__default_endpoint__)
     async def default_endpoint(
         self,
         docs: DocList[TextDoc],
-        parameters=None,
+        parameters: Dict[str, Any] = None,
         *args,
         **kwargs,
-    ):
+    ) -> DocList[TextDoc]:
+        """Process documents through the default execution endpoint.
+
+        Args:
+            docs: List of text documents to process
+            parameters: Optional execution parameters
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Processed document list
         """
-        Default endpoint to be executed in asynchronous mode
-        :param docs:
-        :param parameters:
-        :param args:
-        :param kwargs:
-        :return:
-        """
-        print("Default endpoint called")
+        self.logger.debug("Default endpoint called")
         return docs
 
     @requests(on=__dry_run_endpoint__)
     async def dry_run_func(
         self,
         docs: DocList[TextDoc],
-        parameters=None,
+        parameters: Dict[str, Any] = None,
         *args,
         **kwargs,
-    ):
+    ) -> None:
+        """Execute a dry run to verify system configuration and GPU availability.
+
+        Args:
+            docs: List of text documents (not processed in dry run)
+            parameters: Optional execution parameters
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments
+
+        Raises:
+            RuntimeError: If any errors occur during the dry run
         """
-         DryRun function to be executed in asynchronous mode
-        :param docs:
-        :param parameters:
-        :param args:
-        :param kwargs:
-        """
-        print(
-            f"DryRun(custom) func called : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        self.logger.info(
+            f"Starting dry run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         has_error = False
         message = ""

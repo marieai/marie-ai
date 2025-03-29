@@ -186,8 +186,8 @@ class JobSupervisor:
                         )
         else:
             task = asyncio.create_task(self._submit_job_in_background(curr_info))
-            # task = asyncio.create_task(fn())
-            print(task)
+            self._active_tasks.add(task)
+            task.add_done_callback(lambda t: self._active_tasks.remove(t))
         self.logger.info(f"Job {self._job_id} submitted in the background.")
 
     def send_callback(

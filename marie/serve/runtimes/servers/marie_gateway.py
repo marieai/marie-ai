@@ -477,19 +477,34 @@ class MarieServerGateway(CompositeServer):
         ref_type = metadata.get("ref_type", None)
         ref_id = metadata.get("ref_id", None)
         submission_policy = metadata.get("policy", None)
+        retry = DEFAULT_RETRY_POLICY
+        event_name = submission_model.name
 
-        # ensure that project_id, ref_type, ref_id are the metadata of the submission model
+        # ensure that project_id, ref_type, ref_id are int  metadata of the submission model
         # we need this as this what we will use for Toast events
-        if not ref_type or not ref_id:
+        if not ref_type or not ref_id or not project_id:
             return self.error_response(
                 "Project ID , Reference Type and Reference ID are required in the metadata",
                 None,
             )
 
-        retry = DEFAULT_RETRY_POLICY
+        # Event name is the name of the job, and it will be used to generate the toast event
+        if (
+            not event_name
+            or (any(not (c.isalnum() or c in '-_.') for c in event_name))
+            or event_name.startswith('amq.')
+        ):
+            return self.error_response(
+                "Event name can only contain letters, digits, hyphen, underscore and period",
+                None,
+            )
+        if len(event_name.encode()) > 255:
+            return self.error_response(
+                "Event name cannot exceed 255 bytes in length", None
+            )
 
         work_info = WorkInfo(
-            name=submission_model.name,
+            name=event_name,
             priority=0,
             data=message,
             state=WorkState.CREATED,
@@ -514,7 +529,7 @@ class MarieServerGateway(CompositeServer):
             await mark_as_scheduled(
                 api_key=project_id,
                 job_id=job_id,
-                event_name=work_info.name,
+                event_name=event_name,
                 job_tag=ref_type,
                 status="OK",
                 timestamp=int(time.time()),
@@ -744,7 +759,7 @@ class MarieServerGateway(CompositeServer):
                     gateway_changed = False
 
             except Exception as ex:
-                raise ex
+                # raise ex
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
                 if error_counter >= max_errors:

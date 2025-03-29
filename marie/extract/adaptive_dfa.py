@@ -16,9 +16,7 @@ class AdaptiveDFA:
         """Adds a transition from one state to another with a given label."""
         if from_state not in self.transitions:
             self.transitions[from_state] = {}
-        self.transitions[from_state][
-            to_state
-        ] = label  # ✅ Store state-to-state mapping
+        self.transitions[from_state][to_state] = label
 
     def process_transitions(self, *states):
         """Processes a sequence of state transitions dynamically."""

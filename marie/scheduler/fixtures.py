@@ -313,6 +313,10 @@ def create_dag_table(schema: str):
     #     tree - Provides a tree-structured view of task execution history.
     #     gantt - Displays a Gantt chart for task durations.
     #     duration - Shows task execution durations in a bar chart.
+
+    #   **Storage of Serialized DAGs**
+    #    - DAGs are stored in a **pickled** (binary serialized) format in the database.
+    #    - This helps **workers** retrieve DAGs without requiring direct access to the DAG files.
     return f"""
         CREATE TABLE {schema}.dag (
             id uuid not null default gen_random_uuid(),
@@ -322,6 +326,7 @@ def create_dag_table(schema: str):
             is_subdag BOOLEAN DEFAULT FALSE,
             default_view VARCHAR(50) DEFAULT 'graph', -- Possible values: grid, graph, tree, gantt, duration
             serialized_dag JSONB,
+            serialized_dag_pickle BYTEA,
             completed_on timestamp with time zone,
             created_on timestamp with time zone not null default now(),
             updated_on timestamp with time zone not null default now()

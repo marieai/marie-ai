@@ -18,6 +18,7 @@ from marie import Document, DocumentArray
 from marie._core.definitions.events import AssetKey
 from marie.api.docs import DOC_KEY_PAGE_NUMBER, MarieDoc
 from marie.common.file_io import StrOrBytesPath
+from marie.logging_core.predefined import default_logger as logger
 from marie.storage import StorageManager
 from marie.utils.utils import ensure_exists
 
@@ -332,7 +333,16 @@ def docs_from_asset(
     # Read remote file to a byte array
     with tempfile.NamedTemporaryFile(dir="/tmp/marie", delete=False) as temp_file_out:
         # with open("/tmp/sample.tiff", "w") as temp_file_out:
-        # print(f"Reading file from {uri} to {temp_file_out.name}")
+        print(f"Reading file from {uri} to {temp_file_out.name}")
+
+        print(f'StorageManager : {StorageManager}')
+        print(f'_PATH_HANDLERS : {StorageManager._PATH_HANDLERS}')
+
+        connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+        if not connected:
+            logger.error(f"Error restoring assets : Could not connect to S3")
+            raise ValueError("Error restoring assets : Could not connect to S3")
+
         if not StorageManager.exists(uri):
             raise ValueError(f"Remote file does not exist : {uri}")
 

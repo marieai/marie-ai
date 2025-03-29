@@ -52,6 +52,10 @@ def load_json_file(filename, safe_parse: bool = False) -> Any:
 
 def deserialize_value(json_str) -> Any:
     """Deserialize a JSON string to an object."""
+    if json_str is None:
+        return None
+    if isinstance(json_str, dict):
+        return json_str
     data = json.loads(json_str)
     return data
 

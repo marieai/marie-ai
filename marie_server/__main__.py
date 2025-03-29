@@ -210,18 +210,6 @@ def __main__(
             external=True,
         ).config_gateway(prefetch=prefetch)
 
-        if False:
-            f = (
-                Flow()
-                .add(name="first_exec", uses=FirstExecutor)
-                .add(name="second_exec", uses=FirstExecutor)
-                .add(
-                    name="replicated_exec",
-                    uses=FirstExecutor,
-                    replicas=2,  # This line runs 2 parallel copies of ReplicatedExecutor
-                )
-            )
-
     if False:
         f = Deployment.load_config(
             config,
@@ -230,11 +218,11 @@ def __main__(
             ],
             substitute=True,
             context=context,
-            include_gateway=True,
+            include_gateway=False,
             noblock_on_start=False,
             prefetch=prefetch,
             statefull=False,
-            external=True,
+            external=False,
         )
 
     # marie.helper.extend_rest_interface = partial(extend_rest_interface, f, prefetch)
@@ -255,17 +243,18 @@ def __main__(
             event_builder(api_key, job_id, event, job_tag, status, timestamp, payload),
         )
 
-        MarieEvent.engine_event(
-            f"Starting server with config {yml_config} and env {env}",
-            EngineEventData(
-                metadata={
-                    "config": yml_config,
-                    "env": env,
-                    "context": context,
-                    "prefetch": prefetch,
-                }
-            ),
-        )
+        if False:
+            MarieEvent.engine_event(
+                f"Starting server with config {yml_config} and env {env}",
+                EngineEventData(
+                    metadata={
+                        "config": yml_config,
+                        "env": env,
+                        "context": context,
+                        "prefetch": prefetch,
+                    }
+                ),
+            )
 
     with f:
         f.block()

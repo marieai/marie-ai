@@ -1559,7 +1559,7 @@ class WorkerRequestHandler:
     async def _record_started_job(
         self, job_id: str, requests: List["DataRequest"], params
     ):
-        print(f"Record job started: {job_id}")
+        print(f"Record job started: {job_id} : dry_run {self.is_dry_run(requests)}")
         if self.is_dry_run(requests):
             return
 
@@ -1587,7 +1587,7 @@ class WorkerRequestHandler:
         requests: List["DataRequest"],
         metadata_attributes: Optional[Dict],
     ):
-        print(f"Record job success: {job_id}")
+        print(f"Record job success: {job_id} : dry_run {self.is_dry_run(requests)}")
         if self.is_dry_run(requests):
             return
 

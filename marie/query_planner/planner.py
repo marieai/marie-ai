@@ -1,20 +1,22 @@
-import json
 import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
+from typing import Callable
 
-import numpy as np
 import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
+from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import (
     ExecutorEndpointQueryDefinition,
     LlmQueryDefinition,
     NoopQueryDefinition,
+    PlannerInfo,
     PythonFunctionQueryDefinition,
     Query,
     QueryPlan,
+    QueryPlanRegistry,
     QueryType,
 )
 from marie.query_planner.mapper import JobMetadata
@@ -166,7 +168,104 @@ def topological_sort(plan: QueryPlan) -> list:
     return sorted_nodes
 
 
-def query_planner(frame_count: int, layout: str) -> QueryPlan:
+def _load_query_planner(planner_name: str) -> Callable:
+    """
+    Dynamically load the query planner based on the planner name.
+
+    :param planner_name: The name of the query planner to load.
+    :return: A callable query planner function.
+    :raise ValueError: If the query planner name is invalid.
+    """
+    logger.info(f"Loading query planner: {planner_name}")
+    try:
+        return QueryPlanRegistry.get(planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        raise
+
+
+def query_planner(planner_info: PlannerInfo) -> QueryPlan:
+    logger.info(f"Starting query planning for: {planner_info}")
+    query_planner_name = planner_info.name
+
+    try:
+        query_planner_fn = _load_query_planner(query_planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        raise
+
+    plan = query_planner_fn(planner_info)
+    if not plan:
+        error_message = (
+            f"Query planner '{query_planner_name}' returned an invalid/NONE plan."
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    # Technically DAG can have multiple roots, but we want to enforce
+    # a single root node as that will be used as the entry point
+    strict = True
+    plan = ensure_single_entry_point(plan, planner_info, strict)
+    logger.info(f"Query planning completed successfully for: {query_planner_name}")
+    return plan
+
+
+def ensure_single_entry_point(
+    query_plan: QueryPlan, planner_info: PlannerInfo, strict: bool = False
+) -> QueryPlan:
+    """
+    Ensure the query plan has a single entry point by creating a synthetic root node
+    that connects to all natural root nodes in the DAG.
+
+    Args:
+        query_plan:  QueryPlan object to update with a synthetic root node
+        planner_info: PlannerInfo object containing base_id and current_id
+
+    Returns:
+        Tuple of (updated query plan, incremented current_id)
+        :param strict:
+    """
+    nodes = query_plan.nodes
+    base_job_id = planner_info.base_id
+    current_id = planner_info.current_id
+
+    referenced_nodes = set()
+    for node in nodes:
+        referenced_nodes.update(node.dependencies)
+
+    # Find natural root nodes (nodes that aren't dependencies of any other node)
+    natural_roots = [node for node in nodes if node.task_id not in referenced_nodes]
+
+    strict = False
+    if strict and len(natural_roots) != 1:
+        error_message = (
+            f"Query plan must have exactly one root node, found {len(natural_roots)}"
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    if len(natural_roots) == 1:
+        return query_plan
+
+    current_id += 1
+    root = Query(
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
+        query_str=f"{current_id}: ROOT",
+        dependencies=[],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+
+    for natural_root in natural_roots:
+        natural_root.dependencies.append(root.task_id)
+
+    query_plan.nodes.insert(0, root)
+    planner_info.current_id = current_id
+
+    return query_plan
+
+
+def query_planner_xyz(frame_count: int, layout: str) -> QueryPlan:
     """
     Plan a structured query execution graph for document annotation, adding SEGMENT, FIELD & TABLE Extraction, and COLLATOR steps.
     :param frame_count: Number of frames to process.
@@ -505,19 +604,8 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     plt.show()
 
 
-if __name__ == "__main__":
-    question = "Annotate documents with named entities."
-    frame_count = 3
-    layout = "12345"
-
-    plan = query_planner(frame_count, layout)
-    pprint(plan.model_dump())
-    visualize_query_plan_graph(plan)
-    # yml_str = plan_to_yaml(plan)
-    # pprint(yml_str)
-
-    sorted_nodes = topological_sort(plan)
-    print_sorted_nodes(sorted_nodes, plan)
+def print_query_plan(plan: QueryPlan, layout: str) -> None:
+    """Print the query plan in a human-readable format."""
 
     executors = []
     for node in plan.nodes:
@@ -529,7 +617,25 @@ if __name__ == "__main__":
         except Exception as e:
             traceback.print_exc()
             print(f"Error creating metadata for node {node.task_id}: {e}")
-
     print("Executors:", executors)
     for exec in executors:
         print(f"Executor: {exec}")
+
+
+if __name__ == "__main__":
+    question = "Annotate documents with named entities."
+    frame_count = 3
+    layout = "extract"
+    planner_info = PlannerInfo(name="extract", base_id=generate_job_id())
+    plan = query_planner(planner_info)
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+    # yml_str = plan_to_yaml(plan)
+    # pprint(yml_str)
+
+    json_serialized = plan.model_dump()
+    reconstructed_plan = QueryPlan(**json_serialized)
+
+    sorted_nodes = topological_sort(plan)
+    print_sorted_nodes(sorted_nodes, plan)
+    print_query_plan(plan, layout)

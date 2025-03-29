@@ -136,6 +136,12 @@ def insert_dag(schema: str, dag_id: str, dag_name: str, serialized_dag: dict) ->
     """
 
 
+def load_dag(schema: str, dag_id: str) -> str:
+    return f"""
+        SELECT serialized_dag FROM {schema}.dag WHERE id = '{dag_id}'::uuid
+    """
+
+
 def create_queue(schema: str, queue_name: str, options: Dict[str, str]) -> str:
     return f"""
             SELECT {schema}.create_queue('{queue_name}', '{{"retry_limit":2}}'::json)

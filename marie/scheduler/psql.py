@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import copy
+import pickle
 import time
 import traceback
 from collections import defaultdict
@@ -14,12 +15,12 @@ from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager, generate_job_id
-from marie.job.partition.job_partitioner import MarieJobPartitioner
-from marie.job.pydantic_models import JobPartition
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
-from marie.query_planner.base import QueryPlan
+from marie.messaging import mark_as_complete
+from marie.query_planner.base import Query, QueryDefinition, QueryPlan
 from marie.query_planner.planner import (
+    PlannerInfo,
     plan_to_json,
     plan_to_yaml,
     print_sorted_nodes,
@@ -41,6 +42,7 @@ from marie.scheduler.plans import (
     insert_dag,
     insert_job,
     insert_version,
+    load_dag,
     mark_as_active_jobs,
     resume_jobs,
     to_timestamp_with_tz,
@@ -101,7 +103,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.task = None
         self.sync_task = None
         self.monitoring_task = None
-
         self.aqueue: Optional[asyncio.Queue] = None
 
         lock_free = True
@@ -112,6 +113,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
 
+        self.active_dags = {}
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
@@ -281,7 +283,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _poll(self):
         self.logger.info("Starting database job scheduler")
         wait_time = INIT_POLL_PERIOD
-        batch_size = 10
+        batch_size = 12
         failures = 0
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_entrypoint = available_slots_by_executor(ClusterState.deployments)
@@ -331,7 +333,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 )
 
                 if has_any_open_slots:
-                    # TODO: Allow contronlling how many jobs to fetch per queue
+                    # TODO: Allow controlling how many jobs to fetch per queue
                     records_by_queue = await self.get_work_items_by_queue(
                         limit=batch_size
                     )
@@ -340,6 +342,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     for queue, records in records_by_queue.items():
                         self.logger.info(f"Records for queue: {queue}")
                         for record in records:
+                            self.logger.info(f"record : {record}")
                             work_info = self.record_to_work_info(record)
                             entrypoint = work_info.data.get("metadata", {}).get("on")
                             records_by_entrypoint[entrypoint].append(work_info)
@@ -352,6 +355,26 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                         for work_info in records:
                             print(f'Work item : {work_info}')
+                            dag_id = work_info.dag_id
+                            dag = self.get_dag_by_id(dag_id)
+                            if not dag:
+                                self.logger.warning(
+                                    f"Could not find DAG for job: {dag_id}"
+                                )
+                                continue
+
+                            node = self.get_node_from_dag(work_info.id, dag)
+                            if node and self._is_noop_query_definition(node):
+                                self.logger.info(
+                                    f"Node {node.task_id} in DAG {dag_id} is a NoopQueryDefinition, resolving immediately"
+                                )
+                                job_id = work_info.id
+                                await self.complete(job_id, work_info, {}, force=True)
+                                await self.resolve_dag_status(
+                                    job_id, work_info, datetime.now(), datetime.now()
+                                )
+                                continue
+
                             has_records = True
                             submission_id = work_info.id
                             entrypoint = work_info.data.get("metadata", {}).get("on")
@@ -382,6 +405,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                             print(
                                 f'slots after decrement : {slots_by_entrypoint[executor]}'
                             )
+
                             # FIXME: WE NEED  MAKE SURE THAT THE CLUSTER STATE IS UPDATED BEFORE WE SCHEDULE THE JOB
                             await self.mark_as_active(work_info)
                             job_id = await self.enqueue(work_info)
@@ -689,28 +713,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"For work item : {work_info}."
             )
         # TODO:
-        dag_id = generate_job_id()
+        dag_id = submission_id  # generate_job_id()
         dag_name = f"{dag_id}_dag"
         work_info.dag_id = dag_id
+        query_plan_dag, topological_sorted_nodes = query_plan_work_items(work_info)
 
-        # splits = self.calculate_splits(work_info)
-        query_plan, topological_sorted_nodes = query_plan_work_items(work_info)
         with self:
             try:
-                # insert the DAG
+                # insert the DAG, we will serialize the DAG to JSON and Pickle
+                # this will allow us to re-create the DAG from the database without having to re-plan the DAG
+                json_serialized_dag = query_plan_dag.model_dump()
                 cursor = self._execute_sql_gracefully(
-                    insert_dag(
-                        DEFAULT_SCHEMA, dag_id, dag_name, query_plan.model_dump()
-                    )
+                    insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag)
                 )
                 new_dag_key = cursor is not None and cursor.rowcount > 0
+                self.logger.info(f"DAG inserted with ID: {new_dag_key}")
+                #
+                # cursor = self._execute_sql_gracefully(
+                #     insert_job(DEFAULT_SCHEMA, work_info)
+                # )
+                # new_key_added = cursor is not None and cursor.rowcount > 0
 
-                cursor = self._execute_sql_gracefully(
-                    insert_job(DEFAULT_SCHEMA, work_info)
-                )
-                new_key_added = cursor is not None and cursor.rowcount > 0
-
-                for dag_work_info in topological_sorted_nodes:
+                for i, dag_work_info in enumerate(topological_sorted_nodes):
                     print('------- ', dag_work_info)
                     cursor = self._execute_sql_gracefully(
                         insert_job(
@@ -719,6 +743,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         )
                     )
                     new_dag_key = cursor is not None and cursor.rowcount > 0
+                    if i == 0:
+                        new_key_added = new_dag_key
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
@@ -1104,19 +1130,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if self.connection:
                     self.connection.rollback()  # Ensure rollback on failure
 
-    def calculate_splits(self, work_info: WorkInfo) -> list[JobPartition]:
-        """
-        Calculate the splits for a work item.
-        This is used to split the work item into smaller parts for parallel processing.
-        :param work_info:
-        :return:
-        """
-
-        partitioner = MarieJobPartitioner(10)
-        partitions = partitioner.partition(work_info)
-
-        return partitions
-
     async def notify_event(self) -> bool:
         self.logger.info(f"notify_event : {self._fetch_counter}")
         async with self._fetch_lock:
@@ -1134,22 +1147,125 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         started_on: Optional[datetime] = None,
         completed_on: Optional[datetime] = None,
     ):
-        self.logger.info(f"Resolving DAG status : {job_id}, {work_info}")
+        self.logger.info(f"Resolving DAG status[dag-id] : {work_info.dag_id}")
 
         with self:
             try:
                 resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
-                print('resolve_query : ', resolve_query)
-                self._execute_sql_gracefully(resolve_query)
+                cursor = self._execute_sql_gracefully(resolve_query)
+                result = cursor.fetchone()
+                dag_in_progress = (
+                    not result or not result[0] or result[0] != 'completed'
+                )
+                self.logger.info(f'dag_in_progress = {dag_in_progress}')
+
+                if dag_in_progress:
+                    self.logger.info(
+                        f"DAG {work_info.dag_id} execution is still in progress"
+                    )
+                    return
+
+                if work_info.dag_id in self.active_dags:
+                    del self.active_dags[work_info.dag_id]
+                    self.logger.debug(
+                        f"Removed completed DAG {work_info.dag_id} from active DAGs cache"
+                    )
+
+                event_name = work_info.data.get(
+                    "name", work_info.name
+                )  # they should be the same
+                api_key = work_info.data.get("api_key", None)
+                metadata = work_info.data.get("metadata", {})
+                ref_type = metadata.get("ref_type")
+
+                if not api_key or not event_name:
+                    self.logger.warning(
+                        f"Job completion notification failed - missing required fields: api_key={api_key}, event_name={event_name}"
+                    )
+                    return
+
+                await mark_as_complete(
+                    api_key=api_key,
+                    job_id=job_id,
+                    event_name=event_name,
+                    job_tag=ref_type,
+                    status="OK",
+                    timestamp=int(time.time()),
+                    payload=metadata,
+                )
+
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error handling dag resolution: {error}")
+                raise error
+
+    def get_dag_by_id(self, dag_id: str):
+        """
+        Retrieves a DAG by its ID, either from the active_dags cache or from the database.
+
+        Args:
+            dag_id: The ID of the DAG to retrieve
+
+        Returns:
+            The DAG object if found, None otherwise
+        """
+        if dag_id in self.active_dags:
+            return self.active_dags[dag_id]
+
+        try:
+            with self:
+                cur = self._execute_sql_gracefully(load_dag(DEFAULT_SCHEMA, dag_id))
+                result = cur.fetchone()
+                if result:
+                    dag_definition = result[0]
+                    dag = QueryPlan(**dag_definition)
+                    self.active_dags[dag_id] = dag
+                    return dag
+                return None
+        except Exception as e:
+            self.logger.error(f"Error retrieving DAG {dag_id}: {e}")
+            return None
+
+    def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
+        """
+        Checks if the given node is a NoopQueryDefinition node.
+        """
+        try:
+            from marie.query_planner.base import NoopQueryDefinition
+
+            return isinstance(node.definition, NoopQueryDefinition)
+        except ImportError:
+            # If import fails, try to check by class name
+            return node.__class__.__name__ == "NoopQueryDefinition" or (
+                hasattr(node, 'definition')
+                and node.query_definition.__class__.__name__ == "NoopQueryDefinition"
+            )
+
+    def get_node_from_dag(self, work_id: str, dag: QueryPlan) -> Query:
+        """
+        Retrieves a node from the DAG by its ID.
+
+        Args:
+            work_id: The ID of the node to retrieve
+            dag: The DAG to search in
+
+        Returns:
+            The node if found, None otherwise
+        """
+        for node in dag.nodes:
+            print(
+                f'node.task_id = {node.task_id} > {work_id}  = {node.task_id == work_id}'
+            )
+            if node.task_id == work_id:
+                return node
+        raise ValueError(f"Node with ID {work_id} not found in DAG")
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
     pprint(f"Query planning : {work_info}")
-    frames_count = 3
+    query_planner_name = work_info.name
+    planner_info = PlannerInfo(name=query_planner_name, base_id=work_info.id)
+    plan = query_planner(planner_info)
 
-    plan = query_planner(frames_count, layout="12345")
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
@@ -1161,19 +1277,28 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
     sorted_nodes = topological_sort(plan)
     print("Topologically sorted nodes:", sorted_nodes)
     print_sorted_nodes(sorted_nodes, plan)
-    dag_nodes = []
 
-    for i, node in enumerate(plan.nodes):
+    dag_nodes = []
+    node_dict = {node.task_id: node for node in plan.nodes}
+
+    for i, task_id in enumerate(sorted_nodes):
+        node = node_dict.get(task_id)
         print(f"Node : {node} : dependencies : {node.dependencies}")
         wi = copy.deepcopy(work_info)
         wi.id = node.task_id
         # wi.data = {}
         # we need to add the dependencies to the root node
         if i == 0:
+            # ensure that the root node has no dependencies
+            if node.dependencies:
+                raise ValueError(
+                    f"Root node has dependencies: {node.dependencies}, expected none"
+                )
             work_info.dependencies = []  # Root node has no dependencies
-            wi.dependencies = [
-                work_info.id
-            ]  # Generated plan root node has the work_info as dependency
+            wi.dependencies = []
+            # wi.dependencies = [
+            #     work_info.id
+            # ]  # Generated plan root node has the work_info as dependency
         else:
             wi.dependencies = node.dependencies
         print(f"  -- item : {wi}")

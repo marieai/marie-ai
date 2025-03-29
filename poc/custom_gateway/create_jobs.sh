@@ -26,7 +26,7 @@ fi
 metadata=$(cat <<EOF
 {
     "on__": "/extract",
-    "on": "extract_executor://extract",
+    "on": "extract_executor://document/extract",
     "project_id": "project_id_000001",
     "doc_idXXXX": "doc_id_$RANDOM",
     "ref_id": "doc_id_0001",
