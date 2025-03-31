@@ -79,10 +79,12 @@ class GatewayJobDistributor(JobDistributor):
                     if node['endpoint'] == req_endpoint:
                         found = True
                         break
-                    if node['endpoint'] == __default_endpoint__:
-                        req_endpoint = __default_endpoint__
-                        found = True
-                        break
+                if not found:
+                    for node in nodes:
+                        if node['endpoint'] == __default_endpoint__:
+                            req_endpoint = __default_endpoint__
+                            found = True
+                            break
                 if found:
                     break
         if not found:

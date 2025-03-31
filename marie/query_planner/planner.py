@@ -176,11 +176,17 @@ def _load_query_planner(planner_name: str) -> Callable:
     :return: A callable query planner function.
     :raise ValueError: If the query planner name is invalid.
     """
+    import os
+
     logger.info(f"Loading query planner: {planner_name}")
     try:
         return QueryPlanRegistry.get(planner_name)
     except ValueError as e:
         logger.error(f"Error loading query planner: {e}")
+        if os.getenv("MARIE_DEBUG_QUERY_PLANNER", "false").lower() == "true":
+            logger.error(
+                f"Available planners: {list(QueryPlanRegistry.list_planners())}"
+            )
         raise
 
 

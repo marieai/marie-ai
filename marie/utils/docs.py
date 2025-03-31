@@ -335,9 +335,6 @@ def docs_from_asset(
         # with open("/tmp/sample.tiff", "w") as temp_file_out:
         print(f"Reading file from {uri} to {temp_file_out.name}")
 
-        print(f'StorageManager : {StorageManager}')
-        print(f'_PATH_HANDLERS : {StorageManager._PATH_HANDLERS}')
-
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
         if not connected:
             logger.error(f"Error restoring assets : Could not connect to S3")

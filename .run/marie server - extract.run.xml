@@ -5,7 +5,7 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="COLUMNS" value="120" />
+      <env name="COLUMNS" value="180" />
       <env name="CUDA_VISIBLE_DEVICES" value="0" />
       <env name="GRPC_VERBOSITY" value="debug" />
       <env name="JINA_MP_START_METHOD" value="spawn" />
@@ -22,7 +22,7 @@
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/marie/__main__.py" />
-    <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/marie-extract.yml" />
+    <option name="PARAMETERS" value="server --start --uses /mnt/data/marie-ai/config/service/marie-g5.yml" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

@@ -1,7 +1,7 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
@@ -28,11 +28,14 @@ class BaseOperator(BaseModel):
     Base schema for an operator object.
     """
 
+    # this values will overwrtie the parameters in the work item meta
     name: str
-    type: str = "job"
-    uri: str = "s3://bucket/key"
     on: str = Field(..., description="Specifies which executor handles this operator.")
     name: str = Field(..., description="The name of the operator.")
+    # this parameter dict will be passed in directly without modification
+    op_params: Dict[str, Any] = Field(
+        default_factory=dict, description="The parameters of the operator."
+    )
 
 
 class ExtractorOperatorConfig(BaseOperator):
@@ -82,6 +85,7 @@ def get_layout_config(layout_name: str) -> DictConfig:
 class JobMetadata(BaseModel):
     """
     Schema encapsulating job metadata.
+    API KEY will be populated during request creation.
     """
 
     name: str
@@ -100,7 +104,9 @@ class JobMetadata(BaseModel):
         :param layout: Designates which layout configuration to apply.
         :return: A populated JobMetadata object.
         """
-        logger.info("Processing task: %s", task)
+        logger.info(
+            f"Processing task: {task}",
+        )
 
         task_type = task.node_type
         task_definition = task.definition
@@ -116,8 +122,10 @@ class JobMetadata(BaseModel):
             raise ValueError("Node type is not defined in the task.")
 
         layout_conf = get_layout_config(layout)
-        logger.debug("Loaded layout config: %s", layout_conf)
-        logger.debug("Task Type: %s, Method: %s, Params: %s", task_type, method, params)
+        logger.debug(
+            f"Loaded layout config: {layout_conf}",
+        )
+        logger.debug(f"Task Type: {task_type}, Method: {method}, Params: {params}")
 
         executor_endpoint = "executor://endpoint"
         has_executor = "://" in endpoint
@@ -148,8 +156,7 @@ class JobMetadata(BaseModel):
         # Determine which operator class to create
         operator_class = JobMetadataFactory.get_metadata_class(task_type)
         operator_instance = operator_class(
-            on=executor_endpoint,
-            name=task.query_str,
+            on=executor_endpoint, name=task.query_str, op_params=params
         )
 
         return cls(
@@ -180,7 +187,6 @@ class JobMetadataFactory:
         return type_mapping.get(node_type, BaseOperator)
 
 
-# ✅ Example Usage
 if __name__ == "__main__":
     task_fragment_extractor = {
         "task_id": "067adccc-8316-74a1-8000-202ea146a07b",

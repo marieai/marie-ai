@@ -3,12 +3,10 @@ import os
 import platform
 import sys
 import traceback
-from functools import partial
 from typing import Any, Dict, Optional
 
 from rich.traceback import install
 
-import marie.helper
 from marie import Deployment, Flow, __version__
 from marie.conf.helper import load_yaml
 from marie.constants import (
@@ -16,10 +14,6 @@ from marie.constants import (
     __config_dir__,
     __marie_home__,
     __model_path__,
-)
-from marie.executor.text.text_extraction_executor import (
-    FirstExecutor,
-    LLMExtractionExecutorMock,
 )
 from marie.importer import ImportExtensions
 from marie.logging_core.mdc import MDC
@@ -30,7 +24,6 @@ from marie.messaging.publisher import event_builder
 from marie.utils.device import gpu_device_count
 from marie.utils.server_runtime import setup_auth, setup_storage, setup_toast_events
 from marie.utils.types import strtobool
-from marie_server.rest_extension import extend_rest_interface
 
 DEFAULT_TERM_COLUMNS = 120
 

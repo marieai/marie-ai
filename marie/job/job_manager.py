@@ -119,7 +119,7 @@ class JobManager:
         This is necessary because we need to handle the case where the
         JobSupervisor dies unexpectedly.
         """
-        self.logger.info(f"Monitoring job : {job_id}.")
+        self.logger.debug(f"Monitoring job : {job_id}.")
         if job_id in self.monitored_jobs:
             self.logger.debug(f"Job {job_id} is already being monitored.")
             return
@@ -138,7 +138,7 @@ class JobManager:
         @param job_supervisor: The actor handle for the job supervisor.
         """
 
-        self.logger.info(f"Monitoring job internal : {job_id}.")
+        self.logger.debug(f"Monitoring job internal : {job_id}.")
 
         timeout = float(
             os.environ.get(

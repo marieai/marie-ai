@@ -1,11 +1,11 @@
+import io
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError, EndpointConnectionError
-
-import io
 
 from marie.excepts import BadConfigSource, raise_exception
 from marie.storage import PathHandler
@@ -18,8 +18,10 @@ except ImportError:
 StrOrBytesPath = Union[str, Path, os.PathLike]
 
 from marie.logging_core.predefined import default_logger as logger
-from marie.logging_core.logger import MarieLogger
-
+# Disable thread use/transfer concurrency
+# this need to be configurable
+# doding tthis to prevent: cannot schedule new futures after interpreter shutdown
+config = TransferConfig(use_threads=False)
 
 def is_file_like(obj) -> bool:
     """
@@ -359,7 +361,7 @@ class S3StorageHandler(PathHandler):
         s = S3Url(path)
         try:
             bytes_buffer = io.BytesIO()
-            self.s3.Bucket(s.bucket).download_fileobj(s.key, bytes_buffer)
+            self.s3.Bucket(s.bucket).download_fileobj(s.key, bytes_buffer, Config=config)
 
             return bytes_buffer.getvalue()
         except Exception as e:
@@ -404,10 +406,10 @@ class S3StorageHandler(PathHandler):
                 os.makedirs(os.path.dirname(local_src), exist_ok=True)
 
             if file_like:
-                bucket.download_fileobj(s.key, local_src)
+                bucket.download_fileobj(s.key, local_src, Config=config)
             else:
                 with open(local_src, "wb") as data:
-                    bucket.download_fileobj(s.key, data)
+                    bucket.download_fileobj(s.key, data, Config=config)
 
         except Exception as e:
             logger.error(f"Unable to write file from bucket '{s.bucket}' : {e}")

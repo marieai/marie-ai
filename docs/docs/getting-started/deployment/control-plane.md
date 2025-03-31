@@ -85,7 +85,14 @@ docker compose  --env-file ./config/.env.prod -f docker-compose.s3.yml -f docker
 After S3 is up and running we can mount via `s3fs` and test it out.
 
 ```shell
-s3fs marie /mnt/s3-marie -o passwd_file=${HOME}/.passwd-s3fs -o url=http://127.0.0.1:8000 -o use_path_request_style
+chmod 600 ~/.passwd-s3f
+s3fs marie /mnt/s3-marie -o passwd_file=${HOME}/.passwd-s3fs -o url=http://127.0.0.1:8000  -o allow_other -o use_path_request_style  -o dbglevel=info -f -o curldbg
+```
+Edit `/etc/fuse.conf` and enable `allow_other`
+
+Sample `.passwd-s3fs`
+```text
+MARIEACCESSKEY:MARIESECRETACCESSKEY
 ```
 
 Starting and stopping specific services
@@ -96,7 +103,7 @@ docker compose -f docker-compose.yml -f docker-compose.storage.yml \
 ```
 
 ## Kubernetes 
-[Translate a Docker Compose File to Kubernetes Resources](https://kubernetes.io/docs/tasks/configure-pod-container/translate-compose-kubernetes/)
+[Translate a Docker Compose File to Kubernetes Resources](https://kubernetes.io/docs/tasks/configure-pod-container/translate-compose-kubernetes/)[s3-marie](../../../../../../../../../mnt/s3-marie)
 
 
 ## Services
