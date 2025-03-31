@@ -1,16 +1,29 @@
-from marie.job.job_manager import increment_uuid7str
+from pprint import pprint
+
+from marie.job.job_manager import generate_job_id, increment_uuid7str
 from marie.query_planner.base import (
     ExecutorEndpointQueryDefinition,
     NoopQueryDefinition,
     PlannerInfo,
     Query,
     QueryPlan,
+    QueryPlanRegistry,
     QueryType,
     register_query_plan,
 )
+from marie.query_planner.planner import (
+    print_query_plan,
+    print_sorted_nodes,
+    query_planner,
+    topological_sort,
+    visualize_query_plan_graph,
+)
+
+PLAN_ID = "extract"
 
 
-@register_query_plan("extract")
+# @register_query_plan(PLAN_ID)
+# QueryPlanRegistry.register(PLAN_ID, query_planner_extract)
 def query_planner_extract(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """
     Plan a structured query execution graph for document OCR extraction.
@@ -60,3 +73,19 @@ def query_planner_extract(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     )
 
     return QueryPlan(nodes=[root] + [segment_node] + [end_node])
+
+
+if __name__ == "__main__":
+    question = "Annotate documents with named entities."
+    # this can alsow be registered via a decorator
+    QueryPlanRegistry.register(PLAN_ID, query_planner_extract)
+    print(QueryPlanRegistry.list_planners())
+
+    planner_info = PlannerInfo(name=PLAN_ID, base_id=generate_job_id())
+    plan = query_planner(planner_info)
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+
+    sorted_nodes = topological_sort(plan)
+    print_sorted_nodes(sorted_nodes, plan)
+    print_query_plan(plan, PLAN_ID)

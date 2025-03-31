@@ -1,9 +1,7 @@
-version: "3.9"
-
 # ############### Networks ###############
 
 # Container networking setup
-# docker network create --driver=bridge public
+# docker network create --driver=bridge marie_default
 # sysctl net.ipv4.conf.all.forwarding=1
 
 # Dashboard accessible via `http://localhost:7777/dashboard/#/'

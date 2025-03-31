@@ -205,9 +205,6 @@ class JobSupervisor:
             request = [requests]
         self.request_info = request_info
 
-        print('send_callback self.request_info:', self.request_info)
-        print('send_callback requests:', requests)
-
         # FIXME : This is a hack to trigger the event n iJob Scheduler
         request_id = request_info["request_id"]
         address = request_info["address"]
@@ -305,7 +302,7 @@ class JobSupervisor:
                     )
 
             end_time = time.monotonic()
-            print(f"Full background process took {end_time - mid_time:.2f} seconds")
+            # print(f"Full background process took {end_time - mid_time:.2f} seconds")
         except Exception as e:
             await self._job_info_client.put_status(
                 self._job_id, JobStatus.FAILED, message=str(e)

@@ -1658,7 +1658,7 @@ class WorkerRequestHandler:
         """service heartbeat."""
         if self._lease is None:
             return
-        self.logger.info(
+        self.logger.debug(
             f"Heartbeat : {self._worker_state} - {self._lease.remaining_ttl}"
         )
         try:

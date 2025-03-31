@@ -1,8 +1,7 @@
-version: "3.9"
 services:
   s3server:
     image: zenko/cloudserver:latest
-    container_name: s3server
+    container_name: marie-s3
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -24,7 +23,7 @@ services:
       - ~/.aws/credentials:/root/.aws/credentials
 
 # Container networking setup
-# docker network create --driver=bridge public
+# docker network create --driver=bridge marie_default
 # sysctl net.ipv4.conf.all.forwarding=1
 
 ## ############### Networks ###############

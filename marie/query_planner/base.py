@@ -5,6 +5,8 @@ from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, field_validator
 
+from marie.logging_core.predefined import default_logger as logger
+
 DEFAULT_NAME = "query_plan_tool"
 
 QUERYNODE_QUERY_STR_DESC = """\
@@ -35,26 +37,36 @@ class QueryPlanRegistry:
     _plans: Dict[str, Callable] = {}
 
     @classmethod
-    def register(cls, name: str = None):
+    def register(cls, name: str, function: Callable = None):
         """
-        Decorator to register a query planner function.
+        Register a query planner function.
 
         Usage:
-            @QueryPlannerRegistry.register("my_planner")
-            def my_query_planner(planner_info):
-                # planner implementation
-                return plan
+            As a decorator:
+                @QueryPlanRegistry.register("my_planner")
+                def my_query_planner(planner_info):
+                    # planner implementation
+                    return plan
+
+            Direct registration:
+                def my_query_planner(planner_info):
+                    # planner implementation
+                    return plan
+                QueryPlanRegistry.register("my_planner", my_query_planner)
 
         :param name: The name to register the planner under. If None, uses the function name.
-        :return: Decorator function
+        :param function: Optional. The function to register directly.
+        :return: Decorator function if no function is provided; otherwise, None.
         """
 
-        def decorator(func: Callable) -> Callable:
-            planner_name = name or func.__name__
+        logger.info(f"Registering query planner function : {name}")
 
+        def decorator(func: Callable) -> Callable:
             @wraps(func)
             def wrapper(*args, **kwargs):
                 return func(*args, **kwargs)
+
+            planner_name = name or func.__name__
 
             if planner_name in cls._plans:
                 raise ValueError(
@@ -63,6 +75,9 @@ class QueryPlanRegistry:
 
             cls._plans[planner_name] = wrapper
             return wrapper
+
+        if function is not None:
+            return decorator(function)
 
         return decorator
 
@@ -75,10 +90,12 @@ class QueryPlanRegistry:
         :return: The query planner function.
         :raises ValueError: If the query planner is not registered.
         """
-        if planner_name in cls._plans:
+        try:
             return cls._plans[planner_name]
-
-        raise ValueError(f"Unknown query planner: {planner_name}")
+        except KeyError as e:
+            raise KeyError(
+                f"Query planner '{planner_name}' is not registered! Available planners are: {', '.join(cls._plans.keys())}"
+            ) from e
 
     @classmethod
     def list_planners(cls) -> list[str]:
@@ -166,15 +183,11 @@ class LlmQueryDefinition(QueryDefinition):
     method: str = "LLM"
     endpoint: str = "extract"
     model_name: str = Field(..., description="Name of the LLM model to use.")
-    params: dict = Field(default_factory=lambda: {"layout": None, "roi": None})
+    params: dict = Field(default_factory=lambda: {"layout": None})
 
     def validate_params(self):
         if "layout" not in self.params or self.params["layout"] is None:
             raise ValueError("LLM queries must have a 'layout' parameter.")
-        if "roi" not in self.params or self.params["roi"] is None:
-            raise ValueError(
-                "LLM queries must specify a 'roi' parameter (e.g., 'start', 'end')."
-            )
 
 
 @QueryTypeRegistry.register("PYTHON_FUNCTION")
@@ -272,11 +285,11 @@ class Query(BaseModel):
             # return QueryDefinition(**v)
         return v
 
-    # def __str__(self):
-    #     return f"Query {self.task_id}"
-    #
-    # def __repr__(self):
-    #     return f"Query {self.task_id}"
+    def __str__(self):
+        return f"Query(task_id={self.task_id}, query_str={self.query_str}, dependencies={self.dependencies}, node_type={self.node_type}, definition={self.definition})"
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class QueryPlan(BaseModel):

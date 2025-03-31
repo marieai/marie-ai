@@ -1,7 +1,11 @@
-from typing import Optional, Union
+import os
+import shutil
+from datetime import datetime
+from typing import List, Optional, Union
 
 import torch
 from docarray import DocList
+from PIL import Image
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
@@ -10,14 +14,26 @@ from marie.executor.mixin import StorageMixin
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
-from marie.models.utils import (
-    initialize_device_settings,
-    setup_torch_optimizations,
-    torch_gc,
-)
+from marie.models.utils import torch_gc
+from marie.pipe.components import burst_frames, restore_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
-from marie.utils.image_utils import ensure_max_page_size
+from marie.utils.image_utils import ensure_max_page_size, hash_frames_fast
 from marie.utils.network import get_ip_address
+from marie.utils.utils import ensure_exists
+
+
+def create_working_dir(frames: List, backup: bool = False) -> str:
+    frame_checksum = hash_frames_fast(frames=frames)
+    # create backup name by appending a timestamp
+    if backup:
+        if os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")
+            shutil.move(
+                os.path.join("/tmp/generators", frame_checksum),
+                os.path.join("/tmp/generators", f"{frame_checksum}-{ts}"),
+            )
+    root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+    return root_asset_dir
 
 
 class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
@@ -44,22 +60,8 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         logger.info(f"Device : {device}")
         logger.info(f"Num worker preprocess : {num_worker_preprocess}")
         logger.info(f"Kwargs : {kwargs}")
-
         self.show_error = True  # show prediction errors
         # sometimes we have CUDA/GPU support but want to only use CPU
-        resolved_devices, _ = initialize_device_settings(
-            devices=[device], use_cuda=True, multi_gpu=False
-        )
-        if len(resolved_devices) > 1:
-            self.logger.warning(
-                "Multiple devices are not supported in %s inference, using the first device %s.",
-                self.__class__.__name__,
-                resolved_devices[0],
-            )
-        self.device = resolved_devices[0]
-        has_cuda = True if self.device.type.startswith("cuda") else False
-
-        setup_torch_optimizations()
         instance_name = "not_defined"
         if kwargs is not None:
             if "runtime_args" in kwargs:
@@ -71,7 +73,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
-            "use_cuda": has_cuda,
         }
 
         self.storage_enabled = False
@@ -81,14 +82,17 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
     @requests(on="/default")
     def default(self, parameters, **kwargs):
-        return {"valid": True}
+        raise NotImplementedError(
+            'Invalid(/default) endpoint have been called, ensure your config are correct'
+        )
 
-    @requests(on="/annotator/roi")
-    def annotator_roi(
+    @requests(on="/annotator/llm")
+    def annotator_llm(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
         """
         Document annotator executor
+        Much of this is hardcoded in here and need to be moved into proper pipeline.
 
         EXAMPLE USAGE
 
@@ -103,6 +107,11 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         :param kwargs:
         :return:
         """
+
+        print(f'Annotating documents')
+        print(f'docs : {docs}')
+        print(f'parameters : {parameters}')
+
         if len(docs) == 0:
             return {"error": "empty payload"}
         if len(docs) > 1:
@@ -110,15 +119,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
         # load documents from specified document asset key
         doc = docs[0]
+        self.logger.info(f"doc.asset_key = {doc.asset_key}")
         docs = docs_from_asset(doc.asset_key, doc.pages)
-
-        src_frames = frames_from_docs(docs)
-        changed, frames = ensure_max_page_size(src_frames, max_page_size=(2500, 3000))
-
-        if changed:
-            self.logger.warning(f"Page size of frames was changed ")
-            for i, (s, f) in enumerate(zip(src_frames, frames)):
-                self.logger.warning(f"Frame[{i}] changed : {s.shape} -> {f.shape}")
+        frames = frames_from_docs(docs)
 
         if parameters is None or "job_id" not in parameters:
             self.logger.warning(f"Job ID is not present in parameters")
@@ -132,6 +135,27 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             self.logger.info("The value of {} is {}".format(key, value))
 
         try:
+            ref_id = parameters.get("ref_id")
+            ref_type = parameters.get("ref_type")
+
+            payload = parameters.get("payload")
+            op_params = payload.get("op_params")
+            self.logger.info(f"Executing operation with params : {op_params}")
+
+            root_asset_dir = create_working_dir(frames)
+            ensure_exists(os.path.join(root_asset_dir, "frames"))
+
+            self.logger.info(f"root_asset_dir = {root_asset_dir}")
+            # Save frames as PNG files as LLM will need this format
+            for idx, frame in enumerate(frames):
+                frame_path = os.path.join(root_asset_dir, "frames", f"{idx}.png")
+                self.logger.info(f"Saving frame {idx + 1} to {frame_path}")
+                Image.fromarray(frame).save(frame_path)
+
+            restore_assets(
+                ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
+            )
+
             response = {
                 "status": "success",
                 "runtime_info": self.runtime_info,
