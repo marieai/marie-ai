@@ -1,5 +1,3 @@
-from flatbuffers.number_types import enforce_number
-
 from marie.engine import MODEL_NAME_MAP
 
 # Ensure vLLM is installed before proceeding

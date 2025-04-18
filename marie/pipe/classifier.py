@@ -32,6 +32,7 @@ class ClassifierPipelineComponent(PipelineComponent, ABC):
         *,  # force users to use keyword arguments
         words: List[List[str]] = None,
         boxes: List[List[List[int]]] = None,
+        **kwargs,
     ) -> PipelineResult:
 
         context["metadata"]["page_classifier"] = self.classify(documents, words, boxes)

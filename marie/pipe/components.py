@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 from functools import partial
 from typing import List, Optional, Union
 
@@ -9,6 +10,7 @@ from PIL import Image
 from marie.boxes import PSMode
 from marie.common.file_io import get_file_count
 from marie.components import TransformersDocumentClassifier, TransformersDocumentIndexer
+from marie.components.document_indexer.llm import MMLLMDocumentIndexer
 from marie.components.document_registration.unilm_dit import (
     NoopDocumentBoundaryRegistration,
     UnilmDocumentBoundaryRegistration,
@@ -253,9 +255,7 @@ def setup_indexers(
 
     for config in configs:
         if "model_name_or_path" not in config:
-            raise BadConfigSource(
-                f"Missing model_name_or_path in indexer config : {config}"
-            )
+            raise BadConfigSource(f"Missing model_name_or_path in config : {config}")
 
         if not config.get("enabled", True):
             logger.warning(f"Skipping indexer : {config['model_name_or_path']}")
@@ -290,75 +290,14 @@ def setup_indexers(
                 "filter": model_filter,
                 "group": group,
             }
-
-        else:
-            raise ValueError(f"Invalid indexer type : {model_type}")
-
-    return document_indexers
-
-
-def setup_indexers(
-    pipeline_config: Optional[dict] = None,
-    key: str = "page_indexer",
-    device: str = "cuda",
-    ocr_engine: Optional[OcrEngine] = None,
-) -> dict[str, any]:
-    """
-    Setup the document indexers(Named Entity Recognition) for the pipeline
-    :param pipeline_config: pipeline configuration
-    :param key: key to use in the pipeline config
-    :param device: device to use for classification (cpu or cuda)
-    :param ocr_engine: OCR engine to use for the pipeline (default: None)
-    :return: document classifiers grouped by their group names and indexed by their names
-    """
-
-    if pipeline_config is None:
-        logger.warning("Pipeline config is None, using default config")
-        pipeline_config = {}
-
-    document_indexers = dict()
-    configs = pipeline_config[key] if key in pipeline_config else []
-
-    for config in configs:
-        if "model_name_or_path" not in config:
-            raise BadConfigSource(
-                f"Missing model_name_or_path in indexer config : {config}"
-            )
-
-        if not config.get("enabled", True):
-            logger.warning(f"Skipping indexer : {config['model_name_or_path']}")
-            continue
-
-        model_name_or_path = config["model_name_or_path"]
-        device = config["device"] if "device" in config else "cpu"
-        name = config["name"] if "name" in config else config["model_name_or_path"]
-        model_type = config["type"] if "type" in config else "transformers"
-        logger.info(f"Using model : {model_name_or_path} on device : {device}")
-
-        if name in document_indexers:
-            raise BadConfigSource(f"Duplicate indexer name : {name}")
-
-        if "group" not in config:
-            raise BadConfigSource(f"Missing group in indexer config : {config}")
-
-        group = config["group"] if "group" in config else "default"
-
-        if group not in document_indexers:
-            document_indexers[group] = dict()
-
-        model_filter = config["filter"] if "filter" in config else {}
-        # TODO: Add support for other indexer types
-        if model_type == "transformers":
+        elif model_type == "mmllm":
             document_indexers[group][name] = {
-                "indexer": TransformersDocumentIndexer(
-                    model_name_or_path=model_name_or_path,
+                "indexer": MMLLMDocumentIndexer(
+                    model_path=model_name_or_path,
                     devices=[device],
-                    ocr_engine=ocr_engine,
                 ),
-                "filter": model_filter,
                 "group": group,
             }
-
         else:
             raise ValueError(f"Invalid indexer type : {model_type}")
 
@@ -656,6 +595,44 @@ def ocr_frames(
     return results
 
 
+def setup_llm_tasks(pipeline_config, document_indexers):
+    """
+    LLM Tasks are the overall objectives of each LLM indexer. Each indexer is responsible for HOW
+    it will accomplish each task listed in the pipeline config, but at minimum each indexer must
+    define a task with for each 'llm_task' in the  pipeline_config.
+    """
+    if "llm_tasks" not in pipeline_config:
+        return dict()
+
+    tasks = pipeline_config["llm_tasks"]
+
+    document_llm_tasks = defaultdict(list)
+    for task in tasks:
+        if "name" not in task:
+            raise BadConfigSource(f"Missing name in llm_tasks config : {task}")
+
+        name = task["name"]
+        group = task.get("group", "default")
+
+        if group not in document_indexers:
+            raise BadConfigSource(f"Unknown Group: {group}")
+
+        for indexer_name, indexer_def in document_indexers[group].items():
+            indexer = indexer_def["indexer"]
+            if not isinstance(indexer, MMLLMDocumentIndexer):
+                continue
+
+            if name not in indexer.task_map:
+                raise BadConfigSource(
+                    f"Indexer: '{indexer_name}' does not have llm_task: '{name}' defined. "
+                    f"Model path: {indexer.model_path}"
+                )
+
+        document_llm_tasks[group].append(name)
+
+    return document_llm_tasks
+
+
 def load_pipeline(
     pipeline_config: dict[str, any], ocr_engine: Optional[OcrEngine] = None
 ) -> tuple[str, dict[str, any], dict[str, any]]:
@@ -693,12 +670,16 @@ def load_pipeline(
         pipeline_config, key="page_indexer", device=device, ocr_engine=ocr_engine
     )
 
+    document_llm_tasks = setup_llm_tasks(pipeline_config, document_indexers)
+
     indexer_groups = dict()
-    for group, indexer in document_indexers.items():
+    for group, indexers in document_indexers.items():
         indexer_groups[group] = {
             "group": group,
-            "indexer": indexer,
+            "indexers": indexers,
         }
+        if group in document_llm_tasks:
+            indexer_groups[group]["llm_tasks"] = document_llm_tasks[group]
 
     # dump information about the loaded classifiers that are grouped by the classifier group
     for classifier_group, classifiers in document_classifiers.items():
@@ -710,8 +691,45 @@ def load_pipeline(
             f"Loaded sub-classifiers : {classifier_group}, {len(classifiers)},  {classifiers.keys()}"
         )
 
-    logger.info(
-        f"Loaded indexers : {len(document_indexers)},  {document_indexers.keys()}"
-    )
+    for indexer_group, indexers in document_indexers.items():
+        logger.info(
+            f"Loaded indexers : {indexer_group}, {len(indexers)},  {indexers.keys()}"
+        )
+    for llm_group, tasks in document_llm_tasks.items():
+        logger.info(f"Registered LLM tasks : {llm_group}, {len(tasks)}, {tasks}")
 
     return pipeline_name, classifier_groups, indexer_groups
+
+
+def update_existing_meta(existing_meta: dict, metadata: dict):
+    if not existing_meta:
+        return metadata
+    if not metadata:
+        return existing_meta
+
+    # List elements are overridden on dict.update, so they need to be merged independently
+    # New metadata lists take priority when handling duplicate elements with the same identifier value
+    meta_lists = [("classifications", "group"), ("indexers", "group")]
+    merged_meta_lists = dict()
+    for category, identifier in meta_lists:
+        existing_list = existing_meta.get(category, [])
+        new_list = metadata.get(category, [])
+
+        # Determine if existing keys are stale
+        existing_keys = {unit[identifier]: False for unit in existing_list}
+        for unit in new_list:
+            existing_keys[unit[identifier]] = unit[identifier] in existing_keys
+        # Filter out stale categories
+        merged_list = [
+            unit for unit in existing_list if not existing_keys[unit[identifier]]
+        ]
+        merged_list.extend(new_list)
+
+        if merged_list:
+            merged_meta_lists[category] = merged_list
+
+    # Merge metas (prioritize new metadata)
+    existing_meta.update(metadata)
+    existing_meta.update(merged_meta_lists)
+
+    return existing_meta
