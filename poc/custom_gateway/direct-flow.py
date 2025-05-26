@@ -16,8 +16,8 @@ class TestExecutor(MarieExecutor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("TestExecutor init called")
-        # emulate the long loading time
-        # time.sleep(1
+        # emulate the long loading time o
+        time.sleep(1)
 
     @requests(on="/extract")
     async def func_extract(
@@ -34,9 +34,11 @@ class TestExecutor(MarieExecutor):
         # if random.random() > 0.5:
         #     raise Exception("random error in FirstExec")
         #
+        #
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 5
+        sec = 10
+        # os._exit(1)
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
         # raise Exception("random error in FirstExec")
@@ -46,6 +48,12 @@ class TestExecutor(MarieExecutor):
             "parameters": parameters,
             "data": "Data reply",
         }
+
+    @requests(on="/default")
+    def default(self, parameters, **kwargs):
+        raise NotImplementedError(
+            'Invalid(/default) endpoint have been called, ensure your config are correct'
+        )
 
 
 def main_deployment():
@@ -102,7 +110,7 @@ def main():
             "max_pool_size": 5,
             "max_connections": 5,
         },
-    ).add(uses=TestExecutor, name="executor0", replicas=1) as f:
+    ).add(uses=TestExecutor, name="executor_a", replicas=1) as f:
         f.save_config("/mnt/data/marie-ai/config/service/direct-flow.yml")
         f.block()
 

@@ -1,24 +1,47 @@
+import re
+
 from openai.types.chat import ChatCompletion
 
+from marie.engine.batch_processor import BatchProcessor
 from marie.engine.output_parser import parse_json_markdown
+from marie.excepts import MaxTokensExceededError, RepetitionError
+from marie.utils.utils import get_exception_traceback
 
 try:
-    from openai import AsyncOpenAI, OpenAI
+    from openai import (
+        APIConnectionError,
+        APIError,
+        APITimeoutError,
+        AsyncOpenAI,
+        AuthenticationError,
+        OpenAI,
+        RateLimitError,
+    )
 except ImportError:
     raise ImportError(
         "If you'd like to use OpenAI models, please install the openai package by running `pip install openai`, and add 'OPENAI_API_KEY' to your environment variables."
     )
+
 import asyncio
 import os
+import queue
+import threading
 import time
 import uuid
-from typing import Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import diskcache as dc
-import tiktoken
 from PIL import Image
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random_exponential,
+)
 
 from marie.engine.base import EngineLM
 from marie.engine.engine_utils import (
@@ -28,199 +51,106 @@ from marie.engine.engine_utils import (
     open_ai_like_formatting,
 )
 from marie.logging_core.logger import MarieLogger
+from marie.logging_core.predefined import default_logger as logger
+
+MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
+E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
+openai.api_key prior to initialization.
+API keys can be found or created at \
+https://platform.openai.com/account/api-keys
+"""
+INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
 
 
-def estimate_token_count(prompt: str, model_name: str = "gpt-3.5-turbo-0301") -> int:
+# TODO: FIX DEFAULT_SYSTEM_PROMPT messages
+
+
+def _check_repetition(
+    text: str, min_repeats: int = 3, min_ngram_size: int = 1, max_ngram_size: int = 20
+) -> bool:
     """
-    Estimates the number of tokens in the given prompt using tiktoken.
+    Return True if any n-gram of size between min_ngram_size and max_ngram_size
+    repeats at least min_repeats times consecutively at the very end of text.
+    """
+    tokens = text.split()
+    L = len(tokens)
+    # the largest n we could possibly repeat min_repeats times
+    possible_max_n = L // min_repeats
+    # clamp our n-gram window
+    start_n = max(1, min_ngram_size)
+    end_n = min(max_ngram_size, possible_max_n)
 
-    Args:
-        prompt: The text input for which to estimate token count.
-        model_name: The model name from OpenAI to select the tokenizer. Defaults to "gpt-3.5-turbo-0301".
+    if start_n > end_n:
+        return False
 
-    Returns:
-        The estimated number of tokens in the prompt.
+    for n in range(start_n, end_n + 1):
+        tail = tokens[-n:]
+        repeats = 1
+        # look back to see if the same tail appears min_repeats times
+        for k in range(2, min_repeats + 1):
+            start = -k * n
+            end = -(k - 1) * n
+            if tokens[start:end] == tail:
+                repeats += 1
+            else:
+                break
+        if repeats >= min_repeats:
+            return True
+
+    return False
+
+
+def run_coroutine_in_current_loop(coroutine):
+    """
+    Runs `coroutine` to completion, even if we're inside a running loop.
+    - Outside any loop: uses asyncio.run()
+    - Inside a loop: spins up a fresh loop in a background thread,
+      runs `coroutine`, shuts down async generators, then drains
+      any *other* pending tasks before closing.
     """
     try:
-        tokenizer = tiktoken.encoding_for_model(model_name)
-        tokens = tokenizer.encode(prompt)
-        return len(tokens)
-    except Exception as e:
-        raise ValueError(f"An error occurred while estimating tokens: {e}")
+        # If no loop is running here, just run normally.
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
 
+    result_q = queue.Queue()
 
-class BatchProcessor:
-    def __init__(self, client, model_string, logger: MarieLogger):
-        self.client = client
-        self.model_string = model_string
-        self.logger = logger
-        if not isinstance(self.client, AsyncOpenAI):
-            raise ValueError(
-                "Client must be an instance of OpenAI API client for async operations."
-            )
+    def _thread_target():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
 
-    def extract_text_from_response(self, response: ChatCompletion) -> str:
-        """
-        Extract text from the OpenAI API response.
+        async def _runner():
+            result = await coroutine
+            # 2) clean up any async generators
+            await new_loop.shutdown_asyncgens()
 
-        Args:
-            response: The response object from OpenAI API.
+            # 3) drain *other* pending tasks, excluding this one
+            current = asyncio.current_task()
+            pending = [
+                t for t in asyncio.all_tasks() if not t.done() and t is not current
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
-        Returns:
-            str: The extracted text.
-        """
-
-        if (
-            not response.choices
-            or not hasattr(response.choices[0].message, "content")
-            or not response.choices[0].message.content
-        ):
-            self.logger.warning("No text extracted from Response.")
-            raise ValueError("No text extracted from response.")
-
-        extracted_text = response.choices[0].message.content.strip()
-        self.logger.info(f"Extracted text length: {len(extracted_text)} characters.")
-        return extracted_text
-
-    @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
-    async def completion_non_streaming(
-        self,
-        messages,
-        task_id,
-        request_id,
-        guided_json: Optional[Union[Dict, BaseModel, str]],
-    ):
-        """
-        Asynchronously performs inference for a single request.
-        Each request has a unique task_id for tracking.
-        """
-        try:
-            start = time.time()
-            self.logger.info(
-                f"Request {request_id} - Task {task_id} - Starting inference."
-            )
-            print(f'guided_json = {guided_json}')
-
-            # estimated_tokens = estimate_token_count(prompt)
-            # estimated_tokens = estimated_tokens + 512  #
-            estimated_tokens = 4096
-            max_tokens: int = estimated_tokens  # 2048
-            frequency_penalty = 0.0  # Turns off frequency penalty
-            presence_penalty = 0.0  # Turns off presence penalty
-            stop: List[str] = []
-
-            # The results are being returned in reasoning_content and not in content
-            # [BUG] DeepSeek V3 Does Not Support Structured Output in LangChain with ChatOpenAI() #302
-            # Until this is address we will parse the results from reasoning_content manually.
-            # https://github.com/deepseek-ai/DeepSeek-V3/issues/302
-            # https://docs.vllm.ai/en/latest/features/structured_outputs.html#experimental-automatic-parsing-openai-api
-            # examples/online_serving/openai_chat_completion_structured_outputs_with_reasoning.py
-
-            # 1. **temperature=0.0** – Minimizes randomness by always picking the highest probability token.
-            # 2. **top_p=1.0** – Disables nucleus sampling, ensuring no additional probability mass is truncated.
-            # 3. **frequency_penalty=0.0** and **presence_penalty=0.0** – Ensures no penalization that would otherwise alter token probabilities
-
-            completion = await self.client.chat.completions.create(
-                model=self.model_string,
-                messages=messages,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                stop=stop,
-                stream=False,
-                temperature=0.0,
-                max_tokens=max_tokens,
-                top_p=1,
-                n=1,
-                # extra_body={"guided_json": guided_json} # this will cause issues with DeepSeek and reasoning
-            )
-
-            print(
-                "reasoning_content: ", completion.choices[0].message.reasoning_content
-            )
-            print("content: ", completion.choices[0].message.content)
-            total_time = time.time() - start
-            self.logger.info(
-                f"Request {request_id} - Task {task_id} - Task completed in {total_time:.2f} sec."
-            )
-
-            content = self.extract_text_from_response(completion)
-            return task_id, content
-        except ValueError as e:
-            self.logger.error(
-                f"Request {request_id} - Task {task_id} - Error in completion_non_streaming(Retrying): {e}"
-            )
-            raise e
-        except Exception as e:
-            self.logger.error(
-                f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
-            )
-            return task_id, None
-
-    async def load_batched_request(
-        self,
-        messages_list,
-        request_id,
-        guided_json: Optional[Union[Dict, BaseModel, str]],
-    ):
-        """
-        Processes the batch of requests, assigning a unique task_id to each request.
-        """
-        tasks = [
-            self.completion_non_streaming(
-                messages, f"{request_id}_task_{i}", request_id, guided_json
-            )
-            for i, messages in enumerate(messages_list)
-        ]
-
-        results = await asyncio.gather(*tasks)
-        successful_completions = [
-            response for task_id, response in results if response is not None
-        ]
-        return successful_completions, results
-
-    def batch_generate(
-        self,
-        messages_list: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
-        system_prompt=None,
-        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
-        **kwargs,
-    ) -> List[str]:
-        """
-        Performs batch inference for multiple inputs, supporting both text-only and multimodal content.
-        """
-        request_id = str(uuid.uuid4())
-        system_prompt = system_prompt or "Default system prompt"
-
-        self.logger.info(
-            f"Request {request_id} - Initiating batch inference with {len(messages_list)} requests."
-        )
-        start_time = time.time()
+            return result
 
         try:
-            batch_outputs, task_results = asyncio.run(
-                self.load_batched_request(messages_list, request_id, guided_json)
-            )
-        except Exception as e:
-            self.logger.error(f"❌ Request {request_id} - Batch inference failed: {e}")
-            return ["ERROR: Inference failed"] * len(messages_list)
+            res = new_loop.run_until_complete(_runner())
+            result_q.put((True, res))
+        except Exception as exc:
+            result_q.put((False, exc))
+        finally:
+            new_loop.close()
 
-        for task_id, response in task_results:
-            if response:
-                self.logger.info(
-                    f"Request {request_id} - Task {task_id} - Response received."
-                )
-            else:
-                self.logger.error(
-                    f"Request {request_id} - Task {task_id} - Response failed."
-                )
-                self.logger.error(response)
+    t = threading.Thread(target=_thread_target)
+    t.start()
+    t.join()
 
-        elapsed_time = time.time() - start_time
-        self.logger.info(
-            f"✅ Request {request_id} - Batch inference completed in {elapsed_time:.2f} sec"
-        )
-
-        return batch_outputs
+    ok, payload = result_q.get()
+    if not ok:
+        raise payload
+    return payload
 
 
 class OpenAIEngine(EngineLM):
@@ -257,7 +187,6 @@ class OpenAIEngine(EngineLM):
             self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
         models = self.client.models.list()
-        print('self.model_string : ', models)
         self.model_string = model_name
 
         self.batch_processor = BatchProcessor(
@@ -270,8 +199,6 @@ class OpenAIEngine(EngineLM):
                 "Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models."
             )
 
-    # @cached
-    # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
     def _generate_from_single_prompt(
         self,
         content: Union[str, List[str]],
@@ -409,6 +336,10 @@ class OpenAIEngine(EngineLM):
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
         system_prompt = system_prompt or self.system_prompt
+        system_prompt = (
+            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+        )
+
         if self.is_multimodal:
             batch_content = [
                 open_ai_like_formatting(content, True) for content in batch_content
@@ -442,7 +373,7 @@ class OpenAIEngine(EngineLM):
         return_stats = kwargs.get("return_stats", False)
 
         self.logger.info(
-            f"🚀 Initiating batch inference with {len(batch_content)} requests."
+            f"Initiating batch inference with {len(batch_content)} requests."
         )
         start_time = time.time()
         try:
@@ -450,11 +381,11 @@ class OpenAIEngine(EngineLM):
                 messages_list, guided_json=guided_json
             )
         except Exception as e:
-            self.logger.error(f"❌ Batch inference failed: {e}")
+            self.logger.error(f"Batch inference failed:\n" + get_exception_traceback())
             return ["ERROR: Inference failed"] * len(batch_content)
 
         elapsed_time = time.time() - start_time
-        self.logger.info(f"✅ Batch inference completed in {elapsed_time:.2f} sec")
+        self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")
 
         return ordered_outputs
 
@@ -500,30 +431,36 @@ if __name__ == "__main__":
     # https://github.com/openai/openai-cookbook/blob/main/examples/Parse_PDF_docs_for_RAG.ipynb
     # https://docs.boundaryml.com/examples/prompt-engineering/chain-of-thought
     os.environ['OPENAI_API_KEY'] = 'EMPTY'
-    engine = OpenAIEngine(
-        model_name='deepseek-r1',
-        system_prompt="You are a helpfull assistant",
-        is_multimodal=False,
-        cache=False,
-        processor_kwargs=None,
-        base_url="http://localhost:8090/v1",
-    )
 
-    class Animal(BaseModel):
-        name: str
-        fact: str
-        city: str
+    text = "Need to fuzzy match. Data row at52. Totals? Not sure here. Wait, line52 is a data row but there's no totals line after. Wait, line52 is the only data row here. Wait, looking at line52: it's a data row, but after that, there's no totals line. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data row here. Wait, line52 is the only data"
+    status = _check_repetition(text, 3, 20, 30)
+    print("status : ", status)
 
-    print(engine)
-    prompts = []
-    for i in range(1, 100):
-        prompt = f"Tell me an animal fact, for animal from Poland  for random city # {i} : JSON Schema : {Animal.model_json_schema()}"
-        prompts.append(prompt)
+    if True:
+        engine = OpenAIEngine(
+            model_name='deepseek_r1_32',
+            system_prompt="You are a helpful assistant",
+            is_multimodal=False,
+            cache=False,
+            processor_kwargs=None,
+            # base_url="http://localhost:8090/v1",
+            base_url="http://0.0.0.0:4000",
+        )
 
-    results = engine.generate(prompts)
-    print(results)
+        class Animal(BaseModel):
+            name: str
+            fact: str
+            city: str
 
-    for result in results:
-        json_dict = parse_json_markdown(result)
-        animal = Animal.model_validate(json_dict)
-        print(animal)
+        prompts = []
+        for i in range(1, 2):
+            prompt = f"Tell me an animal fact, for animal from Poland  for random city # {i} : JSON Schema : {Animal.model_json_schema()}"
+            prompts.append(prompt)
+
+        results = engine.generate(prompts)
+        print(results)
+
+        for result in results:
+            json_dict = parse_json_markdown(result)
+            animal = Animal.model_validate(json_dict)
+            print(animal)

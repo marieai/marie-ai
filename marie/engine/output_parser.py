@@ -61,7 +61,7 @@ def parse_json_markdown(text: str) -> Any:
     return json_obj
 
 
-def parse_markdown_markdown(text: str) -> str:
+def parse_markdown_markdown(text: str, return_content=True) -> str:
     """
     Extracts the content enclosed in the first ```markdown ... ``` code block
     from the given text, even if there's a preceding block labeled ```plain text
@@ -70,7 +70,7 @@ def parse_markdown_markdown(text: str) -> str:
     If no ```markdown block is found, returns an empty string.
     """
     if "```markdown" not in text:
-        return ""
+        return text if return_content else ""
     text = text.split("```markdown")[1].strip().strip("```").strip()
     return text
 

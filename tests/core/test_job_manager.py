@@ -5,7 +5,7 @@ import random
 import sys
 import threading
 import time
-from typing import Callable, List
+from typing import AsyncIterator, Callable, List, Optional, Tuple, Union
 
 import pytest
 from docarray import DocList
@@ -13,8 +13,9 @@ from docarray.documents import TextDoc
 
 from marie import Deployment, Document, DocumentArray, Executor, requests
 from marie.enums import PollingType
+from marie.excepts import ExecutorError
 from marie.job.common import JobInfo, JobStatus
-from marie.job.job_distributor import JobDistributor
+from marie.job.job_distributor import JobDistributor, SendCb
 from marie.job.job_manager import JobManager
 from marie.parsers import set_deployment_parser
 from marie.proto import jina_pb2
@@ -244,7 +245,7 @@ def _setup(pod0_port, pod1_port):
 @pytest.mark.parametrize("results_in_order", [False, True])
 @pytest.mark.asyncio
 async def test_gateway_job_manager(
-    port_generator, parameters, target_executor, expected_text, results_in_order
+        port_generator, parameters, target_executor, expected_text, results_in_order
 ):
     pod0_port = port_generator()
     pod1_port = port_generator()
@@ -265,11 +266,11 @@ async def test_gateway_job_manager(
         resp = DocList([])
         num_resp = 0
         async for r in gateway_streamer.stream_docs(
-            docs=input_da,
-            request_size=10,
-            parameters=parameters,
-            target_executor=target_executor,
-            results_in_order=results_in_order,
+                docs=input_da,
+                request_size=10,
+                parameters=parameters,
+                target_executor=target_executor,
+                results_in_order=results_in_order,
         ):
             num_resp += 1
             resp.extend(r)
@@ -295,13 +296,13 @@ async def test_gateway_job_manager(
 
 
 def _create_regular_deployment(
-    port,
-    name="",
-    executor=None,
-    noblock_on_start=True,
-    polling=PollingType.ANY,
-    shards=None,
-    replicas=None,
+        port,
+        name="",
+        executor=None,
+        noblock_on_start=True,
+        polling=PollingType.ANY,
+        shards=None,
+        replicas=None,
 ):
     # return Deployment(uses=executor, include_gateway=False, noblock_on_start=noblock_on_start, replicas=replicas,
     #                   shards=shards)
@@ -342,10 +343,10 @@ class NoopJobDistributor(JobDistributor):
         super().__init__(*args, **kwargs)
 
     async def send(
-        self,
-        submission_id: str,
-        job_info: JobInfo,
-        send_callback: Callable[[List[DataRequest]], DataRequest] = None,
+            self,
+            submission_id: str,
+            job_info: JobInfo,
+            send_callback: Callable[[List[DataRequest]], DataRequest] = None,
     ) -> DataRequest:
         print(f"NoopJobDistributor: {job_info}")
         if job_info.status != JobStatus.PENDING:
@@ -355,6 +356,25 @@ class NoopJobDistributor(JobDistributor):
         r.status.code = jina_pb2.StatusProto.ERROR
 
         return r
+
+    async def send_stream(
+            self,
+            submission_id: str,
+            job_info: JobInfo,
+            send_callback: Optional[SendCb] = None,
+    ) -> AsyncIterator[Tuple[Union[DocumentArray, "Request"], ExecutorError]]:
+        """
+        Wraps the single-shot `send` call in an async generator,
+        yielding (response, None) on success or (None, ExecutorError) on failure.
+        """
+        print(f"NoopJobDistributor.stream_send: {job_info}")
+        try:
+            response = await self.send(submission_id, job_info, send_callback)
+            yield response, None
+        except ExecutorError as e:
+            yield None, e
+        except Exception as e:
+            yield None, ExecutorError(f"stream_send failure: {e}")
 
 
 @pytest.mark.asyncio

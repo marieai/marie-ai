@@ -1,0 +1,12 @@
+# This is a configuration file for the Litellm library.
+# https://docs.litellm.ai/docs/proxy/configs
+#`openai/` prefix tells litellm it's openai compatible
+
+
+model_list:
+  - model_name: qwen_v2_5_vl
+    litellm_params:
+      model: openai/qwen/qwen_v2_5_vl
+      api_key: EMPTY
+      api_base: http://127.0.0.1:4000
+

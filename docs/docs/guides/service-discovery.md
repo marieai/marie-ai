@@ -9,7 +9,9 @@ Here we are going to show how to use the `EtcdServiceResolver` to resolve servic
 docker run  -d  -p 2379:2379  --name etcd \
 -v /usr/share/ca-certificates/:/etc/ssl/certs \
 quay.io/coreos/etcd:v3.5.14 /usr/local/bin/etcd -advertise-client-urls \
-http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379
+http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379 \
+--log-level=info \
+--log-outputs=stdout
 ```
 
 Verify the installation by running the following command:

@@ -1,14 +1,18 @@
 import asyncio
 import contextlib
 import copy
+import itertools
+import os
+import random
 import time
 import traceback
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pprint import pprint
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import psycopg2
+from rich.console import Console
+from rich.table import Table
 
 from marie.excepts import BadConfigSource
 from marie.helper import get_or_reuse_loop
@@ -26,6 +30,7 @@ from marie.query_planner.base import (
 from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.planner import (
     PlannerInfo,
+    compute_job_levels,
     plan_to_json,
     plan_to_yaml,
     print_sorted_nodes,
@@ -34,6 +39,7 @@ from marie.query_planner.planner import (
     visualize_query_plan_graph,
 )
 from marie.scheduler.fixtures import *
+from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.plans import (
@@ -48,19 +54,25 @@ from marie.scheduler.plans import (
     insert_job,
     insert_version,
     load_dag,
+    mark_as_active_dags,
     mark_as_active_jobs,
     resume_jobs,
     to_timestamp_with_tz,
     try_set_monitor_time,
     version_table_exists,
 )
+from marie.scheduler.sjfs_execution_planner import SJFSExecutionPlanner
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor, has_available_slot
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
 INIT_POLL_PERIOD = 2.250  # 250ms
-MAX_POLL_PERIOD = 16.0  # 16s
+
+SHORT_POLL_INTERVAL = 1.0  # seconds, when slots exist but no work
+
+MIN_POLL_PERIOD = 0.5
+MAX_POLL_PERIOD = 16
 
 MONITORING_POLL_PERIOD = 5.0  # 5s
 SYNC_POLL_PERIOD = 5.0  # 5s
@@ -90,6 +102,94 @@ def convert_job_status_to_work_state(job_status: JobStatus) -> WorkState:
         raise ValueError(f"Unknown JobStatus: {job_status}")
 
 
+def adjust_backoff(wait_time: float, idle_streak: int, scheduled: bool) -> float:
+    if scheduled:
+        return max(wait_time * 0.5, MIN_POLL_PERIOD)
+    jitter = random.uniform(0.9, 1.1)
+    return min(wait_time * (1.5 + 0.1 * idle_streak), MAX_POLL_PERIOD) * jitter
+
+
+def print_state_summary(job_states_data: Dict[str, Any]):
+    try:
+        console = Console()
+        table = Table(
+            title="📊 Consolidated Job States for All Queues",
+            border_style="green",
+            title_style="bold white on blue",
+            header_style="bold yellow",
+            show_lines=True,  # Adds separating lines between rows for better readability
+        )
+
+        table.add_column("Queue", justify="left", style="cyan", no_wrap=False, width=16)
+        metrics = [
+            "created",
+            "retry",
+            "active",
+            "completed",
+            "expired",
+            "cancelled",
+            "failed",
+            "all",
+        ]
+        for metric in metrics:
+            table.add_column(
+                metric.capitalize(),
+                justify="center",
+                style="magenta",
+                no_wrap=False,
+                width=16,
+            )
+
+        if job_states_data.get("queues"):
+            for queue_name, queue_data in job_states_data["queues"].items():
+                row_values = [queue_name.capitalize()]
+                for metric in metrics:
+                    row_values.append(str(queue_data.get(metric, 0)))
+                table.add_row(*row_values)
+
+            summary_values = {metric: 0 for metric in metrics}
+            for queue_data in job_states_data["queues"].values():
+                for metric, value in queue_data.items():
+                    if metric in summary_values:
+                        summary_values[metric] += value
+
+            table.add_row(
+                "Summary",
+                *[str(summary_values[metric]) for metric in metrics],
+                style="bold green",
+            )
+        else:
+            table.add_row("No Data", *["0" for _ in metrics], style="bold red")
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Error printing state summary: {e}")
+        logger.error(traceback.format_exc())
+
+
+def print_slots_table(slots: dict[str, int]) -> None:
+    console = Console()
+    table = Table(
+        title="⚙️  Available Slots",
+        border_style="green",
+        title_style="bold white on blue",
+        header_style="bold yellow",
+        show_lines=True,
+    )
+    table.add_column("Slot Type", justify="left", style="cyan", no_wrap=False)
+    table.add_column("Count", justify="center", style="magenta", no_wrap=False)
+
+    slots_s = dict(sorted(slots.items()))
+    for slot_type, count in slots_s.items():
+        table.add_row(slot_type, str(count))
+
+    console.print(table)
+
+
+# FIXME : Today we are tracking at the executor level, however that might not be the best
+# approach. We might want to track at the deployment level (endpoint level) instead.
+# this will allow us to track the status of the deployment and not just the executor.
+
+
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     """A PostgreSQL-based job scheduler."""
 
@@ -99,16 +199,24 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
-        self._fetch_lock = asyncio.Lock()
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
+        self._debounced_notify = False
 
         self.known_queues = set(config.get("queue_names", []))
         self.running = False
         self.task = None
+        self._producer_task = None
+        self._consumer_task = None
+        self._heartbeat_task = None
         self.sync_task = None
         self.monitoring_task = None
-        self.aqueue: Optional[asyncio.Queue] = None
+
+        self.scheduler_mode = config.get(
+            "scheduler_mode", "parallel"
+        )  # "serial" or "parallel"
+        self.scheduler_mode = "serial"
+        self._event_queue = asyncio.Queue()
 
         lock_free = True
         self._lock = (
@@ -117,14 +225,17 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
+        self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.active_dags = {}
-        self.logger.info(f"Queue names to monitor: {self.known_queues}")
+        self.max_concurrent_dags = config.get("max_concurrent_dags", 1)
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
         self._setup_storage(config, connection_only=True)
 
+        # self.execution_planner = SJFSExecutionPlanner()
+        self.execution_planner = GlobalPriorityExecutionPlanner()
         register_all_known_planners()
 
     async def handle_job_event(self, event_type: str, message: Any):
@@ -134,40 +245,49 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param event_type: The type of the event.
         :param message: The message associated with the event.
         """
-        # print if the lock is acquired
+
+        self.logger.info(f"received message: {event_type} > {message}")
+        if not isinstance(message, dict) or "job_id" not in message:
+            self.logger.error(f"Invalid message format: {message}")
+            return
+
         async with self._lock:
-            self.logger.info(f"received message: {event_type} > {message}")
-            job_id = message.get("job_id")
-            status = JobStatus(event_type)
-            work_item: WorkInfo = await self.get_job(job_id)
+            try:
+                job_id = message.get("job_id")
+                status = JobStatus(event_type)
+                work_item: WorkInfo = await self.get_job(job_id)
 
-            if work_item is None:
-                self.logger.error(f"WorkItem not found: {job_id}")
-                return
-            work_state = convert_job_status_to_work_state(status)
+                if work_item is None:
+                    self.logger.error(f"WorkItem not found: {job_id}")
+                    return
+                work_state = convert_job_status_to_work_state(status)
+                now = datetime.now()
 
-            if status == JobStatus.PENDING:
-                self.logger.info(f"Job pending : {job_id}")
-            elif status == JobStatus.SUCCEEDED:
-                self.logger.info(f"Job succeeded : {job_id}")
-                await self.complete(job_id, work_item)
-            elif status == JobStatus.FAILED:
-                self.logger.info(f"Job failed : {job_id}")
-                await self.fail(job_id, work_item)
-            elif status == JobStatus.RUNNING:
-                self.logger.info(f"Job running : {job_id}")
-                await self.put_status(job_id, work_state, datetime.now(), None)
-            else:
-                self.logger.error(f"Unhandled job status: {status}. Marking as FAILED.")
-                await self.fail(job_id, work_item)  # Fail-safe
+                if status == JobStatus.PENDING:
+                    self.logger.debug(f"Job pending : {job_id}")
+                elif status == JobStatus.SUCCEEDED:
+                    await self.complete(job_id, work_item)
+                elif status == JobStatus.FAILED:
+                    await self.fail(job_id, work_item)
+                elif status == JobStatus.RUNNING:
+                    self.logger.debug(f"Job running : {job_id}")
+                    await self.put_status(job_id, work_state, now, None)
+                else:
+                    self.logger.error(
+                        f"Unhandled job status: {status}. Marking as FAILED."
+                    )
+                    await self.fail(job_id, work_item)  # Fail-safe
 
-            await self.resolve_dag_status(
-                job_id, work_item, datetime.now(), datetime.now()
-            )
-
-            if status.is_terminal():
-                self.logger.info(f"Job {job_id} is in terminal state {status}")
-                await self.notify_event()
+                if status.is_terminal():
+                    self.logger.info(
+                        f"Job is in terminal state {status}, job_id: {job_id}"
+                    )
+                    await self.resolve_dag_status(job_id, work_item, now, now)
+                    await self.notify_event()
+            except Exception as e:
+                self.logger.error(
+                    f"Error handling job event {event_type} for job {job_id}: {e}"
+                )
 
     def create_tables(self, schema: str):
         """
@@ -284,163 +404,244 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         self.running = True
         # self.sync_task = asyncio.create_task(self._sync())
-        self.task = asyncio.create_task(self._poll())
         # self.monitoring_task = asyncio.create_task(self._monitor())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        if self.scheduler_mode == "parallelXXX":
+            self._producer_task = asyncio.create_task(self._producer_loop())
+            self._consumer_task = asyncio.create_task(self._consumer_loop())
+            pass
+        else:
+            self.task = asyncio.create_task(self._poll())
+
+        self._sync_dag_task = asyncio.create_task(self._sync_dag())
+        await self.notify_event()
+
+    async def _heartbeat_loop(self, interval: float = 10.0):
+        """Periodic heartbeat logger showing scheduler state."""
+        while self.running:
+            try:
+                queue_size = self._event_queue.qsize()
+                slot_info = available_slots_by_executor(ClusterState.deployments)
+                active_dags = list(self.active_dags.keys())
+
+                self.logger.info("🔄  Scheduler Heartbeat")
+                self.logger.info(f"  🧭  Mode              : {self.scheduler_mode}")
+                self.logger.info(f"  📦  Queue Size        : {queue_size}")
+                self.logger.info(f"  ⚙️   Available Slots ")
+                print_slots_table(slot_info)
+                self.logger.info(f"  🧠  Active DAGs        : {len(active_dags)}")
+
+                if active_dags:
+                    shown = ', '.join(active_dags[:5])
+                    suffix = '...' if len(active_dags) > 5 else ''
+                    self.logger.debug(f"     DAG IDs          : [{shown}{suffix}]")
+
+                states = await self.count_states()
+                print_state_summary(states)
+
+                await asyncio.sleep(interval)
+            except Exception as e:
+                self.logger.error(f"❌ Heartbeat loop error: {e}")
+                await asyncio.sleep(5)
+
+    async def _producer_loop(self):
+        raise NotImplementedError("Producer loop is not implemented yet.")
+
+    async def _consumer_loop(self):
+        raise NotImplementedError("Consumer loop is not implemented yet.")
 
     async def _poll(self):
-        self.logger.info("Starting database job scheduler")
+        self.logger.info("Starting database job scheduler (serial mode)")
         wait_time = INIT_POLL_PERIOD
-        batch_size = 12
+        batch_size = 5000
         failures = 0
+        idle_streak = 0
+
+        self.max_concurrent_dags = 16  # for debugging
         last_deployments_timestamp = ClusterState.deployments_last_updated
-        slots_by_entrypoint = available_slots_by_executor(ClusterState.deployments)
+        slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
+        recently_activated_dags = set()
+        ACTIVATION_TIMEOUT = 60  # Seconds to consider DAG recently activated
+
+        def cleanup_recently_activated_dags():
+            """Removes DAGs that were activated too long ago from the set"""
+            current_time = time.time()
+            for dag_id, ts in list(recently_activated_dags):
+                if current_time - ts > ACTIVATION_TIMEOUT:
+                    recently_activated_dags.remove((dag_id, ts))
 
         while self.running:
-            self.logger.info(
-                f"Checking for new jobs, time = {wait_time}, events = {self._fetch_counter}, set = {self._fetch_event.is_set()}"
-            )
             try:
+                self.logger.debug(
+                    f"Polling : {wait_time:.2f}s — Queue size: {self._event_queue.qsize()} — Idle streak: {idle_streak}"
+                )
                 try:
-                    await asyncio.wait_for(self._fetch_event.wait(), timeout=wait_time)
-                    self._fetch_event.clear()
-                    while self._fetch_counter > 0:
-                        self._fetch_counter -= 1
-                    self.logger.info(f"Processing job events: {self._fetch_counter}")
-                    wait_time = INIT_POLL_PERIOD
+                    await asyncio.wait_for(self._event_queue.get(), timeout=wait_time)
+                    self._debounced_notify = False
+                    wait_time = MIN_POLL_PERIOD
                 except asyncio.TimeoutError:
-                    pass  # Proceed normally if timeout happens
+                    pass
 
-                self.logger.info(f'----------------------------------------------')
-                self.logger.info(f'----------------------------------------------')
-                deployments_last_updated = ClusterState.deployments_last_updated
-                current_deployments = ClusterState.deployments
-
-                if deployments_last_updated != last_deployments_timestamp:
+                # FIXME : this is a hack
+                # refresh slots
+                if ClusterState.deployments_last_updated != last_deployments_timestamp:
+                    last_deployments_timestamp = ClusterState.deployments_last_updated
+                    slots_by_executor = available_slots_by_executor(
+                        ClusterState.deployments
+                    ).copy()
                     self.logger.debug(
-                        "Recalculated slots_by_entrypoint due to deployments change."
-                    )
-                    self.logger.debug(
-                        f"deployments_last_updated   : {deployments_last_updated}"
-                    )
-                    self.logger.debug(
-                        f"last_deployments_timestamp : {last_deployments_timestamp}"
+                        "Detected deployment update — refreshing slot state"
                     )
 
-                    last_deployments_timestamp = deployments_last_updated
-                    slots_by_entrypoint = available_slots_by_executor(
-                        current_deployments
-                    )
+                # back off if no slots
+                self.logger.info(f"Available slots: {slots_by_executor}")
+                if not any(slots_by_executor.values()):
+                    self.logger.debug("No available executor slots. Backing off.")
+                    idle_streak += 1
+                    wait_time = adjust_backoff(wait_time, idle_streak, scheduled=False)
+                    continue
 
-                has_any_open_slots = any(
-                    slots > 0 for slots in slots_by_entrypoint.values()
+                # get jobs from the database that are ready to be scheduled, aka have their dependencies met
+                records_by_queue = await self.get_work_items_by_queue(limit=batch_size)
+                flat_jobs: list[Tuple[str, WorkInfo]] = []
+
+                for rec in itertools.chain.from_iterable(records_by_queue.values()):
+                    wi = self.record_to_work_info(rec)
+                    ep = wi.data.get("metadata", {}).get("on", "")
+                    if "://" not in ep:
+                        self.logger.warning(
+                            f"Skipping job with invalid entrypoint: {wi.id}"
+                        )
+                        continue
+                    flat_jobs.append((ep, wi))
+
+                cleanup_recently_activated_dags()
+                recently_activated_dag_ids = set(
+                    dag_id for dag_id, _ in recently_activated_dags
                 )
-                has_records = False
-                self.logger.info(
-                    f"Slots by entrypoint [{has_any_open_slots}]: {slots_by_entrypoint}"
+                flat_jobs = self.execution_planner.plan(
+                    flat_jobs,
+                    slots_by_executor,
+                    self.active_dags,
+                    recently_activated_dag_ids,
                 )
+                scheduled_any = False
 
-                if has_any_open_slots:
-                    # TODO: Allow controlling how many jobs to fetch per queue
-                    records_by_queue = await self.get_work_items_by_queue(
-                        limit=batch_size
+                if not flat_jobs:
+                    self.logger.info(
+                        "Slots available but no ready jobs; sleeping briefly before next poll."
                     )
-                    records_by_entrypoint = defaultdict(list)
+                    await asyncio.sleep(SHORT_POLL_INTERVAL)
+                    continue
 
-                    for queue, records in records_by_queue.items():
-                        self.logger.info(f"Records for queue: {queue}")
-                        for record in records:
-                            self.logger.debug(f"record : {record}")
-                            work_info = self.record_to_work_info(record)
-                            entrypoint = work_info.data.get("metadata", {}).get("on")
-                            records_by_entrypoint[entrypoint].append(work_info)
+                # Debug: Write the flat jobs plan to a file
+                from datetime import datetime
 
-                    for entrypoint, records in records_by_entrypoint.items():
-                        for work_info in records:
-                            dag_id = work_info.dag_id
-                            dag = self.get_dag_by_id(dag_id)
-                            if not dag:
-                                self.logger.warning(
-                                    f"Could not find DAG for job: {dag_id}"
-                                )
-                                continue
-
-                            node = self.get_node_from_dag(work_info.id, dag)
-                            if self._is_noop_query_definition(node):
-                                self.logger.debug(
-                                    f"Node {node.task_id} in DAG {dag_id} is a NoopQueryDefinition, resolving immediately"
-                                )
-                                job_id = work_info.id
-                                await self.complete(job_id, work_info, {}, force=True)
-                                dag_resolved = await self.resolve_dag_status(
-                                    job_id, work_info, datetime.now(), datetime.now()
-                                )
-
-                                if not dag_resolved:
-                                    wait_time = 0.1
-                                continue
-
-                            has_records = True
-                            submission_id = work_info.id
-                            entrypoint = work_info.data.get("metadata", {}).get("on")
-                            executor = entrypoint.split("://")[0]
-                            # this can happen when the executor is not yet deployed or is being redeployed
-                            if executor not in slots_by_entrypoint:
-                                self.logger.warning(
-                                    f"Executor `{executor}` not found in slots_by_entrypoint. Retrying job `{submission_id}` after short delay."
-                                )
-                                await asyncio.sleep(2)  # Retry after a short delay
-                                continue
-
-                            print('------------')
-                            print(f'Work item : {work_info}')
-                            print(
-                                f'Work item entrypoint: {entrypoint} : slots : {slots_by_entrypoint[executor]}'
+                os.makedirs("/tmp/marie/plans", exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                debug_file_path = (
+                    f"/tmp/marie/plans/flat_jobs_plan_debug_{timestamp}.txt"
+                )
+                try:
+                    with open(debug_file_path, 'w') as debug_file:
+                        for queue_name, records in records_by_queue.items():
+                            debug_file.write(f"Queue: {queue_name}\n")
+                            for record in records:
+                                debug_file.write(f"  Records:  {record},\n")
+                        debug_file.write("\n\n")
+                        debug_file.write("Jobs Plan:\n")
+                        for entrypoint, work_info in flat_jobs:
+                            debug_file.write(
+                                f"Entrypoint: {entrypoint}, "
+                                f"Work ID: {work_info.id}, "
+                                f"Priority: {work_info.priority}, "
+                                f"Job Level: {work_info.job_level}, "
+                                f"DAG ID: {work_info.dag_id}\n"
                             )
-                            if slots_by_entrypoint[executor] <= 0:
-                                self.logger.info(
-                                    f"No available slots for work, scheduling : {submission_id}, time = {wait_time}, on = {entrypoint}"
-                                )
-                                break
-                            slots_by_entrypoint[executor] -= 1
-
-                            # FIXME: WE NEED  MAKE SURE THAT THE CLUSTER STATE IS UPDATED BEFORE WE SCHEDULE THE JOB
-                            await self.mark_as_active(work_info)
-                            job_id = await self.enqueue(work_info)
-
-                            if job_id is None:
-                                self.logger.error(
-                                    f"Error scheduling work item: {work_info.id}"
-                                )
-                            else:
-                                self.logger.info(
-                                    f"Work item scheduled with ID: {job_id}"
-                                )
-
-                            scheduler_timeout = 100
-                            try:
-                                await asyncio.wait_for(
-                                    ClusterState.scheduled_event.wait(),
-                                    timeout=scheduler_timeout,
-                                )
-                                ClusterState.scheduled_event.clear()
-                                self.logger.info(
-                                    f"Scheduled event received, resetting wait time."
-                                )
-                            except asyncio.TimeoutError:
-                                pass  # Proceed normally if timeout happens
-                wait_time = (
-                    INIT_POLL_PERIOD
-                    if has_records
-                    else min(wait_time * 2, MAX_POLL_PERIOD)
-                )
-            except Exception as e:
-                self.logger.error(f"Error fetching jobs: {e}")
-                self.logger.error(traceback.format_exc())
-                failures += 1
-                if failures > 5:
-                    self.logger.error(
-                        f"Too many failures, entering cooldown (sleeping for 60s)"
+                    self.logger.info(
+                        f"Flat jobs plan written to {debug_file_path} for analysis."
                     )
+                except Exception as debug_error:
+                    self.logger.error(
+                        f"Failed to write flat jobs plan to debug file: {debug_error}"
+                    )
+
+                for entrypoint, work_info in flat_jobs:
+                    executor = entrypoint.split("://")[0]
+                    dag_id = work_info.dag_id
+
+                    if (
+                        dag_id not in self.active_dags
+                        and len(self.active_dags) >= self.max_concurrent_dags
+                    ):
+                        self.logger.debug(
+                            f"Max DAG limit reached "
+                            f"({len(self.active_dags)}/{self.max_concurrent_dags}). "
+                            f"Skipping DAG {dag_id}"
+                        )
+                        continue
+
+                    dag = self.get_dag_by_id(dag_id)
+
+                    if dag is None:
+                        raise ValueError(f"DAG not found: {dag_id}")
+
+                    if dag_id not in self.active_dags:
+                        await self.mark_as_active_dag(work_info)
+                        self.active_dags[dag_id] = dag
+                        recently_activated_dags.add((dag_id, time.time()))
+                        self.logger.info(f"DAG activated: {dag_id}")
+
+                    node = self.get_node_from_dag(work_info.id, dag)
+
+                    if self._is_noop_query_definition(node):
+                        now = datetime.now()
+
+                        await self.put_status(
+                            work_info.id, WorkState.COMPLETED, now, now
+                        )
+                        await self.complete(work_info.id, work_info, {}, force=True)
+                        await self.resolve_dag_status(work_info.id, work_info)
+                        await self.notify_event()
+
+                        continue
+
+                    if slots_by_executor.get(executor, 0) <= 0:
+                        self.logger.debug(
+                            f"No slots for {executor}, delaying job {work_info.id}"
+                        )
+                        continue
+
+                    await self.mark_as_active(work_info)
+                    enqueue_id = await self.enqueue(work_info)
+
+                    if enqueue_id:
+                        slots_by_executor[executor] -= 1
+                        self.logger.info(f"Job scheduled: {enqueue_id} on {executor}")
+                        scheduled_any = True
+                    else:
+                        self.logger.error(f"Failed to enqueue job: {work_info.id}")
+
+                # acknowledgments, we are waiting for the jobs to be scheduled on the executor and get response via ETCD
+                if scheduled_any:
+                    try:
+                        await asyncio.wait_for(
+                            ClusterState.scheduled_event.wait(), timeout=1
+                        )  # THIS SHOULD BE SAME AS ETCD lease time
+                    except asyncio.TimeoutError:
+                        self.logger.warning("Timeout waiting for schedule confirmation")
+                    finally:
+                        ClusterState.scheduled_event.clear()
+                        await self.notify_event()
+
+                idle_streak = 0 if scheduled_any else idle_streak + 1
+                wait_time = adjust_backoff(wait_time, idle_streak, scheduled_any)
+                failures = 0
+            except Exception as e:
+                self.logger.error("Poll loop exception", exc_info=True)
+                failures += 1
+                if failures >= 5:
+                    self.logger.warning("Too many failures — entering cooldown")
                     await asyncio.sleep(60)
                     failures = 0
 
@@ -448,19 +649,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.info("Stopping job scheduling agent")
         self.running = False
 
-        if self.task is not None:
-            try:
-                await asyncio.wait_for(self.task, timeout)
-            except asyncio.TimeoutError:
-                self.logger.warning("Task did not complete in time and was cancelled")
+        tasks = [self.monitoring_task]
+        if self.scheduler_mode == "parallel":
+            tasks = tasks + [self._producer_task, self._consumer_task]
+        else:
+            tasks = tasks + [self.task]
 
-        if self.monitoring_task is not None:
-            try:
-                await asyncio.wait_for(self.monitoring_task, timeout)
-            except asyncio.TimeoutError:
-                self.logger.warning(
-                    "Monitoring task did not complete in time and was cancelled"
-                )
+        if self._heartbeat_task:
+            tasks.append(self._heartbeat_task)
+
+        for task in tasks:
+            if task:
+                try:
+                    await asyncio.wait_for(task, timeout)
+                except asyncio.TimeoutError:
+                    self.logger.warning(
+                        "Monitoring task did not complete in time and was cancelled"
+                    )
 
     def debug_info(self) -> str:
         print("Debugging info")
@@ -535,7 +740,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         records = [record for record in cursor]
                         if records:
                             records_by_queue[queue] = records
-                            self.logger.info(
+                            self.logger.debug(
                                 f"Fetched jobs from queue: {queue} > {len(records)}"
                             )
                         else:
@@ -573,7 +778,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                           retry_delay,
                           retry_backoff,
                           keep_until,
-                          dag_id
+                          dag_id,
+                          job_level
                     FROM {schema}.{table}
                     WHERE id = '{job_id}'
                     """
@@ -614,7 +820,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         data,
                         retry_delay,
                         retry_backoff,
-                        keep_until
+                        keep_until,
+                        dag_id,
+                        job_level
                     FROM {schema}.{table}
                     WHERE data->'metadata'->>'ref_type' = '{ref_type}'
                     AND data->'metadata'->>'ref_id' = '{ref_id}'
@@ -655,7 +863,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor.itersize = 10000
                 cursor.execute(
                     f"""
-                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id
+                    SELECT id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id,job_level
                     FROM {schema}.{table} 
                     WHERE state IN ('{states}')
                     {f"LIMIT {batch_size}" if batch_size > 0 else ""}
@@ -721,7 +929,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 cursor = self._execute_sql_gracefully(
                     insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag)
                 )
-                new_dag_key = cursor is not None and cursor.rowcount > 0
+                # we will use the cursor to get the new dag id but it should be the same as dag_id
+                new_dag_key = (
+                    result[0] if cursor and (result := cursor.fetchone()) else None
+                )
                 self.logger.info(f"DAG inserted with ID: {new_dag_key}")
 
                 for i, dag_work_info in enumerate(topological_sorted_nodes):
@@ -754,17 +965,23 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         return submission_id
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
-        print(f"Marking job as active : {work_info.id}")
+        return await self._mark_active(
+            "job", mark_as_active_jobs(DEFAULT_SCHEMA, work_info.name, [work_info.id])
+        )
 
+    async def mark_as_active_dag(self, work_info: WorkInfo) -> bool:
+        return await self._mark_active(
+            "dag", mark_as_active_dags(DEFAULT_SCHEMA, [work_info.dag_id])
+        )
+
+    async def _mark_active(self, label: str, query: str) -> bool:
+        self.logger.debug(f"Marking {label} as active")
         with self:
             try:
-                cursor = self._execute_sql_gracefully(
-                    mark_as_active_jobs(DEFAULT_SCHEMA, work_info.name, [work_info.id])
-                )
-                key_updated = cursor is not None and cursor.rowcount > 0
-                return key_updated
+                cursor = self._execute_sql_gracefully(query)
+                return result[0] if cursor and (result := cursor.fetchone()) else False
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error updating job: {error}")
+                self.logger.error(f"Error updating {label}: {error}")
                 self.connection.rollback()
                 return False
 
@@ -957,6 +1174,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             retry_backoff=record[9],
             keep_until=record[10],
             dag_id=record[11],
+            job_level=record[12],
         )
 
     async def _monitor(self):
@@ -980,10 +1198,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if monitored_on is None:
                     self.logger.error("Error setting monitor time")
                     continue
-
-                states = await self.count_states()
-                logger.info(f"job state: {states}")
-                # TODO: emit event
             except Exception as e:
                 logger.error(f"Error monitoring jobs: {e}")
                 traceback.print_exc()
@@ -996,7 +1210,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         output_metadata: dict = None,
         force=False,
     ):
-        self.logger.info(f"Job completed : {job_id}, {work_item}")
+        # self.logger.info(f"Job completed : {job_id}, {work_item}")
+        self.logger.info(f"Job completed : {job_id}")
         with self:
 
             def complete_jobs_wrapper(
@@ -1028,7 +1243,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def fail(
         self, job_id: str, work_item: WorkInfo, output_metadata: dict = None
     ):
-        self.logger.info(f"Job failed : {job_id}, {work_item}")
+        self.logger.info(f"Job failed : {job_id}")
         with self:
             try:
                 cursor = self._execute_sql_gracefully(
@@ -1048,86 +1263,137 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 self.logger.error(f"Error completing failed job: {error}")
 
     async def _sync(self):
+        """
+        Synchronizes job status between the local job tracking system and db.
+        This function runs in a loop to periodically check the status of active jobs and update their state
+        locally based on the external source.
+        """
         wait_time = SYNC_POLL_PERIOD
-        while self.running:
-            self.logger.info(f"Syncing jobs status : {wait_time}")
-            await asyncio.sleep(wait_time)
-            job_info_client = self.job_manager.job_info_client()
+        job_info_client = self.job_manager.job_info_client()
+        min_sync_interval_seconds = 300  # 5 minutes in seconds
 
+        while self.running:
+            self.logger.info(f"Syncing job status every {wait_time} seconds")
+            await asyncio.sleep(wait_time)
             try:
                 active_jobs = await self.list_jobs(
                     state=[WorkState.ACTIVE.value, WorkState.CREATED.value]
                 )
-                if active_jobs:
-                    for job_id, work_item in active_jobs.items():
-                        self.logger.info(f"Syncing job: {job_id}, {work_item}")
-                        job_info = await job_info_client.get_info(job_id)
-                        if job_info is None:
-                            self.logger.error(f"Job not found: {job_id}")
+                if not active_jobs:
+                    continue
+
+                for job_id, work_item in active_jobs.items():
+                    self.logger.info(f"Syncing job: {job_id}")
+                    job_info = await job_info_client.get_info(job_id)
+                    if job_info is None:
+                        self.logger.error(f"Job to synchronize not found: {job_id}")
+                        continue
+
+                    if not job_info.status:
+                        self.logger.warning(
+                            f"Missing status for job: {job_id}, skipping."
+                        )
+                        continue
+
+                    job_info_state = convert_job_status_to_work_state(job_info.status)
+                    if (
+                        job_info.status.is_terminal()
+                        and work_item.state != job_info_state
+                    ):
+                        self.logger.info(
+                            f"State mismatch for job {job_id}: "
+                            f"WorkState={work_item.state}, JobInfoState={job_info_state}. Updating."
+                        )
+
+                        synchronize = False
+                        remaining_time = None
+
+                        if job_info.end_time is not None:
+                            timestamp_ms = job_info.end_time  # Unix timestamp in ms
+                            end_time = datetime.fromtimestamp(
+                                timestamp_ms / 1000, tz=timezone.utc
+                            )
+                            now = datetime.now(tz=timezone.utc)
+                            remaining_time = end_time - now
+
+                            if end_time < now - timedelta(
+                                seconds=min_sync_interval_seconds
+                            ):
+                                synchronize = True
+
+                        if not synchronize:
+                            seconds = (
+                                remaining_time.total_seconds()
+                                if remaining_time
+                                else "unknown"
+                            )
+                            self.logger.info(
+                                f"Job has not ended more than {min_sync_interval_seconds} seconds ago, skipping sync. "
+                                f"{job_id}: {seconds} seconds since end."
+                            )
                             continue
 
-                        job_info_state = convert_job_status_to_work_state(
-                            job_info.status
-                        )
-                        if (
-                            job_info.status.is_terminal()
-                            and work_item.state != job_info_state
-                        ):
-                            self.logger.info(
-                                f"State mismatch for job {job_id}: "
-                                f"WorkState={work_item.state}, JobInfoState={job_info_state}. "
-                                f"Updating to JobInfoState."
+                        meta = {"synced": True}
+                        if job_info.status == JobStatus.SUCCEEDED:
+                            await self.complete(job_id, work_item, meta, force=True)
+                        elif job_info.status == JobStatus.FAILED:
+                            await self.fail(job_id, work_item, meta)
+                        elif job_info.status == JobStatus.STOPPED:
+                            await self.cancel_job(job_id, work_item)
+                        else:
+                            self.logger.error(
+                                f"Unhandled job status: {job_info.status}. Marking as FAILED."
                             )
-                            # check that the job can be synced by checking the end time have been at least 60min
-                            synchronize = False
-                            remaining_time = None
-                            min_sync_interval = 5
-                            if job_info.end_time is not None:
-                                timestamp_ms = (
-                                    job_info.end_time
-                                )  # Unix timestamp in milliseconds
-                                timestamp_s = timestamp_ms / 1000
-                                end_time = datetime.fromtimestamp(timestamp_s)
-                                remaining_time = end_time - datetime.now()
-                                if end_time < datetime.now() - timedelta(
-                                    minutes=min_sync_interval
-                                ):
-                                    synchronize = True
+                            await self.fail(job_id, work_item)
 
-                            if not synchronize:
-                                self.logger.info(
-                                    f"Job has not ended more than {min_sync_interval} minutes ago, skipping "
-                                    f"synchronization.  {job_id}: {remaining_time.total_seconds()}"
-                                )
-                                continue
-
-                            meta = {"synced": True}
-                            if job_info.status == JobStatus.SUCCEEDED:
-                                await self.complete(job_id, work_item, meta, force=True)
-                            elif job_info.status == JobStatus.FAILED:
-                                await self.fail(job_id, work_item, meta)
-                            elif job_info.status == JobStatus.STOPPED:
-                                await self.cancel_job(job_id, work_item)
-                            else:
-                                self.logger.error(
-                                    f"Unhandled terminal status: {job_info.status}"
-                                )
+                        self.logger.info(
+                            f"Synchronized job {job_id} is in terminal state {job_info.status}"
+                        )
+                        await self.resolve_dag_status(job_id, work_item, now, now)
 
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error syncing jobs: {error}")
-                traceback.print_exc()
-                if self.connection:
-                    self.connection.rollback()  # Ensure rollback on failure
+                self.logger.error(traceback.format_exc())
+
+    async def _sync_dag(self):
+        self.logger.info("Starting DAG synchronization")
+        # https://github.com/marieai/marie-ai/issues/134
+        await self._loop.run_in_executor(None, self._blocking_sync_dag)
+
+    def _blocking_sync_dag(self):
+        self.logger.info("Starting BLOCKING-DAG synchronization")
+        import select
+
+        conn = self._get_connection()
+        try:
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            cur.execute("LISTEN dag_state_changed;")
+            self.logger.info("Listening for DAG changes...")
+
+            while self.running:
+                print("Waiting for notifications on 'dag_state_changed' channel...")
+                if select.select([conn], [], [], 5) == ([], [], []):
+                    continue  # Timeout, no notifications
+                conn.poll()
+                while conn.notifies:
+                    notify = conn.notifies.pop(0)
+                    self.logger.info(f"Received NOTIFY: {notify.payload}")
+
+        except Exception as e:
+            self.logger.error(f"Error in listener: {e}")
+        finally:
+            self._close_connection(conn)
 
     async def notify_event(self) -> bool:
-        self.logger.debug(f"notify_event : {self._fetch_counter}")
-        async with self._fetch_lock:
-            if self._fetch_counter > 0:
-                return False
-
-            self._fetch_counter += 1
-            self._fetch_event.set()
-            return True
+        if self._debounced_notify:
+            return False
+        self._debounced_notify = True
+        try:
+            self._event_queue.put_nowait("wake")
+        except asyncio.QueueFull:
+            pass
+        return True
 
     async def resolve_dag_status(
         self,
@@ -1136,84 +1402,91 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         started_on: Optional[datetime] = None,
         completed_on: Optional[datetime] = None,
     ) -> bool:
-        self.logger.info(f"Resolving DAG status[dag-id] : {work_info.dag_id}")
+        self.logger.debug(f"🔍 Resolving DAG status: {work_info.dag_id}")
 
         with self:
             try:
                 resolve_query = f"SELECT {DEFAULT_SCHEMA}.resolve_dag_state('{work_info.dag_id}'::uuid);"
                 cursor = self._execute_sql_gracefully(resolve_query)
-                result = cursor.fetchone()
-                dag_in_progress = (
-                    not result or not result[0] or result[0] != 'completed'
+                dag_state = (
+                    result[0] if cursor and (result := cursor.fetchone()) else None
                 )
-                self.logger.debug(f'dag_in_progress = {dag_in_progress}')
+                self.logger.debug(f"Resolved DAG state: {dag_state}")
 
-                if dag_in_progress:
-                    self.logger.info(
-                        f"DAG execution is still in progress : {work_info.dag_id}"
-                    )
+                if dag_state not in ("completed", "failed"):
+                    self.logger.debug(f"DAG is still in progress: {work_info.dag_id}")
                     return False
 
                 if work_info.dag_id in self.active_dags:
                     del self.active_dags[work_info.dag_id]
-                    self.logger.debug(
-                        f"Removed completed DAG from active DAGs cache : {work_info.dag_id}"
-                    )
+                    self.logger.debug(f"Removed DAG from cache: {work_info.dag_id}")
 
-                event_name = work_info.data.get(
-                    "name", work_info.name
-                )  # they should be the same
+                self.logger.info(
+                    f"Resolved DAG status: {work_info.dag_id}, status={dag_state}"
+                )
+                # notification
+                event_name = work_info.data.get("name", work_info.name)
                 api_key = work_info.data.get("api_key", None)
                 metadata = work_info.data.get("metadata", {})
                 ref_type = metadata.get("ref_type")
 
                 if not api_key or not event_name:
                     self.logger.warning(
-                        f"Job completion notification failed - missing required fields: api_key={api_key}, event_name={event_name}"
+                        f"Missing API key or event name: api_key={api_key}, event_name={event_name}"
                     )
                     return False
 
-                # when job is marked as completed we mark the DAG not the last jobid as completed
-                # currently we assume that the DAG ID == SUBMITTED JOB ID
+                status = "OK" if dag_state == "completed" else "FAILED"
+
                 await mark_as_complete(
                     api_key=api_key,
                     job_id=work_info.dag_id,
                     event_name=event_name,
                     job_tag=ref_type,
-                    status="OK",
+                    status=status,
                     timestamp=int(time.time()),
                     payload=metadata,
+                )
+
+                self.logger.debug(
+                    f"DAG notification sent: {work_info.dag_id}, status={status}"
                 )
                 return True
 
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error handling dag resolution: {error}")
+                self.logger.error(f"Error resolving DAG status: {error}")
                 raise error
 
-    def get_dag_by_id(self, dag_id: str) -> QueryPlan:
+    def get_dag_by_id(self, dag_id: str) -> QueryPlan | None:
         """
-        Retrieves a DAG by its ID, either from the active_dags cache or from the database.
+        Retrieves a DAG by its ID, using in-memory cache if available.
+        Falls back to loading from db if missing.
         """
+        # Return from cache if present
         if dag_id in self.active_dags:
             return self.active_dags[dag_id]
 
         try:
             with self:
-                cur = self._execute_sql_gracefully(load_dag(DEFAULT_SCHEMA, dag_id))
-                result = cur.fetchone()
-                if result:
+                cursor = self._execute_sql_gracefully(load_dag(DEFAULT_SCHEMA, dag_id))
+                result = cursor.fetchone()
+                if result and result[0]:
                     dag_definition = result[0]
                     dag = QueryPlan(**dag_definition)
-                    self.active_dags[dag_id] = dag
+                    self.logger.debug(f"📥 Loaded DAG from DB: {dag_id}")
                     return dag
-                return None
+                else:
+                    self.logger.warning(f"DAG not found in DB: {dag_id}")
+                    return None
         except Exception as e:
-            self.logger.error(f"Error retrieving DAG {dag_id}: {e}")
+            self.logger.error(f"❌ Error loading DAG {dag_id}: {e}")
             return None
 
     def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
         """
         Checks if the given node is a NoopQueryDefinition node.
+        NoopQueryDefinition is a special type of node that does not perform any operation and are used for
+        aggregation or as placeholders in the query plan.
         """
         try:
             return isinstance(node.definition, NoopQueryDefinition)
@@ -1242,26 +1515,27 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
-    # from metadate or fallback to name
-    # They can be this same
+    # from metadata or fallback to name They can be this same
     query_planner_name = work_info.data.get("metadata", {}).get(
         "planner", work_info.name
     )
 
-    pprint(f"Query planning for : {query_planner_name}")
     planner_info = PlannerInfo(name=query_planner_name, base_id=work_info.id)
     plan = query_planner(planner_info)
 
-    pprint(plan.model_dump())
+    # pprint(plan.model_dump())
+
     visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
-    json_str = plan_to_json(plan)
-    pprint(yml_str)
-    print("-----------------")
-    pprint(json_str)
+
+    # json_str = plan_to_json(plan)
+    # pprint(yml_str)
+    # print("-----------------")
+    # pprint(json_str)
 
     sorted_nodes = topological_sort(plan)
-    print("Topologically sorted nodes:", sorted_nodes)
+    job_levels = compute_job_levels(sorted_nodes, plan)
+    # print("Topologically sorted nodes:", sorted_nodes)
     print_sorted_nodes(sorted_nodes, plan)
 
     dag_nodes = []
@@ -1272,6 +1546,8 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         node = node_dict.get(task_id)
         wi = copy.deepcopy(work_info)
         wi.id = node.task_id
+        wi.job_level = job_levels[task_id]
+
         # FIXME : FOR TESTING ONLY
         # FIXME : This has to be configurable
         if wi.name == 'gen5_extract':
@@ -1290,7 +1566,10 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
             wi.dependencies = []
         else:
             wi.dependencies = node.dependencies
-        print(f"  -- item : {wi}")
+        # print(f"  -- item : {wi}")
         dag_nodes.append(wi)
 
     return plan, dag_nodes
+
+
+# https://ocw.mit.edu/courses/6-042j-mathematics-for-computer-science-spring-2015/mit6_042js15_session17.pdf

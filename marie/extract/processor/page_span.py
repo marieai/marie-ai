@@ -1,15 +1,18 @@
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+from sympy.assumptions.satask import satask
 
 from marie.extract.models.base import Location
 from marie.extract.models.definition import ExecutionContext
-from marie.extract.models.match import MatchSection, Span
+from marie.extract.models.match import MatchSection, ScanResult, Span
 
 
 class PageSpan:
-    page_count: int = 0
-    spanned_pages: List[Span]
+
+    def __init__(self):
+        self.page_count: int = 0
+        self.spanned_pages: List[Span] = []
 
     @staticmethod
     def from_context(
@@ -32,34 +35,64 @@ class PageSpan:
 
     @staticmethod
     def create(
-        context: ExecutionContext, start: Location, stop: Location, msg: str = ""
+        context: ExecutionContext, start: ScanResult, stop: ScanResult, msg: str = ""
     ) -> 'PageSpan':
+        assert context.document is not None
+        doc = context.document
+        print('Creating PAGE SPAN')
+        print('Start:', start)
+        print('Stop:', stop)
+
         page_span = PageSpan()
         sp = start.page
         ep = stop.page
 
+        print(f"Start page = Page {sp}, Stop page = Page {ep}")
+        # TODO: Implement two different strategies for start and stop (LINE and COORDINATE)
+
         for i in range(sp, ep + 1):
-            if not context.is_loaded(i):
-                continue
+            lines_by_page = doc.lines_for_page(i)
+            page_h = len(lines_by_page)
+            start_y = start.line.metadata.line_id
+            stop_y = stop.line.metadata.line_id
 
-            page = context.get_page_by_page_number(i)
-            details = page.details
-
-            span = Span(page=i, h=details.h, msg=msg)
-
+            span = Span(page=i, h=page_h, msg=msg)
             if i == sp:
-                span.y = start.y
+                span.y = start_y
                 if sp == stop.page:
-                    span.h = stop.y - start.y
+                    span.h = stop_y - start_y
                 else:
-                    span.h = details.h - start.y
+                    span.h = page_h - start_y
             elif i == ep:
                 span.y = 0
-                span.h = stop.y
+                span.h = stop_y
             else:
                 span.y = 0
-
             page_span.add(span)
+
+        # for i in range(sp, ep + 1):
+        #     span = Span(page=i, h=details.h, msg=msg)
+        #
+        #     if i == sp:
+        #         span.y = start.y
+        #         if sp == stop.page:
+        #             span.h = stop.y - start.y
+        #         else:
+        #             span.h = details.h - start.y
+        #     elif i == ep:
+        #         span.y = 0
+        #         span.h = stop.y
+        #     else:
+        #         span.y = 0
+        #
+        #     page_span.add(span)
+
+        # Format and output the page spans
+        print("Page spans:")
+        for span in page_span.spanned_pages:
+            print(
+                f"Page: {span.page}, Start Y: {span.y}, Height: {span.h}, Message: {span.msg}"
+            )
 
         return page_span
 

@@ -125,9 +125,9 @@ def get_default_grpc_options() -> List[Tuple[str, Any]]:
         ('grpc.max_send_message_length', -1),
         ('grpc.max_receive_message_length', -1),
         # for the following see this blog post for the choice of default value https://cs.mcgill.ca/~mxia2/2019/02/23/Using-gRPC-in-Production/
-        ('grpc.keepalive_time_ms', 9999),
+        ('grpc.keepalive_time_ms', 15000 * 2),  # 9999
         # send keepalive ping every 9 second, default is 2 hours.
-        ('grpc.keepalive_timeout_ms', 4999),
+        ('grpc.keepalive_timeout_ms', 15000),  # 4999
         # keepalive ping time out after 4 seconds, default is 20 seconds
         ('grpc.keepalive_permit_without_calls', True),
         # allow keepalive pings when there's no gRPC calls
@@ -146,8 +146,8 @@ def get_default_grpc_options() -> List[Tuple[str, Any]]:
         ('grpc.so_reuseport', 0),
         # This suppresses the gRPC server printing "too many pings" error message
         # This is a workaround for https://github.com/marieai/marie-ai/issues/59
-        ('grpc.http2.max_ping_strikes', 0),
-        ('grpc.http1.max_ping_strikes', 0),
+        ('grpc.http2.max_ping_strikes', 2),
+        ('grpc.http1.max_ping_strikes', 2),
     ]
 
 

@@ -9,23 +9,6 @@ from marie.constants import __model_path__
 logger = logging.getLogger(__name__)
 
 
-def get_cache_dir(cache_dir: Optional[str] = None) -> str:
-    """
-    Returns a default directory to cache static files
-    (usually downloaded from Internet), if None is provided.
-
-    Args:
-        cache_dir (None or str): if not None, will be returned as is.
-            If None, returns the default cache directory as:
-
-        1) $MARIE_CACHE, if set
-        2) MARIE_CACHE ~/.marie
-    """
-    if cache_dir is None:
-        cache_dir = os.path.expanduser(os.getenv("MARIE_CACHE", "~/.marie"))
-    return cache_dir
-
-
 class ModelRegistryHandler:
     """
     ModelRegistryHandler is a base class that defines common functionality for a URI protocol.

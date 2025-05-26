@@ -56,12 +56,8 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         )
 
         matched_sections = self.candidate_validator.fix_mismatched_sections(
-            start_candidates, stop_candidates, parent, layer
+            context, start_candidates, stop_candidates, parent, layer
         )
-
-        if matched_sections and not matched_sections:
-            context.get_selector_hits().remove_all(start_selector_hits)
-            context.get_selector_hits().remove_all(stop_selector_hits)
 
         self.populate_values(layer, matched_sections)
         self.prepare_initial_page_spans(context, matched_sections)
@@ -75,11 +71,11 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         )
 
         for ms in matched_sections:
-            ms.owner_layer_identifier = layer.get_identifier()
+            # ms.owner_layer_identifier = layer.get_identifier()
             ms.owner_layer = layer
             ms.parent = parent
-            ms.start_candidates = start_selector_hits
-            ms.stop_candidates = stop_selector_hits
+            # ms.start_candidates = start_selector_hits
+            # ms.stop_candidates = stop_selector_hits
 
         child_layers = layer.layers
         if child_layers and matched_sections:
@@ -89,9 +85,9 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
 
         if matched_sections:
             for sec in matched_sections:
-                sec.set_type(MatchSectionType.CONTENT)
-                sec.set_owner_layer(layer)
-                sec.set_owner_layer_identifier(layer.get_identifier())
+                sec.type = MatchSectionType.CONTENT
+                sec.owner_layer = layer
+                # sec.set_owner_layer_identifier(layer.get_identifier())
                 parent.add_section(sec)
 
     def prepare_initial_page_spans(
@@ -101,11 +97,8 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
             return
 
         for section in matched_sections:
-            start = section.get_start()
-            stop = section.get_stop()
-            page_span = PageSpan.create(context, start, stop)
-            spans = page_span.spanned_pages
-            section.set_span(spans)
+            page_span = PageSpan.create(context, section.start, section.stop)
+            section.span = page_span.spanned_pages
 
     def populate_values(
         self, layer: Layer, matched_sections: List[MatchSection]
@@ -113,9 +106,9 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         if not layer or not matched_sections:
             return
 
-        row_extraction_strategy = layer.get_row_extraction_strategy()
+        row_extraction_strategy = layer.row_extraction_strategy
         for ms in matched_sections:
-            ms.set_row_extraction_strategy(row_extraction_strategy)
+            ms.row_extraction_strategy = row_extraction_strategy
 
     def process_negative_layer(
         self,
@@ -124,8 +117,10 @@ class CutpointProcessingVisitor(BaseProcessingVisitor):
         matched_sections: List[MatchSection],
     ) -> None:
         if not matched_sections:
-            return
+            pass
 
+        if True:
+            raise NotImplemented
         tree = context.get_rtree()
         for section in matched_sections:
             spans = section.get_span()

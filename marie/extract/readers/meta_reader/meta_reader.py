@@ -1,4 +1,3 @@
-from pprint import pprint
 from typing import Any, List, Optional, Union
 
 import numpy as np
@@ -8,6 +7,7 @@ from marie.extract.readers.base import BaseReader
 from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.unstructured_document import UnstructuredDocument
+from marie.logging_core.predefined import default_logger as logger
 
 
 class MetaReader(BaseReader):
@@ -33,17 +33,21 @@ class MetaReader(BaseReader):
 
     @classmethod
     def from_data(
-        cls, frames: List[np.ndarray], ocr_meta: List[dict]
+        cls,
+        frames: List[np.ndarray],
+        ocr_meta: List[dict],
+        unstructured_meta: dict[str, Any],
     ) -> UnstructuredDocument:
         META_KEY = "meta"
         LINES_KEY = "lines"
         PAGE_KEY = "page"
         LINES_BBOXES_KEY = "lines_bboxes"
         WORDS_KEY = "words"
+        strict = False  # config.get("strict", False)
 
         assert len(frames) == len(ocr_meta), "Mismatch between frames and OCR metadata"
 
-        def create_line_with_meta(meta_line, page_id, words):
+        def create_line_with_meta(meta_line, page_id: int, words):
             """Helper function to create a LineWithMeta instance."""
             aligned_words = [w for w in words if w["id"] in meta_line["wordids"]]
             meta_line_model = LineModel(**meta_line)
@@ -66,15 +70,26 @@ class MetaReader(BaseReader):
             frame_lines = np.array(frame_meta[LINES_KEY])
             words = np.array(frame_meta[WORDS_KEY])
 
-            assert len(unique_line_ids) == len(
-                lines_bboxes
-            ), f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
+            if len(unique_line_ids) != len(lines_bboxes):
+                if strict:
+                    raise ValueError(
+                        f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
+                    )
+                else:
+                    logger.warning(
+                        f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
+                    )
+            # assert len(unique_line_ids) == len(
+            #     lines_bboxes
+            # ), f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
 
             for meta_line in frame_lines:
                 line_with_meta = create_line_with_meta(meta_line, page_id, words)
                 unstructured_lines.append(line_with_meta)
 
-        return UnstructuredDocument(lines=unstructured_lines, metadata={})
+        return UnstructuredDocument(
+            lines=unstructured_lines, tables=[], metadata=unstructured_meta
+        )
 
     @classmethod
     def transform(cls, frame, result) -> LineWithMeta:

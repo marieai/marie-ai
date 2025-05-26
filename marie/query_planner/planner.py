@@ -4,6 +4,8 @@ from io import StringIO
 from pprint import pprint
 from typing import Callable
 
+import matplotlib.pyplot as plt
+import networkx as nx
 import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
@@ -81,6 +83,9 @@ def print_sorted_nodes(sorted_nodes: list[str], plan: QueryPlan) -> None:
     :param sorted_nodes: List of nodes in topologically sorted order.
     :param plan: The QueryPlan object.
     """
+    if True:
+        return
+
     print("\n" + "=" * 60)
     print("Topologically Sorted Nodes:")
     print("=" * 60)
@@ -168,6 +173,32 @@ def topological_sort(plan: QueryPlan) -> list:
     return sorted_nodes
 
 
+def compute_job_levels(sorted_nodes: list[str], plan: QueryPlan) -> dict[str, int]:
+    """
+    Given a list of node IDs in topological order and the original QueryPlan,
+    compute a job_level for each node representing its distance from the nearest root.
+
+    :param sorted_nodes: Node IDs in topological order.
+    :param plan: The original QueryPlan with dependency information.
+    :return: A dict mapping node_id to its level (int).
+    """
+    # Build a map from node_id to its dependencies for quick lookup
+    dependency_map = {node.task_id: node.dependencies for node in plan.nodes}
+
+    # Initialize all levels to 0
+    job_level = {node_id: 0 for node_id in sorted_nodes}
+
+    # Iterate in topological order, so dependencies are processed first
+    for node_id in sorted_nodes:
+        deps = dependency_map.get(node_id, []) or []
+        if deps:
+            # level = max level of dependencies + 1
+            max_dep_level = max(job_level.get(dep, 0) for dep in deps)
+            job_level[node_id] = max_dep_level + 1
+
+    return job_level
+
+
 def _load_query_planner(planner_name: str) -> Callable:
     """
     Dynamically load the query planner based on the planner name.
@@ -178,7 +209,7 @@ def _load_query_planner(planner_name: str) -> Callable:
     """
     import os
 
-    logger.info(f"Loading query planner: {planner_name}")
+    logger.debug(f"Loading query planner: {planner_name}")
     try:
         return QueryPlanRegistry.get(planner_name)
     except ValueError as e:
@@ -191,9 +222,7 @@ def _load_query_planner(planner_name: str) -> Callable:
 
 
 def query_planner(planner_info: PlannerInfo) -> QueryPlan:
-    logger.info(f"Starting query planning for: {planner_info}")
     query_planner_name = planner_info.name
-
     try:
         query_planner_fn = _load_query_planner(query_planner_name)
     except ValueError as e:
@@ -203,7 +232,7 @@ def query_planner(planner_info: PlannerInfo) -> QueryPlan:
     plan = query_planner_fn(planner_info)
     if not plan:
         error_message = (
-            f"Query planner '{query_planner_name}' returned an invalid/NONE plan."
+            f"Query planner '{query_planner_name}' returned an invalid plan."
         )
         logger.error(error_message)
         raise ValueError(error_message)
@@ -212,7 +241,7 @@ def query_planner(planner_info: PlannerInfo) -> QueryPlan:
     # a single root node as that will be used as the entry point
     strict = True
     plan = ensure_single_entry_point(plan, planner_info, strict)
-    logger.info(f"Query planning completed successfully for: {query_planner_name}")
+    logger.debug(f"Query planning completed successfully for: {query_planner_name}")
     return plan
 
 
@@ -499,11 +528,12 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     :param plan: The QueryPlan to visualize.
     :param output_path: The file path to save the graph image (default: 'query_plan_graph.png').
     """
-    import matplotlib.pyplot as plt
-    import networkx as nx
 
     # Create a directed graph (DiGraph)
     graph = nx.DiGraph()
+
+    if False:
+        return
 
     # Add nodes and edges to the graph in a consistent order
     for node in sorted(plan.nodes, key=lambda x: x.task_id):  # Sort nodes by ID
@@ -605,9 +635,18 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
     # Save the graph locally
     plt.savefig(output_path, format="png", dpi=300)  # Save with high resolution
-    print(f"Graph saved successfully as '{output_path}'")
 
     plt.show()
+
+
+def nx_to_mermaid(graph: nx.DiGraph) -> str:
+    lines = ["```mermaid", "flowchart TD"]
+
+    for source, target in graph.edges():
+        lines.append(f"    {source} --> {target}")
+
+    lines.append("```")
+    return "\n".join(lines)
 
 
 def print_query_plan(plan: QueryPlan, layout: str) -> None:
@@ -641,7 +680,7 @@ if __name__ == "__main__":
 
     json_serialized = plan.model_dump()
     reconstructed_plan = QueryPlan(**json_serialized)
-
     sorted_nodes = topological_sort(plan)
     print_sorted_nodes(sorted_nodes, plan)
+
     print_query_plan(plan, layout)

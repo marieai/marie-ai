@@ -16,6 +16,11 @@ load_dotenv()  # Loads environment variables from a .env
 
 api_key = os.getenv("OPENAI_API_KEY", "EMPTY")
 base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
+base_url = os.getenv("OPENAI_BASE_URL", "http://184.105.87.211:8000/v1")
+base_url = os.getenv("OPENAI_BASE_URL", "http://209.51.170.37:8000/v1")
+
+base_url = 'http://209.51.170.37:8000/v1'  # DEEPSEEK
+# base_url='http://184.105.87.211:8000/v1' # QWEN VL
 
 print(f"API Key: {api_key}")
 print(f"Base URL: {base_url}")
@@ -222,7 +227,7 @@ def inference_with_api(
     image_type = "png"
     base64_image = base64.b64encode(bytes_data).decode('utf-8')
     estimated_tokens = estimate_token_count(prompt)
-    estimated_tokens = estimated_tokens + 512  #
+    estimated_tokens = 8192  #  estimated_tokens + 512  #
     # --max-batch-prefill-tokens 4096 --max-total-tokens 4096 --max-input-tokens 2048
 
     print('estimated_tokens : ', estimated_tokens)
@@ -254,6 +259,19 @@ def inference_with_api(
             ],
         },
     ]
+
+    # store for debugging
+    temp_dir = "/tmp/openai_messages"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_path = os.path.join(temp_dir, f"qwen-api_messages.json")
+    try:
+        import json
+
+        with open(temp_file_path, "w") as temp_file:
+            json.dump(messages, temp_file, indent=4)
+        print(f"Messages saved for analysis to: {temp_file_path}")
+    except Exception as e:
+        print(f"Failed to save messages to {temp_file_path}: {e}")
 
     # 1. **temperature=0.0** – Minimizes randomness by always picking the highest probability token.
     # 2. **top_p=1.0** – Disables nucleus sampling, ensuring no additional probability mass is truncated.

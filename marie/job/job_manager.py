@@ -19,6 +19,7 @@ from marie.job.scheduling_strategies import (
 )
 from marie.logging_core.logger import MarieLogger
 from marie.storage.kv.storage_client import StorageArea
+from marie.utils.utils import get_exception_traceback
 
 # The max time to wait for the JobSupervisor to start before failing the job.
 DEFAULT_JOB_START_TIMEOUT_SECONDS = 60 * 15
@@ -151,9 +152,8 @@ class JobManager:
         while is_alive:
             try:
                 job_status = await self._job_info_client.get_status(job_id)
-                self.logger.info(f"Monitored job status: {job_id} : {job_status}")
-                # print("len(self.monitored_jobs): ", len(self.monitored_jobs))
-                # print("has_available_slot: ", self.has_available_slot())
+                self.logger.debug(f"Monitored job status: {job_id} : {job_status}")
+
                 if job_status.is_terminal():
                     if job_status == JobStatus.SUCCEEDED:
                         is_alive = False
@@ -240,6 +240,7 @@ class JobManager:
 
                 await asyncio.sleep(self.JOB_MONITOR_LOOP_PERIOD_S)
             except Exception as e:
+                raise e
                 is_alive = False
                 job_status = await self._job_info_client.get_status(job_id)
                 job_error_message = None
@@ -331,7 +332,9 @@ class JobManager:
         # Wait for `_recover_running_jobs` to run before accepting submissions to
         # avoid duplicate monitoring of the same job.
         await self._recover_running_jobs_event.wait()
-        self.logger.info(f"Starting job with submission_id: {submission_id}")
+        self.logger.info(
+            f"Starting job with submission_id: {submission_id} on entrypoint: {entrypoint}"
+        )
 
         job_info = JobInfo(
             entrypoint=entrypoint,
@@ -386,7 +389,7 @@ class JobManager:
             )
             self.logger.info(f"Started job with submission_id: {submission_id}")
         except Exception as e:
-            tb_str = traceback.format_exc()
+            tb_str = get_exception_traceback()
 
             self.logger.warning(
                 f"Failed to start supervisor actor for job {submission_id}: '{e}'"

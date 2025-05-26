@@ -72,6 +72,13 @@ class Rectangle(BaseModel):
     w: float
     h: float
 
+    @classmethod
+    def create_empty(cls) -> "Rectangle":
+        """
+        Creates and returns an empty Rectangle (zero width and height at origin).
+        """
+        return cls(x=0.0, y=0.0, w=0.0, h=0.0)
+
 
 class Location(BaseModel):
     page: int
@@ -89,8 +96,6 @@ class SelectionType(str, Enum):
 class Combinator(str, Enum):
     DESCENDANT = "DESCENDANT"
     CHILD = "CHILD"
-    ADJACENT_SIBLING = "ADJACENT_SIBLING"
-    GENERAL_SIBLING = "GENERAL_SIBLING"
 
 
 class Margin(BaseModel):
@@ -192,7 +197,7 @@ class Selector(BaseModel):
     cut_point_y_offset: int = 0
 
     def __str__(self) -> str:
-        return f"Selector Loc = {self.location} Dim = {self.dimension}"
+        return f"Selector Loc = {self.location} Dim = {self.dimension} Perimeter = {self.search_perimeter} Cutpoint = {self.cut_point_y_offset} Selection Type = {self.selection_type} Tag = {self.tag}"
 
 
 class TextSelector(Selector):
@@ -200,6 +205,9 @@ class TextSelector(Selector):
     multiline: Optional[bool] = False
     method: Optional[str] = "equals"
     strategy: Optional[str] = "embedding"
+
+    def __str__(self) -> str:
+        return f"TextSelector : {super().__str__()} Text = {self.text} Multiline = {self.multiline} Method = {self.method} Strategy = {self.strategy}"
 
 
 class PatternSelector(Selector):

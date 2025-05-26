@@ -1,5 +1,7 @@
 import os
+import sys
 import time
+import traceback
 from typing import Any, Optional, Union
 
 import yaml
@@ -33,6 +35,12 @@ def batchify(iterable, batch_size=1):
     size = len(iterable)
     for ndx in range(0, size, batch_size):
         yield iterable[ndx : min(ndx + batch_size, size)]
+
+
+def get_exception_traceback():
+    etype, value, tb = sys.exc_info()
+    err_str = "".join(traceback.format_exception(etype, value, tb))
+    return err_str
 
 
 def filter_node(node: Any, filters: Union[list, tuple]) -> None:

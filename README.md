@@ -133,8 +133,6 @@ aws s3 rm  s3://marie --recursive --profile marie --endpoint-url http://localhos
 ```
 
 
-
-
 # Production setup
 
 

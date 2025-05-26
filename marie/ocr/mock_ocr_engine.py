@@ -6,6 +6,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.boxes.box_processor import BoxProcessor
+from marie.common.file_io import get_cache_dir
 from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 from marie.ocr import CoordinateFormat, OcrEngine
@@ -44,7 +45,10 @@ class MockOcrEngine(OcrEngine):
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        cache_dir = get_cache_dir()
+        generators_dir = os.path.join(cache_dir, "generators")
+
+        root_asset_dir = ensure_exists(os.path.join(generators_dir, frame_checksum))
         json_path = os.path.join(root_asset_dir, "results", "results.json")
         try:
             return load_json_file(json_path)

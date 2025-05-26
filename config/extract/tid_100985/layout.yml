@@ -1,3 +1,0 @@
-model_executors:
-  qwen_v2_5_vl: annotator_executor
-  qwen_v2_5: annotator_executor

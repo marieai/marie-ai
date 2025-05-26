@@ -87,7 +87,7 @@ class MarieExecutor(Executor):
         Raises:
             RuntimeError: If any errors occur during the dry run
         """
-        self.logger.info(
+        self.logger.debug(
             f"Starting dry run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         has_error = False

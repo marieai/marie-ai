@@ -1,88 +1,171 @@
+import json
+import os
+from dataclasses import dataclass
+from typing import List
+
 from graphviz import Digraph
 
 
+@dataclass
+class State:
+    def __init__(self, name, payload=None):
+        self.name = name
+        self.payload = payload
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        """State equality based on name only.
+        As the name is unique, we can use it to identify the state. while the payload will change
+        """
+        return isinstance(other, State) and self.name == other.name
+
+    def __repr__(self):
+        return f"State(name={self.name}, payload={self.payload})"
+
+
+@dataclass
+class TransitionRecord:
+    from_state: State
+    to_state: State
+    label: str
+    step: int
+
+
 class AdaptiveDFA:
-    def __init__(self):
+    def __init__(self, initial_state: State = None):
         self.states = set()
         self.transitions = {}
-        self.current_state = "BEGIN"
-        self.transition_history = []
+        self.current_state = State("BEGIN") if initial_state is None else initial_state
+        self.transition_history: List[TransitionRecord] = []
+        self._step_counter = 0
 
-    def add_state(self, state):
-        """Adds a state to the DFA."""
+    def add_state(self, state: State):
         self.states.add(state)
 
-    def add_transition(self, from_state, to_state, label):
-        """Adds a transition from one state to another with a given label."""
+    def add_transition(self, from_state: State, to_state: State, label: str):
         if from_state not in self.transitions:
             self.transitions[from_state] = {}
         self.transitions[from_state][to_state] = label
 
-    def process_transitions(self, *states):
-        """Processes a sequence of state transitions dynamically."""
+    def process_transitions(self, *states: State):
         for next_state in states:
-            valid_transition = self.transitions.get(self.current_state, {}).get(
-                next_state
-            )
+            label = self.transitions.get(self.current_state, {}).get(next_state)
 
-            if valid_transition:
-                self.transition_history.append(
-                    (self.current_state, valid_transition, next_state)
+            if label:
+                self._step_counter += 1
+                record = TransitionRecord(
+                    from_state=self.current_state,
+                    to_state=next_state,
+                    label=label,
+                    step=self._step_counter,
                 )
-                self.current_state = next_state  # ✅ Move to next state
+                self.transition_history.append(record)
+                self.current_state = next_state
             else:
                 print(
-                    f"❌ Error: No valid transition from '{self.current_state}' to '{next_state}', stopping."
+                    f"❌ Error: No valid transition from '{self.current_state.name}' to '{next_state.name}', stopping."
                 )
                 break
 
     def reset(self):
-        """Resets the DFA to the BEGIN state and clears the transition history."""
-        self.current_state = "BEGIN"
-        self.transition_history = []
+        self.current_state = State("BEGIN")
+        self.transition_history.clear()
+        self._step_counter = 0
         print("🔄 DFA has been reset to the BEGIN state.")
 
     def generate_state_diagram(self, output_file="dfa_diagram"):
-        """Generates a graphical representation of the DFA."""
         dot = Digraph()
         for state in self.states:
-            shape = "doublecircle" if state == "END" else "circle"
-            dot.node(state, shape=shape)
+            shape = "doublecircle" if state.name == "END" else "circle"
+            dot.node(state.name, shape=shape)
 
         for from_state, transitions in self.transitions.items():
             for to_state, label in transitions.items():
-                dot.edge(from_state, to_state, label=label)
+                dot.edge(from_state.name, to_state.name, label=label)
 
+        output_file = os.path.expanduser("~/dfa_diagram.png")
         dot.render(output_file, format="png", cleanup=True)
         print(f"📌 State diagram saved as {output_file}.png")
 
     def print_transition_history(self):
-        """Prints the sequence of transitions taken."""
         print("📜 Transition History:")
-        for from_state, label, to_state in self.transition_history:
-            print(f"➡️ {from_state} -> {to_state} on '{label}'")
-        print(f"🏁 Final State: {self.current_state}")
+        for record in self.transition_history:
+            print(
+                f"[{record.step}] ➡️ {record.from_state.name} -> {record.to_state.name} on '{record.label}'"
+            )
+        print(f"🏁 Final State: {self.current_state.name}")
+
+    def get_all_transitions(self) -> List[TransitionRecord]:
+        return self.transition_history
+
+    def to_json(self) -> str:
+        """Convert the DFA graph to a JSON representation."""
+        dfa_representation = {
+            "states": [state.name for state in self.states],
+            "transitions": [
+                {
+                    "from_state": from_state.name,
+                    "to_state": to_state.name,
+                    "label": label,
+                }
+                for from_state, transitions in self.transitions.items()
+                for to_state, label in transitions.items()
+            ],
+            "initial_state": self.current_state.name,
+        }
+        return json.dumps(dfa_representation, indent=4)
+
+    def from_json(json_str: str) -> 'AdaptiveDFA':
+        """Load the DFA graph from a JSON representation."""
+        data = json.loads(json_str)
+        dfa = AdaptiveDFA(State(data["initial_state"]))
+        for state_name in data["states"]:
+            dfa.add_state(State(state_name))
+        for transition in data["transitions"]:
+            from_state = State(transition["from_state"])
+            to_state = State(transition["to_state"])
+            label = transition["label"]
+            dfa.add_transition(from_state, to_state, label)
+        return dfa
 
 
 if __name__ == "__main__":
     dfa = AdaptiveDFA()
 
-    # **Add States**
-    dfa.add_state("BEGIN")
-    dfa.add_state("START")
-    dfa.add_state("STOP")
-    dfa.add_state("END")
+    # Define states without payloads for simplicity
+    begin = State("BEGIN")
+    start = State("START")
+    stop = State("STOP")
+    end = State("END")
 
-    #  **Add Transitions**
-    dfa.add_transition("BEGIN", "START", "BEGIN_PROCESS")  # ✅ BEGIN → START
-    dfa.add_transition("BEGIN", "STOP", "BEGIN_PROCESS")  # ✅ BEGIN → START
-    dfa.add_transition("START", "STOP", "VALID")  # ✅ START → STOP
-    dfa.add_transition("STOP", "STOP", "INVALID")  # ✅ STOP → STOP
-    dfa.add_transition("STOP", "START", "INVALID")  # ✅ STOP → START
-    dfa.add_transition("STOP", "END", "FINALIZE")  # ✅ STOP → END
-    dfa.add_transition("START", "END", "INVALID")  # ✅ START → END
+    # Add them to DFA
+    for state in (begin, start, stop, end):
+        dfa.add_state(state)
 
-    # dfa.process_transitions("STOP", "STOP", "STOP", "STOP", "START", "STOP", "END")
-    dfa.process_transitions("START", "STOP", "START", "STOP", "START", "STOP", "END")
+    # Define transitions
+    dfa.add_transition(begin, start, "BEGIN_PROCESS")
+    dfa.add_transition(begin, stop, "BEGIN_PROCESS")
+    dfa.add_transition(start, stop, "VALID")
+    dfa.add_transition(stop, stop, "INVALID")
+    dfa.add_transition(stop, start, "INVALID")
+    dfa.add_transition(stop, end, "FINALIZE")
+    dfa.add_transition(start, end, "INVALID")
+
+    # Run transitions
+    dfa.process_transitions(start, stop, start, stop, end)
     dfa.generate_state_diagram()
     dfa.print_transition_history()
+
+    # Example: custom processing on transitions
+    print("\n🧠 Custom Processing: Transitions that were 'INVALID':")
+    for t in dfa.get_all_transitions():
+        if t.label == "INVALID":
+            print(f"Step {t.step}: {t.from_state.name} -> {t.to_state.name}")
+
+    # output all the valid transitions
+    print("\n✅ Valid Transitions:")
+    for t in dfa.get_all_transitions():
+        if t.label == "VALID":
+            print(f"Step {t.step}: {t.from_state.name} -> {t.to_state.name}")

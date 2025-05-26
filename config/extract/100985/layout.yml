@@ -1,0 +1,4 @@
+model_executors:
+  qwen_v2_5_vl: annotator_llm
+  qwen_v2_5: annotator_llm
+  deepseek_r1_32: annotator_llm # TEXT ONLY MODEL

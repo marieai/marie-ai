@@ -97,6 +97,10 @@ class DiscoveryServiceMixin:
                 if "://" in deployment_address:
                     single_ctrl_address = deployment_address.split("://")[1]
 
+                # FIXME - this is a workaround for the fact that we are not able to register the same service with different addresses
+                # This needs to be reworked in the future to be able to handle Deployment without the gateway
+                # single_ctrl_address = ctrl_address
+
                 self.logger.info(
                     f"Registering deployment {deployment_name} with address {single_ctrl_address}"
                 )
@@ -108,19 +112,8 @@ class DiscoveryServiceMixin:
                     metadata=json.dumps(single_deployments_addresses),
                 )
                 self.logger.info(f"Lease ID: {lease.id}")
-        #
-        # lease = etcd_registry.register(
-        #     [discovery_service_name],
-        #     ctrl_address,
-        #     service_ttl=service_ttl,
-        #     addr_cls=JsonAddress,
-        #     metadata=deployments_addresses,
-        # )
 
         self.sd_state = "started"
-        # self.logger.info(f"Lease ID: {lease.id}")
-
-        #
 
     def _teardown_service_discovery(
         self,

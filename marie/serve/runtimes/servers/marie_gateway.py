@@ -40,7 +40,6 @@ from marie.serve.discovery import JsonAddress
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
-from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
 from marie.serve.networking.connection_stub import _ConnectionStubs
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
@@ -107,7 +106,10 @@ class MarieServerGateway(CompositeServer):
         self._loop = get_or_reuse_loop()
         self.deployment_nodes = {}
         self.deployments = {}
+        self._deployments_lock = asyncio.Lock()
         self.event_queue = asyncio.Queue()
+        self.ready_event = asyncio.Event()
+
         self.args = {**vars(self.runtime_args), **kwargs}
         yml_config = self.args.get("uses")
 
@@ -165,6 +167,7 @@ class MarieServerGateway(CompositeServer):
             logger=self.logger,
         )
 
+        # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
         job_manager = JobManager(storage=storage, job_distributor=self.distributor)
         self.job_scheduler = PostgreSQLJobScheduler(
@@ -278,8 +281,8 @@ class MarieServerGateway(CompositeServer):
             async def invoke_command(
                 request: Request, token: str = Depends(TokenBearer())
             ):
-                self.logger.info(f"Received request at {datetime.now()}")
-                self.logger.info(f"Token : {token}")
+                self.logger.debug(f"Received request at {datetime.now()}")
+                self.logger.debug(f"Token : {token}")
 
                 payload = await request.json()
                 header = payload.get("header", {})
@@ -292,10 +295,7 @@ class MarieServerGateway(CompositeServer):
                 req.parameters = message
 
                 async def caller(req: DataRequest):
-                    print(f"Received request: {req}")
                     decoded = await self.decode_request(req)
-
-                    print("Decoded request: ", decoded)
                     if isinstance(decoded, AsyncIterator):
                         async for response in decoded:
                             yield response
@@ -347,7 +347,7 @@ class MarieServerGateway(CompositeServer):
         :return: The response.
         """
         message = request.parameters
-        self.logger.info(f"Message details : {message}")
+        self.logger.debug(f"Message details : {message}")
 
         if "invoke_action" not in message:
             response = Response()
@@ -424,7 +424,7 @@ class MarieServerGateway(CompositeServer):
         """
 
         action = message.get("action")  # status, submit, logs, stop
-        self.logger.info(f"Handling job action : {action}")
+        self.logger.debug(f"Handling job action : {action}")
 
         if action == "status":
             response = Response()
@@ -466,7 +466,8 @@ class MarieServerGateway(CompositeServer):
         :param message: The message containing the job information.
         :return: The response with the submission result.
         """
-        self.logger.info(f"Handling job submit command : {message}")
+        start_time = time.time()
+        self.logger.debug(f"Handling job submit command : {message}")
         silence_exceptions = strtobool(
             os.environ.get("MARIE_SILENCE_EXCEPTIONS", False)
         )
@@ -558,7 +559,8 @@ class MarieServerGateway(CompositeServer):
                 self.logger.error(f"Failed to mark job as failed: {e}")
             return response
         finally:
-            self.logger.info(f"Job submission completed")
+            elapsed_time = time.time() - start_time
+            self.logger.info(f"Job submission completed in {elapsed_time:.2f} seconds")
 
     def error_response(
         self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False
@@ -582,7 +584,7 @@ class MarieServerGateway(CompositeServer):
                 name = tb.tb_frame.f_code.co_name
                 line_no = tb.tb_lineno
                 # print traceback
-                detail = "Internal Server Error"
+                detail = "Internal Server Error - processing error"
                 exc_msg = {}
 
                 if not silence_exceptions:
@@ -622,8 +624,6 @@ class MarieServerGateway(CompositeServer):
         setup_toast_events(self.args.get("toast", {}))
         setup_storage(self.args.get("storage", {}))
         setup_auth(self.args.get("auth", {}))
-
-        await self.job_scheduler.start()
         await self.setup_service_discovery(
             etcd_host=self.args["discovery_host"],
             etcd_port=self.args["discovery_port"],
@@ -636,9 +636,33 @@ class MarieServerGateway(CompositeServer):
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        # task for processing events
+        # task for processing events and scheduler
         run_server_tasks.append(asyncio.create_task(self.process_events(max_errors=5)))
+        run_server_tasks.append(
+            asyncio.create_task(self.wait_and_start_scheduler(timeout=5))
+        )
+
         await asyncio.gather(*run_server_tasks)
+
+    async def wait_and_start_scheduler(self, timeout: int = 5):
+        """Waits for the service discovery to start and then starts the job scheduler."""
+        self.logger.info(f"Waiting for ready_event with a timeout of {timeout} seconds")
+
+        for remaining in range(timeout, 0, -1):
+            if self.ready_event.is_set():
+                self.logger.info(
+                    f"ready_event set, starting job scheduler early (time remaining: {remaining}s)"
+                )
+                break
+            self.logger.info(f"Time remaining: {remaining} seconds")
+            await asyncio.sleep(1)
+        else:
+            if not self.ready_event.is_set():
+                self.logger.warning(
+                    "Timeout waiting for ready_event, starting scheduler anyway"
+                )
+
+        await self.job_scheduler.start()
 
     async def setup_service_discovery(
         self,
@@ -731,8 +755,8 @@ class MarieServerGateway(CompositeServer):
         while True:
             service, event = await self.event_queue.get()
             try:
-                self.logger.info(
-                    f"Queue size : {self.event_queue.qsize()} service = {service}, event = {event}"
+                self.logger.debug(
+                    f"Queue size after get: {self.event_queue.qsize()} service = {service}, event = {event}"
                 )
 
                 ev_key = event.key
@@ -746,7 +770,7 @@ class MarieServerGateway(CompositeServer):
                     if ev_type == "put":
                         await self.gateway_server_online(service, ev_value)
                     elif ev_type == "delete":
-                        self.logger.info(f"Service {service} is unavailable")
+                        self.logger.info(f"Service is unavailable : {service}")
                         await self.gateway_server_offline(service, ev_value)
                     else:
                         raise TypeError(f"Not recognized event type : {ev_type}")
@@ -757,9 +781,10 @@ class MarieServerGateway(CompositeServer):
                     ClusterState.deployment_nodes = self.deployment_nodes
                     await self.update_gateway_streamer()
                     gateway_changed = False
-
+                    # set the ready event to indicate that we are ready to have scheduler
+                    self.ready_event.set()
             except Exception as ex:
-                # raise ex
+                raise ex
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
                 if error_counter >= max_errors:
@@ -782,7 +807,7 @@ class MarieServerGateway(CompositeServer):
             "status": status,
         }
 
-    async def gateway_server_online(self, service, event_value):
+    async def gateway_server_online(self, service: str, event_value: dict[str, Any]):
         """
         Handle the event when a gateway server comes online.
 
@@ -793,14 +818,12 @@ class MarieServerGateway(CompositeServer):
         This method is used to handle the event when a gateway server comes online. It checks if the gateway server is ready and then discovers all executors from the gateway. It updates the gateway streamer with the discovered nodes.
 
         """
-        self.logger.info(f"Service {service} is available @ {event_value}")
+        self.logger.info(f"Service is available : {service} @ {event_value}")
 
         # convert event_value to JsonAddress
         json_address = JsonAddress.from_value(event_value)
         ctrl_address = json_address._addr
         metadata = json.loads(json_address._metadata)
-
-        self.logger.info(f"JsonAddress : {ctrl_address}, {metadata}")
 
         max_tries = 10
         tries = 0
@@ -858,7 +881,11 @@ class MarieServerGateway(CompositeServer):
                         time.sleep(1)
                         tries += 1
                         if (
-                            e.code() != grpc.StatusCode.UNAVAILABLE
+                            e.code()
+                            not in (
+                                grpc.StatusCode.UNAVAILABLE,
+                                grpc.StatusCode.DEADLINE_EXCEEDED,
+                            )
                             or tries >= max_tries
                         ):
                             raise
@@ -930,26 +957,35 @@ class MarieServerGateway(CompositeServer):
         self.logger.info(f"graph_description: {graph_description}")
         self.logger.info(f"deployments_addresses: {deployments_addresses}")
 
-        load_balancer = RoundRobinLoadBalancer(
-            "deployment-gateway",
-            self.logger,
-            tracing_interceptors=[create_balancer_interceptor()],
-        )
-
         streamer = GatewayStreamer(
             graph_representation=graph_description,
             executor_addresses=deployments_addresses,
             deployments_metadata=deployments_metadata,
-            load_balancer_type=LoadBalancerType.ROUND_ROBIN.name,
-            load_balancer=load_balancer,
+            load_balancer_type=LoadBalancerType.LEAST_CONNECTION.name,
             # aio_tracing_client_interceptors=[create_trace_interceptor()],
+            grpc_channel_options=(
+                self.runtime_args.grpc_channel_options
+                if hasattr(self.runtime_args, "grpc_channel_options")
+                else None
+            ),
         )
 
         self.streamer = streamer
         self.distributor.streamer = streamer
         self.distributor.deployment_nodes = self.deployment_nodes
 
+        # Lets get the new deployment topology
+        # self.streamer.topology_graph.collect_all_results()
+        print('topology_graph', self.streamer.topology_graph)
+        print("-----------------------------")
+        for node in self.streamer.topology_graph.all_nodes:
+            print(node)
+            for outgoing in node.outgoing_nodes:
+                print(f"\t{outgoing}")
+
+        # FIXME : this was a bad idea, we need to use the same deployment
         ClusterState.deployments = self.deployments
+        ClusterState.deployment_nodes = self.deployment_nodes
 
     async def gateway_server_offline(self, service: str, ev_value):
         """
@@ -969,23 +1005,25 @@ class MarieServerGateway(CompositeServer):
             ]
 
     async def deployment_changed(self, ev_key: str, ev_type: str, ev_value: dict):
-        self.logger.info(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
+        self.logger.debug(f"Deployment changed : {ev_key}, {ev_type}, {ev_value}")
         if ev_key == DEPLOYMENT_STATUS_PREFIX:
-            return  # ignore the root key, need to handle this differently
+            return  # ignore the root key
 
-        suffix = ev_key[len(DEPLOYMENT_STATUS_PREFIX) :]
-        if suffix.startswith("/"):
-            suffix = suffix[1:]
+        suffix = ev_key[len(DEPLOYMENT_STATUS_PREFIX) :].lstrip("/")
         address = suffix.split("/", 1)[0]
 
-        if ev_type == 'delete':
-            if address in self.deployments:
-                del self.deployments[address]
-        else:
-            deployment = self.parse_deployment_details(address, ev_value)
-            self.deployments[address] = deployment
+        # serialize all update
+        async with self._deployments_lock:
+            new_deployments = self.deployments.copy()
+            if ev_type == "delete":
+                new_deployments.pop(address, None)
+            else:
+                new_deployments[address] = self.parse_deployment_details(
+                    address, ev_value
+                )
 
-        ClusterState.deployments = self.deployments
+            self.deployments = new_deployments
+            ClusterState.deployments = new_deployments
 
 
 class GatewayLoadBalancerInterceptor(LoadBalancerInterceptor):

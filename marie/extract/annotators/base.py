@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import List
 
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 
@@ -41,15 +42,21 @@ class DocumentAnnotator(ABC):
         return capability in self.capabilities
 
     @abstractmethod
-    def annotate(self, document: UnstructuredDocument):
+    def annotate(self, document: UnstructuredDocument, frames: List):
         """
         Perform annotation operations on the provided document.
         Derived classes must override this method.
         """
-        pass
+
+    async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
+        """
+        Perform annotation operations on the provided document.
+        Derived classes must override this method.
+        """
+        return self.annotate(document, frames)
 
     @abstractmethod
-    def parse_output(self, raw_output):
+    def parse_output(self, raw_output: str):
         """
         Parse raw model output into meaningful annotations.
         Derived classes must override this method.
@@ -60,5 +67,5 @@ class DocumentAnnotator(ABC):
         """
         Ensure the input document is valid (non-empty content).
         """
-        if not document or not document.content:
+        if not document:
             raise ValueError("Document content cannot be empty.")

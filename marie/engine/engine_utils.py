@@ -156,9 +156,9 @@ def open_ai_like_formatting(
     """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API."""
 
     min_pixels = 512 * 28 * 28
-    max_pixels = 2048 * 28 * 28
-
+    max_pixels = 4096 * 28 * 28
     formatted_content = []
+
     for item in content:
         if isinstance(item, Image.Image):
             if remote:

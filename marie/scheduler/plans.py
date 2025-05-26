@@ -59,7 +59,8 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           retry_delay,
           retry_backoff,
           policy,
-          dependencies     
+          dependencies,
+          job_level
         )
         SELECT
           id,
@@ -88,13 +89,15 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
 
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
           q.policy,          
-          {dependencies_json} as dependencies
+          {dependencies_json} as dependencies,
+          job_level
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
                 '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
+                {work_info.job_level}::int as job_level,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
                 CASE
@@ -132,7 +135,9 @@ def insert_dag(schema: str, dag_id: str, dag_name: str, serialized_dag: dict) ->
             '{dag_name}'::text,
             '{WorkState.CREATED.value}',
             {Json(serialized_dag)}::jsonb
-            )
+            ) 
+        ON CONFLICT DO NOTHING
+        RETURNING id
     """
 
 
@@ -236,7 +241,7 @@ def fetch_next_job(schema: str):
                       WHERE d.id = j.dag_id
                       AND d.state = 'completed'
                   )
-                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                 ORDER BY dag_id, job_level ASC, {'priority DESC, ' if priority else ''} created_on, id
                 LIMIT {batch_size}
             )
             UPDATE {schema}.job j SET
@@ -245,11 +250,11 @@ def fetch_next_job(schema: str):
                 retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
             FROM next
             WHERE name = '{name}' AND j.id = next.id
-            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id'}
+            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id, job_level'}
             """
         else:
             return f"""
-                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until,j.dag_id'}
+                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until,j.dag_id, j.job_level'}
                 FROM {schema}.job AS j
                 WHERE j.name = '{name}'
                   AND j.state < '{WorkState.ACTIVE.value}'
@@ -269,14 +274,16 @@ def fetch_next_job(schema: str):
                       WHERE d.id = j.dag_id
                       AND d.state = 'completed'
                   )
-                ORDER BY {'priority DESC, ' if priority else ''} created_on, id
+                  ORDER BY dag_id, job_level ASC,  {'priority DESC, ' if priority else ''} created_on, id
                 LIMIT {batch_size}
             """
 
     return query
 
 
-def mark_as_active_jobs(schema, name: str, ids: list, include_metadata: bool = False):
+def mark_as_active_jobs(
+    schema: str, name: str, ids: list, include_metadata: bool = False
+):
     ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
 
     return f"""
@@ -293,6 +300,24 @@ def mark_as_active_jobs(schema, name: str, ids: list, include_metadata: bool = F
     FROM next
     WHERE name = '{name}' AND j.id = next.id
     RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
+    """
+
+
+def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
+    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+
+    return f"""
+    WITH next AS (
+        SELECT id
+        FROM {schema}.dag
+        WHERE id IN (SELECT UNNEST({ids_string}::uuid[]))
+        --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
+    )
+    UPDATE {schema}.dag j SET
+        started_on = now()
+    FROM next
+    WHERE  j.id = next.id
+    RETURNING j.{'*' if include_metadata else 'id, name, state '}
     """
 
 

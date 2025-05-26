@@ -129,25 +129,36 @@ class JobMetadata(BaseModel):
 
         executor_endpoint = "executor://endpoint"
         has_executor = "://" in endpoint
+        executor = endpoint.split("://")[0] if has_executor else None
 
         if method == "EXECUTOR_ENDPOINT":
             executor_endpoint = endpoint
         elif method == "PYTHON_FUNCTION":
             serverless_exec = layout_conf.serverless_executor or "default"
-            executor_endpoint = (
-                endpoint if has_executor else f"{serverless_exec}://{endpoint}"
-            )
+            if has_executor:
+                executor_endpoint = (
+                    endpoint  # Use original endpoint if it has an executor
+                )
+            else:
+                # Normalize the endpoint path by removing leading slashes
+                endpoint_path = endpoint.lstrip('/')
+                executor_endpoint = f"{serverless_exec}://{endpoint_path}"
         elif method == "LLM":
             model_name = getattr(task_definition, "model_name", None)
             if not model_name:
                 raise ValueError("model_name is required for an LLM method.")
-            executor = layout_conf.model_executors.get(model_name)
-            if not executor:
-                raise ValueError(
-                    f"Executor not found for model: {model_name}. "
-                    f"Available executors: {layout_conf.model_executors}"
-                )
-            executor_endpoint = f"{executor}://{endpoint}"
+            if has_executor:
+                executor_endpoint = endpoint  # Use the original endpoint as-is
+            else:
+                executor = layout_conf.model_executors.get(model_name)
+                if not executor:
+                    raise ValueError(
+                        f"Executor not found for model: {model_name}. "
+                        f"Available executors: {layout_conf.model_executors}"
+                    )
+                endpoint_path = endpoint.lstrip('/')
+                executor_endpoint = f"{executor}://{endpoint_path}"
+            params['model_name'] = model_name
         elif method == "NOOP":
             executor_endpoint = "noop://noop"
         else:

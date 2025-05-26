@@ -240,6 +240,18 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 runtime_conf=runtime_conf,
             )
 
+            if metadata is None:
+                self.logger.warning(
+                    f"Metadata is None, this can happen if no text was found"
+                )
+                response = {
+                    "status": "failed",
+                    "runtime_info": self.runtime_info,
+                    "metadata": {},
+                }
+                converted = safely_encoded(lambda x: x)(response)
+                return converted
+
             del frames
             del regions
 
@@ -383,7 +395,7 @@ class TextExtractionExecutorMock(MarieExecutor):
     # def validate(self, parameters, **kwargs):
     #     return {"valid": True}
 
-    @requests(on="/document/extract")
+    @requests(on="/document/extractXXXX")
     # @safely_encoded # BREAKS WITH docarray 0.39
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         print("TEXT-EXTRACT")
@@ -466,7 +478,10 @@ class TextExtractionExecutorMock(MarieExecutor):
         #     raise Exception("random error in exec")
         # for doc in docs:
         #     doc.text += " First Exec"
-        sec = 2
+        sec = 3600
+        sec = 5
+        # sec = random.randint(1, 5)
+
         print(f"Sleeping for {sec} seconds : ", time.time())
         time.sleep(sec)
 

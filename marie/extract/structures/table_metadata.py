@@ -2,6 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.serializable import Serializable
 
 
@@ -20,6 +21,7 @@ class TableMetadata(Serializable):
         uid: Optional[str] = None,
         rotated_angle: float = 0.0,
         title: str = "",
+        line: LineWithMeta = None,
     ) -> None:
         """
         :param page_id: number of the page where table starts
@@ -33,3 +35,7 @@ class TableMetadata(Serializable):
         self.uid: str = str(uuid.uuid4()) if not uid else uid
         self.rotated_angle: float = rotated_angle
         self.title: str = title
+        self.line: LineWithMeta = line
+
+    def __str__(self) -> str:
+        return f"TableMetadata(page_id={self.page_id}, uid={self.uid},  line_id={self.line.metadata.line_id})"

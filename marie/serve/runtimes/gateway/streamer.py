@@ -4,6 +4,7 @@ import os
 from typing import (
     TYPE_CHECKING,
     AsyncIterator,
+    Callable,
     Dict,
     List,
     Optional,
@@ -18,7 +19,6 @@ from marie.excepts import ExecutorError
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.networking import GrpcConnectionPool
-from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.runtimes.gateway.async_request_response_handling import (
     AsyncRequestResponseHandler,
 )
@@ -65,7 +65,6 @@ class GatewayStreamer:
         tracing_client_interceptor: Optional["OpenTelemetryClientInterceptor"] = None,
         grpc_channel_options: Optional[list] = None,
         load_balancer_type: Optional[str] = "round_robin",
-        load_balancer: Optional[LoadBalancer] = None,
     ):
         """
         :param graph_representation: A dictionary describing the topology of the Deployments. 2 special nodes are expected, the name `start-gateway` and `end-gateway` to
@@ -115,7 +114,6 @@ class GatewayStreamer:
             tracing_client_interceptor,
             grpc_channel_options,
             load_balancer_type,
-            load_balancer,
         )
         request_handler = AsyncRequestResponseHandler(
             metrics_registry, meter, runtime_name, logger
@@ -147,7 +145,6 @@ class GatewayStreamer:
         tracing_client_interceptor,
         grpc_channel_options=None,
         load_balancer_type=None,
-        load_balancer=None,
     ):
         # add the connections needed
         connection_pool = GrpcConnectionPool(
@@ -160,7 +157,6 @@ class GatewayStreamer:
             tracing_client_interceptor=tracing_client_interceptor,
             channel_options=grpc_channel_options,
             load_balancer_type=load_balancer_type,
-            load_balancer=load_balancer,
         )
         for deployment_name, addresses in deployments_addresses.items():
             for address in addresses:
@@ -268,6 +264,7 @@ class GatewayStreamer:
         parameters: Optional[Dict] = None,
         request_id: Optional[str] = None,
         return_type: Type[DocumentArray] = DocumentArray,
+        send_callback: Optional[Callable] = None,
     ) -> AsyncIterator[Tuple[Union[DocumentArray, "Request"], "ExecutorError"]]:
         """
         stream Documents and yield Documents or Responses and unpacked Executor error if any.
@@ -279,6 +276,7 @@ class GatewayStreamer:
         :param parameters: Parameters to be attached to the Requests
         :param request_id: Request ID to add to the request streamed to Executor. Only applicable if request_size is equal or less to the length of the docs
         :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
+        :param send_callback: callback function to notify the client
         :yield: tuple of Documents or Responses and unpacked error from Executors if any
         """
         req = SingleDocumentRequest()
@@ -293,7 +291,9 @@ class GatewayStreamer:
         if parameters:
             req.parameters = parameters
 
-        async for result in self.rpc_stream_doc(request=req, return_type=return_type):
+        async for result in self.rpc_stream_doc(
+            request=req, return_type=return_type, send_callback=send_callback
+        ):
             error = None
             if jina_pb2.StatusProto.ERROR == result.status.code:
                 exception = result.status.exception
@@ -319,6 +319,7 @@ class GatewayStreamer:
         results_in_order: bool = False,
         request_id: Optional[str] = None,
         return_type: Type[DocumentArray] = DocumentArray,
+        send_callback: Optional[Callable] = None,
     ):
         """
         stream documents and stream responses back.
@@ -332,6 +333,7 @@ class GatewayStreamer:
         :param results_in_order: return the results in the same order as the request_iterator
         :param request_id: Request ID to add to the request streamed to Executor. Only applicable if request_size is equal or less to the length of the docs
         :param return_type: the DocumentArray type to be returned. By default, it is `DocumentArray`.
+        :param send_callback: callback function to notify the client
         :yield: Yields DocumentArrays or Responses from the Executors
         """
         request_id = request_id if len(docs) <= request_size else None
@@ -390,6 +392,7 @@ class GatewayStreamer:
             request_iterator=_req_generator(),
             results_in_order=results_in_order,
             return_type=return_type,
+            send_callback=send_callback,
         ):
             if return_results:
                 yield resp
@@ -406,12 +409,15 @@ class GatewayStreamer:
     Call = rpc_stream
 
     async def process_single_data(
-        self, request: DataRequest, context=None, send_callback=None
+        self,
+        request: DataRequest,
+        context=None,
+        send_callback: Optional[Callable] = None,
     ) -> DataRequest:
         """Implements request and response handling of a single DataRequest
         :param request: DataRequest from Client
         :param context: grpc context
-        :param send_callback:
+        :param send_callback: callback function to notify the client
         :return: response DataRequest
         """
         return await self._streamer.process_single_data(request, context, send_callback)

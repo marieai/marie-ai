@@ -318,7 +318,7 @@ class VLLMEngine(EngineLM):
             )
         except Exception as e:
             self.logger.error(f"❌ Batch inference failed: {e}")
-            return ["ERROR: Inference failed"] * len(batch_content)
+            return ["ERROR: Batch Inference failed"] * len(batch_content)
 
         ordered_outputs = [
             output.outputs[0].text if output.outputs else "" for output in batch_outputs
@@ -337,7 +337,7 @@ class VLLMEngine(EngineLM):
             "tokens_per_second": round(tokens_per_second, 2),
         }
 
-        self.logger.info(f"✅ Batch inference completed in {elapsed_time:.2f} sec")
+        self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")
         self.logger.info(
             f"📊 Batch Stats: Requests={len(batch_content)}, Tokens={total_tokens}, TPS={tokens_per_second:.2f}"
         )

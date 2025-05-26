@@ -16,6 +16,7 @@ def register_from_module(planner_module: str) -> None:
     :return: None
     """
     try:
+        logger.info(f"Registering planner from {planner_module}")
         importlib.import_module(planner_module)
     except Exception as e:
         logger.error(f"Registering planner from {planner_module}")
@@ -42,5 +43,14 @@ def register_all_known_planners():
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
 
     # TODO : This needs to load from CONFIG
-    planner_module = "grapnel_g5.tid_100985.query"
-    register_from_module(planner_module)
+    planner_modules = [
+        "grapnel_g5.query.tid_100985.query",
+        "grapnel_g5.query.tid_117183.query",
+    ]
+
+    for planner_module in planner_modules:
+        try:
+            register_from_module(planner_module)
+        except ImportError as e:
+            logger.warning(f"Error importing {planner_module}: {e}")
+            continue

@@ -546,3 +546,7 @@ GOD_OCR2
 https://github.com/infiniflow/ragflow
 
 https://www.upstage.ai/
+
+# AGENT BASED LLMS
+https://github.com/microsoft/UFO/blob/main/ufo/prompter/basic.py#L13
+https://github.com/DataBassGit/AgentForge/blob/main/src/agentforge/agent.py

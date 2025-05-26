@@ -98,7 +98,6 @@ class BaseServer(MonitoringMixin, InstrumentationMixin):
             "port": self.port,
             "host": self.host,
         }
-        print(f"self.add_info: {node_info}")
 
         return self.req_handler_cls(
             args=self.runtime_args,

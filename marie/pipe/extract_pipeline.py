@@ -11,7 +11,7 @@ import torch
 from PIL import Image
 
 from marie.boxes import PSMode
-from marie.common.file_io import get_file_count
+from marie.common.file_io import get_cache_dir, get_file_count
 from marie.components.document_registration.datamodel import DocumentBoundaryPrediction
 from marie.components.template_matching.document_matched import (
     load_template_matching_definitions,
@@ -247,7 +247,6 @@ class ExtractPipeline(BasePipeline):
             self.logger.warning("Template matcher is not configured")
             return []
 
-        # definition_file = "~/dev/grapnel-tooling/dataset-selectors/ready/120791.definition.json"
         definition_file = os.path.join(
             self.template_matching_definitions, f"{definition_id}.definition.json"
         )
@@ -329,6 +328,8 @@ class ExtractPipeline(BasePipeline):
 
         # remove old metadata results if any (for now)
         # Better option is to have client remove the old metadata
+
+        page_boundary_enabled = False
         if page_boundary_enabled:
             filename, prefix, suffix = split_filename(ref_id)
             metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
@@ -483,15 +484,25 @@ class ExtractPipeline(BasePipeline):
 
         # create local asset directory
         frame_checksum = hash_frames_fast(frames=frames)
+
+        cache_dir = get_cache_dir()
+        generators_dir = os.path.join(cache_dir, "generators")
+
         # create backup name by appending a timestamp
-        if os.path.exists(os.path.join("/tmp/generators", frame_checksum)):
+        if os.path.exists(os.path.join(generators_dir, frame_checksum)):
+            if True:
+                self.logger.warning(
+                    f"Asset dir already exists, moving to backup : {frame_checksum}"
+                )
+                return {}
+
             ts = datetime.now().strftime("%Y%m%d%H%M%S")
             shutil.move(
-                os.path.join("/tmp/generators", frame_checksum),
-                os.path.join("/tmp/generators", f"{frame_checksum}-{ts}"),
+                os.path.join(generators_dir, frame_checksum),
+                os.path.join(generators_dir, f"{frame_checksum}-{ts}"),
             )
 
-        root_asset_dir = ensure_exists(os.path.join("/tmp/generators", frame_checksum))
+        root_asset_dir = ensure_exists(os.path.join(generators_dir, frame_checksum))
         self.logger.info(f"Root asset dir {ref_id}, {ref_type} : {root_asset_dir}")
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 

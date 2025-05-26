@@ -12,12 +12,18 @@ import numpy as np
 import torch
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 from qwen_vl_utils import process_vision_info, smart_resize
+
+# Load model directly
 from transformers import (
+    AutoModelForImageTextToText,
     AutoProcessor,
     BitsAndBytesConfig,
-    Qwen2VLForConditionalGeneration,
     TextIteratorStreamer,
 )
+
+# processor = AutoProcessor.from_pretrained("reducto/RolmOCR")
+# model = AutoModelForImageTextToText.from_pretrained("reducto/RolmOCR")
+
 
 additional_colors = [
     colorname for (colorname, colorcode) in ImageColor.colormap.items()
@@ -25,6 +31,8 @@ additional_colors = [
 
 MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
+MODEL_ID = "reducto/RolmOCR"
+
 
 # Configure BitsAndBytesConfig for 8-bit precision
 bnb_config = BitsAndBytesConfig(
