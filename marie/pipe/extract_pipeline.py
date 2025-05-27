@@ -489,7 +489,7 @@ class ExtractPipeline(BasePipeline):
         generators_dir = os.path.join(cache_dir, "generators")
 
         # create backup name by appending a timestamp
-        if os.path.exists(os.path.join(generators_dir, frame_checksum)):
+        if False and os.path.exists(os.path.join(generators_dir, frame_checksum)):
             if True:
                 self.logger.warning(
                     f"Asset dir already exists, moving to backup : {frame_checksum}"

@@ -1,4 +1,3 @@
-import asyncio
 import os
 import random
 import time
@@ -9,7 +8,6 @@ from docarray import DocList
 from grapnel_g5.result_parser import load_config
 from omegaconf import OmegaConf
 
-from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.util import prepare_asset_directory
 from marie.executor.marie_executor import MarieExecutor
@@ -125,7 +123,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         :return: Response dictionary
         """
 
-        if True:
+        if False:
             # Simulate a long-running process with a random chance of cancellation
             self.logger.info(
                 "Simulating long-running process with a random chance of cancellation"

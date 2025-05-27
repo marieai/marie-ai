@@ -1,10 +1,5 @@
-import re
-
-from openai.types.chat import ChatCompletion
-
 from marie.engine.batch_processor import BatchProcessor
 from marie.engine.output_parser import parse_json_markdown
-from marie.excepts import MaxTokensExceededError, RepetitionError
 from marie.utils.utils import get_exception_traceback
 
 try:
@@ -22,26 +17,13 @@ except ImportError:
         "If you'd like to use OpenAI models, please install the openai package by running `pip install openai`, and add 'OPENAI_API_KEY' to your environment variables."
     )
 
-import asyncio
 import os
-import queue
-import threading
 import time
-import uuid
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import diskcache as dc
 from PIL import Image
 from pydantic import BaseModel
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random_exponential,
-)
 
 from marie.engine.base import EngineLM
 from marie.engine.engine_utils import (
@@ -51,7 +33,6 @@ from marie.engine.engine_utils import (
     open_ai_like_formatting,
 )
 from marie.logging_core.logger import MarieLogger
-from marie.logging_core.predefined import default_logger as logger
 
 MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
 E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
@@ -98,59 +79,6 @@ def _check_repetition(
             return True
 
     return False
-
-
-def run_coroutine_in_current_loop(coroutine):
-    """
-    Runs `coroutine` to completion, even if we're inside a running loop.
-    - Outside any loop: uses asyncio.run()
-    - Inside a loop: spins up a fresh loop in a background thread,
-      runs `coroutine`, shuts down async generators, then drains
-      any *other* pending tasks before closing.
-    """
-    try:
-        # If no loop is running here, just run normally.
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coroutine)
-
-    result_q = queue.Queue()
-
-    def _thread_target():
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-
-        async def _runner():
-            result = await coroutine
-            # 2) clean up any async generators
-            await new_loop.shutdown_asyncgens()
-
-            # 3) drain *other* pending tasks, excluding this one
-            current = asyncio.current_task()
-            pending = [
-                t for t in asyncio.all_tasks() if not t.done() and t is not current
-            ]
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-            return result
-
-        try:
-            res = new_loop.run_until_complete(_runner())
-            result_q.put((True, res))
-        except Exception as exc:
-            result_q.put((False, exc))
-        finally:
-            new_loop.close()
-
-    t = threading.Thread(target=_thread_target)
-    t.start()
-    t.join()
-
-    ok, payload = result_q.get()
-    if not ok:
-        raise payload
-    return payload
 
 
 class OpenAIEngine(EngineLM):

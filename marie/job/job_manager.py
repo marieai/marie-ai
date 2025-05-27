@@ -18,6 +18,7 @@ from marie.job.scheduling_strategies import (
     SchedulingStrategyT,
 )
 from marie.logging_core.logger import MarieLogger
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.storage.kv.storage_client import StorageArea
 from marie.utils.utils import get_exception_traceback
 
@@ -83,8 +84,9 @@ class JobManager:
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher()
         self._log_client = JobLogStorageClient()
-        self.monitored_jobs = set()
+        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
+        self.monitored_jobs = set()
 
         try:
             self.event_logger = get_event_logger()
@@ -379,6 +381,7 @@ class JobManager:
                 job_info_client=self._job_info_client,
                 job_distributor=self._job_distributor,
                 event_publisher=self.event_publisher,
+                etcd_client=self._etcd_client,
             )
             await supervisor.run(_start_signal_actor=_start_signal_actor)
 

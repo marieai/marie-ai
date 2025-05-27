@@ -49,7 +49,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         :return: Response dictionary
         """
 
-        if True:
+        if False:
             print('===================== SLEEPING =====================')
             time.sleep(2)
             return

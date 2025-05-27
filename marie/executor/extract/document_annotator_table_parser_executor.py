@@ -54,7 +54,7 @@ class DocumentAnnotatorTableParserExecutor(DocumentAnnotatorExecutor):
         """
         self.logger.info("Table parser executor")
 
-        if True:
+        if False:
             print('===================== SLEEPING =====================')
             time.sleep(2)
             return

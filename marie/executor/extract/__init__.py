@@ -1,7 +1,7 @@
 # isort: skip
 
+from .document_annotator_executor import DocumentAnnotatorExecutor  # isort:skip
 from .document_annotator_embedding_executor import DocumentAnnotatorEmbeddingsExecutor
-from .document_annotator_executor import DocumentAnnotatorExecutor
 from .document_annotator_llm_executor import DocumentAnnotatorLLMExecutor
 from .document_annotator_parser_executor import DocumentAnnotatorParserExecutor
 from .document_annotator_table_llm_executor import DocumentAnnotatorTableLLMExecutor

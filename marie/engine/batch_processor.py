@@ -2,10 +2,8 @@ import re
 
 from openai.types.chat import ChatCompletion
 
-from marie.engine.openai_engine import run_coroutine_in_current_loop
-from marie.engine.output_parser import parse_json_markdown
+from marie.engine.async_helper import run_coroutine_in_current_loop
 from marie.excepts import MaxTokensExceededError, RepetitionError
-from marie.utils.utils import get_exception_traceback
 
 try:
     from openai import (
@@ -24,32 +22,20 @@ except ImportError:
 
 import asyncio
 import os
-import queue
-import threading
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import diskcache as dc
 from PIL import Image
 from pydantic import BaseModel
 from tenacity import (
-    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    wait_random_exponential,
 )
 
-from marie.engine.base import EngineLM
-from marie.engine.engine_utils import (
-    convert_openai_to_transformers_format,
-    extract_text_info,
-    is_batched_request,
-    open_ai_like_formatting,
-)
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 

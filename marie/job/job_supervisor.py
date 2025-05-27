@@ -39,14 +39,15 @@ class JobSupervisor:
         job_info_client: JobInfoStorageClient,
         job_distributor: JobDistributor,
         event_publisher: EventPublisher,
+        etcd_client: EtcdClient,
     ):
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
         self._job_info_client = job_info_client
         self._job_distributor = job_distributor
         self._event_publisher = event_publisher
+        self._etcd_client = etcd_client
         self.request_info = None
-        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
 
         self._active_tasks = set()
         self._submission_queue = asyncio.Queue()
