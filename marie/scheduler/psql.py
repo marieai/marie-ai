@@ -457,7 +457,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         failures = 0
         idle_streak = 0
 
-        self.max_concurrent_dags = 16  # for debugging
+        self.max_concurrent_dags = 512  # for debugging
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
         recently_activated_dags = set()

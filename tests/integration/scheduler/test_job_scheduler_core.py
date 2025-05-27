@@ -12,6 +12,7 @@ from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.state import WorkState
+from marie.serve.discovery.etcd_client import EtcdClient
 from marie.storage.kv.in_memory import InMemoryKV
 from tests.core.test_job_manager import NoopJobDistributor
 from tests.core.test_utils import async_delay, async_wait_for_condition_async_predicate
@@ -99,9 +100,11 @@ async def job_manager(tmp_path):
         "max_pool_size": 5,
         "max_connections": 5,
     }
-
     # storage = PostgreSQLKV(config=storage_config, reset=True)
-    yield JobManager(storage=storage, job_distributor=NoopJobDistributor())
+
+    etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+
+    yield JobManager(storage=storage, job_distributor=NoopJobDistributor(), etcd_client=etcd_client)
 
 
 @pytest.mark.asyncio

@@ -79,12 +79,18 @@ class JobManager:
         self,
         storage: StorageArea,
         job_distributor: JobDistributor,
+        etcd_client: EtcdClient,
     ):
+        if etcd_client is None:
+            raise Exception("EtcdClient is not configured")
+
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher()
         self._log_client = JobLogStorageClient()
-        self._etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+        self._etcd_client = (
+            etcd_client  # EtcdClient("localhost", 2379, namespace="marie")
+        )
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
         self.monitored_jobs = set()
 
