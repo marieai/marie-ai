@@ -201,6 +201,26 @@ class ExecutorError(RuntimeError, BaseMarieException):
         return self.__str__()
 
 
+class MaxTokensExceededError(Exception):
+    """
+    Raised when the LLM stops because it hit the max_tokens limit
+    (finish_reason == "length").
+    """
+
+    def __init__(self, message: str = "LLM hit max_tokens"):
+        super().__init__(message)
+
+
+class RepetitionError(Exception):
+    """
+    Raised when the LLM output is stuck repeating the same sentence
+    multiple times in a row.
+    """
+
+    def __init__(self, message: str = "LLM output is repetitive"):
+        super().__init__(message)
+
+
 def raise_exception(
     e,
     suppress_errors: bool,

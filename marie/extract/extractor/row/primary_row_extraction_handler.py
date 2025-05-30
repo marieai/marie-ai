@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from marie.extract.extractor.row_extraction_handler import RowExtractionHandler
+from marie.extract.extractor.row.row_extraction_handler import RowExtractionHandler
 from marie.extract.models.base import Blob
 from marie.extract.models.definition import (
     ExecutionContext,
@@ -10,8 +10,6 @@ from marie.extract.models.definition import (
     RowExtractionStrategy,
 )
 from marie.extract.models.match import MatchFieldRow, MatchSection, Span
-
-LOGGER = logging.getLogger(__name__)
 
 
 class PrimaryRowExtractionHandler(RowExtractionHandler):

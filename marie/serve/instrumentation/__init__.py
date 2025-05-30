@@ -2,6 +2,9 @@ import functools
 from timeit import default_timer
 from typing import TYPE_CHECKING, Dict, Optional, Sequence
 
+import grpc
+from grpc.aio import AioRpcError
+
 if TYPE_CHECKING:  # pragma: no cover
     from grpc.aio._interceptor import ClientInterceptor, ServerInterceptor
     from opentelemetry.instrumentation.grpc._client import (
@@ -101,6 +104,8 @@ class InstrumentationMixin:
         """Create a gRPC aio server interceptor.
         :returns: A service-side aio interceptor object.
         """
+        self.tracing = False
+        # return [LoggingInterceptor()]
         if self.tracing:
             from opentelemetry.instrumentation.grpc._aio_server import (
                 OpenTelemetryAioServerInterceptor,
@@ -196,3 +201,58 @@ class MetricsTimer:
                 return f(*args, **kwargs)
 
         return wrapped
+
+
+import time
+from datetime import datetime
+
+import grpc
+from grpc.aio import AioRpcError, ServerInterceptor
+from grpc.aio._interceptor import ServerInterceptor
+
+
+class LoggingInterceptor(ServerInterceptor):
+    async def intercept_service(self, continuation, handler_call_details):
+        method = handler_call_details.method
+
+        # Skip health check logs to reduce noise
+        if method == "/grpc.health.v1.Health/Check":
+            return await continuation(handler_call_details)
+
+        handler = await continuation(handler_call_details)
+
+        async def new_behavior(request, context):
+            start_time = time.time()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            print(f"[{current_time}]  Received call to: {method}")
+            print(f"Metadata: {dict(context.invocation_metadata())}")
+            print(f"Peer: {context.peer()}")
+
+            try:
+                print('handler_call_details:', handler)
+                result = await handler.unary_unary(request, context)
+                duration = time.time() - start_time
+                print(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Completed call to: {method} in {duration:.3f} seconds"
+                )
+                return result
+            except AioRpcError as e:
+                duration = time.time() - start_time
+                if e.code() == grpc.StatusCode.CANCELLED:
+                    print(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ CANCELLED: {method} by client after {duration:.3f} seconds"
+                    )
+                else:
+                    print(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ ERROR in {method}: {e.code()} - {e.details()} (after {duration:.3f} seconds)"
+                    )
+                raise
+            except Exception as ex:
+                duration = time.time() - start_time
+                print(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ EXCEPTION in {method}: {ex} (after {duration:.3f} seconds)"
+                )
+                raise
+
+        return grpc.unary_unary_rpc_method_handler(new_behavior)

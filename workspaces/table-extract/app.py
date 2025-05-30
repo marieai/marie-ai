@@ -233,10 +233,24 @@ def recognize_table(image):
     id2label[len(structure_model.config.id2label)] = "no object"
     cells = outputs_to_objects(outputs, image.size, id2label)
 
+    header_cells = []
+    for ui_idx, cell in enumerate(cells):
+        if cell["label"] not in ["table header", "table column"]:
+            continue
+        header_cells.append(cell)
+
+        bbox = cell["bbox"]
+        cell_image = np.array(image.crop(bbox))
+        # # save the cell image
+        cell_image_pil = Image.fromarray(cell_image)
+        cell_image_pil.save(f"./debug/cell_{ui_idx}.png")
+
+    print("----------")
+    for i, cell in enumerate(header_cells):
+        print(f"{i} > {cell}")
+
     # visualize cells on cropped table
     draw = ImageDraw.Draw(image)
-
-    # cell {'label': 'table column', 'score': 0.9999186992645264, 'bbox': [234.88938903808594, 0.005605429410934448, 631.3909912109375, 125.88072967529297]}
     for cell in cells:
         # filter to only show table headers
         print("cell", cell)
@@ -244,7 +258,6 @@ def recognize_table(image):
         #     continue
         fill_color = "red" if cell["label"] == "table column header" else "blue"
         draw.rectangle(cell["bbox"], outline=fill_color)
-        # add label
         draw.text((cell["bbox"][0], cell["bbox"][1]), cell["label"], fill=fill_color)
 
     return image, cells
@@ -350,16 +363,14 @@ def dump_cells(cropped_table, table_data):
 
 def process_document(image):
     cropped_table = detect_and_crop_table(image)
-
     # dump cropped_table to disk
     cropped_table.save("./debug/cropped_table.png")
-
     image, cells = recognize_table(cropped_table)
-    cell_coordinates = get_cell_coordinates_by_row(cells)
 
-    dump_cells(cropped_table, cells)
-    data = apply_ocr(cell_coordinates, image)
-
+    # cell_coordinates = get_cell_coordinates_by_row(cells)
+    # dump_cells(cropped_table, cells)
+    # data = apply_ocr(cell_coordinates, image)
+    data = {}
     return image, data
 
 

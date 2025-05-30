@@ -1,4 +1,3 @@
-from pprint import pprint
 from typing import Any, List, Optional, Union
 
 import numpy as np
@@ -8,11 +7,12 @@ from marie.extract.readers.base import BaseReader
 from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.unstructured_document import UnstructuredDocument
+from marie.logging_core.predefined import default_logger as logger
 
 
 class MetaReader(BaseReader):
     """
-    This reader allows handling of Metadata from marie
+    This reader allows handling of Metadata from marie-ai
     """
 
     def __init__(self, *, config: Optional[dict] = None) -> None:
@@ -33,81 +33,67 @@ class MetaReader(BaseReader):
 
     @classmethod
     def from_data(
-        cls, frames: List[np.ndarray], ocr_meta: List[dict]
+        cls,
+        frames: List[np.ndarray],
+        ocr_meta: List[dict],
+        unstructured_meta: dict[str, Any],
     ) -> UnstructuredDocument:
-        assert len(frames) == len(ocr_meta)
+        META_KEY = "meta"
+        LINES_KEY = "lines"
+        PAGE_KEY = "page"
+        LINES_BBOXES_KEY = "lines_bboxes"
+        WORDS_KEY = "words"
+        strict = False  # config.get("strict", False)
+
+        assert len(frames) == len(ocr_meta), "Mismatch between frames and OCR metadata"
+
+        def create_line_with_meta(meta_line, page_id: int, words):
+            """Helper function to create a LineWithMeta instance."""
+            aligned_words = [w for w in words if w["id"] in meta_line["wordids"]]
+            meta_line_model = LineModel(**meta_line)
+            meta_line_model.words = [WordModel(**w) for w in aligned_words]
+            line_metadata = LineMetadata(
+                page_id=page_id, line_id=int(meta_line["line"]), model=meta_line_model
+            )
+            return LineWithMeta(
+                line=meta_line_model.text, annotations=[], metadata=line_metadata
+            )
+
         unstructured_lines = []
 
-        for k, (frame, frame_meta) in enumerate(zip(frames, ocr_meta)):
-            print('-------------')
-            print(f"Frame index : {k}")
-            lines = frame_meta["meta"]["lines"]
-            page_id = frame_meta["meta"]["page"]
+        for frame, frame_meta in zip(frames, ocr_meta):
+            meta = frame_meta[META_KEY]
+            lines = meta[LINES_KEY]
+            page_id = meta[PAGE_KEY]
             unique_line_ids = sorted(np.unique(lines))
-            # line_bboxes = frame_meta["meta"]["lines_bboxes"]
-            line_bboxes = np.array(frame_meta["meta"]["lines_bboxes"])
-            # FIXME : This fails sometimes, need to fix this upstream
-            assert len(unique_line_ids) == len(
-                line_bboxes
-            ), f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
+            lines_bboxes = np.array(meta[LINES_BBOXES_KEY])
+            frame_lines = np.array(frame_meta[LINES_KEY])
+            words = np.array(frame_meta[WORDS_KEY])
 
-            print(
-                f"Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
-            )
-            # doc 226749569   00003  shows this behaviour
-            if len(unique_line_ids) != len(line_bboxes):
-                print(
-                    f"WARNING : Unique Line IDs : {len(unique_line_ids)}, Line BBoxes : {len(line_bboxes)}"
-                )
+            if len(unique_line_ids) != len(lines_bboxes):
+                if strict:
+                    raise ValueError(
+                        f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
+                    )
+                else:
+                    logger.warning(
+                        f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
+                    )
+            # assert len(unique_line_ids) == len(
+            #     lines_bboxes
+            # ), f"Unique Line IDs: {len(unique_line_ids)}, Line BBoxes: {len(lines_bboxes)}"
 
-            print('unique_line_ids -------------------')
-            print(unique_line_ids)
-            for k, line_idx in enumerate(unique_line_ids):
-                lines_bbox = line_bboxes[line_idx - 1]
+            for meta_line in frame_lines:
+                line_with_meta = create_line_with_meta(meta_line, page_id, words)
+                unstructured_lines.append(line_with_meta)
 
-                meta_line = [
-                    LineModel(**m_line)
-                    for m_line in frame_meta["lines"]
-                    if m_line["line"] == line_idx
-                ]
-
-                if not meta_line or len(meta_line) == 0:
-                    print(f"No meta line found for : {line_idx}")
-                    continue
-
-                meta_line = meta_line[0]
-                meta_words = [
-                    WordModel(**word)
-                    for word in frame_meta["words"]
-                    if word["line"] == line_idx
-                ]
-                meta_line.words = meta_words
-                # convert to list of WordModel
-                # print(f"Line / Words : {line_idx}, {len(meta_words)}")
-                # print(meta_line)
-
-                # Due to the bug in how Unique Line ID don't aligh with all bboxes
-                # (doc 226749569  00003 shows this behaviour)
-                # we will use an index K+1 instead of the line_idx
-                # This is a bug in the upstream code and need to be fixed first
-                # we can always use the line_idx from the meta_line if needed
-
-                data = meta_line.model_dump()
-                lmd = LineMetadata(page_id=page_id, line_id=line_idx, model=meta_line)
-
-                lwm = LineWithMeta(
-                    line=meta_line.text,
-                    annotations=[],
-                    metadata=lmd,
-                )
-                unstructured_lines.append(lwm)
-        return UnstructuredDocument(lines=unstructured_lines, metadata={})
+        return UnstructuredDocument(
+            lines=unstructured_lines, tables=[], metadata=unstructured_meta
+        )
 
     @classmethod
     def transform(cls, frame, result) -> LineWithMeta:
-        print("00000000000000000000000000000000000")
-        pprint(result)
-
+        raise NotImplementedError()
         return LineWithMeta(
             line="",
             annotations=[],

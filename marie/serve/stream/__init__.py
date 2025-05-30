@@ -128,6 +128,7 @@ class RequestStreamer:
         :yield: responses from Executors
         """
         try:
+            print('Processing _stream_doc_request')
             async_iter: AsyncIterator = self._stream_doc_request(
                 request=request,
             )
@@ -165,7 +166,7 @@ class RequestStreamer:
         results_in_order: bool = False,
         prefetch: Optional[int] = None,
         return_type: Type[DocumentArray] = DocumentArray,
-        send_callback: callable(None) = None,
+        send_callback: Optional[Callable] = None,
         *args,
     ) -> AsyncIterator["Request"]:
         """
@@ -180,6 +181,7 @@ class RequestStreamer:
         :param send_callback: callback to send the response back to the client
         :yield: responses from Executors
         """
+
         prefetch = prefetch or self._prefetch
         if context is not None:
             for metadatum in context.invocation_metadata():
@@ -198,9 +200,7 @@ class RequestStreamer:
                 return_type=return_type,
                 send_callback=send_callback,
             )
-            print("async_iter", async_iter)
             async for response in async_iter:
-                print("response ::: ", response)
                 yield response
         except InternalNetworkError as err:
             print("err", err)

@@ -1,20 +1,24 @@
-import json
 import traceback
 from collections import defaultdict, deque
 from io import StringIO
 from pprint import pprint
+from typing import Callable
 
-import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
 import yaml
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
+from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import (
     ExecutorEndpointQueryDefinition,
     LlmQueryDefinition,
     NoopQueryDefinition,
+    PlannerInfo,
     PythonFunctionQueryDefinition,
     Query,
     QueryPlan,
+    QueryPlanRegistry,
     QueryType,
 )
 from marie.query_planner.mapper import JobMetadata
@@ -79,6 +83,9 @@ def print_sorted_nodes(sorted_nodes: list[str], plan: QueryPlan) -> None:
     :param sorted_nodes: List of nodes in topologically sorted order.
     :param plan: The QueryPlan object.
     """
+    if True:
+        return
+
     print("\n" + "=" * 60)
     print("Topologically Sorted Nodes:")
     print("=" * 60)
@@ -166,7 +173,134 @@ def topological_sort(plan: QueryPlan) -> list:
     return sorted_nodes
 
 
-def query_planner(frame_count: int, layout: str) -> QueryPlan:
+def compute_job_levels(sorted_nodes: list[str], plan: QueryPlan) -> dict[str, int]:
+    """
+    Given a list of node IDs in topological order and the original QueryPlan,
+    compute a job_level for each node representing its distance from the nearest root.
+
+    :param sorted_nodes: Node IDs in topological order.
+    :param plan: The original QueryPlan with dependency information.
+    :return: A dict mapping node_id to its level (int).
+    """
+    # Build a map from node_id to its dependencies for quick lookup
+    dependency_map = {node.task_id: node.dependencies for node in plan.nodes}
+
+    # Initialize all levels to 0
+    job_level = {node_id: 0 for node_id in sorted_nodes}
+
+    # Iterate in topological order, so dependencies are processed first
+    for node_id in sorted_nodes:
+        deps = dependency_map.get(node_id, []) or []
+        if deps:
+            # level = max level of dependencies + 1
+            max_dep_level = max(job_level.get(dep, 0) for dep in deps)
+            job_level[node_id] = max_dep_level + 1
+
+    return job_level
+
+
+def _load_query_planner(planner_name: str) -> Callable:
+    """
+    Dynamically load the query planner based on the planner name.
+
+    :param planner_name: The name of the query planner to load.
+    :return: A callable query planner function.
+    :raise ValueError: If the query planner name is invalid.
+    """
+    import os
+
+    logger.debug(f"Loading query planner: {planner_name}")
+    try:
+        return QueryPlanRegistry.get(planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        if os.getenv("MARIE_DEBUG_QUERY_PLANNER", "false").lower() == "true":
+            logger.error(
+                f"Available planners: {list(QueryPlanRegistry.list_planners())}"
+            )
+        raise
+
+
+def query_planner(planner_info: PlannerInfo) -> QueryPlan:
+    query_planner_name = planner_info.name
+    try:
+        query_planner_fn = _load_query_planner(query_planner_name)
+    except ValueError as e:
+        logger.error(f"Error loading query planner: {e}")
+        raise
+
+    plan = query_planner_fn(planner_info)
+    if not plan:
+        error_message = (
+            f"Query planner '{query_planner_name}' returned an invalid plan."
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    # Technically DAG can have multiple roots, but we want to enforce
+    # a single root node as that will be used as the entry point
+    strict = True
+    plan = ensure_single_entry_point(plan, planner_info, strict)
+    logger.debug(f"Query planning completed successfully for: {query_planner_name}")
+    return plan
+
+
+def ensure_single_entry_point(
+    query_plan: QueryPlan, planner_info: PlannerInfo, strict: bool = False
+) -> QueryPlan:
+    """
+    Ensure the query plan has a single entry point by creating a synthetic root node
+    that connects to all natural root nodes in the DAG.
+
+    Args:
+        query_plan:  QueryPlan object to update with a synthetic root node
+        planner_info: PlannerInfo object containing base_id and current_id
+
+    Returns:
+        Tuple of (updated query plan, incremented current_id)
+        :param strict:
+    """
+    nodes = query_plan.nodes
+    base_job_id = planner_info.base_id
+    current_id = planner_info.current_id
+
+    referenced_nodes = set()
+    for node in nodes:
+        referenced_nodes.update(node.dependencies)
+
+    # Find natural root nodes (nodes that aren't dependencies of any other node)
+    natural_roots = [node for node in nodes if node.task_id not in referenced_nodes]
+
+    strict = False
+    if strict and len(natural_roots) != 1:
+        error_message = (
+            f"Query plan must have exactly one root node, found {len(natural_roots)}"
+        )
+        logger.error(error_message)
+        raise ValueError(error_message)
+
+    if len(natural_roots) == 1:
+        return query_plan
+
+    current_id += 1
+    root = Query(
+        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
+        query_str=f"{current_id}: ROOT",
+        dependencies=[],
+        node_type=QueryType.COMPUTE,
+        definition=NoopQueryDefinition(),
+    )
+
+    for natural_root in natural_roots:
+        natural_root.dependencies.append(root.task_id)
+
+    query_plan.nodes.insert(0, root)
+    planner_info.current_id = current_id
+
+    return query_plan
+
+
+def query_planner_xyz(frame_count: int, layout: str) -> QueryPlan:
     """
     Plan a structured query execution graph for document annotation, adding SEGMENT, FIELD & TABLE Extraction, and COLLATOR steps.
     :param frame_count: Number of frames to process.
@@ -394,11 +528,12 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     :param plan: The QueryPlan to visualize.
     :param output_path: The file path to save the graph image (default: 'query_plan_graph.png').
     """
-    import matplotlib.pyplot as plt
-    import networkx as nx
 
     # Create a directed graph (DiGraph)
     graph = nx.DiGraph()
+
+    if False:
+        return
 
     # Add nodes and edges to the graph in a consistent order
     for node in sorted(plan.nodes, key=lambda x: x.task_id):  # Sort nodes by ID
@@ -500,24 +635,22 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
     # Save the graph locally
     plt.savefig(output_path, format="png", dpi=300)  # Save with high resolution
-    print(f"Graph saved successfully as '{output_path}'")
 
     plt.show()
 
 
-if __name__ == "__main__":
-    question = "Annotate documents with named entities."
-    frame_count = 3
-    layout = "12345"
+def nx_to_mermaid(graph: nx.DiGraph) -> str:
+    lines = ["```mermaid", "flowchart TD"]
 
-    plan = query_planner(frame_count, layout)
-    pprint(plan.model_dump())
-    visualize_query_plan_graph(plan)
-    # yml_str = plan_to_yaml(plan)
-    # pprint(yml_str)
+    for source, target in graph.edges():
+        lines.append(f"    {source} --> {target}")
 
-    sorted_nodes = topological_sort(plan)
-    print_sorted_nodes(sorted_nodes, plan)
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def print_query_plan(plan: QueryPlan, layout: str) -> None:
+    """Print the query plan in a human-readable format."""
 
     executors = []
     for node in plan.nodes:
@@ -529,7 +662,25 @@ if __name__ == "__main__":
         except Exception as e:
             traceback.print_exc()
             print(f"Error creating metadata for node {node.task_id}: {e}")
-
     print("Executors:", executors)
     for exec in executors:
         print(f"Executor: {exec}")
+
+
+if __name__ == "__main__":
+    question = "Annotate documents with named entities."
+    frame_count = 3
+    layout = "extract"
+    planner_info = PlannerInfo(name="extract", base_id=generate_job_id())
+    plan = query_planner(planner_info)
+    pprint(plan.model_dump())
+    visualize_query_plan_graph(plan)
+    # yml_str = plan_to_yaml(plan)
+    # pprint(yml_str)
+
+    json_serialized = plan.model_dump()
+    reconstructed_plan = QueryPlan(**json_serialized)
+    sorted_nodes = topological_sort(plan)
+    print_sorted_nodes(sorted_nodes, plan)
+
+    print_query_plan(plan, layout)

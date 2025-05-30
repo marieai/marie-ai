@@ -64,9 +64,3 @@ def get_file_count(path: str) -> int:
     return len(
         [name for name in os.listdir(path) if os.path.isfile(os.path.join(path, name))]
     )
-
-
-#
-#
-# # Install default handlers
-# PathManager.register_handler(HTTPURLHandler())

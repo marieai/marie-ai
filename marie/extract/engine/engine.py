@@ -2,8 +2,11 @@ import logging
 from typing import List
 
 from marie.extract.engine.cutpoint_visitor import CutpointProcessingVisitor
-from marie.extract.engine.print_visitor import PrintVisitor
+from marie.extract.engine.match_section_extract_visitor import (
+    MatchSectionExtractionProcessingVisitor,
+)
 from marie.extract.engine.processing_visitor import ProcessingVisitor
+from marie.extract.engine.rendering_visitor import MatchSectionRenderingVisitor
 from marie.extract.engine.template_validator_visitor import TemplateValidatorVisitor
 from marie.extract.models.definition import ExecutionContext
 from marie.extract.models.match import SubzeroResult
@@ -11,7 +14,7 @@ from marie.extract.models.match import SubzeroResult
 LOGGER = logging.getLogger(__name__)
 
 
-class SubzeroEngine:
+class DocumentExtractEngine:
     """Subzero Engine"""
 
     def __init__(self):
@@ -26,8 +29,9 @@ class SubzeroEngine:
         # Order of these visitors is important
         self.visitors.append(TemplateValidatorVisitor(True))
         self.visitors.append(CutpointProcessingVisitor())
-        # self.visitors.append(MatchSectionExtractionProcessingVisitor(True))
-        self.visitors.append(PrintVisitor(True))
+        self.visitors.append(MatchSectionExtractionProcessingVisitor(True))
+        self.visitors.append(MatchSectionRenderingVisitor(True))
+        # self.visitors.append(PrintVisitor(True))
 
     def match(self, context: ExecutionContext) -> SubzeroResult:
         """
@@ -44,6 +48,7 @@ class SubzeroEngine:
 
         # Our root node that will be used to aggregate results
         root = SubzeroResult("ROOT")
+
         for visitor in self.visitors:
             if visitor.is_enabled():
                 visitor.pre_visit(context, root)

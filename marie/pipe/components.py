@@ -471,6 +471,38 @@ def store_assets(
         logger.error(f"Error storing assets : {e}")
 
 
+def download_asset(
+    ref_id: str,
+    ref_type: str,
+    root_asset_dir: str,
+    s3_file_path: str = "meta.json",
+    overwrite=True,
+) -> str or None:
+    """
+    Download assets from primary storage (S3) into root asset directory. This restores
+    the assets from the last run of the extract pipeline.
+
+    :param ref_id: document reference id (e.g. filename)
+    :param ref_type: document reference type(e.g. document, page, process)
+    :param root_asset_dir: root asset directory
+    :param s3_file_path: file path in S3
+    :param overwrite: if True, overwrite existing assets in root asset directory
+    :return:
+    """
+
+    s3_root_path = s3_asset_path(ref_id, ref_type)
+    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
+    if not connected:
+        logger.error(f"Error restoring assets : Could not connect to S3")
+        return None
+
+    uri = f"{s3_root_path}/{s3_file_path}"
+    logger.info(f"Restoring assets from {uri} to {root_asset_dir}")
+    output_file_path = os.path.join(root_asset_dir, s3_file_path)
+    StorageManager.read_to_file(uri, output_file_path, overwrite=overwrite)
+    return output_file_path
+
+
 def burst_frames(
     ref_id: str,
     frames: List[np.ndarray],

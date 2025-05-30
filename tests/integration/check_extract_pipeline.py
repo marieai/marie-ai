@@ -47,6 +47,9 @@ def run_extract_pipeline():
     img_path = "~/tmp/address-001.png"
     img_path = "~/tmp/demo/159000487_1.png"
     img_path = "~/tmp/4007/176075018.tif"
+
+    img_path = "~/dev/rms/grapnel-g5/assets/TID-100985/226749569/PID_7350_14627_0_226749569.tif"
+
     img_path = os.path.expanduser(img_path)
     # StorageManager.mkdir("s3://marie")
 
@@ -80,7 +83,7 @@ def run_extract_pipeline():
             pipeline_config=pipeline_config["pipeline"], cuda=False
         )
 
-    for i in range(3):
+    for i in range(1):
         with TimeContext(f"### ExtractPipeline info [{i}]"):
             results = pipeline.execute(
                 ref_id=filename, ref_type="pid", frames=frames_from_file(img_path)
@@ -116,8 +119,9 @@ def regions():
             "h": 180,
         }
     ]
+    regions = None
 
-    for i in range(5):
+    for i in range(1):
         with TimeContext(f"### ExtractPipeline info [{i}]"):
             results = pipeline.execute(
                 ref_id=filename,

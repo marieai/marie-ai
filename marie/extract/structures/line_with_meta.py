@@ -2,6 +2,7 @@ from typing import List, Optional, Sized, Union
 
 from pydantic import BaseModel
 
+from marie.extract.models.models import LineModel
 from marie.extract.structures.annotation import Annotation
 from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.serializable import Serializable
@@ -31,8 +32,22 @@ class LineWithMeta(Sized, Serializable):
         from uuid import uuid1
 
         self._line = line
+        # this happens when line is empty, example is creating a table
         self._metadata = (
-            LineMetadata(page_id=0, line_id=None) if metadata is None else metadata
+            LineMetadata(
+                page_id=0,
+                line_id=None,
+                model=LineModel(
+                    line=-1,
+                    wordids=[],
+                    text=line,
+                    bbox=[0, 0, 0, 0],
+                    confidence=1.0,
+                    word=[],
+                ),
+            )
+            if metadata is None
+            else metadata
         )
         self._annotations = [] if annotations is None else annotations
         self._uid = str(uuid1()) if uid is None else uid
@@ -107,6 +122,13 @@ class LineWithMeta(Sized, Serializable):
         Metadata that refers to some part of the text, for example, font size, font type, etc.
         """
         return self._annotations
+
+    @annotations.setter
+    def annotations(self, annotations: List[Annotation]) -> None:
+        """
+        Set annotations for the line
+        """
+        self._annotations = annotations
 
     @property
     def uid(self) -> str:

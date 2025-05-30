@@ -56,7 +56,8 @@ def create_job_table(schema: str):
       dead_letter text,
       policy text,
       dependencies JSONB DEFAULT '[]'::jsonb,
-      dag_id uuid not null
+      dag_id uuid not null,
+      job_level integer not null default(0),
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
@@ -81,9 +82,9 @@ def create_job_history_table(schema: str):
       retry_delay integer not null default(0),
       retry_backoff boolean not null default false,
       start_after timestamp with time zone not null default now(),
-      started_on timestamp with time zone,
       expire_in interval not null default interval '15 minutes',
       created_on timestamp with time zone not null default now(),
+      started_on timestamp with time zone,
       completed_on timestamp with time zone,
       keep_until timestamp with time zone not null default now() + interval '14 days',       
       output jsonb,
@@ -313,6 +314,10 @@ def create_dag_table(schema: str):
     #     tree - Provides a tree-structured view of task execution history.
     #     gantt - Displays a Gantt chart for task durations.
     #     duration - Shows task execution durations in a bar chart.
+
+    #   **Storage of Serialized DAGs**
+    #    - DAGs are stored in a **pickled** (binary serialized) format in the database.
+    #    - This helps **workers** retrieve DAGs without requiring direct access to the DAG files.
     return f"""
         CREATE TABLE {schema}.dag (
             id uuid not null default gen_random_uuid(),
@@ -322,7 +327,9 @@ def create_dag_table(schema: str):
             is_subdag BOOLEAN DEFAULT FALSE,
             default_view VARCHAR(50) DEFAULT 'graph', -- Possible values: grid, graph, tree, gantt, duration
             serialized_dag JSONB,
-            completed_on timestamp with time zone,
+            serialized_dag_pickle BYTEA,
+            started_on timestamp with time zone,
+            completed_on timestamp with time zone,            
             created_on timestamp with time zone not null default now(),
             updated_on timestamp with time zone not null default now()
         );
@@ -343,7 +350,8 @@ def create_dag_table_history(schema: str):
           is_subdag        BOOLEAN DEFAULT FALSE,
           default_view     VARCHAR(50) DEFAULT 'graph',  -- e.g., grid, graph, tree, gantt, duration
           serialized_dag   JSONB,
-          completed_on     TIMESTAMP WITH TIME ZONE,
+          started_on       TIMESTAMP WITH TIME ZONE,
+          completed_on     TIMESTAMP WITH TIME ZONE,          
           created_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
           updated_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
         
@@ -368,6 +376,7 @@ def create_dag_history_trigger_function(schema: str):
               is_subdag,
               default_view,
               serialized_dag,
+              started_on,
               completed_on,
               created_on,
               updated_on
@@ -380,6 +389,7 @@ def create_dag_history_trigger_function(schema: str):
               NEW.is_subdag,
               NEW.default_view,
               NEW.serialized_dag,
+              NEW.started_on,
               NEW.completed_on,
               NEW.created_on,
               NEW.updated_on
@@ -395,6 +405,7 @@ def create_dag_history_trigger_function(schema: str):
               is_subdag,
               default_view,
               serialized_dag,
+              started_on,
               completed_on,
               created_on,
               updated_on
@@ -407,6 +418,7 @@ def create_dag_history_trigger_function(schema: str):
               NEW.is_subdag,
               NEW.default_view,
               NEW.serialized_dag,
+              NEW.started_on,
               NEW.completed_on,
               NEW.created_on,
               NEW.updated_on
@@ -422,6 +434,7 @@ def create_dag_history_trigger_function(schema: str):
               is_subdag,
               default_view,
               serialized_dag,
+              started_on,
               completed_on,
               created_on,
               updated_on
@@ -434,6 +447,7 @@ def create_dag_history_trigger_function(schema: str):
               OLD.is_subdag,
               OLD.default_view,
               OLD.serialized_dag,
+              OLD.started_on,
               OLD.completed_on,
               OLD.created_on,
               OLD.updated_on
@@ -460,12 +474,11 @@ def create_dag_resolve_state_function(schema: str):
     # 3. Otherwise marks the DAG as “active.”
 
     return f"""
-        CREATE OR REPLACE FUNCTION {schema}.resolve_dag_state(
-            p_dag_id UUID
-        )
+        CREATE OR REPLACE FUNCTION {schema}.resolve_dag_state(p_dag_id UUID)
         RETURNS TEXT
         LANGUAGE plpgsql
-        AS $$
+        AS
+        $$
         DECLARE
             v_any_failed    BOOLEAN;
             v_all_completed BOOLEAN;
@@ -502,11 +515,16 @@ def create_dag_resolve_state_function(schema: str):
                 END IF;
             END IF;
         
-            -- Update the DAG state if it differs from the current one:
+            -- Update DAG state and completed_on
             UPDATE marie_scheduler.dag
-            SET state = v_new_state
-            WHERE id = p_dag_id
-              AND state <> v_new_state;
+            SET
+                state = v_new_state,
+                completed_on = CASE
+                    WHEN v_new_state IN ('completed', 'failed') AND completed_on IS NULL
+                    THEN NOW()
+                    ELSE completed_on
+                END
+            WHERE id = p_dag_id;
         
             GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
         
@@ -522,5 +540,4 @@ def create_dag_resolve_state_function(schema: str):
             );
         END;
         $$;
-        
     """

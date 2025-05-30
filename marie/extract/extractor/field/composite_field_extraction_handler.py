@@ -2,7 +2,6 @@ import logging
 from collections import namedtuple
 from typing import List, Tuple
 
-from marie.extract.exceptions import GrapnelException
 from marie.extract.extractor.field.base import BaseFieldExtractionHandler
 from marie.extract.models.definition import (
     CompositeFieldMapping,
@@ -13,10 +12,6 @@ from marie.extract.models.definition import (
     Perimeter,
 )
 from marie.extract.models.match import MatchField, MatchSection
-from marie.extract.processor.scan_result import GrapnelScanResult
-from marie.extract.processor.selector_matcher import SelectorMatcher
-from marie.extract.utils.blob_util import BlobUtil
-from marie.extract.utils.conversion_util import ConversionUtil
 
 LOGGER = logging.getLogger(__name__)
 

@@ -122,7 +122,6 @@ class GRPCServer(BaseServer):
         )
         # Mark all services as healthy.
         health_pb2_grpc.add_HealthServicer_to_server(self.health_servicer, self.server)
-
         reflection.enable_server_reflection(service_names, self.server)
 
         bind_addr = f'{self.host}:{self.port}'
@@ -153,6 +152,8 @@ class GRPCServer(BaseServer):
         self.logger.info(f'start server bound to {bind_addr}')
         await self.server.start()
         self.logger.debug(f'server bound to {bind_addr} started')
+        # Mark all services as healthy.
+        await self.health_servicer.set('', health_pb2.HealthCheckResponse.SERVING)
         for service in service_names:
             await self.health_servicer.set(
                 service, health_pb2.HealthCheckResponse.SERVING

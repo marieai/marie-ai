@@ -61,6 +61,7 @@ class EngineLM(ABC):
         self.model_string = model_string
         self.system_prompt = system_prompt
         self.is_multimodal = is_multimodal
+        self.max_running_requests = 200
 
         # cache resolution
         if isinstance(cache, dc.Cache):

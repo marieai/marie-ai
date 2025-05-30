@@ -1,7 +1,11 @@
 import enum
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from functools import wraps
+from typing import Any, Callable, Dict, List, Optional, Type
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from marie.logging_core.predefined import default_logger as logger
 
 DEFAULT_NAME = "query_plan_tool"
 
@@ -27,17 +31,113 @@ Type of question we are asking, either a single question or a multi question mer
 """
 
 
-class QueryDefinitionXXXXXXX(BaseModel):
-    """
-    Represents a task that executes via a registered execution method.
-    """
+class QueryPlanRegistry:
+    """Registry for query planner functions."""
 
-    method: str = Field(
-        ..., description="Type of execution method (LLM, Python, API, etc.)."
-    )
-    params: Dict[str, Optional[str]] = Field(
-        default={}, description="Input parameters required for execution."
-    )
+    _plans: Dict[str, Callable] = {}
+
+    @classmethod
+    def register(cls, name: str, function: Callable = None):
+        """
+        Register a query planner function.
+
+        Usage:
+            As a decorator:
+                @QueryPlanRegistry.register("my_planner")
+                def my_query_planner(planner_info):
+                    # planner implementation
+                    return plan
+
+            Direct registration:
+                def my_query_planner(planner_info):
+                    # planner implementation
+                    return plan
+                QueryPlanRegistry.register("my_planner", my_query_planner)
+
+        :param name: The name to register the planner under. If None, uses the function name.
+        :param function: Optional. The function to register directly.
+        :return: Decorator function if no function is provided; otherwise, None.
+        """
+
+        logger.info(f"Registering query planner function : {name}")
+
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+
+            planner_name = name or func.__name__
+
+            if planner_name in cls._plans:
+                raise ValueError(
+                    f"Query planner '{planner_name}' is already registered"
+                )
+
+            cls._plans[planner_name] = wrapper
+            return wrapper
+
+        if function is not None:
+            return decorator(function)
+
+        return decorator
+
+    @classmethod
+    def get(cls, planner_name: str) -> Callable:
+        """
+        Get a query planner by name.
+
+        :param planner_name: The name of the query planner to get.
+        :return: The query planner function.
+        :raises ValueError: If the query planner is not registered.
+        """
+        try:
+            return cls._plans[planner_name]
+        except KeyError as e:
+            raise KeyError(
+                f"Query planner '{planner_name}' is not registered! Available planners are: {', '.join(cls._plans.keys())}"
+            ) from e
+
+    @classmethod
+    def list_planners(cls) -> list[str]:
+        """Return a list of all registered planner names."""
+        return list(cls._plans.keys())
+
+
+def register_query_plan(name: str = None):
+    """
+    Decorator to register a query planner function.
+
+    This is a more concise alternative to @QueryPlannerRegistry.register
+
+    Usage:
+        @register_query_plan("my_query_plan")
+        def my_query_planner(planner_info):
+            # planner implementation
+            return plan
+
+    :param name: The name to register the query plan under. If None, uses the function name.
+    :return: Decorator function
+    """
+    return QueryPlanRegistry.register(name)
+
+
+class QueryTypeRegistry:
+    _method_to_class: Dict[str, Type[BaseModel]] = {}
+
+    @classmethod
+    def register(cls, method: str):
+        """Decorator to register a class for a specific method"""
+
+        def decorator(model_class: Type[BaseModel]):
+            cls._method_to_class[method] = model_class
+            return model_class
+
+        return decorator
+
+    @classmethod
+    def get_class_for_method(cls, method: str) -> Optional[Type[BaseModel]]:
+        """Get the class for a given method"""
+        return cls._method_to_class.get(method)
 
 
 class QueryDefinition(BaseModel):
@@ -49,7 +149,7 @@ class QueryDefinition(BaseModel):
     method: str
     endpoint: str = Field(
         ...,
-        description="API endpoint for the query. This coulde a executor endpoint or a model endpoint.",
+        description="API endpoint for the query. This could a executor endpoint or a model endpoint.",
     )
     params: dict
 
@@ -58,6 +158,7 @@ class QueryDefinition(BaseModel):
         raise NotImplementedError("Subclasses must implement validate_params.")
 
 
+@QueryTypeRegistry.register("NOOP")
 class NoopQueryDefinition(QueryDefinition):
     """
     Represents a NOOP (no operation) query definition.
@@ -73,6 +174,7 @@ class NoopQueryDefinition(QueryDefinition):
             raise ValueError("NOOP queries must have a 'layout' parameter.")
 
 
+@QueryTypeRegistry.register("LLM")
 class LlmQueryDefinition(QueryDefinition):
     """
     Represents an LLM (language model) query definition.
@@ -81,17 +183,14 @@ class LlmQueryDefinition(QueryDefinition):
     method: str = "LLM"
     endpoint: str = "extract"
     model_name: str = Field(..., description="Name of the LLM model to use.")
-    params: dict = Field(default_factory=lambda: {"layout": None, "roi": None})
+    params: dict = Field(default_factory=lambda: {"layout": None})
 
     def validate_params(self):
         if "layout" not in self.params or self.params["layout"] is None:
             raise ValueError("LLM queries must have a 'layout' parameter.")
-        if "roi" not in self.params or self.params["roi"] is None:
-            raise ValueError(
-                "LLM queries must specify a 'roi' parameter (e.g., 'start', 'end')."
-            )
 
 
+@QueryTypeRegistry.register("PYTHON_FUNCTION")
 class PythonFunctionQueryDefinition(QueryDefinition):
     """
     Represents a Python function execution query definition.
@@ -112,6 +211,7 @@ class PythonFunctionQueryDefinition(QueryDefinition):
             )
 
 
+@QueryTypeRegistry.register("EXECUTOR_ENDPOINT")
 class ExecutorEndpointQueryDefinition(QueryDefinition):
     """
     Represents an executor endpoint query definition.
@@ -170,11 +270,26 @@ class Query(BaseModel):
         description="Definition of the query to be executed.",
     )
 
-    # def __str__(self):
-    #     return f"Query {self.task_id}"
-    #
-    # def __repr__(self):
-    #     return f"Query {self.task_id}"
+    @field_validator('definition', mode='before')
+    @classmethod
+    def validate_definition(cls, v):
+        """Custom serialization for the definition field"""
+        if isinstance(v, dict):
+            method = v.get('method', '')
+            model_class = QueryTypeRegistry.get_class_for_method(method)
+            if model_class:
+                return model_class(**v)
+            raise ValueError(
+                f"Unknown method {method}, cannot create QueryDefinition. Ensure it is registered."
+            )
+            # return QueryDefinition(**v)
+        return v
+
+    def __str__(self):
+        return f"Query(task_id={self.task_id}, query_str={self.query_str}, dependencies={self.dependencies}, node_type={self.node_type}, definition={self.definition})"
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class QueryPlan(BaseModel):
@@ -190,3 +305,24 @@ class QueryPlan(BaseModel):
         Returns the dependencies of the query with the given id.
         """
         return [q for q in self.nodes if q.task_id in idz]
+
+
+@dataclass
+class PlannerInfo:
+    """
+    A transfer object that holds relevant information for constructing
+    a structured query execution graph for document annotation.
+
+    Example of usage:
+        planner_info = PlannerInfo(
+            name="complex",
+            steps=["SEGMENT", "FIELD_EXTRACTION", "TABLE_EXTRACTION"]
+        )
+        # This object can then be handed off to a query_planner function.
+    """
+
+    name: str
+    base_id: str  # UUID7 identifier
+    current_id: int = 0  # Node counter
+    steps: List[str] = field(default_factory=list)
+    metadata: Any = None

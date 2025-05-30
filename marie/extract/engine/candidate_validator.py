@@ -2,9 +2,9 @@ import logging
 from collections import deque
 from typing import List, Optional
 
-from marie.extract.models.definition import CutpointStrategy, Layer
+from marie.extract.adaptive_dfa import AdaptiveDFA, State
+from marie.extract.models.definition import ExecutionContext, Layer
 from marie.extract.models.match import (
-    Location,
     LocationType,
     MatchSection,
     ScanResult,
@@ -15,8 +15,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class CandidateValidator:
+
     def fix_mismatched_sections(
         self,
+        context: ExecutionContext,
         start_candidates: List[ScanResult],
         stop_candidates: List[ScanResult],
         parent: MatchSection,
@@ -25,118 +27,124 @@ class CandidateValidator:
         if not start_candidates and not stop_candidates:
             return []
 
+        assert layer is not None, "Layer cannot be None"
+        assert context.document is not None, "Document cannot be None"
+        document = context.document
+
+        first_line = document.lines[0]
+        last_line = document.lines[-1]
+
         starts = TypedScanResult.wrap(start_candidates, LocationType.START)
         stops = TypedScanResult.wrap(stop_candidates, LocationType.STOP)
 
         locations = deque(starts + stops)
-        # locations = sorted(
-        #     locations,
-        #     key=ComparatorFactory.SCANRESULT_Y_COMPARATOR.get_comparator(
-        #         Ordering.ASCENDING
-        #     ),
-        # )
+        locations = sorted(
+            locations, key=lambda x: (x.line.metadata.page_id, x.line.metadata.line_id)
+        )
 
-        current = None
-        last = None
-        last_type = None
+        print('--' * 50)
+        print(f"Total locations: {len(locations)}")
+        for loc in locations:
+            print(
+                f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
+            )
+            print(loc)
 
-        return []
+        # build our adaptive dfa, THIS NEED TO BE CONFIGURED via the config per layer/layout
 
-        if False:
-            cutpoint_strategy = CutpointStrategy.START_ON_STOP
-            if layer:
-                cutpoint_strategy = layer.get_cutpoint_strategy()
+        begin = State(
+            "BEGIN", ScanResult(page=first_line.metadata.page_id, line=first_line)
+        )
+        start = State("START")
+        continuation = State("CONTINUATION")
+        stop = State("STOP")
 
-            merged_sections = []
-            while locations:
-                current = locations.popleft()
-                current_type = current.location_type
-                LOGGER.debug(f"CStatus: {current_type}")
+        end = State(
+            "END",
+            TypedScanResult(
+                location_type=LocationType.STOP,
+                page=last_line.metadata.page_id,
+                line=last_line,
+            ),
+        )
 
-                if current_type == LocationType.START:
-                    if (
-                        cutpoint_strategy == CutpointStrategy.START_ON_STOP
-                        and last_type == LocationType.START
-                    ):
-                        ca = current.get_area()
-                        current_y_offset = current.get_y_offset()
-                        stop_y = (
-                            ca.y - current_y_offset if current_y_offset >= 0 else ca.y
-                        )
+        dfa = AdaptiveDFA(initial_state=begin)
 
-                        section = self.extract_match_section(
-                            last,
-                            current,
-                            last.page,
-                            last.get_area().y,
-                            current.page,
-                            stop_y,
-                            last.get_x_offset(),
-                            last.get_y_offset(),
-                        )
-                        merged_sections.add(section)
+        # Add them to DFA
+        for state in (begin, start, stop, end, continuation):
+            dfa.add_state(state)
 
-                if current_type == LocationType.STOP:
-                    if last_type == LocationType.START:
-                        section = self.extract_match_section(
-                            last,
-                            current,
-                            last.page,
-                            last.get_area().y,
-                            current.page,
-                            current.get_area().y,
-                            last.get_x_offset(),
-                            last.get_y_offset(),
-                        )
-                        merged_sections.add(section)
-                    else:
-                        LOGGER.debug(f"Rejecting cutpoint: {current}")
+        # Setup ROOT transitions
+        dfa.add_transition(begin, start, "BEGIN_PROCESS")
+        dfa.add_transition(begin, stop, "BEGIN_PROCESS")
 
-                if not locations and current_type == LocationType.START:
-                    stop = parent.get_stop()
-                    cutpoint = self.extract_match_section(
-                        current,
-                        None,
-                        current.page,
-                        current.get_area().y,
-                        stop.page,
-                        stop.y,
-                        current.get_x_offset(),
-                        current.get_y_offset(),
-                    )
-                    merged_sections.add(cutpoint)
+        # we can go from start to stop or start to start or start to end
+        dfa.add_transition(start, stop, "VALID")
+        dfa.add_transition(start, start, "VALID")
+        dfa.add_transition(start, end, "VALID")
 
-                last = current
-                last_type = last.location_type
+        # dfa.add_transition(start, continuation, "VALID")
+        # dfa.add_transition(continuation, end, "VALID")
+        # dfa.add_transition(continuation, start, "VALID")
 
-        return merged_sections
+        # We can't go from stop to start or stop
+        dfa.add_transition(stop, stop, "INVALID")
+        dfa.add_transition(stop, start, "INVALID")
+
+        dfa.add_transition(stop, end, "FINALIZE")
+
+        # create the dfa states to process the locations
+        states = []  # do not add the BEGIN as it is the initial state
+        for loc in locations:
+            print(
+                f"Page {loc.page}, Line {loc.line.metadata.line_id}, Type: {loc.location_type}"
+            )
+            label = loc.location_type.name
+            # state = State(label, f"STATE-{loc.page}-{loc.line.metadata.line_id}")
+            state = State(label, loc)
+            states.append(state)
+        states.append(end)
+
+        dfa.process_transitions(*states)
+        dfa.generate_state_diagram()
+        dfa.print_transition_history()
+
+        print("\n✅ Valid Transitions:")
+        valid_transitions = []
+        for t in dfa.get_all_transitions():
+            if t.label == "VALID":
+                print(f"Step {t.step}: {t.from_state.name} -> {t.to_state.name}")
+                valid_transitions.append(t)
+
+        print('Converting to valid transitions to match sections')
+        # we will create a match section for each valid transition
+        match_sections = []
+        for tran in valid_transitions:
+            from_state = tran.from_state
+            to_state = tran.to_state
+            print(
+                f"Valid Transition: {from_state.name} -> {to_state.name} : > {from_state.payload} -> {to_state.payload}"
+            )
+            section = self.extract_match_section(from_state.payload, to_state.payload)
+            section.owner_layer = layer
+
+            match_sections.append(section)
+
+        return match_sections
 
     def extract_match_section(
         self,
         start: TypedScanResult,
-        stop: Optional[TypedScanResult],
-        start_page: int,
-        start_y: float,
-        stop_page: int,
-        stop_y: float,
-        x_offset: int,
-        y_offset: int,
+        stop: TypedScanResult,
     ) -> MatchSection:
+        assert isinstance(start, TypedScanResult)
+        assert isinstance(stop, TypedScanResult)
+
+        def filtered_vars(tsr: TypedScanResult):
+            return {k: v for k, v in vars(tsr).items() if k != 'location_type'}
+
         section = MatchSection(label="Cut Section")
-        section.set_x_offset(x_offset)
-        section.set_y_offset(y_offset)
-
-        if start_page == stop_page and (stop_y - start_y) < 0:
-            start_y, stop_y = stop_y, start_y
-
-        section.set_start(Location(start_page, int(start_y)))
-        section.set_stop(Location(stop_page, int(stop_y)))
-
-        if start:
-            section.set_start_selector_set_owner_identifier(
-                start.get_owner_identifier()
-            )
-        if stop:
-            section.set_stop_selector_set_owner_identifier(stop.get_owner_identifier())
+        section.start = ScanResult(**filtered_vars(start))
+        section.stop = ScanResult(**filtered_vars(stop))
 
         return section

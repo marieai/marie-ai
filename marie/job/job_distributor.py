@@ -1,9 +1,16 @@
 import abc
-from typing import Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, List, Optional, Tuple, Union
 
+from marie.excepts import ExecutorError
 from marie.job.common import JobInfo
-from marie.types_core.request import Request
-from marie.types_core.request.data import DataRequest
+from marie.types_core.request.data import DataRequest, Request
+
+# SendCb = Callable[[List[DataRequest]], Union[DataRequest, Awaitable[DataRequest]]]
+SendCb = Callable[..., Any]  # now fully generic
+
+
+class DocumentArray:
+    pass
 
 
 class JobDistributor(abc.ABC):
@@ -16,8 +23,26 @@ class JobDistributor(abc.ABC):
         self,
         submission_id: str,
         job_info: JobInfo,
-        send_callback: Optional[Callable[[List[Request], Dict[str, str]], None]] = None,
+        send_callback: Optional[SendCb] = None,
     ) -> DataRequest:
+        """
+        Publish a job to the underlying executor. This is a synchronous method that will block until the job is completed
+        or an error occurs.
+
+        :param submission_id: The submission id of the job.
+        :param job_info: The job info to publish.
+        :param send_callback:  The callback after the job is submitted over the network.
+        :return:
+        """
+        ...
+
+    @abc.abstractmethod
+    async def send_stream(
+        self,
+        submission_id: str,
+        job_info: JobInfo,
+        send_callback: Optional[SendCb] = None,
+    ) -> AsyncIterator[Tuple[Union[DocumentArray, "Request"], "ExecutorError"]]:
         """
         Publish a job to the underlying executor.
 

@@ -213,3 +213,4 @@ ansible/inventories/hosts.dev.yml
 /examples/config.prod.json
 
 .gradle
+!/G5-ERRORS/

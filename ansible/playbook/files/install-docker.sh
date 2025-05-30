@@ -21,6 +21,8 @@ sudo apt-get install -yq \
     curl \
     gnupg
 
+# Ubuntu 22/24 https://askubuntu.com/questions/1409192/cannot-install-docker-desktop-on-ubuntu-22-04
+# Ubuntu 20.04
 # 2 Add Docker’s official GPG key:
 sudo mkdir -m 0755 -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg

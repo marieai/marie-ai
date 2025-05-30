@@ -1,4 +1,5 @@
 import abc
+import asyncio
 from enum import Enum
 from typing import Optional, Sequence, Union
 
@@ -13,23 +14,26 @@ class LoadBalancerType(Enum):
     """
 
     ROUND_ROBIN = "ROUND_ROBIN"
-    LEAST_CONNECTION = "LEAST_CONNECTION"
+    LEAST_CONNECTION = "LEAST_CONNECTION"  # SHORTEST QUEUE
     CONSISTENT_HASHING = "CONSISTENT_HASHING"  # TODO: Implement this
     RANDOM = "RANDOM"  # TODO: Implement this
 
     @staticmethod
-    def from_value(value: str):
+    def from_value(value: str) -> "LoadBalancerType":
         """
         Get the load balancer type from the value.
-        :param value:
-        :return:
+        :param value: Value of the load balancer type.
+        :return: LoadBalancerType
         """
         if value is None or value == "":
             return LoadBalancerType.ROUND_ROBIN
         for data in LoadBalancerType:
             if data.value.lower() == value.lower():
                 return data
-        return LoadBalancerType.ROUND_ROBIN
+
+        raise ValueError(
+            f"Invalid load balancer type: {value}. Supported types are: {[item.value for item in LoadBalancerType]}."
+        )
 
 
 class LoadBalancer(abc.ABC):
@@ -47,23 +51,27 @@ class LoadBalancer(abc.ABC):
         self.active_counter = {}
         self.debug_loging_enabled = False
         self.tracing_interceptors = tracing_interceptors or []
+        self._logger.info(f"LoadBalancer: for {self._deployment_name} initialized.")
+        self._lock = asyncio.Lock()
 
     async def get_next_connection(self, num_retries=3):
         """
         Returns the next connection to be used based on the load balancing algorithm.
         :param num_retries:  Number of times to retry if the connection is not available.
         """
-        connection = await self._get_next_connection(num_retries=num_retries)
 
-        if connection is None:
-            raise EstablishGrpcConnectionError(
-                f"Error while acquiring connection {self._deployment_name}. Connection cannot be used."
-            )
+        async with self._lock:
+            connection = await self._get_next_connection(num_retries=num_retries)
 
-        for interceptor in self.tracing_interceptors:
-            interceptor.on_connection_acquired(connection)
+            if connection is None:
+                raise EstablishGrpcConnectionError(
+                    f"Error while acquiring connection {self._deployment_name}. Connection cannot be used."
+                )
 
-        return connection
+            for interceptor in self.tracing_interceptors:
+                interceptor.on_connection_acquired(connection)
+
+            return connection
 
     @abc.abstractmethod
     async def _get_next_connection(self, num_retries=3):
@@ -92,7 +100,7 @@ class LoadBalancer(abc.ABC):
             interceptor.on_connections_updated(self._connections)
 
     @staticmethod
-    def get_load_balancer(
+    def create_load_balancer(
         load_balancer_type: Union[LoadBalancerType, str],
         deployment_name: str,
         logger: MarieLogger,
@@ -135,7 +143,6 @@ class LoadBalancer(abc.ABC):
         """
         self._logger.debug(f"Incrementing usage for address : {address}")
         self.active_counter[address] = self.active_counter.get(address, 0) + 1
-
         self._logger.debug(f"incr_usage: self.active_counter: {self.active_counter}")
 
         return self.active_counter[address]

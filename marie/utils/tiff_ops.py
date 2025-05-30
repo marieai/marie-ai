@@ -118,7 +118,7 @@ def burst_tiff_frames(
     """
 
     filename_generator = filename_generator or (
-        lambda pagenumber: f"{pagenumber:05}.tif"
+        lambda page_number: f"{page_number:05}.tif"
     )
 
     with tempfile.TemporaryDirectory() as tmp_dir:

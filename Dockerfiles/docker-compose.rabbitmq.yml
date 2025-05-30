@@ -1,0 +1,37 @@
+# ############### Networks ###############
+
+# Container networking setup
+# docker network create --driver=bridge marie_default
+# sysctl net.ipv4.conf.all.forwarding=1
+
+# Dashboard accessible via `http://localhost:7777/dashboard/#/'
+# Consul accessible via `http://localhost:8500/`
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    container_name: 'marie-rabbitmq'
+    ports:
+        - 5672:5672 # AMQP
+        - 15672:15672 # HTTP
+    environment:
+        - RABBITMQ_DEFAULT_USER=guest
+        - RABBITMQ_DEFAULT_PASS=guest
+        - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+        - rabbitmq_data:/var/lib/rabbitmq
+        - rabbitmq_log:/var/log/rabbitmq
+    networks:
+        - marie_default
+
+volumes:
+  rabbitmq_data:
+    driver: local
+  rabbitmq_log:
+    driver: local
+
+# ############### Networks ###############
+networks:
+  marie_default:
+    external: true

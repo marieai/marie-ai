@@ -66,7 +66,6 @@ else:
 
 # fix fork error on MacOS but seems no effect? must do EXPORT manually before jina start
 _os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
-
 # JINA_MP_START_METHOD has higher priority than os-patch
 _start_method = _os.environ.get("JINA_MP_START_METHOD", None)
 if _start_method and _start_method.lower() in {"fork", "spawn", "forkserver"}:

@@ -1,3 +1,5 @@
+from typing import List
+
 import numpy as np
 
 # https://gist.github.com/YaYaB/39f9df9d481d784b786ad88eea8533e8
@@ -37,6 +39,7 @@ def find_overlap(box, data, overlap_ratio=0.75):
             indexes.append(i)
 
     return overlaps, indexes
+
 
 def find_overlap_total(box, data):
     """Find overlap between a box and a data set
@@ -83,7 +86,7 @@ def find_overlap_total(box, data):
                 min(
                     intersection_area / float(bb1_area + bb2_area - intersection_area),
                     1.0,
-                    ),
+                ),
                 0.0,
             )
             scores.append(iou)
@@ -230,7 +233,7 @@ def find_overlap_horizontal(box, bboxes, center_y_overlap=None):
     return overlaps, indexes, scores
 
 
-def merge_bboxes_as_block(bboxes) -> list[int]:
+def merge_bboxes_as_block(bboxes) -> List[int]:
     """
     Merge bounding boxes into one block
     :param bboxes: bounding boxes in [x, y, w, h]

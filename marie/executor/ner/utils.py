@@ -167,8 +167,8 @@ def visualize_icr(
 
     for page_idx, (image, result) in enumerate(zip(frames, results)):
         # convert from numpy to PIL
-        if page_idx != 8:
-            continue
+        # if page_idx != 8:
+        #     continue
 
         img = image.copy()
         # we can have frames as both PIL and CV images
@@ -218,7 +218,6 @@ def visualize_icr(
                 viz_img.paste(button_img, (box[0], box[1]))
 
         for i, box in enumerate(lines_bboxes):
-            print(f' line box {i}: {box}')
             draw_box(
                 draw,
                 box,

@@ -148,7 +148,7 @@ class ClassificationPipeline(BasePipeline):
         }
 
         restore_assets(
-            ref_id, ref_type, root_asset_dir, full_restore=False, overwrite=True
+            ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
         )
         burst_frames(ref_id, frames, root_asset_dir)
 

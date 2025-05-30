@@ -3,6 +3,7 @@
   hosts: ml_cluster
   gather_facts: false
 
+
   vars:
     stack_name: "dev"
 
@@ -11,11 +12,19 @@
     - name: Set the Python interpreter to the virtual environment
       set_fact:
         ansible_python_interpreter: /usr/bin/python3
-        
+
     - name: Update apt cache
       apt:
         update_cache: yes
-      become_user: root 
+      become_user: root
+      become: yes
+      become_method: sudo
+
+    - name: Ensure python3-pip is installed
+      apt:
+        name: python3-pip
+        state: present
+      become_user: root
       become: yes
       become_method: sudo
 
@@ -28,7 +37,7 @@
         install_recommends: no
         allow_unauthenticated: yes
 
-      become_user: root 
+      become_user: root
       become: yes
       become_method: sudo
 
@@ -36,7 +45,13 @@
       command: python3 -m venv /opt/venv
       args:
         creates: /opt/venv/bin/activate
-      become_user: root 
+      become_user: root
+      become: yes
+      become_method: sudo
+
+    - name: Upgrade pip in the virtual environment
+      command: /opt/venv/bin/pip install --upgrade pip
+      become_user: root
       become: yes
       become_method: sudo
 
