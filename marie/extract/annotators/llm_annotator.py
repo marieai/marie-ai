@@ -2,6 +2,7 @@ import os
 import os.path
 from typing import List
 
+from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
 from marie.extract.annotators.util import (
     ascan_and_process_images,
@@ -13,6 +14,11 @@ from marie.logging_core.logger import MarieLogger
 from marie.utils.utils import ensure_exists
 
 SYSTEM_PROMPT = ""
+
+
+def sanitize_path(path: str) -> str:
+    """Remove any path traversal attempts from the given path"""
+    return os.path.basename(path) if path else None
 
 
 class LLMAnnotator(DocumentAnnotator):
@@ -76,19 +82,29 @@ class LLMAnnotator(DocumentAnnotator):
         )
         self.frames_dir = os.path.join(working_dir, "frames")
 
+        if self.model_name is None:
+            raise ValueError("Model name must be provided in the configuration.")
+
         # TODO : This NEEDS to be moved to a config file
         if self.prompt_path is None and self.system_prompt_text is None:
             raise ValueError(
                 "Either prompt_path or system_prompt_text must be provided."
             )
-        self.prompt_text = self.load_prompt(
-            os.path.expanduser(
-                os.path.join(
-                    f"~/dev/workflow/grapnel-g5/assets/TID-{self.layout_id}/annotator",
-                    self.prompt_path,
-                )
+
+        safe_prompt_path = sanitize_path(self.prompt_path) if self.prompt_path else None
+        full_prompt_path = (
+            os.path.join(
+                __config_dir__,
+                "extract",
+                f"TID-{self.layout_id}/annotator",
+                safe_prompt_path,
             )
+            if safe_prompt_path
+            else None
         )
+        self.prompt_text = self.load_prompt(full_prompt_path)
+
+        self.engine = route_llm_engine(self.model_name, self.multimodal)
 
     @property
     def capabilities(self) -> list:
@@ -107,13 +123,12 @@ class LLMAnnotator(DocumentAnnotator):
             )
             return
 
-        engine = route_llm_engine(self.model_name, self.multimodal)
         scan_and_process_images(
             self.frames_dir,
             self.output_dir,
             self.prompt_text,
             document,
-            engine=engine,
+            engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
         )
@@ -133,13 +148,12 @@ class LLMAnnotator(DocumentAnnotator):
             )
             return
 
-        engine = route_llm_engine(self.model_name, self.multimodal)
         await ascan_and_process_images(
             self.frames_dir,
             self.output_dir,
             self.prompt_text,
             document,
-            engine=engine,
+            engine=self.engine,
             is_multimodal=self.multimodal,
             expect_output=self.expect_output,
         )
@@ -153,11 +167,15 @@ class LLMAnnotator(DocumentAnnotator):
         print("Parsing raw model output...")
         return {}
 
-    def load_prompt(self, prompt_file: str):
+    def load_prompt(self, prompt_file: str) -> str:
+        """Load the prompt text from a file.
+        :param prompt_file: Path to the prompt file.
+        :return: The prompt text as a string.
+        """
         try:
-            with open(prompt_file, "r", encoding="utf-8") as f:
+            with open(os.path.expanduser(prompt_file), "r", encoding="utf-8") as f:
                 prompt = f.read().strip()
             return prompt
         except FileNotFoundError:
             print(f"Unable to find the file: {prompt_file}")
-            return
+            raise

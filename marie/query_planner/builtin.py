@@ -42,10 +42,14 @@ def register_all_known_planners():
     logger.info("Registering all known planners")
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
 
+    # WARNING: The following is hardcoded and needs to be dynamically loaded from CONFIG.
+    warnings.warn(
+        "The planner_modules list is currently hardcoded. This should be replaced with a dynamic configuration loader."
+    )
     # TODO : This needs to load from CONFIG
     planner_modules = [
         "grapnel_g5.query.tid_100985.query",
-        "grapnel_g5.query.tid_117183.query",
+        "grapnel_g5.query.tid_121880.query",
     ]
 
     for planner_module in planner_modules:

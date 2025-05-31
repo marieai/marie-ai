@@ -12,7 +12,7 @@ from marie.extract.models.base import (
     SelectionType,
     SelectorSet,
 )
-from marie.extract.readers.meta_reader.meta_reader import MetaReader
+from marie.extract.readers import MetaReader
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 
 

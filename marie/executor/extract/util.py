@@ -1,6 +1,7 @@
 import functools
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -76,6 +77,17 @@ def prepare_asset_directory(
     existing_files = (
         sorted(os.listdir(frames_dir)) if os.path.exists(frames_dir) else []
     )
+
+    burst_dir = os.path.join(root_asset_dir, "burst")
+    if not existing_files and os.path.exists(burst_dir):
+        burst_files = sorted([f for f in os.listdir(burst_dir) if f.endswith('.tif')])
+        if burst_files:
+            for idx, file in enumerate(burst_files):
+                src = os.path.join(burst_dir, file)
+                dst = os.path.join(frames_dir, f"{idx + 1:05}.png")
+                shutil.copy2(src, dst)
+            existing_files = sorted(os.listdir(frames_dir))
+
     if existing_files:
         existing_frames = [
             os.path.join(frames_dir, file)
@@ -97,7 +109,10 @@ def prepare_asset_directory(
     # Copy local file to the target path in the asset directory
     target_path = os.path.join(root_asset_dir, ref_id)
     if not os.path.exists(target_path):
-        shutil.copy(local_path, target_path)
+        shutil.copy2(local_path, target_path)
+        with open(target_path, 'a') as f:
+            f.flush()
+            os.fsync(f.fileno())
         logger.info(f"Copied file from '{local_path}' to '{target_path}'.")
 
     logger.info(f"Root asset directory created: '{root_asset_dir}'")
@@ -123,6 +138,23 @@ def prepare_asset_directory(
         overwrite=True,
     )
     logger.info(f"Metadata file downloaded and stored at: '{metadata_file}'")
+    time.sleep(0.1)  # Ensure file system operations are completed
+
+    # Ensure the metadata file exists and that it is a valid JSON file
+    if not os.path.exists(metadata_file):
+        logger.error(f"Metadata file '{metadata_file}' does not exist.")
+        raise FileNotFoundError(f"Metadata file '{metadata_file}' not found.")
+
+    try:
+        with open(metadata_file, 'r') as f:
+            metadata = f.read()
+            if not metadata.strip().startswith('{'):
+                raise ValueError(
+                    f"Metadata file '{metadata_file}' is not a valid JSON."
+                )
+    except Exception as e:
+        logger.error(f"Error reading metadata file '{metadata_file}': {e}")
+        raise
 
     return root_asset_dir, frames_dir, metadata_file
 

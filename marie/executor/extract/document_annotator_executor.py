@@ -9,6 +9,7 @@ from grapnel_g5.result_parser import load_config
 from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
+from marie.constants import __config_dir__
 from marie.executor.extract.util import prepare_asset_directory
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -69,6 +70,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         if storage is not None and "psql" in storage:
             sconf = storage["psql"]
             self.setup_storage(sconf.get("enabled", False), sconf)
+
+        self.root_config_dir = os.path.join(__config_dir__, "extract")
+        self.logger.info(f"root_config_dir: {self.root_config_dir}")
 
     # @requests(on="/default")
     # def default(self,
@@ -170,7 +174,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             self.logger.info(f"Extracted op_key: {op_key}")
             self.logger.info(f"Extracted op_layout: {op_layout}")
 
-            cfg = self.layout_config(op_layout)
+            cfg = self.layout_config(self.root_config_dir, op_layout)
 
             annotator_conf = None
             for annotator in cfg.annotators:
@@ -221,7 +225,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
             self.logger.info(f"Annotator : {annotator}")
             await annotator.aannotate(doc, frames)
-            # annotator.annotate(doc, frames)
             del annotator
 
             response = {
@@ -244,17 +247,15 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             torch_gc()
             MDC.remove("request_id")
 
-    def layout_config(self, layout_id: str) -> OmegaConf:
-
-        # TODO : THIS NEEDS TO BE CONFIGURABLE
+    def layout_config(self, root_config_dir: str, layout_id: str) -> OmegaConf:
+        base_dir = os.path.expanduser(os.path.join(root_config_dir, "base"))
         layout_dir = os.path.expanduser(
-            f"~/dev/workflow/grapnel-g5/assets/TID-{layout_id}/annotator"
+            os.path.join(root_config_dir, f"TID-{layout_id}/annotator")
         )
-        base_dir = os.path.expanduser("~/dev/workflow/grapnel-g5/assets/config")
-        self.logger.warning(f"FIX CONFIG PATH")
+
         self.logger.info(f"Layout ID : {layout_id}")
-        self.logger.info(f"Layout dir : {layout_dir}")
         self.logger.info(f"Base dir : {base_dir}")
+        self.logger.info(f"Layout dir : {layout_dir}")
 
         cfg = load_config(base_dir, layout_dir)
         self.logger.debug(f"Layout config : {cfg}")

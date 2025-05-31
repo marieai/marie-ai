@@ -529,6 +529,10 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     :param output_path: The file path to save the graph image (default: 'query_plan_graph.png').
     """
 
+    # https://mermaid.live/
+    mermaid_code = generate_mermaid_from_query_plan(plan)
+    print(mermaid_code)
+
     # Create a directed graph (DiGraph)
     graph = nx.DiGraph()
 
@@ -574,7 +578,10 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
 
     # Use a consistent hierarchical layout (Graphviz) for reproducibility
     try:
-        pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")  # Top-down layout
+        # pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")  # Top-down layout
+        pos = nx.nx_agraph.graphviz_layout(
+            graph, prog="dot", args='-Gnodesep=0.6 -Granksep=1.2'
+        )
     except ImportError:
         # If Graphviz is not available, fall back to spring_layout with a fixed seed
         pos = nx.spring_layout(graph, seed=42)  # Setting a seed for consistent results
@@ -649,6 +656,43 @@ def nx_to_mermaid(graph: nx.DiGraph) -> str:
     return "\n".join(lines)
 
 
+def generate_mermaid_from_query_plan(plan: QueryPlan) -> str:
+    """
+    Generate Mermaid flowchart syntax from a QueryPlan.
+
+    Args:
+        plan (QueryPlan): The query plan object with nodes.
+
+    Returns:
+        str: Mermaid diagram code.
+    """
+    # Build nodes dictionary for quick lookup
+    nodes = {node.task_id: node for node in plan.nodes}
+
+    lines = ["graph TD"]  # top-down graph
+
+    # Define nodes with labels, wrap or shorten long labels if needed
+    import textwrap
+
+    def wrap_label(label, max_len=30):
+        return "<br>".join(textwrap.wrap(label, max_len))
+
+    for node in plan.nodes:
+        label = wrap_label(node.query_str)
+        # Mermaid node id: sanitize task_id (e.g., remove dashes)
+        node_id = node.task_id.replace("-", "_")
+        lines.append(f'    {node_id}["{label}"]')
+
+    # Add edges based on dependencies
+    for node in plan.nodes:
+        node_id = node.task_id.replace("-", "_")
+        for dep in node.dependencies:
+            dep_id = dep.replace("-", "_")
+            lines.append(f'    {dep_id} --> {node_id}')
+
+    return "\n".join(lines)
+
+
 def print_query_plan(plan: QueryPlan, layout: str) -> None:
     """Print the query plan in a human-readable format."""
 
@@ -675,6 +719,7 @@ if __name__ == "__main__":
     plan = query_planner(planner_info)
     pprint(plan.model_dump())
     visualize_query_plan_graph(plan)
+    mermaid = generate_mermaid_from_query_plan(plan)
     # yml_str = plan_to_yaml(plan)
     # pprint(yml_str)
 

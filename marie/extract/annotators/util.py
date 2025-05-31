@@ -424,7 +424,6 @@ async def ascan_and_process_images(
             )
 
     tasks = [asyncio.create_task(_worker(batch)) for batch in batched_files]
-    # await asyncio.gather(*tasks)
     error_file_path = "/tmp/marie/llm-engine/error.log"
     if not os.path.exists(os.path.dirname(error_file_path)):
         os.makedirs(os.path.dirname(error_file_path), exist_ok=True)

@@ -1,7 +1,10 @@
+from pathlib import Path
 import io
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
+from typing import Dict, List, Optional, Union
 
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -381,40 +384,43 @@ class S3StorageHandler(PathHandler):
 
     # download  file from s3 to local path
     def _read_to_file(
-        self,
-        path: str,
-        local_src: str | os.PathLike | io.BytesIO,
-        overwrite=False,
-        **kwargs: Any,
+            self,
+            path: str,
+            local_src: str | os.PathLike | io.BytesIO,
+            overwrite=False,
+            retries: int = 3,
+            **kwargs: Any,
     ):
         s = S3Url(path)
         bucket = self.s3.Bucket(s.bucket)
+        sleep_time: float = 1.0
+        file_like = is_file_like(local_src)
 
-        file_like = False
-        if is_file_like(local_src):
-            file_like = True
+        for attempt in range(1, retries + 1):
+            try:
+                if not file_like:
+                    if overwrite:
+                        if os.path.exists(local_src) and os.path.isfile(local_src):
+                            os.remove(local_src)
+                    else:
+                        if os.path.exists(local_src):
+                            raise Exception(f"File {local_src} already exists")
+                    os.makedirs(os.path.dirname(local_src), exist_ok=True)
 
-        try:
-            if not file_like:
-                if overwrite:
-                    if os.path.exists(local_src) and os.path.isfile(local_src):
-                        os.remove(local_src)
+                if file_like:
+                    bucket.download_fileobj(s.key, local_src, Config=config)
                 else:
-                    if os.path.exists(local_src):
-                        raise Exception(f"File {local_src} already exists")
-                # make sure the directory exists
-                os.makedirs(os.path.dirname(local_src), exist_ok=True)
+                    with open(local_src, "wb") as data:
+                        bucket.download_fileobj(s.key, data, Config=config)
+                return
 
-            if file_like:
-                bucket.download_fileobj(s.key, local_src, Config=config)
-            else:
-                with open(local_src, "wb") as data:
-                    bucket.download_fileobj(s.key, data, Config=config)
-
-        except Exception as e:
-            logger.error(f"Unable to write file from bucket '{s.bucket}' : {e}")
-            if not self.suppress_errors:
-                raise e
+            except Exception as e:
+                logger.error(f"Attempt {attempt} failed to write file from bucket '{s.bucket}': {e}")
+                if attempt < retries:
+                    time.sleep(sleep_time)
+                else:
+                    if not self.suppress_errors:
+                        raise e
 
     def _list(self, path: str, return_full_path=False, **kwargs: Any) -> List[str]:
         """List all files in current bucket in s3 storage"""
