@@ -71,7 +71,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         self.logger.info(f"Extracted op_key: {op_key}")
         self.logger.info(f"Extracted op_layout: {op_layout}")
 
-        conf = self.layout_config(op_layout)
+        conf = self.layout_config(self.root_config_dir, op_layout)
 
         # load documents from specified document asset key
         doc: AssetKeyDoc = docs[0]

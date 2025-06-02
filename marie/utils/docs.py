@@ -42,8 +42,8 @@ def get_document_type(file_path: str):
         try:
             PyPDF4.PdfFileReader(open(file_path, "rb"))
             file_type = "pdf"
-        except PdfReadError:
-            print("invalid PDF file")
+        except PdfReadError as e:
+            print(f"invalid PDF file : {e}")
         else:
             pass
 

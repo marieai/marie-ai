@@ -283,30 +283,6 @@ class BatchProcessor:
             self.logger.error(f"Request {request_id} – Task {task_id} failed: {e!r}")
             return task_id, None
 
-    async def load_batched_requestXXXX(self, messages_list, request_id, guided_json):
-        """
-        Processes the batch of requests, assigning a unique task_id to each request.
-        """
-        tasks = [
-            self.acompletion_with_retry(
-                3, msgs, f"{request_id}_task_{i}", request_id, guided_json
-            )
-            for i, msgs in enumerate(messages_list)
-        ]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, asyncio.CancelledError):
-                logger.warning(f"One of the tasks was cancelled : {r}")
-            elif isinstance(r, Exception):
-                logger.error("Task failed:", exc_info=r)
-            else:
-                logger.info(f"Task completed successfully with result: {r}")
-
-        # results = await asyncio.gather(*tasks)  # never raises
-        ordered_responses: List[Optional[str]] = [resp for (_tid, resp) in results]
-        return ordered_responses, results
-
     async def load_batched_request(self, messages_list, request_id, guided_json):
         """
         Processes the batch of requests, returning exactly:
@@ -334,20 +310,15 @@ class BatchProcessor:
         # build all coroutines, but do NOT wrap them in create_task()
         coros = [safe_call(i, msgs) for i, msgs in enumerate(messages_list)]
 
-        # run them all together
         try:
             batch_results: List[BatchResult] = await asyncio.gather(*coros)
         except asyncio.CancelledError:
-            # if the outer caller cancels this batch, it propagates here
-            # no need to manually cancel anything — gather will do it for us
             raise
 
-        # convert BatchResult → (task_id, response)
+        # convert BatchResult (task_id, response)
         raw_results: List[Tuple[str, Optional[str]]] = [
             (br.task_id, br.response) for br in batch_results
         ]
-
-        # extract just the responses (or None) in the same order
         ordered_responses: List[Optional[str]] = [resp for (_tid, resp) in raw_results]
 
         return ordered_responses, raw_results

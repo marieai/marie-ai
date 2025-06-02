@@ -62,17 +62,17 @@ class MergerOperatorConfig(BaseOperator):
     pass
 
 
-def get_layout_config(layout_name: str) -> DictConfig:
+def get_mapper_config(base_dir: str, layout_name: str) -> DictConfig:
     """
     Generate a configuration dictionary by merging a base configuration file
     with a layout-specific file. The resulting configuration is made read-only.
 
+    :param base_dir: The base directory where the configuration files are located.
     :param layout_name: The identifier for the layout configuration.
     :return: A read-only merged configuration as a DictConfig.
     """
-    base_dir = os.path.join(__config_dir__, "extract")
-    base_cfg_path = os.path.join(base_dir, "base.yml")
-    layout_cfg_path = os.path.join(base_dir, layout_name, "layout.yml")
+    base_cfg_path = os.path.join(base_dir, "base", "mapper.yml")
+    layout_cfg_path = os.path.join(base_dir, f"TID-{layout_name}", "mapper.yml")
 
     parent_cfg = OmegaConf.load(base_cfg_path)
     layout_cfg = OmegaConf.load(layout_cfg_path)
@@ -121,7 +121,14 @@ class JobMetadata(BaseModel):
         if not task_type:
             raise ValueError("Node type is not defined in the task.")
 
-        layout_conf = get_layout_config(layout)
+        base_dir = os.path.join(__config_dir__, "extract")
+        if not os.path.exists(base_dir):
+            raise FileNotFoundError(
+                f"Base directory does not exist: {base_dir}. "
+                "Ensure the configuration files are correctly set up."
+            )
+
+        layout_conf = get_mapper_config(base_dir, layout)
         logger.debug(
             f"Loaded layout config: {layout_conf}",
         )
