@@ -1550,7 +1550,7 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
 
         # FIXME : FOR TESTING ONLY
         # FIXME : This has to be configurable
-        if wi.name == 'gen5_extract':
+        if wi.name in ('gen5_extract', 'corr'):
             meta = JobMetadata.from_task(node, query_planner_name)
             meta_dict = meta.model_dump()  # need plain dict
             metadata = meta_dict["metadata"]

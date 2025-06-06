@@ -93,6 +93,7 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
                     words=words,
                     boxes=boxes,
                     lines=lines,
+                    tasks=self.llm_tasks,
                 )
 
                 task_meta = defaultdict(list)
@@ -100,8 +101,7 @@ class LLMIndexerPipelineComponent(PipelineComponent, ABC):
                     assert DOC_KEY_INDEXER in document.tags
                     assert all(
                         task_name in document.tags[DOC_KEY_INDEXER]
-                        for task_name, task in indexer.task_map.items()
-                        if task.store_results
+                        for task_name in self.llm_tasks
                     )
 
                     indexed_values_by_task = document.tags[DOC_KEY_INDEXER]

@@ -7,6 +7,7 @@ from PIL import Image
 
 from marie.boxes import PSMode
 from marie.excepts import BadConfigSource
+from marie.logging_core.profile import TimeContext
 from marie.models.utils import initialize_device_settings
 from marie.ocr import CoordinateFormat
 from marie.ocr.util import get_known_ocr_engines
@@ -89,8 +90,8 @@ class LLMPipeline(BasePipeline):
         self.device = resolved_devices[0]
         # self.has_cuda = True if self.device.type.startswith("cuda") else False
 
-        # self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
-        self.ocr_engines = {"default": None}
+        self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
+        # self.ocr_engines = {"default": None}
 
         (
             self.pipeline_name,
@@ -150,7 +151,10 @@ class LLMPipeline(BasePipeline):
         ocr_results = ocr_frames(self.ocr_engines, ref_id, frames, root_asset_dir)
         metadata["ocr"] = ocr_results
 
-        self.execute_llm_pipeline(frames, metadata, ocr_results)
+        # Track pipline execution time for metrics
+        with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
+            self.execute_llm_pipeline(frames, metadata, ocr_results)
+            metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
         del metadata["ocr"]
@@ -280,7 +284,7 @@ class LLMPipeline(BasePipeline):
         :return:  metadata for the document (e.g. OCR results, classification results, etc)
         """
 
-        if regions is not None:
+        if regions:
             raise NotImplementedError("Regions is not implemented yet")
         if pms_mode is not PSMode.SPARSE:
             raise NotImplementedError(f"PMS mode `{pms_mode}` is not implemented yet")

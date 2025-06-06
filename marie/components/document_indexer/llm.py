@@ -1,21 +1,16 @@
-import os
-import time
 from typing import Any, Tuple, Union
 
-import numpy as np
 import torch
 from docarray import DocList
-from PIL import Image
 
-from marie.constants import __marie_home__, __model_path__
+from marie.constants import __model_path__
 from marie.logging_core.logger import MarieLogger
 
 from ...api.docs import DOC_KEY_INDEXER, MarieDoc
-from ...engine import check_if_multimodal, get_engine, validate_multimodal_engine
+from ...engine import check_if_multimodal, get_engine
 from ...engine.multimodal_ops import MultimodalLLMCall
 from ...registry.model_registry import ModelRegistry
 from ...utils.docs import convert_frames, frames_from_docs
-from ...utils.json import load_json_file, store_json_object
 from .base import BaseDocumentIndexer
 from .llm_task import *
 
@@ -84,6 +79,9 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         if not check_if_multimodal(self.model_name):
             raise ValueError(f"The engine requested is not multimodal.")
 
+        engine_instance = get_engine(self.model_name, self.engine_provider)
+        self.model_inference = MultimodalLLMCall(engine_instance, system_prompt=None)
+
         self.tasks = config.tasks
         initialize_tasks(self.tasks, model_path)
         self.logger.info(f"Task Initialization complete")
@@ -105,12 +103,15 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         if len(documents) == 0:
             return documents
 
-        engine_instance = get_engine(self.model_name, self.engine_provider)
-        validate_multimodal_engine(engine_instance)
-
         task_outputs = {}
         # Execute tasks sequentially based on the order defined in config
-        for task in self.tasks:
+        task_request = kwargs.get("tasks")
+        tasks = (
+            self.resolve_task_graph(task_request)
+            if task_request is not None
+            else self.tasks
+        )
+        for task in tasks:
             task_name = task.name
 
             chained_inputs = []
@@ -145,8 +146,9 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
             self.logger.info(
                 f"Running '{task_name}' with strategy '{prompt_strategy_name}'"
             )
-            model_inference = MultimodalLLMCall(engine_instance, system_prompt=None)
-            model_output = model_inference(batch, guided_json=task.guided_json_schema)
+            model_output = self.model_inference(
+                batch, guided_json=task.guided_json_schema
+            )
             parsed_output = parse_task_output(model_output, task.output_type)
             task_outputs[task_name] = modify_outputs(parsed_output, task.output_mod)
 
@@ -194,3 +196,22 @@ class MMLLMDocumentIndexer(BaseDocumentIndexer):
         """Postprocess the results of the inference."""
 
         return data
+
+    def resolve_task_graph(self, task_requests):
+
+        requested_tasks = []
+        for task_name in task_requests:
+            if task_name not in self.task_map:
+                raise ValueError(
+                    f"Undefined task requested {task_name}. Available tasks: {list(self.task_map.keys())}"
+                )
+            requested_tasks.append(self.task_map[task_name])
+
+        chained_tasks = []
+        for task in requested_tasks:
+            if task.chained_tasks:
+                chained_tasks.extend(
+                    [self.task_map[task_name] for task_name in task.chained_tasks]
+                )
+
+        return chained_tasks + requested_tasks
