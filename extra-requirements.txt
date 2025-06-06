@@ -177,5 +177,5 @@ scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
 
-faiss-gpu-cu12;                standard,core
- sentence-transformers==4.1.0  standard,core
+faiss-gpu-cu12:                standard,core
+sentence-transformers==4.1.0:  standard,core
