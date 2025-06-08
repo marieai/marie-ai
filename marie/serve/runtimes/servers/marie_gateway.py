@@ -16,6 +16,7 @@ from rich.traceback import install
 
 import marie
 import marie.helper
+from marie._core.utils import run_background_task
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.constants import (
@@ -512,7 +513,7 @@ class MarieServerGateway(CompositeServer):
 
         work_info = WorkInfo(
             name=event_name,
-            priority=0,
+            priority=0,  # calculated based of the sla criteria and updated via cron
             data=message,
             state=WorkState.CREATED,
             retry_limit=retry.retry_limit,
@@ -533,14 +534,17 @@ class MarieServerGateway(CompositeServer):
                 "msg": f"job submitted with id {job_id}",
                 "job_id": job_id,
             }
-            await mark_as_scheduled(
-                api_key=project_id,
-                job_id=job_id,
-                event_name=event_name,
-                job_tag=ref_type,
-                status="OK",
-                timestamp=int(time.time()),
-                payload=metadata,
+            self.logger.info(f"Job submitted with id {job_id}")
+            run_background_task(
+                mark_as_scheduled(
+                    api_key=project_id,
+                    job_id=job_id,
+                    event_name=event_name,
+                    job_tag=ref_type,
+                    status="OK",
+                    timestamp=int(time.time()),
+                    payload=metadata,
+                )
             )
             return response
         except BaseException as ex:

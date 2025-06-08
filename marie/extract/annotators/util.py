@@ -4,7 +4,7 @@ import logging
 import os
 import os.path
 import time
-from typing import Dict, Generator, List, Optional
+from typing import Any, Generator, List, Optional
 
 from numpy import ndarray
 from qwen_vl_utils import smart_resize
@@ -103,7 +103,7 @@ async def process_batch(
     output_path: str,
     is_multimodal: bool = False,
     expect_output: str = None,
-) -> List[Dict]:
+) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
     """
@@ -131,10 +131,10 @@ async def process_batch(
                 [b[0], b[1]] for b in batch
             ]  # batch_t is a list of tuples(image, prompt, image_path) but we only need image and prompt
             if is_multimodal:
-                responses = llm_call(batch_t, max_tokens=4096 * 4)
+                responses = await llm_call.acall(batch_t, max_tokens=4096 * 4)
             else:
                 batch_t = [b[1] for b in batch]
-                responses = llm_call(
+                responses = await llm_call.acall(
                     batch_t,
                     max_tokens=4096 * 4,
                 )

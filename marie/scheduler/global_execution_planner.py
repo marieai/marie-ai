@@ -42,7 +42,7 @@ class GlobalPriorityExecutionPlanner:
                 (endpoint, wi, level, priority, free_slots, is_new, rt, burst_boost)
             )
 
-        # sort by the tuple:
+        # sort by:
         #  - level descending
         #  - priority descending
         #  - free_slots descending

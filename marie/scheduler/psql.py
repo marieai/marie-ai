@@ -2,19 +2,18 @@ import asyncio
 import contextlib
 import copy
 import itertools
-import os
 import random
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from pprint import pprint
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import psycopg2
 from rich.console import Console
 from rich.table import Table
 
-from marie.excepts import BadConfigSource
+from marie.constants import __config_dir__
+from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
 from marie.job.job_manager import JobManager
@@ -31,7 +30,6 @@ from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.planner import (
     PlannerInfo,
     compute_job_levels,
-    plan_to_json,
     plan_to_yaml,
     print_sorted_nodes,
     query_planner,
@@ -61,7 +59,6 @@ from marie.scheduler.plans import (
     try_set_monitor_time,
     version_table_exists,
 )
-from marie.scheduler.sjfs_execution_planner import SJFSExecutionPlanner
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor, has_available_slot
 from marie.serve.runtimes.servers.cluster_state import ClusterState
@@ -322,7 +319,87 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             create_dag_table(schema),
             create_dag_table_history(schema),
             create_dag_history_trigger_function(schema),
-            create_dag_resolve_state_function(schema),
+            # create_dag_resolve_state_function(schema),
+            create_sql_from_file(
+                schema,
+                os.path.join(__config_dir__, "psql/schema", "resolve_dag_state.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__config_dir__, "psql/schema", "fetch_next_job.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__config_dir__, "psql/schema", "delete_dag_and_jobs.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "delete_failed_dags_and_jobs.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__config_dir__, "psql/schema", "delete_orphaned_jobs.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "jobs_with_unmet_dependencies.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "notify_dag_state_change.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "purge_non_started_work.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__config_dir__, "psql/schema", "ready_jobs_view.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "refresh_dag_durations.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "refresh_job_durations.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "reset_active_dags_and_jobs.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema, os.path.join(__config_dir__, "psql/schema", "reset_all.sql")
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "reset_completed_dags_and_jobs.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(
+                    __config_dir__, "psql/schema", "reset_failed_dags_and_jobs.sql"
+                ),
+            ),
+            create_sql_from_file(
+                schema, os.path.join(__config_dir__, "psql", "cront_job_init.sql")
+            ),
         ]
 
         query = ";\n".join(commands)
@@ -345,6 +422,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 else:
                     self.logger.error(f"Error creating tables: {error}")
                     self.connection.rollback()
+                    raise RuntimeFailToStart(
+                        f"Failed to create tables in schema '{schema}': {error}"
+                    )
 
     async def wipe(self) -> None:
         """Clears the schedule storage."""
@@ -370,7 +450,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     if result and result[0] is not None:
                         return True
             except (Exception, psycopg2.Error) as error:
-                self.logger.error(f"Error clearing tables: {error}")
+                self.logger.error(f"Error checking tables: {error}")
+                raise RuntimeFailToStart(
+                    f"Unable to check installation in schema '{schema}': {error}"
+                )
         return False
 
     async def create_queue(self, queue_name: str) -> None:
@@ -413,7 +496,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         else:
             self.task = asyncio.create_task(self._poll())
 
-        self._sync_dag_task = asyncio.create_task(self._sync_dag())
+        # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
 
     async def _heartbeat_loop(self, interval: float = 10.0):
@@ -457,7 +540,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         failures = 0
         idle_streak = 0
 
-        self.max_concurrent_dags = 512  # for debugging
+        self.max_concurrent_dags = 32  # for debugging
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
         recently_activated_dags = set()
@@ -590,7 +673,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         await self.mark_as_active_dag(work_info)
                         self.active_dags[dag_id] = dag
                         recently_activated_dags.add((dag_id, time.time()))
-                        self.logger.info(f"DAG activated: {dag_id}")
+                        self.logger.debug(f"DAG activated: {dag_id}")
 
                     node = self.get_node_from_dag(work_info.id, dag)
 
@@ -683,12 +766,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if not entrypoint:
             raise ValueError("The entrypoint 'on' is not defined in metadata")
 
-        if False:
-            if not has_available_slot(entrypoint, ClusterState.deployments):
-                self.logger.info(
-                    f"No available slots for work, scheduling : {submission_id}"
-                )
-                return None
         # FIXME : This is a hack to allow the job to be re-submitted after a failure
         await self.job_manager.job_info_client().delete_info(submission_id)
 
@@ -989,28 +1066,41 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self, work_info: WorkInfo, policy: ExistingWorkPolicy
     ) -> bool:
         """
-        :param work_info: Information about the work to be checked for validity.
-        :type work_info: WorkInfo
-        :param policy: Policy that dictates the rules for the work submission.
-        :type policy: ExistingWorkPolicy
-        :return: Returns True if the work submission is valid according to the policy, False otherwise.
-        :rtype: bool
+        Validates a work submission based on the specified policy.
+
+        :param work_info: Information about the work to be checked for validity
+        :param policy: Policy that dictates the rules for the work submission
+        :return: True if the submission is valid according to the policy, False otherwise
+        :raises ValueError: If an unsupported policy is provided
         """
-        if policy == ExistingWorkPolicy.ALLOW_ALL:
-            return True
-        if policy == ExistingWorkPolicy.REJECT_ALL:
-            return False
-        if policy == ExistingWorkPolicy.ALLOW_DUPLICATE:
-            return True
-        if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
-            existing_job = await self.get_job_for_policy(work_info)
-            return existing_job is None
-        if policy == ExistingWorkPolicy.REPLACE:
-            existing_job = await self.get_job_for_policy(work_info)
-            if existing_job and existing_job.state and existing_job.state.is_terminal():
+        try:
+            if policy in (
+                ExistingWorkPolicy.ALLOW_ALL,
+                ExistingWorkPolicy.ALLOW_DUPLICATE,
+            ):
                 return True
-            else:
+
+            if policy == ExistingWorkPolicy.REJECT_ALL:
                 return False
+
+            existing_job = await self.get_job_for_policy(work_info)
+
+            if policy == ExistingWorkPolicy.REJECT_DUPLICATE:
+                return existing_job is None
+
+            if policy == ExistingWorkPolicy.REPLACE:
+                return not existing_job or (
+                    existing_job.state is not None and existing_job.state.is_terminal()
+                )
+
+            raise ValueError(f"Unsupported policy: {policy}")
+
+        except Exception as e:
+            logger.error(
+                f"Error validating submission for work '{work_info.name}' "
+                f"with policy '{policy}': {str(e)}"
+            )
+            return False
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to exit, fire and forget.

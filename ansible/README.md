@@ -6,9 +6,20 @@ ssh-copy-id -i ~/.ssh/id_rsa.pub gpu-svc@<remote-ip>
 ```
 
 
+To fix the following issue, you need to pin the `requests` version to 2.31.0  on the target machine.
+https://github.com/docker/docker-py/pull/3257
+
+"Error connecting: Error while fetching server API version: HTTPConnection.request() got an unexpected keyword argument 'chunked'"
+
 ## gpu-svc user setup on the remote machine
 
 This will create the `gpu-svc` user, add it to the sudo group, configure passwordless sudo, and set up SSH keys for passwordless login.
+
+
+
+This will create new virtual env and install the required packages.
+``` bash
+./play-venv.sh
 
 ```bash
 sudo adduser gpu-svc && \

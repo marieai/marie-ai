@@ -1,3 +1,7 @@
+import os
+import re
+from typing import Optional
+
 from marie.scheduler.state import WorkState
 
 
@@ -58,6 +62,11 @@ def create_job_table(schema: str):
       dependencies JSONB DEFAULT '[]'::jsonb,
       dag_id uuid not null,
       job_level integer not null default(0),
+      duration interval,
+      sla_interval interval,
+      soft_sla timestamp with time zone,
+      hard_sla timestamp with time zone,
+      sla_miss_logged boolean not null default false
      -- CONSTRAINT job_pkey PRIMARY KEY (name, id) -- adde via partition
     ) 
     PARTITION BY LIST (name)
@@ -72,7 +81,7 @@ def create_job_history_table(schema: str):
     return f"""
     CREATE TABLE {schema}.job_history (
       history_id bigserial primary key,
-      id text not null,
+      id uuid not null,
       name text not null,
       priority integer not null default(0),
       data jsonb,
@@ -89,7 +98,15 @@ def create_job_history_table(schema: str):
       keep_until timestamp with time zone not null default now() + interval '14 days',       
       output jsonb,
       dead_letter text,
-      policy text,   
+      policy text,
+      duration interval,
+      sla_interval interval,
+      soft_sla timestamp with time zone,
+      hard_sla timestamp with time zone,
+      sla_miss_logged boolean not null default false,
+      dag_id uuid not null,
+      job_level integer not null default 0,
+      dependencies jsonb default '[]'::jsonb,
       history_created_on timestamp with time zone not null default now()
     )
     """
@@ -102,16 +119,19 @@ def create_job_update_trigger_function(schema: str):
     BEGIN
         INSERT INTO {schema}.job_history (
             id, name, priority, data, state, retry_limit, retry_count, retry_delay, 
-            retry_backoff, start_after, started_on, expire_in, created_on, 
-            completed_on, keep_until, output, dead_letter, policy, history_created_on
+            retry_backoff, start_after, expire_in, created_on, started_on, 
+            completed_on, keep_until, output, dead_letter, policy, duration,
+            sla_interval, soft_sla, hard_sla, sla_miss_logged,
+            dag_id, job_level, dependencies, history_created_on
         )
-        SELECT 
+        VALUES (
             NEW.id, NEW.name, NEW.priority, NEW.data, NEW.state, NEW.retry_limit, 
             NEW.retry_count, NEW.retry_delay, NEW.retry_backoff, NEW.start_after, 
-            NEW.started_on, NEW.expire_in, NEW.created_on, NEW.completed_on, 
-            NEW.keep_until, NEW.output, NEW.dead_letter, NEW.policy,  now() as history_created_on
-        FROM {schema}.job
-        WHERE id = NEW.id;
+            NEW.expire_in, NEW.created_on, NEW.started_on, NEW.completed_on, 
+            NEW.keep_until, NEW.output, NEW.dead_letter, NEW.policy, NEW.duration,
+            NEW.sla_interval, NEW.soft_sla, NEW.hard_sla, NEW.sla_miss_logged,
+            NEW.dag_id, NEW.job_level, NEW.dependencies, now()
+        );
         RETURN NEW;
     END;
     $$ LANGUAGE plpgsql;
@@ -331,7 +351,13 @@ def create_dag_table(schema: str):
             started_on timestamp with time zone,
             completed_on timestamp with time zone,            
             created_on timestamp with time zone not null default now(),
-            updated_on timestamp with time zone not null default now()
+            updated_on timestamp with time zone not null default now(),
+            
+            duration interval,
+            sla_interval interval,
+            soft_sla timestamp with time zone,
+            hard_sla timestamp with time zone,
+            sla_miss_logged boolean not null default false
         );
     """
 
@@ -354,6 +380,11 @@ def create_dag_table_history(schema: str):
           completed_on     TIMESTAMP WITH TIME ZONE,          
           created_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
           updated_on       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          duration         INTERVAL,
+          sla_interval     INTERVAL,
+          soft_sla         TIMESTAMP WITH TIME ZONE,
+          hard_sla         TIMESTAMP WITH TIME ZONE,
+          sla_miss_logged  BOOLEAN,
         
           -- Timestamp for when this row was added to the history:
           history_created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
@@ -379,7 +410,12 @@ def create_dag_history_trigger_function(schema: str):
               started_on,
               completed_on,
               created_on,
-              updated_on
+              updated_on,
+              duration,
+              sla_interval,
+              soft_sla,
+              hard_sla,
+              sla_miss_logged
             )
             VALUES (
               NEW.id,
@@ -392,10 +428,15 @@ def create_dag_history_trigger_function(schema: str):
               NEW.started_on,
               NEW.completed_on,
               NEW.created_on,
-              NEW.updated_on
+              NEW.updated_on,
+              NEW.duration,
+              NEW.sla_interval,
+              NEW.soft_sla,
+              NEW.hard_sla,
+              NEW.sla_miss_logged
             );
             RETURN NEW;
-        
+
           ELSIF TG_OP = 'UPDATE' THEN
             INSERT INTO {schema}.dag_history (
               id,
@@ -408,7 +449,12 @@ def create_dag_history_trigger_function(schema: str):
               started_on,
               completed_on,
               created_on,
-              updated_on
+              updated_on,
+              duration,
+              sla_interval,
+              soft_sla,
+              hard_sla,
+              sla_miss_logged
             )
             VALUES (
               NEW.id,
@@ -421,10 +467,15 @@ def create_dag_history_trigger_function(schema: str):
               NEW.started_on,
               NEW.completed_on,
               NEW.created_on,
-              NEW.updated_on
+              NEW.updated_on,
+              NEW.duration,
+              NEW.sla_interval,
+              NEW.soft_sla,
+              NEW.hard_sla,
+              NEW.sla_miss_logged
             );
             RETURN NEW;
-        
+
           ELSIF TG_OP = 'DELETE' THEN
             INSERT INTO {schema}.dag_history (
               id,
@@ -437,7 +488,12 @@ def create_dag_history_trigger_function(schema: str):
               started_on,
               completed_on,
               created_on,
-              updated_on
+              updated_on,
+              duration,
+              sla_interval,
+              soft_sla,
+              hard_sla,
+              sla_miss_logged
             )
             VALUES (
               OLD.id,
@@ -450,7 +506,12 @@ def create_dag_history_trigger_function(schema: str):
               OLD.started_on,
               OLD.completed_on,
               OLD.created_on,
-              OLD.updated_on
+              OLD.updated_on,
+              OLD.duration,
+              OLD.sla_interval,
+              OLD.soft_sla,
+              OLD.hard_sla,
+              OLD.sla_miss_logged
             );
             RETURN OLD;
           END IF;
@@ -541,3 +602,43 @@ def create_dag_resolve_state_function(schema: str):
         END;
         $$;
     """
+
+
+def create_sql_from_file(schema: str, file_path: str) -> Optional[str]:
+    """
+    Reads a SQL file and substitutes the schema placeholder with the provided schema name.
+
+    Args:
+        schema: The schema name to substitute in the SQL file
+        file_path: Path to the SQL file
+
+    Returns:
+        The SQL content with schema substituted or raises an exception if the file does not exist or cannot be read.
+    """
+    if not os.path.exists(file_path):
+        raise Exception(f"SQL file does not exist: {file_path}")
+
+    try:
+        with open(file_path, 'r') as f:
+            sql_content = f.read()
+
+        # Replace schema placeholders (common patterns include {schema}, {SCHEMA}, $(schema))
+        patterns = [
+            (r'\{schema\}', schema),
+            (r'\{SCHEMA\}', schema),
+            (r'\$\(schema\)', schema),
+            (r'__SCHEMA__', schema),
+        ]
+
+        for pattern, replacement in patterns:
+            sql_content = re.sub(pattern, replacement, sql_content)
+
+        sql_content += '\n;'
+
+        # Add a comment indicating the source file
+        file_name = os.path.basename(file_path)
+        content = f"-- SQL from file: {file_name}\n" + sql_content
+
+        return content
+    except Exception as e:
+        raise Exception(f"Error reading SQL file {file_path}: {e}")

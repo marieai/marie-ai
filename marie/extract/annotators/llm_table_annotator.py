@@ -103,12 +103,6 @@ class LLMTableAnnotator(LLMAnnotator):
             table_output_dir,
         ) = setup_table_directories(self.working_dir, self.name)
 
-        # moved to a separate executor
-        # conf = OmegaConf.create({"grounding": {"table": []}})
-        # parse_tables(document, self.working_dir, src_dir=table_src_dir, conf=conf)
-        # highlight_tables(document, frames, htables_output_dir)
-        # extract_tables(document, frames, metadata={}, output_dir=table_annotated_dir)
-        #
         if False and os.listdir(table_annotated_fragments_dir):
             self.logger.info(
                 f"Output directory '{table_annotated_fragments_dir}' contains results. Skipping annotation..."
