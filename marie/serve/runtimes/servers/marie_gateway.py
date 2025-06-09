@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional
 from urllib.parse import urlparse
 
@@ -205,7 +205,8 @@ class MarieServerGateway(CompositeServer):
                 summary=f"Submit a job /api/submit",
             )
             async def job_submit(text: str):
-                self.logger.info(f"Received request at {datetime.now}")
+                now = datetime.now()
+                self.logger.info(f"Received request at {now}")
                 work_info = WorkInfo(
                     name="extract",
                     priority=0,
@@ -214,9 +215,11 @@ class MarieServerGateway(CompositeServer):
                     retry_limit=0,
                     retry_delay=0,
                     retry_backoff=False,
-                    start_after=datetime.now(),
+                    start_after=now,
                     expire_in_seconds=0,
-                    keep_until=datetime.now(),
+                    keep_until=now + timedelta(days=2),
+                    soft_sla=now,
+                    hard_sla=now + timedelta(hours=4),
                 )
 
                 result = await self.job_scheduler.submit_job(work_info)
@@ -479,14 +482,31 @@ class MarieServerGateway(CompositeServer):
             os.environ.get("MARIE_SILENCE_EXCEPTIONS", False)
         )
 
+        now = datetime.now()
         submission_model = JobSubmissionModel(**message)
         metadata = submission_model.metadata
         project_id = metadata.get("project_id", None)
         ref_type = metadata.get("ref_type", None)
         ref_id = metadata.get("ref_id", None)
         submission_policy = metadata.get("policy", None)
+        soft_sla = metadata.get("soft_sla", None)
+        hard_sla = metadata.get("hard_sla", None)
         retry = DEFAULT_RETRY_POLICY
         event_name = submission_model.name
+
+        if soft_sla is None:
+            soft_sla = now
+            hard_sla = now + timedelta(hours=4)
+        else:
+            if isinstance(soft_sla, str):
+                soft_sla = datetime.fromisoformat(soft_sla)
+            if isinstance(hard_sla, str):
+                hard_sla = datetime.fromisoformat(hard_sla)
+
+        if soft_sla > hard_sla:
+            return self.error_response(
+                "Soft SLA must be before Hard SLA", None, silence_exceptions
+            )
 
         # ensure that project_id, ref_type, ref_id are int  metadata of the submission model
         # we need this as this what we will use for Toast events
@@ -519,10 +539,12 @@ class MarieServerGateway(CompositeServer):
             retry_limit=retry.retry_limit,
             retry_delay=retry.retry_delay,
             retry_backoff=retry.retry_backoff,
-            start_after=datetime.now(),
+            start_after=now,
             expire_in_seconds=0,
-            keep_until=datetime.now(),
+            keep_until=now + timedelta(days=2),
             policy=submission_policy,
+            soft_sla=soft_sla,
+            hard_sla=hard_sla,
         )
 
         try:

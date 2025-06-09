@@ -322,7 +322,7 @@ class JobSupervisor:
             _lease_time = 5
             _lease = self._etcd_client.lease(_lease_time)
             res = self._etcd_client.put(key, status_str, lease=_lease)
-            self.logger.info(
+            self.logger.debug(
                 f"Updated Etcd with key {key}, status: {status_str}, lease time: {_lease_time}"
             )
         except Exception as e:

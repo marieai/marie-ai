@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
 
-from marie.constants import __config_dir__
+from marie.constants import __config_dir__, __default_extract_dir__
 from marie.query_planner.base import Query
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,18 @@ class MergerOperatorConfig(BaseOperator):
     """
 
     pass
+
+
+def has_mapper_config(base_dir: str, layout_name: str) -> bool:
+    """
+    Check if the mapper configuration file exists for a given layout.
+
+    :param base_dir: The base directory where the configuration files are located.
+    :param layout_name: The identifier for the layout configuration.
+    :return: True if the configuration file exists, False otherwise.
+    """
+    layout_cfg_path = os.path.join(base_dir, f"TID-{layout_name}", "mapper.yml")
+    return os.path.exists(layout_cfg_path)
 
 
 def get_mapper_config(base_dir: str, layout_name: str) -> DictConfig:
@@ -121,14 +133,13 @@ class JobMetadata(BaseModel):
         if not task_type:
             raise ValueError("Node type is not defined in the task.")
 
-        base_dir = os.path.join(__config_dir__, "extract")
-        if not os.path.exists(base_dir):
+        if not os.path.exists(__default_extract_dir__):
             raise FileNotFoundError(
-                f"Base directory does not exist: {base_dir}. "
+                f"Base directory does not exist: {__default_extract_dir__}. "
                 "Ensure the configuration files are correctly set up."
             )
 
-        layout_conf = get_mapper_config(base_dir, layout)
+        layout_conf = get_mapper_config(__default_extract_dir__, layout)
         logger.debug(
             f"Loaded layout config: {layout_conf}",
         )

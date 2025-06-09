@@ -51,7 +51,7 @@ class GlobalPriorityExecutionPlanner:
         annotated.sort(
             key=lambda t: (
                 -t[2],  # level
-                -t[3],  # priority
+                t[3],  # priority
                 -t[4],  # free_slots
                 t[5],  # is_new (False < True)
                 t[6],  # est. runtime

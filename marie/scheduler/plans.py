@@ -60,7 +60,9 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           retry_backoff,
           policy,
           dependencies,
-          job_level
+          job_level,
+          soft_sla,
+          hard_sla
         )
         SELECT
           id,
@@ -90,14 +92,18 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
           q.policy,          
           {dependencies_json} as dependencies,
-          job_level
+          j.job_level,
+          j.soft_sla,
+          j.hard_sla
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
                 '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
-                {work_info.job_level}::int as job_level,
+                {work_info.job_level}::int as job_level,                
+                CAST('{to_timestamp_with_tz(work_info.soft_sla)}' as timestamp with time zone) as soft_sla,
+                CAST('{to_timestamp_with_tz(work_info.hard_sla)}' as timestamp with time zone) as hard_sla,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
                 CASE

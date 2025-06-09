@@ -12,7 +12,11 @@ import psycopg2
 from rich.console import Console
 from rich.table import Table
 
-from marie.constants import __config_dir__
+from marie.constants import (
+    __default_extract_dir__,
+    __default_psql_dir__,
+    __default_schema_dir__,
+)
 from marie.excepts import BadConfigSource, RuntimeFailToStart
 from marie.helper import get_or_reuse_loop
 from marie.job.common import JobStatus
@@ -27,14 +31,13 @@ from marie.query_planner.base import (
     QueryPlan,
 )
 from marie.query_planner.builtin import register_all_known_planners
+from marie.query_planner.mapper import JobMetadata, has_mapper_config
 from marie.query_planner.planner import (
     PlannerInfo,
     compute_job_levels,
     plan_to_yaml,
-    print_sorted_nodes,
     query_planner,
     topological_sort,
-    visualize_query_plan_graph,
 )
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
@@ -60,7 +63,7 @@ from marie.scheduler.plans import (
     version_table_exists,
 )
 from marie.scheduler.state import WorkState
-from marie.scheduler.util import available_slots_by_executor, has_available_slot
+from marie.scheduler.util import available_slots_by_executor
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.storage.database.postgres import PostgresqlMixin
 
@@ -276,7 +279,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await self.fail(job_id, work_item)  # Fail-safe
 
                 if status.is_terminal():
-                    self.logger.info(
+                    self.logger.debug(
                         f"Job is in terminal state {status}, job_id: {job_id}"
                     )
                     await self.resolve_dag_status(job_id, work_item, now, now)
@@ -322,83 +325,69 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             # create_dag_resolve_state_function(schema),
             create_sql_from_file(
                 schema,
-                os.path.join(__config_dir__, "psql/schema", "resolve_dag_state.sql"),
+                os.path.join(__default_schema_dir__, "resolve_dag_state.sql"),
             ),
             create_sql_from_file(
                 schema,
-                os.path.join(__config_dir__, "psql/schema", "fetch_next_job.sql"),
+                os.path.join(__default_schema_dir__, "fetch_next_job.sql"),
             ),
             create_sql_from_file(
                 schema,
-                os.path.join(__config_dir__, "psql/schema", "delete_dag_and_jobs.sql"),
+                os.path.join(__default_schema_dir__, "delete_dag_and_jobs.sql"),
             ),
             create_sql_from_file(
                 schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "delete_failed_dags_and_jobs.sql"
-                ),
+                os.path.join(__default_schema_dir__, "delete_failed_dags_and_jobs.sql"),
             ),
             create_sql_from_file(
                 schema,
-                os.path.join(__config_dir__, "psql/schema", "delete_orphaned_jobs.sql"),
+                os.path.join(__default_schema_dir__, "delete_orphaned_jobs.sql"),
             ),
             create_sql_from_file(
                 schema,
                 os.path.join(
-                    __config_dir__, "psql/schema", "jobs_with_unmet_dependencies.sql"
+                    __default_schema_dir__, "jobs_with_unmet_dependencies.sql"
                 ),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "notify_dag_state_change.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "purge_non_started_work.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "ready_jobs_view.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "refresh_dag_durations.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "refresh_job_durations.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "reset_active_dags_and_jobs.sql"),
+            ),
+            create_sql_from_file(
+                schema, os.path.join(__default_schema_dir__, "reset_all.sql")
             ),
             create_sql_from_file(
                 schema,
                 os.path.join(
-                    __config_dir__, "psql/schema", "notify_dag_state_change.sql"
+                    __default_schema_dir__, "reset_completed_dags_and_jobs.sql"
                 ),
             ),
             create_sql_from_file(
                 schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "purge_non_started_work.sql"
-                ),
+                os.path.join(__default_schema_dir__, "reset_failed_dags_and_jobs.sql"),
             ),
             create_sql_from_file(
-                schema,
-                os.path.join(__config_dir__, "psql/schema", "ready_jobs_view.sql"),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "refresh_dag_durations.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "refresh_job_durations.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "reset_active_dags_and_jobs.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema, os.path.join(__config_dir__, "psql/schema", "reset_all.sql")
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "reset_completed_dags_and_jobs.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema,
-                os.path.join(
-                    __config_dir__, "psql/schema", "reset_failed_dags_and_jobs.sql"
-                ),
-            ),
-            create_sql_from_file(
-                schema, os.path.join(__config_dir__, "psql", "cront_job_init.sql")
+                schema, os.path.join(__default_psql_dir__, "cront_job_init.sql")
             ),
         ]
 
@@ -577,7 +566,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     )
 
                 # back off if no slots
-                self.logger.info(f"Available slots: {slots_by_executor}")
+                self.logger.debug(f"Available slots: {slots_by_executor}")
                 if not any(slots_by_executor.values()):
                     self.logger.debug("No available executor slots. Backing off.")
                     idle_streak += 1
@@ -611,43 +600,13 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 scheduled_any = False
 
                 if not flat_jobs:
-                    self.logger.info(
+                    self.logger.debug(
                         "Slots available but no ready jobs; sleeping briefly before next poll."
                     )
                     await asyncio.sleep(SHORT_POLL_INTERVAL)
                     continue
 
-                # Debug: Write the flat jobs plan to a file
-                from datetime import datetime
-
-                os.makedirs("/tmp/marie/plans", exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                debug_file_path = (
-                    f"/tmp/marie/plans/flat_jobs_plan_debug_{timestamp}.txt"
-                )
-                try:
-                    with open(debug_file_path, 'w') as debug_file:
-                        for queue_name, records in records_by_queue.items():
-                            debug_file.write(f"Queue: {queue_name}\n")
-                            for record in records:
-                                debug_file.write(f"  Records:  {record},\n")
-                        debug_file.write("\n\n")
-                        debug_file.write("Jobs Plan:\n")
-                        for entrypoint, work_info in flat_jobs:
-                            debug_file.write(
-                                f"Entrypoint: {entrypoint}, "
-                                f"Work ID: {work_info.id}, "
-                                f"Priority: {work_info.priority}, "
-                                f"Job Level: {work_info.job_level}, "
-                                f"DAG ID: {work_info.dag_id}\n"
-                            )
-                    self.logger.info(
-                        f"Flat jobs plan written to {debug_file_path} for analysis."
-                    )
-                except Exception as debug_error:
-                    self.logger.error(
-                        f"Failed to write flat jobs plan to debug file: {debug_error}"
-                    )
+                await self.debug_work_plans(flat_jobs, records_by_queue)
 
                 for entrypoint, work_info in flat_jobs:
                     executor = entrypoint.split("://")[0]
@@ -728,6 +687,37 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     await asyncio.sleep(60)
                     failures = 0
 
+    async def debug_work_plans(self, flat_jobs, records_by_queue):
+        # Debug: Write the flat jobs plan to a file
+        from datetime import datetime
+
+        os.makedirs("/tmp/marie/plans", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_file_path = f"/tmp/marie/plans/flat_jobs_plan_debug_{timestamp}.txt"
+        try:
+            with open(debug_file_path, 'w') as debug_file:
+                for queue_name, records in records_by_queue.items():
+                    debug_file.write(f"Queue: {queue_name}\n")
+                    for record in records:
+                        debug_file.write(f"  Records:  {record},\n")
+                debug_file.write("\n\n")
+                debug_file.write("Jobs Plan:\n")
+                for entrypoint, work_info in flat_jobs:
+                    debug_file.write(
+                        f"Entrypoint: {entrypoint}, "
+                        f"Work ID: {work_info.id}, "
+                        f"Priority: {work_info.priority}, "
+                        f"Job Level: {work_info.job_level}, "
+                        f"DAG ID: {work_info.dag_id}\n"
+                    )
+            self.logger.debug(
+                f"Flat jobs plan written to {debug_file_path} for analysis."
+            )
+        except Exception as debug_error:
+            self.logger.error(
+                f"Failed to write flat jobs plan to debug file: {debug_error}"
+            )
+
     async def stop(self, timeout: float = 2.0) -> None:
         self.logger.info("Stopping job scheduling agent")
         self.running = False
@@ -760,7 +750,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :param work_info: The information about the work item to be processed.
         :return: The ID of the work item if successfully enqueued, None otherwise.
         """
-        self.logger.info(f"Enqueuing work item : {work_info.id}")
+        self.logger.debug(f"Enqueuing work item : {work_info.id}")
         submission_id = work_info.id
         entrypoint = work_info.data.get("metadata", {}).get("on")
         if not entrypoint:
@@ -992,7 +982,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 f"Job with submission_id {submission_id} already exists."
                 f"For work item : {work_info}."
             )
-        # TODO:
+        # TODO: generate a unique dag_id if not provided
         dag_id = submission_id  # generate_job_id()
         dag_name = f"{dag_id}_dag"
         work_info.dag_id = dag_id
@@ -1037,7 +1027,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 "Please use a different submission_id."
             )
 
-        self.logger.info(f"Job NOTIFY START with ID: {submission_id}")
         await self.notify_event()
         return submission_id
 
@@ -1612,25 +1601,17 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
 
     planner_info = PlannerInfo(name=query_planner_name, base_id=work_info.id)
     plan = query_planner(planner_info)
-
     # pprint(plan.model_dump())
-
-    visualize_query_plan_graph(plan)
+    # visualize_query_plan_graph(plan)
     yml_str = plan_to_yaml(plan)
-
-    # json_str = plan_to_json(plan)
-    # pprint(yml_str)
-    # print("-----------------")
-    # pprint(json_str)
 
     sorted_nodes = topological_sort(plan)
     job_levels = compute_job_levels(sorted_nodes, plan)
     # print("Topologically sorted nodes:", sorted_nodes)
-    print_sorted_nodes(sorted_nodes, plan)
+    # print_sorted_nodes(sorted_nodes, plan)
 
     dag_nodes = []
     node_dict = {node.task_id: node for node in plan.nodes}
-    from marie.query_planner.mapper import JobMetadata
 
     for i, task_id in enumerate(sorted_nodes):
         node = node_dict.get(task_id)
@@ -1638,14 +1619,17 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
         wi.id = node.task_id
         wi.job_level = job_levels[task_id]
 
-        # FIXME : FOR TESTING ONLY
-        # FIXME : This has to be configurable
-        if wi.name == 'gen5_extract':
+        if has_mapper_config(__default_extract_dir__, query_planner_name):
             meta = JobMetadata.from_task(node, query_planner_name)
             meta_dict = meta.model_dump()  # need plain dict
             metadata = meta_dict["metadata"]
             wi.data['metadata'].update(metadata)
-            # we need to add the dependencies to the root node
+        else:
+            logger.warning(
+                f"No mapper configuration found for {query_planner_name}, "
+                "using default metadata."
+            )
+
         if i == 0:
             # this should already been handled by the query planner
             if node.dependencies:
@@ -1656,7 +1640,6 @@ def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo
             wi.dependencies = []
         else:
             wi.dependencies = node.dependencies
-        # print(f"  -- item : {wi}")
         dag_nodes.append(wi)
 
     return plan, dag_nodes
