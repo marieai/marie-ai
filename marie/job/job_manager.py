@@ -88,9 +88,7 @@ class JobManager:
         self._job_distributor = job_distributor
         self.event_publisher = EventPublisher()
         self._log_client = JobLogStorageClient()
-        self._etcd_client = (
-            etcd_client  # EtcdClient("localhost", 2379, namespace="marie")
-        )
+        self._etcd_client = etcd_client
         self._job_info_client = JobInfoStorageClientProxy(self.event_publisher, storage)
         self.monitored_jobs = set()
 

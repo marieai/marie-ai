@@ -172,10 +172,14 @@ class MarieServerGateway(CompositeServer):
         # FIXME : We need to get etcd host and port from the config
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
-        etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+        self.etcd_client = EtcdClient(
+            self.args["discovery_host"], self.args["discovery_port"], namespace="marie"
+        )
 
         job_manager = JobManager(
-            storage=storage, job_distributor=self.distributor, etcd_client=etcd_client
+            storage=storage,
+            job_distributor=self.distributor,
+            etcd_client=self.etcd_client,
         )
         self.job_scheduler = PostgreSQLJobScheduler(
             config=job_scheduler_kwargs, job_manager=job_manager
@@ -723,8 +727,9 @@ class MarieServerGateway(CompositeServer):
         async def _start_watcher():
             try:
                 self.resolver = EtcdServiceResolver(
-                    etcd_host,
-                    etcd_port,
+                    etcd_client=self.etcd_client,
+                    # etcd_host,
+                    # etcd_port,
                     namespace="marie",
                     start_listener=False,
                     listen_timeout=watchdog_interval,
