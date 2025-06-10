@@ -5,8 +5,9 @@ from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlanRegistry
 from marie.query_planner.ocr_planner import PLAN_ID as EXTRACT_PLAN_ID
 from marie.query_planner.ocr_planner import query_planner_extract
-from marie.query_planner.planners.corr.corr_planner import PLAN_ID as CORR_PLAN_ID
-from marie.query_planner.planners.corr.corr_planner import query_planner_corr
+
+# from marie.query_planner.planners.corr.corr_planner import PLAN_ID as CORR_PLAN_ID
+# from marie.query_planner.planners.corr.corr_planner import query_planner_corr
 
 
 def register_from_module(planner_module: str) -> None:
@@ -43,7 +44,7 @@ def register_all_known_planners():
     """
     logger.info("Registering all known planners")
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
-    QueryPlanRegistry.register(CORR_PLAN_ID, query_planner_corr)
+    # QueryPlanRegistry.register(CORR_PLAN_ID, query_planner_corr)
 
     # WARNING: The following is hardcoded and needs to be dynamically loaded from CONFIG.
     warnings.warn(
@@ -53,6 +54,7 @@ def register_all_known_planners():
     planner_modules = [
         "grapnel_g5.query.tid_100985.query",
         "grapnel_g5.query.tid_121880.query",
+        "marie.query_planner.planners.corr.corr_planner",
     ]
 
     for planner_module in planner_modules:

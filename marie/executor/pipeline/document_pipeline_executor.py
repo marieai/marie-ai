@@ -120,9 +120,9 @@ class DocumentPipelineExecutor(MarieExecutor, StorageMixin):
     def default(self, parameters, **kwargs):
         return {"valid": True}
 
-    @requests(on="/document/classify")
-    # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supportedncoded
-    def classify(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
+    def run_pipeline(
+        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
+    ):
         if len(docs) == 0:
             return {"error": "empty payload"}
         if len(docs) > 1:
