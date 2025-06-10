@@ -72,6 +72,8 @@ class DiscoveryServiceMixin:
         ctrl_address = f"{scheme}://{host}:{port}"
         ctrl_address = f"{host}:{port}"
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
+        self.logger.info(f"Deployments ctrl_address: {ctrl_address}")
+        self.logger.info(f"Deployments runtime_args: {runtime_args}")
 
         # TODO - this should be configurable
         service_ttl = 6

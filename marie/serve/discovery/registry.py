@@ -243,7 +243,7 @@ def main():
         "--host",
         help="the etcd host, default = 127.0.0.1",
         required=False,
-        default="127.0.0.1",
+        default="127.0.0.1XXX",
     )
     parser.add_argument(
         "--port",

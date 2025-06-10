@@ -2,14 +2,14 @@ import functools
 import logging
 import time
 from collections import namedtuple
-from typing import Callable, Dict, Mapping, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 from urllib.parse import quote as _quote
 from urllib.parse import unquote
 
 import etcd3
 import grpc
-from etcd3 import etcdrpc
-from etcd3.client import EtcdTokenCallCredentials
+from etcd3 import MultiEndpointEtcd3Client, etcdrpc
+from etcd3.client import Etcd3Client, EtcdTokenCallCredentials
 from grpc._channel import _Rendezvous
 
 __all__ = ["EtcdClient", "Event"]
@@ -126,24 +126,98 @@ class EtcdClient(object):
 
     def __init__(
         self,
-        etcd_host,
-        etcd_port,
-        namespace="marie",
-        credentials=None,
-        encoding="utf8",
-        retry_times=10,
+        etcd_host: Optional[str] = None,
+        etcd_port: Optional[int] = None,
+        endpoints: Optional[List[Union[str, Tuple[str, int]]]] = None,
+        namespace: str = "marie",
+        credentials: Optional[Dict[str, str]] = None,
+        encoding: str = "utf8",
+        retry_times: int = 10,
+        ca_cert: Optional[str] = None,
+        cert_key: Optional[str] = None,
+        cert_cert: Optional[str] = None,
+        timeout: float = 5.0,
+        grpc_options: Optional[List[Tuple[str, Any]]] = None,
     ):
-        self.client = None  # type: etcd3.client
-        self._host = etcd_host
-        self._port = etcd_port
-        self._client_idx = 0
-        self._cluster = None
-        self.encoding = encoding
-        self.retry_times = 3  # retry_times
-        self.ns = namespace
-        self._creds = credentials
+
+        self.client: Optional[Union[Etcd3Client, MultiEndpointEtcd3Client]] = None
+        self._host: Optional[str] = etcd_host
+        self._port: Optional[int] = etcd_port
+        self._endpoints: List[Tuple[str, int]] = self._normalize_endpoints(
+            endpoints, etcd_host, etcd_port
+        )
+        self._client_idx: int = 0
+        self._cluster: Optional[List[Any]] = None
+        self.encoding: str = encoding
+        self.retry_times: int = retry_times
+        self.ns: str = namespace
+        self._creds: Optional[Dict[str, str]] = credentials
+        self._ca_cert: Optional[str] = ca_cert
+        self._cert_key: Optional[str] = cert_key
+        self._cert_cert: Optional[str] = cert_cert
+        self._timeout: float = timeout
+        self._grpc_options: List[Tuple[str, Any]] = grpc_options or []
+        self._is_multi_endpoint: bool = len(self._endpoints) > 1
 
         self.connect()
+
+    def _normalize_endpoints(self, endpoints, etcd_host, etcd_port):
+        """Normalize various input formats to a list of (host, port) tuples."""
+        if endpoints:
+            # Handle different endpoint formats
+            normalized = []
+            for endpoint in endpoints:
+                if isinstance(endpoint, tuple):
+                    # Already a tuple (host, port)
+                    normalized.append(endpoint)
+                elif isinstance(endpoint, str):
+                    # String format like "host:port" or just "host"
+                    if ':' in endpoint:
+                        host, port = endpoint.split(':', 1)
+                        normalized.append((host, int(port)))
+                    else:
+                        # Default to port 2379 if not specified
+                        normalized.append((endpoint, 2379))
+                else:
+                    raise ValueError(f"Invalid endpoint format: {endpoint}")
+            return normalized
+        elif etcd_host and etcd_port:
+            # Single endpoint from host/port
+            return [(etcd_host, etcd_port)]
+        else:
+            raise ValueError(
+                "Either 'endpoints' or 'etcd_host'/'etcd_port' must be provided"
+            )
+
+    def _create_client(self) -> Union[Etcd3Client, MultiEndpointEtcd3Client]:
+        """Create the appropriate etcd client based on endpoint configuration."""
+        client_kwargs = {
+            'timeout': self._timeout,
+            'grpc_options': self._grpc_options,
+        }
+
+        # Add credentials
+        if self._creds:
+            client_kwargs['user'] = self._creds.get("user")
+            client_kwargs['password'] = self._creds.get("password")
+
+        # Add TLS certificates if provided
+        if self._ca_cert:
+            client_kwargs['ca_cert'] = self._ca_cert
+        if self._cert_key:
+            client_kwargs['cert_key'] = self._cert_key
+        if self._cert_cert:
+            client_kwargs['cert_cert'] = self._cert_cert
+
+        if self._is_multi_endpoint:
+            client_kwargs['endpoints'] = self._endpoints
+            return MultiEndpointEtcd3Client(**client_kwargs)
+        else:
+            # Use single endpoint client
+            host, port = self._endpoints[0]
+            client_kwargs['host'] = host
+            client_kwargs['port'] = port
+            return etcd3.client(**client_kwargs)
 
     def _mangle_key(self, key: str) -> bytes:
         if key.startswith("/"):
@@ -159,27 +233,41 @@ class EtcdClient(object):
         return k
 
     def call(self, method, *args, **kwargs):
-        """Etcd operation proxy method."""
+        """Etcd operation proxy method with improved failover."""
         if self._cluster is None:
             raise RuntimeFailToStart("Etcd client not initialized.")
 
         times = 0
         while times < self.retry_times:
-            client = self._cluster[self._client_idx]
+            if self._is_multi_endpoint:
+                # For multi-endpoint client, use the client directly (it handles failover)
+                client = self.client
+            else:
+                # For single endpoint, use the cluster failover logic
+                client = self._cluster[self._client_idx]
+
             try:
                 ret = getattr(client, method)(*args, **kwargs)
                 return ret
             except _Rendezvous as e:
                 if e.code() in self._suffer_status_code:
                     times += 1
-                    self._client_idx = (self._client_idx + 1) % len(self._cluster)
+                    if not self._is_multi_endpoint:
+                        # Only cycle through cluster members for single endpoint
+                        self._client_idx = (self._client_idx + 1) % len(self._cluster)
                     log.info(f"Failed with exception {e}, retry after 1 second.")
                     time.sleep(1)
+                    continue
                 raise e  # raise exception if not in suffer status code
             except Exception as e:
                 times += 1
+                if not self._is_multi_endpoint:
+                    # Only cycle through cluster members for single endpoint
+                    self._client_idx = (self._client_idx + 1) % len(self._cluster)
                 log.info(f"Failed with exception {e}, retry after 1 second.")
                 time.sleep(1)
+
+        raise ValueError(f"Failed after {times} times.")
 
         raise ValueError(f"Failed after {times} times.")
 
@@ -395,20 +483,32 @@ class EtcdClient(object):
         return connected
 
     def connect(self) -> bool:
-        addr = f"{self._host}:{self._port}"
+        """Connect to etcd using the appropriate client type."""
         times = 0
         last_ex = None
 
         while times < self.retry_times:
             try:
-                self.client = etcd3.client(
-                    host=self._host,
-                    port=self._port,
-                    user=self._creds.get("user") if self._creds else None,
-                    password=self._creds.get("password") if self._creds else None,
-                )
-                self._cluster = [member._etcd_client for member in self.client.members]
+                self.client = self._create_client()
+
+                if self._is_multi_endpoint:
+                    log.info(
+                        f'Connected to etcd using multi-endpoint client: {self._endpoints}'
+                    )
+                    # For multi-endpoint client, we use the client directly
+                    self._cluster = [self.client]
+                else:
+                    host, port = self._endpoints[0]
+                    log.info(
+                        f'Connected to etcd using single-endpoint client: {host}:{port}'
+                    )
+                    # Build cluster from members for single endpoint
+                    self._cluster = [
+                        member._etcd_client for member in self.client.members
+                    ]
+
                 break
+
             except grpc.RpcError as e:
                 times += 1
                 last_ex = e
@@ -419,12 +519,58 @@ class EtcdClient(object):
                     time.sleep(1)
                     continue
                 raise e
+            except Exception as e:
+                times += 1
+                last_ex = e
+                log.error(
+                    f"etcd3 connection failed with {e}. retrying after 1 sec, attempt # {times} of {self.retry_times}"
+                )
+                time.sleep(1)
+
         if times >= self.retry_times:
             raise RuntimeFailToStart(
-                f"Initialize etcd client failed failed after {self.retry_times} times. Due to {last_ex}"
+                f"Initialize etcd client failed after {self.retry_times} times. Due to {last_ex}"
             )
-        log.info(f'using etcd cluster from {addr} with namespace "{self.ns}"')
+
+        log.info(f'Connected to etcd with namespace "{self.ns}"')
         return True
+
+
+def client_examples():
+    # These all work the same way
+    etcd_client = EtcdClient("localhost", 2379, namespace="marie")
+    etcd_client = EtcdClient(etcd_host="localhost", etcd_port=2379, namespace="marie")
+    etcd_client = EtcdClient(endpoints=["localhost:2379"], namespace="marie")
+
+    # List of tuples
+    etcd_client = EtcdClient(
+        endpoints=[
+            ("etcd-node1.example.com", 2379),
+            ("etcd-node2.example.com", 2379),
+            ("etcd-node3.example.com", 2379),
+        ],
+        namespace="marie",
+    )
+
+    # List of strings with ports
+    etcd_client = EtcdClient(
+        endpoints=[
+            "etcd-node1.example.com:2379",
+            "etcd-node2.example.com:2379",
+            "etcd-node3.example.com:2379",
+        ],
+        namespace="marie",
+    )
+
+    # Mixed formats (defaults to port 2379 if not specified)
+    etcd_client = EtcdClient(
+        endpoints=[
+            "etcd-node1.example.com",  # Uses port 2379
+            "etcd-node2.example.com:2380",  # Uses port 2380
+            ("etcd-node3.example.com", 2381),  # Uses port 2381
+        ],
+        namespace="marie",
+    )
 
 
 if __name__ == "__main__":

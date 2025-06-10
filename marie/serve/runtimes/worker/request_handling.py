@@ -1636,8 +1636,15 @@ class WorkerRequestHandler:
             "host": get_ip_address(flush_cache=False),
         }
 
-    def _init_etcd(self, etcd_host, etcd_port):
-        etcd_client = EtcdClient(etcd_host, etcd_port, namespace="marie")
+    def _init_etcd(
+        self, etcd_host: str = None, etcd_port: int = None, etcd_endpoints: [] = None
+    ):
+        etcd_client = EtcdClient(
+            etcd_host=etcd_host,
+            etcd_port=etcd_port,
+            endpoints=etcd_endpoints,
+            namespace="marie",
+        )
         return etcd_client
 
     def _set_deployment_status(
