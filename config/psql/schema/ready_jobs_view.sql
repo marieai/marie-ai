@@ -1,12 +1,6 @@
 CREATE OR REPLACE VIEW marie_scheduler.ready_jobs_view AS
 WITH candidate_jobs AS (
-    SELECT *,
-       CASE
-          WHEN NOW() > hard_sla THEN 'missed_hard'
-          WHEN NOW() > soft_sla THEN 'missed_soft'
-          WHEN soft_sla IS NOT NULL THEN 'on_time'
-          ELSE 'no_sla'
-        END AS sla_tier
+    SELECT *
     FROM marie_scheduler.job
     WHERE state < 'active'
       AND start_after < now()

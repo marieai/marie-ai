@@ -112,7 +112,7 @@ with:
     max_pool_size: 5
     max_connections: 5
 
-  host: 127.0.0.1
+  host: 0.0.0.0
 
 # monitoring done by grafana/prometheus has been deprecated in favor of open-telemetry
 #  monitoring: false
@@ -168,8 +168,8 @@ prefetch: 4
 executors:
    - name: extract_executor
      uses:
-       jtype: TextExtractionExecutor
-#       jtype: TextExtractionExecutorMock
+#       jtype: TextExtractionExecutor
+       jtype: TextExtractionExecutorMock
        with:
          storage:
            # postgresql configuration. Will be used only if value of backend is "psql"
