@@ -24,7 +24,7 @@ docker exec -it etcd etcdctl version
 docker exec -it etcd etcdctl put 'hello' 'value-1'
 docker exec -it etcd etcdctl put 'world' 'value-2'
  
-docker exec -it etcd etcdctl get "" --prefix=true
+docker exec -it etcd etcdctl get "" --prefix=true[marie-g5-annotator_table_parser.yml](../../../../../../../../mnt/data/marie-ai/config/service/g5/marie-g5-annotator_table_parser.yml)
 docker exec -it etcd etcdctl get "" --from-key
 ```
 
@@ -34,7 +34,6 @@ docker exec -it etcd etcdctl get "" --from-key
 ```bash
 docker exec -it etcd etcdctl del "" --from-key=true
 ```
-  
 
 ## Install the `etcd3` package
 

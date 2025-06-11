@@ -33,6 +33,7 @@ from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.discovery.etcd_client import EtcdClient
+from marie.serve.discovery.etcd_manager import get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
@@ -1646,6 +1647,24 @@ class WorkerRequestHandler:
             namespace="marie",
         )
         return etcd_client
+
+    def _init_etcd3(self):
+        """Initialize etcd client."""
+        # FIXME : the args are not used right now.
+        if self.args.discovery_host and self.args.discovery_port:
+            # Convert args to dict format
+            etcd_args = {
+                'discovery_host': self.args.discovery_host,
+                'discovery_port': self.args.discovery_port,
+                'etcd_namespace': getattr(self.args, 'etcd_namespace', 'marie'),
+                'etcd_timeout': 10.0,  # Add timeout
+                'etcd_retry_times': 5,  # Add retry times
+            }
+            _etcd_client = get_etcd_client(etcd_args)
+        else:
+            # originally initialized via gateway
+            _etcd_client = get_etcd_client()
+        return _etcd_client
 
     def _set_deployment_status(
         self, status: health_pb2.HealthCheckResponse.ServingStatus
