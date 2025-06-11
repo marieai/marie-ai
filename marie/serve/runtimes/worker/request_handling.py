@@ -34,8 +34,7 @@ from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
 from marie.serve.discovery.container import EtcdConfig
-from marie.serve.discovery.etcd_client import EtcdClient
-from marie.serve.discovery.etcd_manager import get_etcd_client
+from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
@@ -189,7 +188,7 @@ class WorkerRequestHandler:
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
 
         # discovery
-        etcd_args = self._convert_to_etcd_args()
+        etcd_args = convert_to_etcd_args(self.args)
         etcd_config = EtcdConfig.from_dict(etcd_args)
         self._lease_time = etcd_config.lease_sec
         self._heartbeat_time = etcd_config.heartbeat_sec
@@ -1640,30 +1639,6 @@ class WorkerRequestHandler:
             "runtime_name": self.args.name,
             "host": get_ip_address(flush_cache=False),
         }
-
-    def _convert_to_etcd_args(self):
-        discovery_host = getattr(self.args, 'discovery_host', None)
-        if not discovery_host:
-            warnings.warn(
-                "The `discovery_host` is not defined. Defaulting to `127.0.0.1`. Please ensure this is intentional.",
-                UserWarning,
-            )
-            discovery_host = '127.0.0.1'  # Default value
-
-        etcd_args = {
-            'host': discovery_host,
-            'port': getattr(self.args, 'discovery_port', 2379),
-            'namespace': getattr(self.args, 'discovery_namespace', 'marie'),
-            'timeout': getattr(self.args, 'discovery_timeout_sec', 10),
-            'retry_times': getattr(self.args, 'discovery_retry_times', 5),
-            'lease_sec': getattr(self.args, 'discovery_lease_sec', 6),
-            'heartbeat_sec': getattr(self.args, 'discovery_heartbeat_sec', 1.5),
-            'ca_cert': getattr(self.args, 'discovery_ca_cert', None),
-            'cert_key': getattr(self.args, 'discovery_cert_key', None),
-            'cert_cert': getattr(self.args, 'discovery_cert_cert', None),
-            'grpc_options': getattr(self.args, 'discovery_grpc_options', None),
-        }
-        return etcd_args
 
     def _set_deployment_status(
         self, status: health_pb2.HealthCheckResponse.ServingStatus

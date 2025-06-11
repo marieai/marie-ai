@@ -50,6 +50,7 @@ def register_all_known_planners():
     warnings.warn(
         "The planner_modules list is currently hardcoded. This should be replaced with a dynamic configuration loader."
     )
+
     # TODO : This needs to load from CONFIG
     planner_modules = [
         "grapnel_g5.query.tid_100985.query",
