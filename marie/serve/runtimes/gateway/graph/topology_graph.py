@@ -463,16 +463,16 @@ class TopologyGraph:
                     try:
 
                         # Debug information to log and understand the process
-                        self.logger.info(
+                        self.logger.debug(
                             f"Sending requests for deployment: {self.name}"
                         )
                         # self.logger.info(f"Metadata: {metadata}")
-                        self.logger.info(f"Endpoint: {endpoint}")
-                        self.logger.info(
+                        self.logger.debug(f"Endpoint: {endpoint}")
+                        self.logger.debug(
                             f"Request parameters: {req_to_send.parameters}"
                         )
-                        self.logger.info(f"Timeout: {self._timeout_send}")
-                        self.logger.info(f"Retries: {self._retries}")
+                        self.logger.debug(f"Timeout: {self._timeout_send}")
+                        self.logger.debug(f"Retries: {self._retries}")
 
                         task = connection_pool.send_requests_once(
                             requests=self.parts_to_send,

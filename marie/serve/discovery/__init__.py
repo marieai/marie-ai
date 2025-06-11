@@ -2,6 +2,7 @@ import json
 from typing import TYPE_CHECKING, Dict, Optional
 
 from marie.enums import ProtocolType
+from marie.helper import get_internal_ip
 from marie.serve.discovery.address import JsonAddress
 from marie.serve.discovery.registry import EtcdServiceRegistry
 
@@ -72,6 +73,8 @@ class DiscoveryServiceMixin:
         ctrl_address = f"{scheme}://{host}:{port}"
         ctrl_address = f"{host}:{port}"
         self.logger.info(f"Deployments addresses: {deployments_addresses}")
+        self.logger.info(f"Deployments ctrl_address: {ctrl_address}")
+        self.logger.info(f"Deployments runtime_args: {runtime_args}")
 
         # TODO - this should be configurable
         service_ttl = 6
@@ -89,11 +92,25 @@ class DiscoveryServiceMixin:
         self.logger.info(f"Registering service : {name}")
         for deployment_name, deployment_addresses in deployments_addresses.items():
             for deployment_address in deployment_addresses:
+                # TODO: we need to handle both internal and public IPs or have a way to distinguish between them
+                # TODO: Long term solution is to have a way to register both internal and public IPs at this same time
+                # When registering the deployment with ETCD, we need to ensure that IP can access from another machine
+                # get_internal_ip()  or   get_public_ip()
+
+                if "://" in deployment_address:
+                    scheme, address = deployment_address.split("://")
+                    ip, port = address.split(":")
+                    private_ip = get_internal_ip()
+                    deployment_address = f"{scheme}://{private_ip}:{port}"
+                else:
+                    ip, port = deployment_address.split(":")
+                    private_ip = get_internal_ip()
+                    deployment_address = f"{private_ip}:{port}"
+
                 single_deployments_addresses = {
                     deployment_name: [deployment_address]
                 }  # we keeping the original format
                 single_ctrl_address = deployment_address
-                # grpc://127.0.0.1:52271 -> parse the schema out if it exists
                 if "://" in deployment_address:
                     single_ctrl_address = deployment_address.split("://")[1]
 

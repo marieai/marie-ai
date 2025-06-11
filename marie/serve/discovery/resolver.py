@@ -308,19 +308,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-if __name__ == "__main__XXX":
-    resolver = EtcdServiceResolver(
-        "127.0.0.1", 2379, namespace="marie", start_listener=False, listen_timeout=5
-    )
-    print(resolver.resolve("gateway/service_test"))
-
-    resolver.watch_service(
-        "gateway/service_test",
-        lambda service, event: print("Event from service : ", service, event),
-    )
-
-    while True:
-        print("Checking service address...")
-        # print(resolver.resolve('service_test'))
-        time.sleep(2)

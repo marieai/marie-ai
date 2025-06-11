@@ -60,7 +60,9 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           retry_backoff,
           policy,
           dependencies,
-          job_level
+          job_level,
+          soft_sla,
+          hard_sla
         )
         SELECT
           id,
@@ -90,14 +92,18 @@ def insert_job(schema: str, work_info: WorkInfo) -> str:
           COALESCE(j.retry_backoff, q.retry_backoff, retry_backoff_default, false) as retry_backoff,
           q.policy,          
           {dependencies_json} as dependencies,
-          job_level
+          j.job_level,
+          j.soft_sla,
+          j.hard_sla
         FROM
         ( SELECT
                 '{work_info.id}'::uuid as id,
                 '{work_info.dag_id}'::uuid as dag_id,
                 '{work_info.name}'::text as name,
                 {work_info.priority}::int as priority,
-                {work_info.job_level}::int as job_level,
+                {work_info.job_level}::int as job_level,                
+                CAST('{to_timestamp_with_tz(work_info.soft_sla)}' as timestamp with time zone) as soft_sla,
+                CAST('{to_timestamp_with_tz(work_info.hard_sla)}' as timestamp with time zone) as hard_sla,
                 '{WorkState.CREATED.value}'::{schema}.job_state as state,
                 {work_info.retry_limit}::int as retry_limit,
                 CASE
@@ -225,58 +231,22 @@ def fetch_next_job(schema: str):
         priority: bool = True,
         mark_as_active: bool = False,
     ) -> str:
+        """
+        Constructs a SQL query that calls the stored function to fetch the next job(s),
+        using the standardized DAG-aware dependency logic and state transitions.
+        """
+        # Use schema-qualified function call
+        function_call = f"{schema}.fetch_next_job('{name}', {batch_size}, {'TRUE' if mark_as_active else 'FALSE'})"
 
-        if mark_as_active:
-            return f"""
-            WITH next AS (
-                SELECT id
-                FROM {schema}.job
-                WHERE name = '{name}'
-                  AND state < '{WorkState.ACTIVE.value}'
-                  AND start_after < now()
-                  AND (dependencies IS NULL OR jsonb_array_length(dependencies) = 0) -- Ensure no pending dependencies
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM {schema}.dag AS d
-                      WHERE d.id = j.dag_id
-                      AND d.state = 'completed'
-                  )
-                 ORDER BY dag_id, job_level ASC, {'priority DESC, ' if priority else ''} created_on, id
-                LIMIT {batch_size}
-            )
-            UPDATE {schema}.job j SET
-                state = '{WorkState.ACTIVE.value}',
-                started_on = now(),
-                retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
-            FROM next
-            WHERE name = '{name}' AND j.id = next.id
-            RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until,dag_id, job_level'}
-            """
+        # Select only relevant columns if include_metadata is False
+        if include_metadata:
+            return f"SELECT * FROM {function_call};"
         else:
-            return f"""
-                SELECT {'j.*' if include_metadata else 'j.id,j.name, j.priority,j.state,j.retry_limit,j.start_after,j.expire_in,j.data,j.retry_delay,j.retry_backoff,j.keep_until,j.dag_id, j.job_level'}
-                FROM {schema}.job AS j
-                WHERE j.name = '{name}'
-                  AND j.state < '{WorkState.ACTIVE.value}'
-                  AND j.start_after < now()
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM {schema}.job AS d
-                      WHERE d.id IN (
-                          SELECT value::uuid
-                          FROM jsonb_array_elements_text(j.dependencies)
-                      )
-                      AND d.state != 'completed'
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM {schema}.dag AS d
-                      WHERE d.id = j.dag_id
-                      AND d.state = 'completed'
-                  )
-                  ORDER BY dag_id, job_level ASC,  {'priority DESC, ' if priority else ''} created_on, id
-                LIMIT {batch_size}
-            """
+            return (
+                "SELECT id, name, priority, state, retry_limit, start_after, expire_in, "
+                "data, retry_delay, retry_backoff, keep_until, dag_id, job_level "
+                f"FROM {function_call};"
+            )
 
     return query
 

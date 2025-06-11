@@ -39,7 +39,7 @@ BEGIN
 
     RETURN NULL;
 END;
-$$ LANGUAGE plpgsql
+$$ LANGUAGE plpgsql;
 
 
 -- Create trigger for UPDATE and DELETE on dag table
@@ -50,12 +50,5 @@ AFTER UPDATE OR DELETE ON marie_scheduler.dag
 FOR EACH ROW
 EXECUTE FUNCTION marie_scheduler.notify_dag_state_change();
 
-
 -- DROP TRIGGER trg_notify_dag_delete ON marie_scheduler.dag;
 -- DROP FUNCTION notify_dag_state_change
-
--- VERIFY TRIGGERS
-SELECT event_object_table, trigger_name, action_timing, event_manipulation
-FROM information_schema.triggers
-WHERE event_object_table = 'dag';
-

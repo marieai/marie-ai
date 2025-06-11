@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import warnings
 from typing import Any, Optional, Union
@@ -7,7 +8,7 @@ import numpy as np
 import torch
 from docarray import DocList
 
-from marie import Executor, requests, safely_encoded
+from marie import Executor, monitor, requests, safely_encoded
 from marie.api import value_from_payload_or_args
 from marie.api.docs import AssetKeyDoc, OutputDoc, StorageDoc
 from marie.boxes import PSMode
@@ -81,7 +82,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        has_cuda = True if self.device.type.startswith("cuda") else False
+        self.has_cuda = True if self.device.type.startswith("cuda") else False
 
         num_threads = max(1, torch.get_num_threads())
         if not self.device.type.startswith("cuda") and (
@@ -105,7 +106,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         setup_torch_optimizations(num_threads=num_threads)
         self.show_error = True  # show prediction errors
-        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=has_cuda)
+        # self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=has_cuda)
 
         instance_name = "not_defined"
         if kwargs is not None:
@@ -118,7 +119,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             "model": "",
             "host": get_ip_address(),
             "workspace": self.workspace,
-            "use_cuda": has_cuda,
+            "use_cuda": self.has_cuda,
         }
 
         self.storage_enabled = False
@@ -128,6 +129,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
         logger.warning(f"S3 connection status : {connected}")
+
+        self.pipeline = ExtractPipeline(pipeline_config=pipeline, cuda=self.has_cuda)
 
     @requests(on="/document/extract")
     # @safely_encoded # BREAKS WITH docarray 0.39 as it turns this into a LegacyDocument which is not supported

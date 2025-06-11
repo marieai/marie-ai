@@ -1,3 +1,5 @@
+import asyncio
+import functools
 from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel
@@ -85,6 +87,113 @@ class LLMCall(Function):
 
         return response_text
 
+    async def aforward(
+        self,
+        prompt: Union[str, List[str]],
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
+        **kwargs,
+    ) -> FunctionReturnType:
+        system_prompt_value = self.system_prompt
+
+        # Check if engine has async call capability
+        if hasattr(self.engine, "__call__") and asyncio.iscoroutinefunction(
+            self.engine
+        ):
+            response_text = await self.engine(
+                prompt,
+                system_prompt=system_prompt_value,
+                guided_json=guided_json,
+                guided_regex=guided_regex,
+                guided_choice=guided_choice,
+                guided_grammar=guided_grammar,
+                guided_json_object=guided_json_object,
+                guided_backend=guided_backend,
+                guided_whitespace_pattern=guided_whitespace_pattern,
+                **kwargs,
+            )
+        else:
+            # Fallback: run sync forward in executor
+            loop = asyncio.get_running_loop()
+            response_text = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self.forward,
+                    prompt,
+                    guided_json=guided_json,
+                    guided_regex=guided_regex,
+                    guided_choice=guided_choice,
+                    guided_grammar=guided_grammar,
+                    guided_json_object=guided_json_object,
+                    guided_backend=guided_backend,
+                    guided_whitespace_pattern=guided_whitespace_pattern,
+                    **kwargs,
+                ),
+            )
+
+        logger.info(
+            "LLMCall function aforward",
+            extra={
+                "text": f"System:{system_prompt_value}\nQuery: {prompt}\nResponse: {response_text}"
+            },
+        )
+
+        return response_text
+
+
+async def main():
+    # some sample text
+    document_context = """
+        ### **Input Text:**
+        Patient Greg Bugaj, born 12/31/1980
+        Policy Number: 123456789
+        Claim Number: 987654321
+    """
+
+    prompt = f"""
+    ### Task: Extract Key-Value Pairs
+
+    Extract structured key-value pairs from the given text while maintaining accuracy and formatting.
+
+    ### **Rules:**
+    1 **Extract only key-value pairs** — Do not include explanations, summaries, or extra text.  
+    2 **Preserve key names exactly as they appear** — No modifications, abbreviations, or rewording.  
+    3 **Ensure values are extracted accurately** — No truncation or paraphrasing.  
+    4 **If a key has no value, return:** `KeyName: [MISSING]`  
+    5 **If no key-value pairs are found, return exactly:** `"No key-value pairs found."`  
+
+    ### **Strict Output Format:**
+    Key1: Value1;
+    Key2: Value2;
+    Key3: Value3;
+    ...
+
+    Your response **must contain only** the extracted key-value pairs in the format above. No additional text.
+
+    {document_context}
+    """
+
+    engine = get_engine("qwen2_5_3b")
+    llm_call = LLMCall(engine)
+
+    # Single async call
+    response = await llm_call.acall(prompt)
+    print(response)
+
+    # Multiple async calls
+    for i in range(10):
+        print('---------------')
+        response = await llm_call.acall(prompt)
+        print(response)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 if __name__ == "__main__":
 

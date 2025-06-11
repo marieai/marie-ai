@@ -243,7 +243,7 @@ def main():
         "--host",
         help="the etcd host, default = 127.0.0.1",
         required=False,
-        default="127.0.0.1",
+        default="127.0.0.1XXX",
     )
     parser.add_argument(
         "--port",
@@ -299,10 +299,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-if __name__ == "__main__XXXX":
-    etcd_registry = EtcdServiceRegistry("127.0.0.1", 2379, heartbeat_time=5)
-    etcd_registry.register(["gateway/service_test"], "127.0.0.1:50011", 6)
-
-    print(etcd_registry._services)
-    print(etcd_registry._leases)

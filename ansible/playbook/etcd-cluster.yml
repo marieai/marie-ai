@@ -1,0 +1,8 @@
+---
+- name: Deploy ETCD cluster
+  hosts: etcd_cluster
+  become: true
+  become_user: gpu-svc
+
+  roles:
+    - etcd_cluster

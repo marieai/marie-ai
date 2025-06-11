@@ -37,12 +37,6 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
         if len(min_use_connections) == 1:
             self._rr_counter = 0
 
-        self._logger.info(
-            f"least_connection_balancer.py: min_use_connections: {min_use_connections}"
-            f" min_active_connections: {min_active_connections}"
-            f" self._rr_counter: {self._rr_counter}"
-        )
-
         # Round robin between the connections with the least active connections
         try:
             connection = None
@@ -77,9 +71,9 @@ class LeastConnectionsLoadBalancer(LoadBalancer):
         return connection
 
     def print_selection_stats(self):
-        self._logger.info(f"Connection selection stats for {self._deployment_name}:")
+        self._logger.debug(f"Connection selection stats for {self._deployment_name}:")
         for address, count in self.selection_counter.items():
-            self._logger.info(f"  {address}: selected {count} times")
+            self._logger.debug(f"  {address}: selected {count} times")
 
     def close(self):
         pass

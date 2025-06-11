@@ -322,7 +322,7 @@ class JobSupervisor:
             _lease_time = 5
             _lease = self._etcd_client.lease(_lease_time)
             res = self._etcd_client.put(key, status_str, lease=_lease)
-            self.logger.info(
+            self.logger.debug(
                 f"Updated Etcd with key {key}, status: {status_str}, lease time: {_lease_time}"
             )
         except Exception as e:
@@ -338,7 +338,7 @@ class JobSupervisor:
             start_time = time.monotonic()
             job_info: JobInfo = await self._submission_queue.get()
 
-            self.logger.info(f"Starting background submission for job: {self._job_id}")
+            self.logger.debug(f"Starting background submission for job: {self._job_id}")
             response = await self._job_distributor.send(
                 submission_id=self._job_id,
                 job_info=job_info,

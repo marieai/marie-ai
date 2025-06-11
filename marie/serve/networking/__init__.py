@@ -589,7 +589,6 @@ class GrpcConnectionPool:
                             "address": current_connection.address,
                             "deployment": current_connection.deployment_name,
                         }
-                        print(f"SEND CALLBACK ctx: {ctx}")
                         await self._safe_send_callback(send_callback, requests, ctx)
                         # asyncio.create_task(
                         #     self._safe_send_callback(send_callback, requests, ctx)

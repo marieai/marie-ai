@@ -1,0 +1,41 @@
+# ############### Networks ###############
+
+# Container networking setup
+# docker network create --driver=bridge public
+# sysctl net.ipv4.conf.all.forwarding=1
+
+services:
+  psql:
+    container_name: marie-psql-server
+#    image: postgres:${POSTGRES_VERSION}
+    # pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg${POSTGRES_VERSION}
+    command: postgres -c 'max_connections=200'
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - psql_data:/var/lib/postgresql/data
+      - ./config/pgvector/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - marie_default
+volumes:
+  psql_data:
+    driver: local
+
+## ############### Networks ###############
+networks:
+  marie_default:
+    external: true
+
+# ############### Docker Compose Commands ###############
+
+# docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up  --build --remove-orphans
+
+# cleanup
+# docker volume rm marie-ai_psql_data  --force
+# docker container rm marie-psql-server  --force  --volumes
+# docker compose  --env-file ./config/.env  -f ./Dockerfiles/docker-compose.storage.yml --project-directory . down --remove-orphans

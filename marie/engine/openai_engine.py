@@ -153,8 +153,6 @@ class OpenAIEngine(EngineLM):
             **kwargs,
         )
 
-    # @cached
-    # @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(3))
     def _generate_from_multiple_input(
         self,
         content: Union[

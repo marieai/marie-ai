@@ -1,3 +1,5 @@
+import asyncio
+import functools
 from typing import Dict, List, Optional, Union
 
 from PIL import Image
@@ -72,7 +74,6 @@ class MultimodalLLMCall(Function):
 
         system_prompt_value = self.system_prompt
 
-        # Make the LLM Call
         response_text = self.engine(
             inputs,
             system_prompt=system_prompt_value,
@@ -87,6 +88,78 @@ class MultimodalLLMCall(Function):
 
         logger.info(
             f"MultimodalLLMCall function forward",
+            extra={
+                "text": f"System:{system_prompt_value}\nQuery: {inputs}\nResponse: {response_text}"
+            },
+        )
+
+        return response_text
+
+    async def aforward(
+        self,
+        inputs: Union[
+            List[List[Union[str, bytes, Image.Image]]],
+            List[Union[str, bytes, Image.Image]],
+        ],
+        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
+        guided_regex: Optional[str] = None,
+        guided_choice: Optional[List[str]] = None,
+        guided_grammar: Optional[str] = None,
+        guided_json_object: Optional[bool] = None,
+        guided_backend: Optional[str] = None,
+        guided_whitespace_pattern: Optional[str] = None,
+        **kwargs,
+    ) -> FunctionReturnType:
+        def validate_input(input_items: List[Union[str, bytes, Image.Image]]):
+            for variable in input_items:
+                if not isinstance(variable, (str, bytes, Image.Image)):
+                    raise ValueError(
+                        f"MultimodalLLMCall only accepts str, bytes or PIL Image, got {type(variable)}"
+                    )
+
+        if isinstance(inputs[0], list):
+            for sublist in inputs:
+                validate_input(sublist)
+        else:
+            validate_input(inputs)
+
+        system_prompt_value = self.system_prompt
+
+        if hasattr(self.engine, "__call__") and asyncio.iscoroutinefunction(
+            self.engine
+        ):
+            response_text = await self.engine(
+                inputs,
+                system_prompt=system_prompt_value,
+                guided_json=guided_json,
+                guided_regex=guided_regex,
+                guided_choice=guided_choice,
+                guided_grammar=guided_grammar,
+                guided_json_object=guided_json_object,
+                guided_backend=guided_backend,
+                guided_whitespace_pattern=guided_whitespace_pattern,
+                **kwargs,
+            )
+        else:
+            loop = asyncio.get_running_loop()
+            response_text = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self.forward,
+                    inputs,
+                    guided_json=guided_json,
+                    guided_regex=guided_regex,
+                    guided_choice=guided_choice,
+                    guided_grammar=guided_grammar,
+                    guided_json_object=guided_json_object,
+                    guided_backend=guided_backend,
+                    guided_whitespace_pattern=guided_whitespace_pattern,
+                    **kwargs,
+                ),
+            )
+
+        logger.info(
+            "MultimodalLLMCall function aforward",
             extra={
                 "text": f"System:{system_prompt_value}\nQuery: {inputs}\nResponse: {response_text}"
             },

@@ -1,6 +1,6 @@
 ---
 - name: Marie-AI - Status Node
-  hosts: ml_cluster
+  hosts: "{{ target_group }}"
   gather_facts: false
 
 

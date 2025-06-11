@@ -42,7 +42,7 @@ class GlobalPriorityExecutionPlanner:
                 (endpoint, wi, level, priority, free_slots, is_new, rt, burst_boost)
             )
 
-        # sort by the tuple:
+        # sort by:
         #  - level descending
         #  - priority descending
         #  - free_slots descending
@@ -51,7 +51,7 @@ class GlobalPriorityExecutionPlanner:
         annotated.sort(
             key=lambda t: (
                 -t[2],  # level
-                -t[3],  # priority
+                t[3],  # priority
                 -t[4],  # free_slots
                 t[5],  # is_new (False < True)
                 t[6],  # est. runtime
