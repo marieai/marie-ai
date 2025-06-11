@@ -97,10 +97,26 @@ with:
 #    - http
 
   discovery: true
-  discovery_host: 0.0.0.0
+  discovery_host: 127.0.0.1 # SINGLE HOST OR A LIST OF HOSTS
   discovery_port: 2379
-  discovery_watchdog_interval: 2
+  discovery_watchdog_interval: 5 # DEPRECATED replace by discovery_heartbeat_sec
   discovery_service_name: gateway/marie
+  discovery_namespace: marie
+  discovery_lease_sec: 6
+  discovery_heartbeat_sec: 1.5
+  discovery_timeout_sec: 10
+  discovery_retry_times : 5
+
+#  discovery_ca_cert: "/path/to/ca.crt"
+#  discovery_cert_key: "/path/to/client.key"
+#  discovery_cert_cert: "/path/to/client.crt"
+#  discovery_grpc_options: "grpc.keepalive_time_ms:30000,grpc.keepalive_timeout_ms:5000"
+
+  discovery_ca_cert:
+  discovery_cert_key:
+  discovery_cert_cert:
+  discovery_grpc_options:
+
   kv_store_kwargs:
     provider: postgresql
     hostname: 127.0.0.1
@@ -111,6 +127,7 @@ with:
     default_table: kv_store_worker
     max_pool_size: 5
     max_connections: 5
+
 
   host: 0.0.0.0
 
@@ -226,6 +243,7 @@ executors:
 
      env:
        CUDA_VISIBLE_DEVICES: RR
+
 
 # Authentication and Authorization configuration
 auth:

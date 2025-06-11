@@ -318,8 +318,8 @@ def mixin_stateful_parser(parser):
     )
 
 
-def mixin_gateway_discovery_parser(parser):
-    """Add the arguments for the Gateway
+def mixin_discovery_parser(parser):
+    """Add the arguments for the Gateway / Deployment
 
     :param parser: the parser configured
     """
@@ -327,35 +327,98 @@ def mixin_gateway_discovery_parser(parser):
         "--discovery",
         action="store_true",
         default=False,
-        help="If set, service discovery will be enabled. Default service discovery provider will use Consul",
+        help="If set, service discovery will be enabled.",
     )
 
     parser.add_argument(
         "--discovery-host",
         type=str,
-        default=None,
-        help="If discovery is enabled, this hostname will be used to configure the discovery agent.",
+        default="127.0.0.1",
+        help="If discovery is enabled, this can be a single hostname or a comma-separated list of endpoints (e.g., '127.0.0.1,10.0.0.1:2379'). Default is '127.0.0.1'.",
     )
 
     parser.add_argument(
         "--discovery-port",
         type=int,
-        default=None,
-        help="If discovery is enabled, this port will be used to configure the discovery agent.",
+        default=2379,
+        help="If discovery is enabled, this port will be used to configure the discovery agent. Default is 2379.",
     )
 
     parser.add_argument(
         "--discovery-watchdog-interval",
         type=int,
-        default=60,
-        help="Time interval (seconds) between sending system health checks",
+        default=None,
+        help="DEPRECATED! Time interval (seconds) between sending system health checks. Use `discovery-heartbeat-sec` instead.",
     )
 
     parser.add_argument(
         "--discovery-service-name",
         type=str,
+        default="gateway/marie",
+        help="If discovery is enabled, this service name will be used to configure the discovery agent. Default is 'gateway/marie'.",
+    )
+
+    parser.add_argument(
+        "--discovery-namespace",
+        type=str,
+        default="marie",
+        help="The namespace to be used in the discovery system. Default is 'marie'.",
+    )
+
+    parser.add_argument(
+        "--discovery-lease-sec",
+        type=int,
+        default=6,
+        help="The lease duration in seconds for the discovery registration. Default is 6 seconds.",
+    )
+
+    parser.add_argument(
+        "--discovery-heartbeat-sec",
+        type=float,
+        default=2.0,
+        help="Time interval (seconds, can be a float) for sending heartbeat signals. Default is 2.0 seconds.",
+    )
+
+    parser.add_argument(
+        "--discovery-timeout-sec",
+        type=int,
+        default=10,
+        help="The timeout duration in seconds for discovery operations. Default is 10 seconds.",
+    )
+
+    parser.add_argument(
+        "--discovery-retry-times",
+        type=int,
+        default=5,
+        help="Number of retry attempts for discovery operations. Default is 5 retries.",
+    )
+
+    parser.add_argument(
+        "--discovery-ca-cert",
+        type=str,
         default=None,
-        help="If discovery is enabled, this service name will be used to configure the discovery agent.",
+        help="Path to the CA certificate for secure communication with the discovery service.",
+    )
+
+    parser.add_argument(
+        "--discovery-cert-key",
+        type=str,
+        default=None,
+        help="Path to the client certificate key for secure communication with the discovery service.",
+    )
+
+    parser.add_argument(
+        "--discovery-cert-cert",
+        type=str,
+        default=None,
+        help="Path to the client certificate for secure communication with the discovery service.",
+    )
+
+    parser.add_argument(
+        "--discovery-grpc-options",
+        type=str,
+        default=None,
+        help="Comma-separated gRPC options for advanced configurations, e.g., 'grpc.keepalive_time_ms:30000,grpc.keepalive_timeout_ms:5000'.",
     )
 
 

@@ -3,6 +3,7 @@ import asyncio
 import functools
 import json
 import os
+import random
 import tempfile
 import threading
 import time
@@ -32,6 +33,7 @@ from marie.helper import get_full_version
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
+from marie.serve.discovery.container import EtcdConfig
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.serve.discovery.etcd_manager import get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
@@ -186,13 +188,15 @@ class WorkerRequestHandler:
 
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
 
-        # FIXME: Externalize config
+        # discovery
+        etcd_args = self._convert_to_etcd_args()
+        etcd_config = EtcdConfig.from_dict(etcd_args)
+        self._lease_time = etcd_config.lease_sec
+        self._heartbeat_time = etcd_config.heartbeat_sec
         self._heartbeat_thread = None
-        self._lease_time = 10
-        self._heartbeat_time = 1.5
-
         self._lease = None
-        self._etcd_client = self._init_etcd("localhost", 2379)
+
+        self._etcd_client = get_etcd_client(etcd_args)
         self._lease = self._etcd_client.lease(self._lease_time)
         self._worker_state = health_pb2.HealthCheckResponse.ServingStatus.NOT_SERVING
         self._set_deployment_status(
@@ -1637,34 +1641,29 @@ class WorkerRequestHandler:
             "host": get_ip_address(flush_cache=False),
         }
 
-    def _init_etcd(
-        self, etcd_host: str = None, etcd_port: int = None, etcd_endpoints: [] = None
-    ):
-        etcd_client = EtcdClient(
-            etcd_host=etcd_host,
-            etcd_port=etcd_port,
-            endpoints=etcd_endpoints,
-            namespace="marie",
-        )
-        return etcd_client
+    def _convert_to_etcd_args(self):
+        discovery_host = getattr(self.args, 'discovery_host', None)
+        if not discovery_host:
+            warnings.warn(
+                "The `discovery_host` is not defined. Defaulting to `127.0.0.1`. Please ensure this is intentional.",
+                UserWarning,
+            )
+            discovery_host = '127.0.0.1'  # Default value
 
-    def _init_etcd3(self):
-        """Initialize etcd client."""
-        # FIXME : the args are not used right now.
-        if self.args.discovery_host and self.args.discovery_port:
-            # Convert args to dict format
-            etcd_args = {
-                'discovery_host': self.args.discovery_host,
-                'discovery_port': self.args.discovery_port,
-                'etcd_namespace': getattr(self.args, 'etcd_namespace', 'marie'),
-                'etcd_timeout': 10.0,  # Add timeout
-                'etcd_retry_times': 5,  # Add retry times
-            }
-            _etcd_client = get_etcd_client(etcd_args)
-        else:
-            # originally initialized via gateway
-            _etcd_client = get_etcd_client()
-        return _etcd_client
+        etcd_args = {
+            'host': discovery_host,
+            'port': getattr(self.args, 'discovery_port', 2379),
+            'namespace': getattr(self.args, 'discovery_namespace', 'marie'),
+            'timeout': getattr(self.args, 'discovery_timeout_sec', 10),
+            'retry_times': getattr(self.args, 'discovery_retry_times', 5),
+            'lease_sec': getattr(self.args, 'discovery_lease_sec', 6),
+            'heartbeat_sec': getattr(self.args, 'discovery_heartbeat_sec', 1.5),
+            'ca_cert': getattr(self.args, 'discovery_ca_cert', None),
+            'cert_key': getattr(self.args, 'discovery_cert_key', None),
+            'cert_cert': getattr(self.args, 'discovery_cert_cert', None),
+            'grpc_options': getattr(self.args, 'discovery_grpc_options', None),
+        }
+        return etcd_args
 
     def _set_deployment_status(
         self, status: health_pb2.HealthCheckResponse.ServingStatus
@@ -1759,7 +1758,9 @@ class WorkerRequestHandler:
             )
 
             failures = 0
-            max_failures = 3
+            max_failures = 5
+            initial_backoff = 2
+            max_backoff = 30
 
             time.sleep(self._heartbeat_time)
 
@@ -1770,13 +1771,27 @@ class WorkerRequestHandler:
 
                 except Exception as e:
                     failures += 1
-                    self.logger.error(
-                        f"Error in heartbeat ({failures}/{max_failures}): {e}"
+                    base_delay = min(
+                        initial_backoff * (2 ** (failures - 1)), max_backoff
                     )
-                    if failures >= max_failures:
-                        self.logger.error("Max failures reached, stopping heartbeat.")
-                        break
+                    jitter = random.uniform(0, base_delay * 0.5)
+                    backoff_time = base_delay + jitter
 
+                    self.logger.error(
+                        f"Error in heartbeat attempt {failures}/{max_failures}: {e}"
+                    )
+                    self.logger.debug(f"Traceback: {traceback.format_exc()}")
+                    self.logger.warning(
+                        f"Retrying heartbeat in {backoff_time:.2f} seconds (exponential backoff with jitter)..."
+                    )
+
+                    if failures >= max_failures:
+                        self.logger.error(
+                            f"Max failures reached ({max_failures}). Heartbeat process will stop."
+                        )
+                        break  # Exit the heartbeat loop after max retry attempts
+
+                    time.sleep(backoff_time)
                 time.sleep(self._heartbeat_time)
 
         self._heartbeat_thread = threading.Thread(target=_heartbeat_setup, daemon=True)
