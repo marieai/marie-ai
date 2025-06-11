@@ -193,6 +193,7 @@ class WorkerRequestHandler:
         # discovery
         args_dict = {k: v for k, v in vars(self.args).items() if v is not None}
         etcd_args = convert_to_etcd_args(args_dict)
+
         etcd_config = EtcdConfig.from_dict(etcd_args)
         self._lease_time = etcd_config.lease_sec
         self._heartbeat_time = etcd_config.heartbeat_sec
@@ -379,6 +380,11 @@ class WorkerRequestHandler:
         metrics_registry: Optional["CollectorRegistry"] = None,
         meter: Optional["metrics.Meter"] = None,
     ):
+        """Initialize the monitoring system.
+
+        :param metrics_registry: Optional prometheus metrics registry for monitoring
+        :param meter: Optional metrics meter for monitoring
+        """
 
         if metrics_registry:
 
