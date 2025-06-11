@@ -160,6 +160,8 @@ def print_state_summary(job_states_data: Dict[str, Any]):
             )
         else:
             table.add_row("No Data", *["0" for _ in metrics], style="bold red")
+
+        console.print(table)
     except Exception as e:
         logger.error(f"Error printing state summary: {e}")
         logger.error(traceback.format_exc())
