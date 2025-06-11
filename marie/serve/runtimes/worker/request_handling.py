@@ -188,7 +188,8 @@ class WorkerRequestHandler:
         self._job_info_client = self._init_job_info_client(self.args.kv_store_kwargs)
 
         # discovery
-        etcd_args = convert_to_etcd_args(self.args)
+        args_dict = {k: v for k, v in vars(self.args).items() if v is not None}
+        etcd_args = convert_to_etcd_args(args_dict)
         etcd_config = EtcdConfig.from_dict(etcd_args)
         self._lease_time = etcd_config.lease_sec
         self._heartbeat_time = etcd_config.heartbeat_sec
