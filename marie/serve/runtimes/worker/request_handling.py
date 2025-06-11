@@ -29,7 +29,7 @@ from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie._docarray import DocumentArray, docarray_v2
 from marie.constants import DEPLOYMENT_STATUS_PREFIX, __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
-from marie.helper import get_full_version
+from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
 from marie.job.common import JobInfoStorageClient, JobStatus
 from marie.proto import jina_pb2
@@ -37,6 +37,7 @@ from marie.serve.discovery.container import EtcdConfig
 from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
 from marie.serve.instrumentation import MetricsTimer
+from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
@@ -99,12 +100,14 @@ class WorkerRequestHandler:
 
         runtime_name = kwargs.get("runtime_name", None)
         node_info['deployment_name'] = deployment_name
+        host = node_info.get('host')
+        node_info['host'] = get_internal_ip() if host and host_is_local(host) else host
         self.node_info = node_info
 
         if self.metrics_registry:
             with ImportExtensions(
                 required=True,
-                help_text="You need to install the `prometheus_client` to use the montitoring functionality of marie",
+                help_text="You need to install the `prometheus_client` to use the monitoring functionality of marie",
             ):
                 from prometheus_client import Counter, Summary
 
