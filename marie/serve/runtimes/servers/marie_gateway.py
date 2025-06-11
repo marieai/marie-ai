@@ -38,8 +38,7 @@ from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
 from marie.scheduler.state import WorkState
 from marie.serve.discovery import JsonAddress
-from marie.serve.discovery.etcd_client import EtcdClient
-from marie.serve.discovery.etcd_manager import get_etcd_client
+from marie.serve.discovery.etcd_manager import convert_to_etcd_args, get_etcd_client
 from marie.serve.discovery.resolver import EtcdServiceResolver
 from marie.serve.networking.balancer.interceptor import LoadBalancerInterceptor
 from marie.serve.networking.balancer.load_balancer import LoadBalancerType
@@ -173,17 +172,7 @@ class MarieServerGateway(CompositeServer):
         # FIXME : We need to get etcd host and port from the config
         # we should start job scheduler after the gateway server is started
         storage = PostgreSQLKV(config=kv_store_kwargs, reset=False)
-        self.etcd_client = EtcdClient(
-            self.args["discovery_host"], self.args["discovery_port"], namespace="marie"
-        )
-
-        # this will create a new etcd client if it does not exist
-        etcd_args = {
-            'discovery_host': self.args["discovery_host"],
-            'discovery_port': self.args["discovery_port"],
-            'etcd_namespace': "marie",
-        }
-        self.etcd_client = get_etcd_client(etcd_args)
+        self.etcd_client = get_etcd_client(convert_to_etcd_args(self.args))
 
         job_manager = JobManager(
             storage=storage,

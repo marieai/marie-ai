@@ -1,6 +1,7 @@
 import collections
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
@@ -273,6 +274,14 @@ def load_py_modules(d: Dict, extra_search_paths: Optional[List[str]] = None) -> 
     :param extra_search_paths: any extra paths to search
     """
     mod = []
+    print('extra_search_paths: ', extra_search_paths)
+    # Add extra search paths to sys.path, this will allow the importer to find the modules
+    add_to_syspath = True
+    if extra_search_paths and add_to_syspath:
+        for path in extra_search_paths:
+            abs_path = os.path.abspath(path)
+            if abs_path not in sys.path:
+                sys.path.insert(0, abs_path)
 
     def _finditem(obj, key='py_modules'):
         value = obj.get(key, [])
