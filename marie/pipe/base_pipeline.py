@@ -263,7 +263,7 @@ class BasePipeline(ABC):
     def get_classifier_results(
         self,
         page_classifier_meta,
-        prediction_agent="majority",
+        prediction_agent="max_score",
         tie_break_policy="best_with_diff",
     ):
 
