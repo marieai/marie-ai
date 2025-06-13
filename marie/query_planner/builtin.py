@@ -1,8 +1,10 @@
 import importlib
 import warnings
 
+from marie.importer import PathImporter
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlanRegistry
+from marie.query_planner.model import QueryPlannersConf
 from marie.query_planner.ocr_planner import PLAN_ID as EXTRACT_PLAN_ID
 from marie.query_planner.ocr_planner import query_planner_extract
 
@@ -25,7 +27,7 @@ def register_from_module(planner_module: str) -> None:
         )
 
 
-def register_all_known_planners():
+def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     """
     Registers all known query planners in the QueryPlanRegistry.
 
@@ -42,10 +44,14 @@ def register_all_known_planners():
     logger.info("Registering all known planners")
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
 
-    # WARNING: The following is hardcoded and needs to be dynamically loaded from CONFIG.
-    warnings.warn(
-        "The planner_modules list is currently hardcoded. This should be replaced with a dynamic configuration loader."
-    )
+    logger.info(f"Registering {len(query_planners_conf.planners)} planners...")
+    for planner in query_planners_conf.planners:
+        logger.info(f"Registering planner: {planner.name} from {planner.py_module}")
+        planner_module = planner.py_module
+        try:
+            register_from_module(planner_module)
+        except ImportError as e:
+            logger.warning(f"Error importing {planner_module}: {e}")
 
     # TODO : This needs to load from CONFIG
     planner_modules = [
@@ -58,4 +64,3 @@ def register_all_known_planners():
             register_from_module(planner_module)
         except ImportError as e:
             logger.warning(f"Error importing {planner_module}: {e}")
-            continue

@@ -202,7 +202,7 @@ class EtcdServiceRegistry(ServiceRegistry):
         """
 
         def _heartbeat_setup():
-            print(
+            log.info(
                 f"Setting up heartbeat for etcd service registry  : {self._heartbeat_time}"
             )
             time.sleep(self._heartbeat_time)
