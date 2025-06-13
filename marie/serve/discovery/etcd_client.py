@@ -169,25 +169,79 @@ class EtcdClient(object):
             for endpoint in endpoints:
                 if isinstance(endpoint, tuple):
                     # Already a tuple (host, port)
-                    normalized.append(endpoint)
+                    normalized.append((endpoint[0], int(endpoint[1])))
                 elif isinstance(endpoint, str):
                     # String format like "host:port" or just "host"
-                    if ':' in endpoint:
-                        host, port = endpoint.split(':', 1)
-                        normalized.append((host, int(port)))
-                    else:
-                        # Default to port 2379 if not specified
-                        normalized.append((endpoint, 2379))
+                    host, port = self._parse_single_endpoint(endpoint)
+                    normalized.append((host, port))
                 else:
                     raise ValueError(f"Invalid endpoint format: {endpoint}")
             return normalized
-        elif etcd_host and etcd_port:
-            # Single endpoint from host/port
-            return [(etcd_host, etcd_port)]
+        elif etcd_host:
+            # Handle etcd_host parameter
+            if isinstance(etcd_host, str) and ',' in etcd_host:
+                # Comma-separated string format
+                normalized = []
+                endpoint_strings = [
+                    ep.strip() for ep in etcd_host.split(',') if ep.strip()
+                ]
+                for endpoint_str in endpoint_strings:
+                    host, port = self._parse_single_endpoint(endpoint_str)
+                    normalized.append((host, port))
+                return normalized
+            else:
+                # Single endpoint from host/port
+                port = etcd_port if etcd_port is not None else 2379
+                return [(etcd_host, int(port))]
         else:
             raise ValueError(
                 "Either 'endpoints' or 'etcd_host'/'etcd_port' must be provided"
             )
+
+    def _parse_single_endpoint(self, endpoint_str):
+        """
+        Parse a single endpoint string into (host, port) tuple.
+
+        Args:
+            endpoint_str: String like "host:port" or "host"
+
+        Returns:
+            Tuple of (host, port)
+        """
+        endpoint_str = endpoint_str.strip()
+
+        if not endpoint_str:
+            raise ValueError("Empty endpoint string")
+
+        # Handle IPv6 addresses like [::1]:2379 or [2001:db8::1]:2379
+        if endpoint_str.startswith('['):
+            if ']:' not in endpoint_str:
+                raise ValueError(f"Invalid IPv6 endpoint format: {endpoint_str}")
+            host, port_str = endpoint_str.rsplit(']:', 1)
+            host = host[1:]  # Remove leading '['
+        elif ':' in endpoint_str:
+            # IPv4 or hostname format: host:port
+            # Use rsplit to handle cases where host might contain ':'
+            host, port_str = endpoint_str.rsplit(':', 1)
+        else:
+            # No port specified, use default
+            host = endpoint_str
+            port_str = "2379"
+
+        # Validate and convert port
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError(f"Port must be between 1 and 65535, got: {port}")
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(f"Invalid port number in endpoint: {endpoint_str}")
+            raise
+
+        if not host:
+            raise ValueError(f"Empty host in endpoint: {endpoint_str}")
+
+        return (host, port)
 
     def _create_client(self) -> Union[Etcd3Client, MultiEndpointEtcd3Client]:
         """Create the appropriate etcd client based on endpoint configuration."""
@@ -541,6 +595,11 @@ def client_examples():
     etcd_client = EtcdClient("localhost", 2379, namespace="marie")
     etcd_client = EtcdClient(etcd_host="localhost", etcd_port=2379, namespace="marie")
     etcd_client = EtcdClient(endpoints=["localhost:2379"], namespace="marie")
+
+    # List of endpoints as strings in t etcd_host format
+    etcd_client = EtcdClient(
+        etcd_host="etcd-node1.example.com:2379, etcd-node2.example.com,etcd-node3.example.com:2379",
+    )
 
     # List of tuples
     etcd_client = EtcdClient(

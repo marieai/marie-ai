@@ -293,8 +293,13 @@ class MarieServerGateway(CompositeServer):
             async def invoke_command(
                 request: Request, token: str = Depends(TokenBearer())
             ):
-                self.logger.debug(f"Received request at {datetime.now()}")
+                self.logger.info(f"Received request at {datetime.now()}")
                 self.logger.debug(f"Token : {token}")
+                # For testing purposes, we can return a mock response
+                # if False:
+                #     return {"header": {}, "parameters": {
+                #         "job_id" : "12345",
+                #     }, "data": None}
 
                 payload = await request.json()
                 header = payload.get("header", {})
@@ -594,7 +599,7 @@ class MarieServerGateway(CompositeServer):
             return response
         finally:
             elapsed_time = time.time() - start_time
-            self.logger.info(f"Job submission completed in {elapsed_time:.2f} seconds")
+            self.logger.debug(f"Job submission completed in {elapsed_time:.2f} seconds")
 
     def error_response(
         self, msg: str, exception: Optional[Exception], silence_exceptions: bool = False
@@ -726,8 +731,6 @@ class MarieServerGateway(CompositeServer):
             try:
                 self.resolver = EtcdServiceResolver(
                     etcd_client=self.etcd_client,
-                    # etcd_host,
-                    # etcd_port,
                     namespace="marie",
                     start_listener=False,
                     listen_timeout=watchdog_interval,

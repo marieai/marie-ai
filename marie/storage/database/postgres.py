@@ -34,9 +34,10 @@ class PostgresqlMixin:
             username = config["username"]
             password = config["password"]
             database = config["database"]
+            max_connections = int(config.get("max_connections", 10))
 
-            max_connections = 10
-            self.postgreSQL_pool = psycopg2.pool.SimpleConnectionPool(
+            # ThreadedConnectionPool
+            self.postgreSQL_pool = psycopg2.pool.ThreadedConnectionPool(
                 1,
                 max_connections,
                 user=username,
@@ -123,23 +124,24 @@ class PostgresqlMixin:
         *,
         named_cursor_name: Optional[str] = None,
         itersize: Optional[int] = 10000,
+        connection: Optional[psycopg2.extensions.connection] = None,
     ) -> psycopg2.extras.DictCursor:
+        conn = connection or self.connection
         try:
             if named_cursor_name:
-                cursor = self.connection.cursor(named_cursor_name)
+                cursor = conn.cursor(named_cursor_name)
                 cursor.itersize = itersize
             else:
-                cursor = self.connection.cursor()
+                cursor = conn.cursor()
             if data:
                 cursor.execute(statement, data)
             else:
                 cursor.execute(statement)
+            return cursor
         except (Exception, psycopg2.Error) as error:
             # except psycopg2.errors.UniqueViolation as error:
-            print(statement)
             self.logger.debug(f"Error while executing {statement}: {error}.")
-            self.connection.rollback()
+            conn.rollback()
             raise error
         finally:
-            self.connection.commit()
-        return cursor
+            conn.commit()

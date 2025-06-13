@@ -80,15 +80,12 @@ class EtcdConfig:
         return False
 
     @staticmethod
-    def _get_endpoints_from_env() -> List[Union[str, Tuple[str, int]]]:
-        """Get etcd endpoints from environment or defaults."""
+    def _get_endpoints_from_env() -> list[str] | None:
+        """Get etcd endpoints from environment or return None."""
         endpoints_str = os.getenv('ETCD_ENDPOINTS')
         if endpoints_str:
             return endpoints_str.split(',')
-        # Fallback to individual host/port
-        host = os.getenv('ETCD_HOST', 'localhost')
-        port = int(os.getenv('ETCD_PORT', 2379))
-        return [(host, port)]
+        return None
 
     @staticmethod
     def _get_grpc_options_from_env() -> Optional[List[Tuple[str, Any]]]:

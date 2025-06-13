@@ -5,8 +5,11 @@ import itertools
 import random
 import time
 import traceback
+import uuid
+from asyncio import Queue
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, NamedTuple, Tuple
 
 import psycopg2
 from rich.console import Console
@@ -32,6 +35,7 @@ from marie.query_planner.base import (
 )
 from marie.query_planner.builtin import register_all_known_planners
 from marie.query_planner.mapper import JobMetadata, has_mapper_config
+from marie.query_planner.model import QueryPlannersConf
 from marie.query_planner.planner import (
     PlannerInfo,
     compute_job_levels,
@@ -39,6 +43,7 @@ from marie.query_planner.planner import (
     query_planner,
     topological_sort,
 )
+from marie.scheduler.dag_concurrency_manager import DagConcurrencyManager
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
@@ -191,6 +196,13 @@ def print_slots_table(slots: dict[str, int]) -> None:
 # this will allow us to track the status of the deployment and not just the executor.
 
 
+class JobSubmissionRequest(NamedTuple):
+    work_info: WorkInfo
+    overwrite: bool
+    request_id: str
+    result_future: asyncio.Future
+
+
 class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     """A PostgreSQL-based job scheduler."""
 
@@ -199,9 +211,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
-
-        print('**************************************')
-        print(config)
 
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
@@ -215,6 +224,10 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self._heartbeat_task = None
         self.sync_task = None
         self.monitoring_task = None
+        self._worker_task = None
+        self._submission_count = 0
+        self._pending_requests = {}  # Track pending requests by ID
+        self._request_queue = Queue()  # Buffer up to 1000 requests
 
         self.scheduler_mode = config.get(
             "scheduler_mode", "parallel"
@@ -227,12 +240,16 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             contextlib.AsyncExitStack() if lock_free else asyncio.Lock()
         )  # Lock to prevent concurrent access to the database
 
+        max_workers = config.get("max_workers", 5)
+        self._db_executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="sync-db-executor"
+        )
+
         if self.known_queues is None or len(self.known_queues) == 0:
             raise BadConfigSource("Queue names are required for JobScheduler")
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.active_dags = {}
-        self.max_concurrent_dags = config.get("max_concurrent_dags", 1)
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
@@ -240,7 +257,28 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         # self.execution_planner = SJFSExecutionPlanner()
         self.execution_planner = GlobalPriorityExecutionPlanner()
-        register_all_known_planners()
+        register_all_known_planners(
+            QueryPlannersConf.from_dict(config.get("query_planners", {}))
+        )
+
+        dag_config = config.get("dag_manager", {})
+        dag_strategy = dag_config.get("strategy", 'fixed')  # fixed or dynamic
+        min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
+        max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
+        cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
+
+        self.dag_concurrency_manager = DagConcurrencyManager(
+            self,
+            strategy=dag_strategy,
+            min_concurrent_dags=min_concurrent_dags,
+            max_concurrent_dags=max_concurrent_dags,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+
+        count = self.dag_concurrency_manager.calculate_max_concurrent_dags()
+        print(f'dag_config : ', dag_config)
+        print(f'count  = {count}')
+        print(self.dag_concurrency_manager.get_configuration_summary())
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -489,6 +527,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         else:
             self.task = asyncio.create_task(self._poll())
 
+        self._worker_task = asyncio.create_task(self._process_submission_queue())
         # self._sync_dag_task = asyncio.create_task(self._sync_dag())
         await self.notify_event()
 
@@ -533,7 +572,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         failures = 0
         idle_streak = 0
 
-        self.max_concurrent_dags = 32  # for debugging
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
         recently_activated_dags = set()
@@ -591,6 +629,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         continue
                     flat_jobs.append((ep, wi))
 
+                max_concurrent_dags = (
+                    self.dag_concurrency_manager.calculate_max_concurrent_dags(
+                        flat_jobs
+                    )
+                )
                 cleanup_recently_activated_dags()
                 recently_activated_dag_ids = set(
                     dag_id for dag_id, _ in recently_activated_dags
@@ -618,11 +661,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     if (
                         dag_id not in self.active_dags
-                        and len(self.active_dags) >= self.max_concurrent_dags
+                        and len(self.active_dags) >= max_concurrent_dags
                     ):
                         self.logger.debug(
                             f"Max DAG limit reached "
-                            f"({len(self.active_dags)}/{self.max_concurrent_dags}). "
+                            f"({len(self.active_dags)}/{max_concurrent_dags}). "
                             f"Skipping DAG {dag_id}"
                         )
                         continue
@@ -735,14 +778,19 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if self._heartbeat_task:
             tasks.append(self._heartbeat_task)
 
+        if self._worker_task:
+            tasks.append(self._worker_task)
+
         for task in tasks:
-            if task:
+            if task and not task.done():
                 try:
                     await asyncio.wait_for(task, timeout)
                 except asyncio.TimeoutError:
                     self.logger.warning(
                         "Monitoring task did not complete in time and was cancelled"
                     )
+                except asyncio.CancelledError:
+                    pass
 
     def debug_info(self) -> str:
         print("Debugging info")
@@ -957,8 +1005,8 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         :return: The ID of the inserted work item.
         :raises ValueError: If the job submission fails or if the job already exists.
         """
-
         self.logger.info(f"Submitting job : {work_info.id}")
+
         work_queue = work_info.name
         if work_info.name not in self.known_queues:
             self.logger.info(f"Checking for queue: {work_queue}")
@@ -966,39 +1014,121 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             await self.create_queue(f"${work_queue}_dlq")
             self.known_queues.add(work_queue)
 
-        return await self.__submit_job(work_info, overwrite)
+        result_future = asyncio.Future()
+        request_id = str(uuid.uuid4())
 
-    async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
-        """
-        :param work_info:
-        :param overwrite:
-        :return:
-        """
-        new_key_added = False
-        submission_id = work_info.id
-        submission_policy = ExistingWorkPolicy.create(
-            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+        submission_request = JobSubmissionRequest(
+            work_info=work_info,
+            overwrite=overwrite,
+            request_id=request_id,
+            result_future=result_future,
         )
 
-        is_valid = await self.is_valid_submission(work_info, submission_policy)
-        if not is_valid:
-            raise ValueError(
-                f"Job with submission_id {submission_id} already exists."
-                f"For work item : {work_info}."
+        self._pending_requests[request_id] = submission_request
+
+        try:
+            self._request_queue.put_nowait(submission_request)
+            self.logger.debug(
+                f"Job {work_info.id} queued successfully (request: {request_id})"
             )
+            # sync_mode = work_info.data.get("metadata", {}).get("sync_mode", False)
+            sync_mode = False
+            if sync_mode:
+                # Wait for the result
+                result = await result_future
+                return result
+
+            return work_info.id
+        except Exception as e:
+            self._pending_requests.pop(request_id, None)
+            result_future.set_exception(e)
+            raise
+
+    async def _handle_priority_refresh(self):
+        """Handle priority refresh"""
+        refresh_interval = getattr(self, 'priority_refresh_interval', 10)
+        self._submission_count += 1
+
+        if self._submission_count % refresh_interval == 0:
+            await self._refresh_job_priorities()
+            self.logger.info(
+                f"Refreshed job priorities after {self._submission_count} submissions "
+                f"(interval: {refresh_interval})"
+            )
+
+    async def _process_submission_queue(self):
+        """Background worker that processes queued job submissions"""
+        self.logger.info("Background job submission worker started")
+
+        while True:
+            request = None
+            try:
+                request = await self._request_queue.get()
+                print(request.work_info)
+                try:
+                    result = await self.__submit_job(
+                        request.work_info, request.overwrite
+                    )
+                    await self._handle_priority_refresh()
+
+                    if not request.result_future.done():
+                        request.result_future.set_result(result)
+                    self.logger.debug(
+                        f"Successfully processed job: {request.work_info.id}"
+                    )
+
+                except Exception as e:
+                    if not request.result_future.done():
+                        request.result_future.set_exception(e)
+                    self.logger.error(
+                        f"Failed to process job {request.work_info.id}: {e}"
+                    )
+                finally:
+                    self._pending_requests.pop(request.request_id, None)
+
+            except asyncio.CancelledError:
+                self.logger.info("Background job submission worker cancelled")
+                break
+            except Exception as e:
+                self.logger.error(f"Unexpected error in submission worker: {e}")
+                await asyncio.sleep(1)
+            finally:
+                if request:
+                    self._request_queue.task_done()
+
+    async def get_queue_status(self) -> dict:
+        """Get current status of the submission queue"""
+        return {
+            "queue_size": self._request_queue.qsize(),
+            "pending_requests": len(self._pending_requests),
+            "total_submissions": self._submission_count,
+            "worker_running": self._worker_task and not self._worker_task.done(),
+        }
+
+    def _create_dag_and_jobs_sync(
+        self, work_info: WorkInfo, submission_id: str
+    ) -> Tuple[bool, str]:
+        """Synchronous method for blocking database operations
+        It is important to run this in a thread to prevent blocking the main event loop.
+
+        :param work_info: WorkInfo object containing job details
+        :param submission_id: Unique identifier for the job submission
+        """
         # TODO: generate a unique dag_id if not provided
         dag_id = submission_id  # generate_job_id()
         dag_name = f"{dag_id}_dag"
         work_info.dag_id = dag_id
         query_plan_dag, topological_sorted_nodes = query_plan_work_items(work_info)
-
-        with self:
+        try:
+            # important that we use new connection for each job submission
+            connection = self._get_connection()
             try:
                 # insert the DAG, we will serialize the DAG to JSON and Pickle
                 # this will allow us to re-create the DAG from the database without having to re-plan the DAG
                 json_serialized_dag = query_plan_dag.model_dump()
                 cursor = self._execute_sql_gracefully(
-                    insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag)
+                    insert_dag(DEFAULT_SCHEMA, dag_id, dag_name, json_serialized_dag),
+                    connection=connection,
                 )
                 # we will use the cursor to get the new dag id but it should be the same as dag_id
                 new_dag_key = (
@@ -1011,19 +1141,52 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         insert_job(
                             DEFAULT_SCHEMA,
                             dag_work_info,
-                        )
+                        ),
+                        connection=connection,
                     )
                     new_dag_key = cursor is not None and cursor.rowcount > 0
                     if i == 0:
                         new_key_added = new_dag_key
 
+                return new_key_added, new_dag_key
+
             except (Exception, psycopg2.Error) as error:
                 self.logger.error(f"Error creating job: {error}")
-                self.connection.rollback()
+                if connection:
+                    connection.rollback()
                 raise ValueError(
                     f"Job creation for submission_id {submission_id} failed. "
                     f"Please check the logs for more information. {error}"
                 )
+        finally:
+            if connection:
+                try:
+                    self._close_connection(connection)
+                except Exception as e:
+                    self.logger.warning(f"Error returning connection to pool: {e}")
+
+    async def __submit_job(self, work_info: WorkInfo, overwrite: bool = True) -> str:
+        """
+        :param work_info: WorkInfo object containing job details
+        :param overwrite:
+        :return:
+        """
+        submission_id = work_info.id
+        submission_policy = ExistingWorkPolicy.create(
+            work_info.policy, default_policy=ExistingWorkPolicy.REJECT_DUPLICATE
+        )
+
+        is_valid = await self.is_valid_submission(work_info, submission_policy)
+        if not is_valid:
+            raise ValueError(
+                f"Job with submission_id {submission_id} already exists."
+                f"For work item : {work_info}."
+            )
+
+        # until we upgrade to pycog3 and convert to async we have to run this in a thread to prevent blocking of main loop
+        new_key_added, new_dag_key = await self._loop.run_in_executor(
+            self._db_executor, self._create_dag_and_jobs_sync, work_info, submission_id
+        )
 
         if not new_key_added:
             raise ValueError(
@@ -1033,6 +1196,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
         await self.notify_event()
         return submission_id
+
+    async def _refresh_job_priorities(self):
+        """Execute the job priority refresh SQL function"""
+        try:
+            print(f'Refreshing job priorities...  : {self._submission_count}')
+            #   SELECT marie_scheduler.refresh_job_priority();
+        except Exception as e:
+            self.logger.error(f"Failed to refresh job priorities: {e}")
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
         return await self._mark_active(
@@ -1563,6 +1734,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                     return None
         except Exception as e:
             self.logger.error(f"❌ Error loading DAG {dag_id}: {e}")
+            raise e
             return None
 
     def _is_noop_query_definition(self, node: QueryDefinition) -> bool:
@@ -1595,6 +1767,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if node.task_id == work_id:
                 return node
         raise ValueError(f"Node with ID {work_id} not found in DAG")
+
+    def get_available_slots(self) -> dict[str, int]:
+        return available_slots_by_executor(ClusterState.deployments)
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
