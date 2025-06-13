@@ -1,7 +1,3 @@
-"""
-DAG Concurrency Manager - Sample Usage
-"""
-
 import logging
 import random
 import time
@@ -76,28 +72,25 @@ def example_1_basic_usage():
     analysis = dag_manager.get_capacity_analysis()
     print(f"\nDetailed Analysis:")
     print(f"Available slots: {analysis['available_slots']}")
-    print(f"Weighted capacity: {analysis['calculations']['weighted_average']['value']}")
-    print(f"Conservative capacity: {analysis['calculations']['conservative']['value']}")
-    print(f"Final result: {analysis['final_result']}")
+    print(f"Bottleneck capacity: {analysis['bottleneck_capacity']}")
+    print(f"Bottleneck resource: {analysis['bottleneck_resource']}")
+    print(f"Final result: {analysis['bounded_capacity']}")
 
-    # Show per-slot breakdown
-    print(f"\nPer-slot breakdown:")
-    for slot_type, breakdown in analysis['slot_breakdown'].items():
-        defaults = []
-        if breakdown['using_defaults']['multiplier']:
-            defaults.append('mult')
-        if breakdown['using_defaults']['weight']:
-            defaults.append('weight')
-        defaults_str = f" (defaults: {','.join(defaults)})" if defaults else ""
-        print(
-            f"  {slot_type}: {breakdown['slots']} slots × {breakdown['multiplier']} mult × {breakdown['weight']:.3f} weight = {breakdown['weighted_contribution']:.2f}{defaults_str}"
+    # Show per-slot status
+    print(f"\nSlot status:")
+    for slot_type, count in analysis['available_slots'].items():
+        status = (
+            "⚠ BOTTLENECK"
+            if count == analysis['bottleneck_capacity']
+            else "✓ Available"
         )
+        print(f"  {slot_type}: {count} slots {status}")
 
 
-def example_2_configuration_updates():
-    """Example 2: Dynamic configuration updates"""
+def example_2_limits_configuration():
+    """Example 2: Configuring DAG limits"""
     print("\n" + "=" * 60)
-    print("EXAMPLE 2: Configuration Updates")
+    print("EXAMPLE 2: DAG Limits Configuration")
     print("=" * 60)
 
     scheduler = MockScheduler()
@@ -105,44 +98,137 @@ def example_2_configuration_updates():
 
     print("Initial capacity:", dag_manager.calculate_max_concurrent_dags())
 
-    # Update strategy balance to be more conservative
-    print("\n1. Making strategy more conservative (30% weighted, 70% conservative):")
-    dag_manager.update_strategy_balance(0.3, 0.7)
+    # Update limits for a more conservative approach
+    print("\n1. Setting conservative limits (min=2, max=10):")
+    dag_manager.update_dag_limits(min_dags=2, max_dags=10)
     capacity_conservative = dag_manager.calculate_max_concurrent_dags()
     print(f"New capacity: {capacity_conservative}")
 
-    # Update resource weights to prioritize LLM slots
-    print("\n2. Prioritizing LLM slots (80% weight):")
-    dag_manager.update_resource_weights(
-        annotator_llm=0.8,
-        annotator_embeddings=0.1,
-        annotator_parser=0.05,
-        annotator_table=0.03,
-        annotator_table_parser=0.02,
+    # Set higher availability to test max limit
+    print("\n2. Simulating high availability (all slots = 20):")
+    scheduler.set_slots(
+        annotator_llm=20,
+        annotator_embeddings=20,
+        annotator_parser=20,
+        annotator_table=20,
+        annotator_table_parser=20,
     )
-    capacity_llm_focused = dag_manager.calculate_max_concurrent_dags()
-    print(f"New capacity: {capacity_llm_focused}")
-
-    # Update slot multipliers
-    print("\n3. Increasing LLM multiplier (can handle more DAGs per slot):")
-    dag_manager.update_slot_multiplier('annotator_llm', 4)
-    capacity_higher_mult = dag_manager.calculate_max_concurrent_dags()
-    print(f"New capacity: {capacity_higher_mult}")
-
-    # Show final configuration
-    analysis = dag_manager.get_capacity_analysis()
+    capacity_high = dag_manager.calculate_max_concurrent_dags()
     print(
-        f"\nFinal configuration multipliers: {[(k, analysis['slot_breakdown'][k]['multiplier']) for k in analysis['slot_breakdown']]}"
+        f"Capacity with high availability: {capacity_high} (should be capped at max=10)"
     )
+
+    # Show configuration
+    config = dag_manager.get_configuration_summary()
+    print(config)
     print(
-        f"Final configuration weights: {[(k, analysis['slot_breakdown'][k]['weight']) for k in analysis['slot_breakdown']]}"
+        f"\nCurrent limits: min={config['configuration']['dag_limits']['min']}, max={config['configuration']['dag_limits']['max']}"
     )
 
 
-def example_3_performance_and_caching():
-    """Example 3: Performance testing and caching demonstration"""
+def example_3_utilization_factor():
+    """Example 3: Utilization factor with pending jobs"""
     print("\n" + "=" * 60)
-    print("EXAMPLE 3: Performance and Caching")
+    print("EXAMPLE 3: Utilization Factor with Pending Jobs")
+    print("=" * 60)
+
+    scheduler = MockScheduler()
+    dag_manager = DagConcurrencyManager(scheduler)
+
+    # Test with no pending jobs
+    print("1. No pending jobs:")
+    capacity_no_jobs = dag_manager.calculate_max_concurrent_dags()
+    print(f"Capacity: {capacity_no_jobs}")
+
+    # Test with light load
+    print("\n2. Light load (2 pending jobs):")
+    flat_jobs = [
+        ('annotator_llm', {'job_id': 'job1'}),
+        ('annotator_embeddings', {'job_id': 'job2'}),
+    ]
+    capacity_light = dag_manager.calculate_max_concurrent_dags(flat_jobs)
+    analysis_light = dag_manager.get_capacity_analysis(flat_jobs)
+    print(
+        f"Capacity: {capacity_light} (utilization factor: {analysis_light['utilization_factor']:.3f})"
+    )
+
+    # Test with bottleneck (jobs waiting for unavailable slots)
+    print("\n3. Bottleneck scenario (jobs waiting for unavailable slots):")
+    flat_jobs_bottleneck = [
+        ('annotator_table_parser', {'job_id': 'job1'}),  # 0 slots available
+        ('annotator_table_parser', {'job_id': 'job2'}),  # 0 slots available
+        ('annotator_llm', {'job_id': 'job3'}),
+    ]
+    capacity_bottleneck = dag_manager.calculate_max_concurrent_dags(
+        flat_jobs_bottleneck
+    )
+    analysis_bottleneck = dag_manager.get_capacity_analysis(flat_jobs_bottleneck)
+    print(
+        f"Capacity: {capacity_bottleneck} (utilization factor: {analysis_bottleneck['utilization_factor']:.3f})"
+    )
+
+    # Test with severe bottleneck
+    print("\n4. Severe bottleneck (many jobs waiting):")
+    flat_jobs_severe = [
+        ('annotator_table_parser', {'job_id': f'job{i}'}) for i in range(5)
+    ]  # 5 jobs waiting for 0 slots
+    capacity_severe = dag_manager.calculate_max_concurrent_dags(flat_jobs_severe)
+    analysis_severe = dag_manager.get_capacity_analysis(flat_jobs_severe)
+    print(
+        f"Capacity: {capacity_severe} (utilization factor: {analysis_severe['utilization_factor']:.3f})"
+    )
+
+
+def example_4_capacity_tracking():
+    """Example 4: Capacity tracking over time"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 4: Capacity Tracking")
+    print("=" * 60)
+
+    scheduler = MockScheduler()
+    dag_manager = DagConcurrencyManager(scheduler)
+
+    # Initial state
+    print("1. Initial capacity tracking:")
+    tracking_info = dag_manager.get_capacity_tracking_info()
+    print(f"Max observed capacity: {tracking_info['max_observed_capacity']}")
+
+    # Simulate executor scaling up
+    print("\n2. Simulating executor scale-up:")
+    for step in range(3):
+        # Gradually increase slots
+        new_slots = {
+            'annotator_llm': 5 + step * 2,
+            'annotator_embeddings': 1 + step,
+            'annotator_parser': 1 + step,
+            'annotator_table': 1,
+            'annotator_table_parser': step,  # Goes from 0 to 2
+        }
+        scheduler.set_slots(**new_slots)
+
+        capacity = dag_manager.calculate_max_concurrent_dags()
+        tracking_info = dag_manager.get_capacity_tracking_info()
+
+        print(f"  Step {step + 1}: capacity={capacity}")
+        print(f"    Current slots: {scheduler.get_available_slots()}")
+        print(f"    Max observed: {tracking_info['max_observed_capacity']}")
+
+    # Test with pending jobs after scale-up
+    print("\n3. Testing with pending jobs after scale-up:")
+    flat_jobs = [
+        ('annotator_table_parser', {'job_id': f'job{i}'}) for i in range(2)
+    ]  # Now we have capacity for these
+    capacity_after_scale = dag_manager.calculate_max_concurrent_dags(flat_jobs)
+    analysis_after_scale = dag_manager.get_capacity_analysis(flat_jobs)
+    print(
+        f"Capacity with jobs: {capacity_after_scale} (utilization factor: {analysis_after_scale['utilization_factor']:.3f})"
+    )
+
+
+def example_5_performance_and_caching():
+    """Example 5: Performance testing and caching demonstration"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 5: Performance and Caching")
     print("=" * 60)
 
     scheduler = MockScheduler()
@@ -166,21 +252,16 @@ def example_3_performance_and_caching():
 
     # Show metrics
     analysis = dag_manager.get_capacity_analysis()
-    metrics = analysis['metrics']
     print(f"\nMetrics:")
-    print(f"Total calculations: {metrics['calculation_count']}")
-    print(f"Total errors: {metrics['error_count']}")
-    print(f"Cache size: {metrics['cache_size']}")
-    if metrics['last_calculation']:
-        print(
-            f"Last calculation time: {metrics['last_calculation']['calculation_time_ms']:.2f} ms"
-        )
+    print(f"Total calculations: {analysis['calculation_count']}")
+    print(f"Total errors: {analysis['error_count']}")
+    print(f"Cache size: {len(dag_manager._cache)}")
 
 
-def example_4_error_handling():
-    """Example 4: Error handling and graceful degradation"""
+def example_6_error_handling():
+    """Example 6: Error handling and graceful degradation"""
     print("\n" + "=" * 60)
-    print("EXAMPLE 4: Error Handling")
+    print("EXAMPLE 6: Error Handling")
     print("=" * 60)
 
     scheduler = MockScheduler()
@@ -194,11 +275,8 @@ def example_4_error_handling():
     # Simulate scheduler failure
     print("\n2. Scheduler failure scenario:")
     scheduler.set_failure_mode(True)
-    try:
-        capacity = dag_manager.calculate_max_concurrent_dags()
-        print(f"Fallback capacity: {capacity}")
-    except Exception as e:
-        print(f"Error caught: {e}")
+    capacity = dag_manager.calculate_max_concurrent_dags()  # Should return fallback
+    print(f"Fallback capacity: {capacity}")
 
     # Restore scheduler and show recovery
     print("\n3. Recovery scenario:")
@@ -209,141 +287,71 @@ def example_4_error_handling():
     # Invalid configuration
     print("\n4. Invalid configuration handling:")
     try:
-        dag_manager.update_slot_multiplier('test_slot', -1)  # Invalid multiplier
+        dag_manager.update_dag_limits(min_dags=-1)  # Invalid min
+    except Exception as e:
+        print(f"Configuration error caught: {e}")
+
+    try:
+        dag_manager.update_dag_limits(max_dags=5, min_dags=10)  # max < min
     except Exception as e:
         print(f"Configuration error caught: {e}")
 
     # Health status
     health = dag_manager.get_health_status()
-    print(f"\nHealth status: {health}")
+    print(f"\nHealth status: {health['status']}")
+    if health['issues']:
+        print(f"Issues: {health['issues']}")
 
 
-def example_5_dynamic_slot_types():
-    """Example 5: Handling dynamic slot types"""
+def example_7_dynamic_slot_types():
+    """Example 7: Handling dynamic slot types"""
     print("\n" + "=" * 60)
-    print("EXAMPLE 5: Dynamic Slot Types")
+    print("EXAMPLE 7: Dynamic Slot Types")
     print("=" * 60)
 
     scheduler = MockScheduler()
     dag_manager = DagConcurrencyManager(scheduler)
 
-    print("Initial slot types:")
-    status = dag_manager.get_slot_types_status()
-    for slot_type, info in status.items():
-        print(f"  {slot_type}: configured={info['fully_configured']}")
+    print("Initial available slots:")
+    initial_analysis = dag_manager.get_capacity_analysis()
+    for slot_type, count in initial_analysis['available_slots'].items():
+        print(f"  {slot_type}: {count}")
 
     # Add new slot type to scheduler
-    print("\n1. Adding new slot type 'annotator_vision' to scheduler:")
+    print("\n1. Adding new slot type 'annotator_vision':")
     scheduler.set_slots(annotator_vision=3)
 
-    capacity_before = dag_manager.calculate_max_concurrent_dags()
-    print(f"Capacity with new slot (using defaults): {capacity_before}")
+    capacity_with_new = dag_manager.calculate_max_concurrent_dags()
+    new_analysis = dag_manager.get_capacity_analysis()
+    print(f"Capacity with new slot: {capacity_with_new}")
+    print(f"New bottleneck resource: {new_analysis['bottleneck_resource']}")
 
-    # Configure the new slot type
-    print("\n2. Configuring new slot type:")
-    dag_manager.add_slot_type_config('annotator_vision', multiplier=2, weight=0.15)
-
-    capacity_after = dag_manager.calculate_max_concurrent_dags()
-    print(f"Capacity with configured slot: {capacity_after}")
-
-    # Show updated status
-    print("\n3. Updated slot types status:")
-    status = dag_manager.get_slot_types_status()
-    for slot_type, info in status.items():
-        configured = "✓" if info['fully_configured'] else "⚠"
-        print(
-            f"  {configured} {slot_type}: slots={info['available_slots']}, mult={info['multiplier']}, weight={info['weight']:.3f}"
+    # Show updated slots
+    print("\n2. Updated available slots:")
+    for slot_type, count in new_analysis['available_slots'].items():
+        marker = "🆕" if slot_type == 'annotator_vision' else "  "
+        bottleneck_marker = (
+            " [BOTTLENECK]" if count == new_analysis['bottleneck_capacity'] else ""
         )
+        print(f"{marker} {slot_type}: {count}{bottleneck_marker}")
+
+    # Test capacity tracking with new slot type
+    print("\n3. Capacity tracking for new slot type:")
+    tracking_info = dag_manager.get_capacity_tracking_info()
+    print(f"Max observed capacity: {tracking_info['max_observed_capacity']}")
 
 
-def example_6_monitoring_setup():
-    """Example 6: Production monitoring setup"""
+def example_8_production_scheduler_integration():
+    """Example 8: Integration with production scheduler"""
     print("\n" + "=" * 60)
-    print("EXAMPLE 6: Production Monitoring")
+    print("EXAMPLE 8: Production Scheduler Integration")
     print("=" * 60)
 
-    scheduler = MockScheduler()
-    dag_manager = DagConcurrencyManager(scheduler)
-
-    # Enable slot variations to simulate real environment
-    scheduler.enable_variations(True)
-
-    print("Simulating production workload...")
-
-    # Collect metrics over time
-    metrics_history = []
-    for i in range(10):
-        start_time = time.time()
-        capacity = dag_manager.calculate_max_concurrent_dags()
-
-        # Get health status
-        health = dag_manager.get_health_status()
-        analysis = dag_manager.get_capacity_analysis()
-
-        metrics = {
-            'timestamp': start_time,
-            'capacity': capacity,
-            'healthy': health['healthy'],
-            'calculation_time_ms': (
-                analysis['metrics']['last_calculation']['calculation_time_ms']
-                if analysis['metrics']['last_calculation']
-                else 0
-            ),
-            'bottleneck': (
-                analysis['metrics']['last_calculation']['bottleneck_resource']
-                if analysis['metrics']['last_calculation']
-                else None
-            ),
-            'available_slots': dict(analysis['available_slots']),
-        }
-        metrics_history.append(metrics)
-
-        print(
-            f"Step {i + 1}: capacity={capacity}, time={metrics['calculation_time_ms']:.2f}ms, bottleneck={metrics['bottleneck']}"
-        )
-
-        # Small delay to simulate real timing
-        time.sleep(0.1)
-
-    # Analysis
-    print(f"\nMonitoring Summary:")
-    avg_capacity = sum(m['capacity'] for m in metrics_history) / len(metrics_history)
-    avg_time = sum(m['calculation_time_ms'] for m in metrics_history) / len(
-        metrics_history
-    )
-    bottlenecks = [m['bottleneck'] for m in metrics_history if m['bottleneck']]
-    most_common_bottleneck = (
-        max(set(bottlenecks), key=bottlenecks.count) if bottlenecks else "None"
-    )
-
-    print(f"Average capacity: {avg_capacity:.1f}")
-    print(f"Average calculation time: {avg_time:.2f} ms")
-    print(f"Most common bottleneck: {most_common_bottleneck}")
-    print(f"All calculations healthy: {all(m['healthy'] for m in metrics_history)}")
-
-    # Final health check
-    final_health = dag_manager.get_health_status()
-    print(f"\nFinal health status:")
-    for key, value in final_health.items():
-        print(f"  {key}: {value}")
-
-
-def example_7_production_scheduler_integration():
-    """Example 7: Integration with production scheduler"""
-    print("\n" + "=" * 60)
-    print("EXAMPLE 7: Production Scheduler Integration")
-    print("=" * 60)
-
-    # This would be your actual scheduler class
-    class ProductionScheduler:
+    # Example enhanced scheduler
+    class EnhancedProductionScheduler:
         def __init__(self):
-            # Your actual initialization
-            pass
-
-        def get_available_slots(self):
-            # Your actual implementation
-            # This is just a simulation
-            return {
+            self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+            self.base_slots = {
                 'annotator_llm': 8,
                 'annotator_embeddings': 2,
                 'annotator_parser': 3,
@@ -352,68 +360,46 @@ def example_7_production_scheduler_integration():
                 'annotator_vision': 1,  # New slot type
             }
 
-        def submit_job(self, work_info, overwrite=False):
-            # Your actual job submission logic
-            print(
-                f"Submitting job with max_concurrent_dags: {self.max_concurrent_dags}"
-            )
-            return "job_id_12345"
-
-    # Example enhanced scheduler
-    class EnhancedProductionScheduler(ProductionScheduler):
-        def __init__(self):
-            super().__init__()
-            self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-
             # Initialize concurrency manager
-            self.dag_concurrency_manager = DagConcurrencyManager(self)
-
-            # Set custom configuration for your environment
-            self.dag_concurrency_manager.update_resource_weights(
-                annotator_llm=0.35,  # High priority
-                annotator_embeddings=0.25,  # Medium-high priority
-                annotator_parser=0.20,  # Medium priority
-                annotator_table=0.10,  # Lower priority
-                annotator_table_parser=0.05,  # Low priority
-                annotator_vision=0.05,  # New feature, low priority initially
+            self.dag_concurrency_manager = DagConcurrencyManager(
+                self, min_concurrent_dags=2, max_concurrent_dags=25
             )
 
-            # Conservative strategy for production stability
-            self.dag_concurrency_manager.update_strategy_balance(
-                0.4, 0.6
-            )  # 40% weighted, 60% conservative
+        def get_available_slots(self):
+            """Your actual implementation - this is just a simulation"""
+            return self.base_slots.copy()
 
-            # Production limits
-            self.dag_concurrency_manager.update_dag_limits(
-                min_concurrent_dags=2, max_concurrent_dags=25
-            )
-
-        def submit_job(self, work_info, overwrite=False):
+        def submit_job(self, work_info, flat_jobs=None):
             """Enhanced job submission with adaptive concurrency"""
             try:
                 # Calculate optimal concurrency
                 self.max_concurrent_dags = (
-                    self.dag_concurrency_manager.calculate_max_concurrent_dags()
+                    self.dag_concurrency_manager.calculate_max_concurrent_dags(
+                        flat_jobs
+                    )
                 )
 
                 # Log decision
-                analysis = self.dag_concurrency_manager.get_capacity_analysis()
+                analysis = self.dag_concurrency_manager.get_capacity_analysis(flat_jobs)
                 self.logger.info(
                     f"Adaptive concurrency: {self.max_concurrent_dags} DAGs"
                 )
                 self.logger.debug(
-                    f"Bottleneck resource: {analysis['metrics']['last_calculation']['bottleneck_resource'] if analysis['metrics']['last_calculation'] else 'Unknown'}"
+                    f"Bottleneck resource: {analysis['bottleneck_resource']}"
                 )
 
-                # Submit with calculated concurrency
-                return super().submit_job(work_info, overwrite)
+                # Simulate job submission
+                print(
+                    f"Submitting job with max_concurrent_dags: {self.max_concurrent_dags}"
+                )
+                return "job_id_12345"
 
             except Exception as e:
                 self.logger.error(f"Error in adaptive submission: {e}")
                 # Fallback to safe value
                 self.max_concurrent_dags = 2
                 self.logger.warning("Using fallback concurrency: 2 DAGs")
-                return super().submit_job(work_info, overwrite)
+                return "job_id_fallback"
 
         def get_system_status(self):
             """Get comprehensive system status"""
@@ -422,26 +408,11 @@ def example_7_production_scheduler_integration():
                 health_status = self.dag_concurrency_manager.get_health_status()
 
                 return {
-                    'current_capacity': capacity_analysis['final_result'],
+                    'current_capacity': capacity_analysis['bounded_capacity'],
                     'slot_status': capacity_analysis['available_slots'],
-                    'bottleneck': (
-                        capacity_analysis['metrics']['last_calculation'][
-                            'bottleneck_resource'
-                        ]
-                        if capacity_analysis['metrics']['last_calculation']
-                        else None
-                    ),
+                    'bottleneck': capacity_analysis['bottleneck_resource'],
                     'health': health_status,
-                    'configuration': {
-                        'strategy_weights': {
-                            'weighted': self.dag_concurrency_manager.weighted_strategy_weight,
-                            'conservative': self.dag_concurrency_manager.conservative_strategy_weight,
-                        },
-                        'limits': {
-                            'min': self.dag_concurrency_manager.min_concurrent_dags,
-                            'max': self.dag_concurrency_manager.max_concurrent_dags,
-                        },
-                    },
+                    'limits': capacity_analysis['limits'],
                 }
             except Exception as e:
                 self.logger.error(f"Error getting system status: {e}")
@@ -450,32 +421,46 @@ def example_7_production_scheduler_integration():
     # Demonstrate usage
     scheduler = EnhancedProductionScheduler()
 
-    # Submit a job
+    # Submit a job with no pending work
+    print("1. Job submission with no pending work:")
     job_id = scheduler.submit_job({'type': 'annotation_job', 'data': 'sample_data'})
     print(f"Job submitted: {job_id}")
 
+    # Submit a job with some pending work
+    print("\n2. Job submission with pending work:")
+    flat_jobs = [
+        ('annotator_table_parser', {'job_id': 'pending1'}),
+        ('annotator_llm', {'job_id': 'pending2'}),
+    ]
+    job_id = scheduler.submit_job(
+        {'type': 'annotation_job', 'data': 'sample_data'}, flat_jobs
+    )
+    print(f"Job submitted: {job_id}")
+
     # Get system status
+    print("\n3. System status:")
     status = scheduler.get_system_status()
-    print(f"\nSystem Status:")
     print(f"Current capacity: {status['current_capacity']}")
     print(f"Bottleneck resource: {status['bottleneck']}")
-    print(f"System healthy: {status['health']['healthy']}")
+    print(f"System healthy: {status['health']['status']}")
     print(f"Available slots: {status['slot_status']}")
+    print(f"Configured limits: {status['limits']}")
 
 
 def main():
     """Run all examples"""
-    print("DAG Concurrency Manager - Comprehensive Sample Usage")
+    print("DAG Concurrency Manager - Simplified Sample Usage")
     print("=" * 60)
 
     try:
         example_1_basic_usage()
-        example_2_configuration_updates()
-        example_3_performance_and_caching()
-        example_4_error_handling()
-        example_5_dynamic_slot_types()
-        example_6_monitoring_setup()
-        example_7_production_scheduler_integration()
+        example_2_limits_configuration()
+        example_3_utilization_factor()
+        example_4_capacity_tracking()
+        example_5_performance_and_caching()
+        example_6_error_handling()
+        example_7_dynamic_slot_types()
+        example_8_production_scheduler_integration()
 
         print("\n" + "=" * 60)
         print("All examples completed successfully!")

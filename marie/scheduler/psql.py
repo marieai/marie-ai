@@ -3,7 +3,6 @@ import contextlib
 import copy
 import itertools
 import random
-import threading
 import time
 import traceback
 import uuid
@@ -213,7 +212,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         if job_manager is None:
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
-        self.dag_concurrency_manager = DagConcurrencyManager(self)
         self._fetch_event = asyncio.Event()
         self._fetch_counter = 0
         self._debounced_notify = False
@@ -252,7 +250,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         self.logger.info(f"Queue names to monitor: {self.known_queues}")
 
         self.active_dags = {}
-        self.max_concurrent_dags = config.get("max_concurrent_dags", 1)
         self.job_manager = job_manager
         self._loop = get_or_reuse_loop()
         self._setup_event_subscriptions()
@@ -263,6 +260,25 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         register_all_known_planners(
             QueryPlannersConf.from_dict(config.get("query_planners", {}))
         )
+
+        dag_config = config.get("dag_manager", {})
+        dag_strategy = dag_config.get("strategy", 'fixed')  # fixed or dynamic
+        min_concurrent_dags = int(dag_config.get("min_concurrent_dags", 1))
+        max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
+        cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
+
+        self.dag_concurrency_manager = DagConcurrencyManager(
+            self,
+            strategy=dag_strategy,
+            min_concurrent_dags=min_concurrent_dags,
+            max_concurrent_dags=max_concurrent_dags,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+
+        count = self.dag_concurrency_manager.calculate_max_concurrent_dags()
+        print(f'dag_config : ', dag_config)
+        print(f'count  = {count}')
+        print(self.dag_concurrency_manager.get_configuration_summary())
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -556,7 +572,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         failures = 0
         idle_streak = 0
 
-        self.max_concurrent_dags = 32  # for debugging
         last_deployments_timestamp = ClusterState.deployments_last_updated
         slots_by_executor = available_slots_by_executor(ClusterState.deployments).copy()
         recently_activated_dags = set()
@@ -614,6 +629,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         continue
                     flat_jobs.append((ep, wi))
 
+                max_concurrent_dags = (
+                    self.dag_concurrency_manager.calculate_max_concurrent_dags(
+                        flat_jobs
+                    )
+                )
                 cleanup_recently_activated_dags()
                 recently_activated_dag_ids = set(
                     dag_id for dag_id, _ in recently_activated_dags
@@ -641,11 +661,11 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                     if (
                         dag_id not in self.active_dags
-                        and len(self.active_dags) >= self.max_concurrent_dags
+                        and len(self.active_dags) >= max_concurrent_dags
                     ):
                         self.logger.debug(
                             f"Max DAG limit reached "
-                            f"({len(self.active_dags)}/{self.max_concurrent_dags}). "
+                            f"({len(self.active_dags)}/{max_concurrent_dags}). "
                             f"Skipping DAG {dag_id}"
                         )
                         continue
@@ -1747,6 +1767,9 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
             if node.task_id == work_id:
                 return node
         raise ValueError(f"Node with ID {work_id} not found in DAG")
+
+    def get_available_slots(self) -> dict[str, int]:
+        return available_slots_by_executor(ClusterState.deployments)
 
 
 def query_plan_work_items(work_info: WorkInfo) -> tuple[QueryPlan, list[WorkInfo]]:
