@@ -52,15 +52,3 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
             register_from_module(planner_module)
         except ImportError as e:
             logger.warning(f"Error importing {planner_module}: {e}")
-
-    # TODO : This needs to load from CONFIG
-    planner_modules = [
-        "grapnel_g5.query.tid_100985.query",
-        "grapnel_g5.query.tid_121880.query",
-    ]
-
-    for planner_module in planner_modules:
-        try:
-            register_from_module(planner_module)
-        except ImportError as e:
-            logger.warning(f"Error importing {planner_module}: {e}")

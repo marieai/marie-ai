@@ -1,14 +1,17 @@
 import time
+from pprint import pformat
 from typing import Optional, Union
 
 import torch
 from docarray import DocList
-from grapnel_g5.result_parser import parse_results
 
 from marie import requests
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.executor.extract.util import prepare_asset_directory
+from marie.extract.results.base import initialize_parsers_from_config
+from marie.extract.results.registry import parser_registry
+from marie.extract.results.result_parser import parse_results
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.utils.docs import docs_from_asset, frames_from_docs
@@ -24,6 +27,7 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, any] = None,
+        parsers: dict[str, any] = None,
         dtype: Optional[Union[str, torch.dtype]] = None,
         **kwargs,
     ):
@@ -33,6 +37,19 @@ class DocumentAnnotatorParserExecutor(DocumentAnnotatorExecutor):
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
 
+        result = initialize_parsers_from_config(parsers)
+
+        logger.info(f"Loaded modules: {result['loaded']}")
+        logger.info(f"Failed modules: {result['failed']}")
+        logger.info(f"Total parsers available: {result['total_parsers']}")
+
+        reg_parsers = parser_registry.list_parsers()
+        logger.info("Available parsers:")
+        for parser_name in reg_parsers:
+            logger.info(f"- {parser_name}")
+
+        info = parser_registry.get_parser_info()
+        logger.info(f"Parser info:\n{pformat(info)}")
         logger.info(f"Started executor : {self.__class__.__name__}")
 
     # TODO : this should be moved to a proper pipeline
