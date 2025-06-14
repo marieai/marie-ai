@@ -66,7 +66,6 @@ from marie.scheduler.plans import (
     try_set_monitor_time,
     version_table_exists,
 )
-from marie.scheduler.pretty_printer import print_dag_concurrency_status_compact
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import available_slots_by_executor
 from marie.serve.runtimes.servers.cluster_state import ClusterState

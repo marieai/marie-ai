@@ -1016,12 +1016,12 @@ class MarieServerGateway(CompositeServer):
 
         # Lets get the new deployment topology
         # self.streamer.topology_graph.collect_all_results()
-        print('topology_graph', self.streamer.topology_graph)
-        print("-----------------------------")
+        self.logger.info(f'topology_graph : {self.streamer.topology_graph}')
+        self.logger.info("-----------------------------")
         for node in self.streamer.topology_graph.all_nodes:
-            print(node)
+            self.logger.info(node)
             for outgoing in node.outgoing_nodes:
-                print(f"\t{outgoing}")
+                self.logger.info(f"\t{outgoing}")
 
         # FIXME : this was a bad idea, we need to use the same deployment
         ClusterState.deployments = self.deployments

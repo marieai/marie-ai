@@ -11,11 +11,8 @@ import yaml
 from marie.job.job_manager import generate_job_id, increment_uuid7str
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import (
-    ExecutorEndpointQueryDefinition,
-    LlmQueryDefinition,
     NoopQueryDefinition,
     PlannerInfo,
-    PythonFunctionQueryDefinition,
     Query,
     QueryPlan,
     QueryPlanRegistry,
@@ -79,11 +76,13 @@ def plan_to_yaml(plan: QueryPlan, output_path: str = "query_plan_pretty.yaml") -
 def print_sorted_nodes(sorted_nodes: list[str], plan: QueryPlan) -> None:
     """
     Pretty prints the sorted nodes, with their descriptions, and the query plan in sorted order.
+    Currently disabled - will log a warning and return immediately.
 
     :param sorted_nodes: List of nodes in topologically sorted order.
     :param plan: The QueryPlan object.
     """
     if True:
+        logger.warning("Skipping sorted nodes output")
         return
 
     print("\n" + "=" * 60)
@@ -300,226 +299,6 @@ def ensure_single_entry_point(
     return query_plan
 
 
-def query_planner_xyz(frame_count: int, layout: str) -> QueryPlan:
-    """
-    Plan a structured query execution graph for document annotation, adding SEGMENT, FIELD & TABLE Extraction, and COLLATOR steps.
-    :param frame_count: Number of frames to process.
-    :param layout: The layout of the document.
-    :return: The QueryPlan for the structured query execution graph.
-
-    Example:
-    START -> ROOT (Annotator) -> Frame1 -> Frame2 -> MERGE -> COLLATOR -> END
-
-    """
-    base_job_id = generate_job_id()
-
-    current_id = 0
-    # Root node for the entire process
-    root = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: START",
-        dependencies=[],
-        node_type=QueryType.COMPUTE,
-        definition=NoopQueryDefinition(),
-    )
-    current_id += 1
-
-    annotator_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: Document annotator",
-        dependencies=[root.task_id],
-        node_type=QueryType.COMPUTE,
-        definition=NoopQueryDefinition(),
-    )
-    current_id += 1
-
-    steps = []
-    frame_joiners = []
-    frame_annotators = []
-
-    for i in range(frame_count):
-        # Frame segmentation step
-        frame_annotator = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: Annotate frame {i} ROIs",
-            dependencies=[annotator_node.task_id],  # No dependency
-            node_type=QueryType.COMPUTE,
-            definition=NoopQueryDefinition(params={"layout": layout}),
-        )
-        current_id += 1
-        frame_annotators.append(frame_annotator)
-
-        step_start = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_START for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "start"},
-            ),
-        )
-        current_id += 1
-
-        step_end = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_END for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "end"},
-            ),
-        )
-        current_id += 1
-
-        step_relation = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: ROI_RELATION for frame {i}",
-            dependencies=[frame_annotator.task_id],  # Now dependent on segmenter
-            node_type=QueryType.COMPUTE,
-            definition=LlmQueryDefinition(
-                model_name="qwen_v2_5_vl",
-                endpoint="annotator/roi",
-                params={"layout": layout, "roi": "relation"},
-            ),
-        )
-        current_id += 1
-
-        steps.extend([frame_annotator, step_start, step_end, step_relation])
-
-        # Frame-level joiner now depends on all frame annotations
-        joiner = Query(
-            task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-            query_str=f"{current_id}: Merge frame {i}",
-            dependencies=[step_start.task_id, step_end.task_id, step_relation.task_id],
-            node_type=QueryType.MERGER,
-            definition=NoopQueryDefinition(params={'layout': layout}),
-        )
-        current_id += 1
-
-        frame_joiners.append(joiner)
-
-    # Global joiner (Merging results from all frames)
-    global_joiner = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: Merge all frames",
-        dependencies=[
-            joiner.task_id for joiner in frame_joiners
-        ],  # Depends on all frame joiners
-        node_type=QueryType.MERGER,
-        definition=NoopQueryDefinition(params={'layout': layout}),
-    )
-    current_id += 1
-
-    # Additional Processing Steps after Global Joiner
-    segment_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: SEGMENT extracted data",
-        dependencies=[global_joiner.task_id],  # Depends on global merged results
-        node_type=QueryType.COMPUTE,
-        definition=ExecutorEndpointQueryDefinition(
-            endpoint="extract_executor://segmenter",
-            params={'layout': layout, 'function': 'segment_data'},
-        ),
-    )
-    current_id += 1
-
-    document_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: DOC VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/field_doc",
-            params={'layout': layout, 'extractor': 'doc'},
-        ),
-    )
-    current_id += 1
-
-    field_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: FIELD VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/field",
-            params={'layout': layout, 'extractor': 'field'},
-        ),
-    )
-    current_id += 1
-
-    table_value_extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: TABLE VALUE EXTRACT",
-        dependencies=[segment_node.task_id],  # Depends on segmentation step
-        node_type=QueryType.EXTRACTOR,
-        definition=LlmQueryDefinition(
-            model_name="qwen_v2_5_vl",
-            endpoint="extract/table",
-            params={'layout': layout, 'extractor': 'table'},
-        ),
-    )
-    current_id += 1
-
-    # EXTRACT node now depends on both field & table extraction steps
-    extract_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: EXTRACT insights",
-        dependencies=[
-            document_value_extract_node.task_id,
-            field_value_extract_node.task_id,
-            table_value_extract_node.task_id,
-        ],
-        node_type=QueryType.MERGER,
-        definition=PythonFunctionQueryDefinition(
-            endpoint="evaluator",
-            params={'layout': layout, 'function': 'extract_insights'},
-        ),
-    )
-    current_id += 1
-
-    collator_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: COLLATOR: Compile structured output",
-        dependencies=[extract_node.task_id],  # Depends on extraction step
-        node_type=QueryType.MERGER,
-        definition=PythonFunctionQueryDefinition(
-            endpoint="evaluator", params={'layout': layout, 'function': 'data_collator'}
-        ),
-    )
-    current_id += 1
-
-    end_node = Query(
-        task_id=f"{increment_uuid7str(base_job_id, current_id)}",
-        query_str=f"{current_id}: END",
-        dependencies=[collator_node.task_id],  # Depends on extraction step
-        node_type=QueryType.COMPUTE,
-        definition=NoopQueryDefinition(params={'layout': layout}),
-    )
-
-    return QueryPlan(
-        nodes=[root]
-        + [annotator_node]
-        + steps
-        + frame_joiners
-        + [
-            global_joiner,
-            segment_node,
-            document_value_extract_node,
-            field_value_extract_node,
-            table_value_extract_node,
-            extract_node,
-            collator_node,
-        ]
-        + [end_node]
-    )
-
-
 def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.png"):
     """
     Prints and saves a consistent and predictable graph visualization of the query plan
@@ -537,6 +316,7 @@ def visualize_query_plan_graph(plan: QueryPlan, output_path="query_plan_graph.pn
     graph = nx.DiGraph()
 
     if False:
+        logger.warning("Skipping graph visualization")
         return
 
     # Add nodes and edges to the graph in a consistent order
