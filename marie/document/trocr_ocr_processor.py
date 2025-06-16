@@ -19,7 +19,7 @@ from marie.constants import __model_path__
 from marie.document.ocr_processor import OcrProcessor
 from marie.lang import Object
 from marie.logging_core.predefined import default_logger
-from marie.logging_core.profile import TimeContext, TimeContextCuda
+from marie.logging_core.profile import TimeContext
 from marie.models.icr.memory_dataset import MemoryDataset
 
 # required to register text_recognition

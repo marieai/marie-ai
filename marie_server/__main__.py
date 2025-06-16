@@ -200,7 +200,7 @@ def __main__(
             include_gateway=False,
             noblock_on_start=False,
             prefetch=prefetch,
-            external=True,
+            external=False,
         ).config_gateway(prefetch=prefetch)
 
     if False:

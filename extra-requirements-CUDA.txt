@@ -40,7 +40,10 @@ grpcio-reflection>=1.46.0,<=1.57.0:  core
 grpcio-health-checking>=1.46.0,<=1.57.0:  core
 pyyaml>=5.3.1:              standard,core
 packaging>=20.0:            standard,core
-docarray>=0.16.4,<=0.40.0:  core
+# docarray>=0.16.4:           standard,core
+# docarray==0.19.1:           standard,core
+#docarray>=0.19.1,<0.30.0:    standard,core
+docarray>=0.16.4,<=0.40.0:             core
 
 prometheus_client:          standard,perf
 psutil:                     perf,standard,devel
@@ -84,11 +87,14 @@ black==24.3.0:              test
 kubernetes>=18.20.0,<31.0.0: test
 pytest-kind==22.11.1:       test
 pytest-lazy-fixture:        test
+torch:                      cicd
 psutil:                     test
 strawberry-graphql>=0.96.0: cicd,devel
 
+
 watchfiles>=0.18.0:           devel
 urllib3>=1.25.9,<2.0.0:       core
+transformers:                 standard,core
 anyconfig:                    standard,core
 
 python-consul2:               standard,devel
@@ -100,6 +106,8 @@ lmdb:                         standard,core
 natsort:                      standard,core
 celery:                       standard,core
 
+# opencv-python==4.5.4.60:      standard,core
+#opencv-python==4.7.0.68:      standard,core
 # MEMORY LEAK FIXED RELATED TO  https://github.com/opencv/opencv/issues/23633
 opencv-python==4.8.1.78:      standard,core
 
@@ -109,7 +117,7 @@ PyPDF4:                       standard,core
 reportlab:                    standard,core
 pycocotools:                  standard,core
 nltk:                         standard,core
-# timm==1.0.11:                 standard,core
+timm==1.0.11:                 standard,core
 #segmentation-models-pytorch:  standard,core
 Wand:                         standard,core
 
@@ -124,6 +132,12 @@ nlpaug:                       standard,core
 munch:                        standard,core
 
 # opentelemetry-api:          standard,core
+
+onnx:                         standard,core
+onnxruntime:                  standard,core
+onnxruntime-gpu:              standard,core
+# onnxconverter_common==1.13.0: standard,core
+# onnxmltools:                  standard,core
 
 pika:                         standard,core
 sentencepiece:                standard,core
@@ -142,10 +156,14 @@ Pillow-SIMD:                  standard,core
 # https://github.com/facebookresearch/detectron2/issues/5010
 pillow~=9.5:                  standard,core
 
+pytesseract:                  standard,core
 patchify==0.2.3:              standard,core
 colorcet:                     standard,core
+fast_pytorch_kmeans:          standard,core
 
+sahi:                         standard,core
 clip:                         standard,core
+efficientnet-pytorch:         standard,core
 seaborn:                      standard,core
 textual:                      standard,core
 textual_textarea:             standard,core
@@ -153,8 +171,12 @@ textual_fastdatatable:        standard,core
 etcd3:                        standard,core
 
 typing_extensions>=4.12.2:    standard,core
+#vllm:                         standard,core
 rtree:                        standard,core
 scikit-image:                  standard,core
 filetype:                      standard,core
 dataclasses_json:              standard,core
+
+faiss-gpu-cu12:                standard,core
+sentence-transformers==4.1.0:  standard,core
 watchdog:                      standard,core

@@ -43,7 +43,6 @@ from marie.query_planner.planner import (
     query_planner,
     topological_sort,
 )
-from marie.scheduler.dag_concurrency_manager import DagConcurrencyManager
 from marie.scheduler.fixtures import *
 from marie.scheduler.global_execution_planner import GlobalPriorityExecutionPlanner
 from marie.scheduler.job_scheduler import JobScheduler
@@ -267,18 +266,20 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
         max_concurrent_dags = int(dag_config.get("max_concurrent_dags", 16))
         cache_ttl_seconds = int(dag_config.get("cache_ttl_seconds", 5))
 
-        self.dag_concurrency_manager = DagConcurrencyManager(
-            self,
-            strategy=dag_strategy,
-            min_concurrent_dags=min_concurrent_dags,
-            max_concurrent_dags=max_concurrent_dags,
-            cache_ttl_seconds=cache_ttl_seconds,
-        )
-
-        count = self.dag_concurrency_manager.calculate_max_concurrent_dags()
-        print(f'dag_config : ', dag_config)
-        print(f'count  = {count}')
-        print(self.dag_concurrency_manager.get_configuration_summary())
+        # TODO : Implement DagConcurrencyManager properly
+        self.max_concurrent_dags = max_concurrent_dags
+        # self.dag_concurrency_manager = DagConcurrencyManager(
+        #     self,
+        #     strategy=dag_strategy,
+        #     min_concurrent_dags=min_concurrent_dags,
+        #     max_concurrent_dags=max_concurrent_dags,
+        #     cache_ttl_seconds=cache_ttl_seconds,
+        # )
+        #
+        # count = self.dag_concurrency_manager.calculate_max_concurrent_dags()
+        # print(f'dag_config : ', dag_config)
+        # print(f'count  = {count}')
+        # print(self.dag_concurrency_manager.get_configuration_summary())
 
     async def handle_job_event(self, event_type: str, message: Any):
         """
@@ -553,6 +554,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
 
                 states = await self.count_states()
                 print_state_summary(states)
+                # print_dag_concurrency_status_compact(self.dag_concurrency_manager.get_configuration_summary())
 
                 await asyncio.sleep(interval)
             except Exception as e:
@@ -568,7 +570,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
     async def _poll(self):
         self.logger.info("Starting database job scheduler (serial mode)")
         wait_time = INIT_POLL_PERIOD
-        batch_size = 5000
+        batch_size = 25000
         failures = 0
         idle_streak = 0
 
@@ -584,6 +586,7 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 if current_time - ts > ACTIVATION_TIMEOUT:
                     recently_activated_dags.remove((dag_id, ts))
 
+        max_concurrent_dags = self.max_concurrent_dags
         while self.running:
             try:
                 self.logger.debug(
@@ -629,11 +632,6 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                         continue
                     flat_jobs.append((ep, wi))
 
-                max_concurrent_dags = (
-                    self.dag_concurrency_manager.calculate_max_concurrent_dags(
-                        flat_jobs
-                    )
-                )
                 cleanup_recently_activated_dags()
                 recently_activated_dag_ids = set(
                     dag_id for dag_id, _ in recently_activated_dags

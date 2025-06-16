@@ -1,4 +1,6 @@
 import enum
+import importlib
+import warnings
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Type
@@ -6,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Type
 from pydantic import BaseModel, Field, field_validator
 
 from marie.logging_core.predefined import default_logger as logger
+from marie.wheel_manager import PipWheelManager, WheelDirectoryWatcher
 
 DEFAULT_NAME = "query_plan_tool"
 
@@ -31,10 +34,48 @@ Type of question we are asking, either a single question or a multi question mer
 """
 
 
+class QueryPlanRegistryWheelCallback:
+    """Callback handler for wheel installation events in QueryPlanRegistry"""
+
+    @staticmethod
+    def on_wheel_installed(wheel_info: Dict[str, Any]) -> None:
+        """Called when a wheel is successfully installed"""
+        planners_count = len(QueryPlanRegistry.list_planners())
+        logger.info(f"Wheel installed: {wheel_info['package_name']}")
+        logger.info(f"Total query planners available: {planners_count}")
+
+    @staticmethod
+    def on_wheel_uninstalled(package_name: str) -> None:
+        """Called when a wheel is successfully uninstalled"""
+        planners_count = len(QueryPlanRegistry.list_planners())
+        logger.info(f"Wheel uninstalled: {package_name}")
+        logger.info(f"Total query planners available: {planners_count}")
+
+    @staticmethod
+    def on_wheel_error(wheel_path: str, error: Exception) -> None:
+        """Called when a wheel installation/uninstallation fails"""
+        logger.error(f"Wheel installation failed for {wheel_path}: {error}")
+
+
 class QueryPlanRegistry:
-    """Registry for query planner functions."""
+    """Registry for query planner functions with wheel support."""
 
     _plans: Dict[str, Callable] = {}
+    _external_modules_loaded: bool = False
+
+    # Wheel management components (class-level)
+    _wheel_manager: Optional[PipWheelManager] = None
+    _wheel_watcher: Optional[WheelDirectoryWatcher] = None
+    _wheel_callback: Optional[QueryPlanRegistryWheelCallback] = None
+
+    @classmethod
+    def _ensure_wheel_manager(cls):
+        """Ensure wheel management components are initialized"""
+        if cls._wheel_manager is None:
+            cls._wheel_manager = PipWheelManager()
+            cls._wheel_watcher = WheelDirectoryWatcher(cls._wheel_manager)
+            cls._wheel_callback = QueryPlanRegistryWheelCallback()
+            cls._wheel_manager.add_callback(cls._wheel_callback)
 
     @classmethod
     def register(cls, name: str, function: Callable = None):
@@ -82,6 +123,110 @@ class QueryPlanRegistry:
         return decorator
 
     @classmethod
+    def register_from_module(cls, planner_module: str) -> bool:
+        """
+        Registers a planner from the specified module.
+
+        :param planner_module: The name of the module to register the planner from.
+        :type planner_module: str
+        :return: True if successful, False if failed
+        """
+        try:
+            logger.info(f"Registering planner from {planner_module}")
+            importlib.import_module(planner_module)
+            logger.info(f"Successfully registered planner from {planner_module}")
+            return True
+        except Exception as e:
+            logger.error(f"Error registering planner from {planner_module}: {e}")
+            warnings.warn(
+                f"Error importing {planner_module} : some configs may not be available\n\n\tRoot cause: {e}\n"
+            )
+            return False
+
+    @classmethod
+    def initialize_from_config(cls, query_planners_conf) -> Dict[str, Any]:
+        """
+        Initialize query planners from configuration with wheel support.
+
+        :param query_planners_conf: Configuration containing planner modules and wheel settings
+        :return: Dictionary with initialization results
+        """
+        logger.info("Initializing query planners from configuration")
+
+        cls._ensure_wheel_manager()
+
+        result = {
+            'loaded': [],
+            'failed': [],
+            'total_planners': len(cls._plans),
+            'wheel_results': {},
+        }
+
+        # Handle wheel directories
+        wheel_directories = getattr(query_planners_conf, 'wheel_directories', [])
+        wheel_watch = getattr(query_planners_conf, 'watch_wheels', True)
+
+        if wheel_directories:
+            logger.info(f"Processing wheel directories: {wheel_directories}")
+
+            for wheel_dir in wheel_directories:
+                try:
+                    logger.info(f"Installing wheels from directory: {wheel_dir}")
+                    wheel_result = cls._wheel_watcher.install_existing_wheels(wheel_dir)
+                    result['wheel_results'][wheel_dir] = wheel_result
+                    logger.info(
+                        f"Wheel installation result for {wheel_dir}: {wheel_result}"
+                    )
+
+                    # Start watching if requested
+                    if wheel_watch:
+                        logger.info(
+                            f"Starting wheel directory watcher for: {wheel_dir}"
+                        )
+                        cls._wheel_watcher.watch_directory(wheel_dir)
+
+                except Exception as e:
+                    logger.error(f"Failed to handle wheels from {wheel_dir}: {e}")
+                    result['failed'].append((wheel_dir, f"Wheel error: {e}"))
+
+        # Register planners from external modules
+        loaded_modules = []
+        failed_modules = []
+
+        for planner in query_planners_conf.planners:
+            logger.info(f"Registering planner: {planner.name} from {planner.py_module}")
+            planner_module = planner.py_module
+
+            if cls.register_from_module(planner_module):
+                loaded_modules.append(planner_module)
+            else:
+                failed_modules.append((planner_module, "Module import failed"))
+
+        result['loaded'] = loaded_modules
+        result['failed'].extend(failed_modules)
+        result['total_planners'] = len(cls._plans)
+
+        cls._external_modules_loaded = True
+
+        if loaded_modules:
+            logger.info(f"Successfully loaded {len(loaded_modules)} planner modules")
+        if failed_modules:
+            logger.warning(f"Failed to load {len(failed_modules)} planner modules")
+
+        if loaded_modules and not failed_modules:
+            logger.info(
+                f"All {len(loaded_modules)} planner modules loaded successfully"
+            )
+        elif failed_modules and not loaded_modules:
+            logger.warning(f"All {len(failed_modules)} planner modules failed to load")
+        elif loaded_modules and failed_modules:
+            logger.info(
+                f"Mixed results: {len(loaded_modules)} loaded, {len(failed_modules)} failed"
+            )
+
+        return result
+
+    @classmethod
     def get(cls, planner_name: str) -> Callable:
         """
         Get a query planner by name.
@@ -101,6 +246,56 @@ class QueryPlanRegistry:
     def list_planners(cls) -> list[str]:
         """Return a list of all registered planner names."""
         return list(cls._plans.keys())
+
+    @classmethod
+    def get_planner_info(cls) -> Dict[str, Any]:
+        """Get detailed information about registered planners"""
+        cls._ensure_wheel_manager()
+
+        installed_wheels = cls._wheel_manager.get_installed_wheels()
+        planners = cls.list_planners()
+
+        info = {
+            'total_planners': len(planners),
+            'planner_names': planners,
+            'external_loaded': cls._external_modules_loaded,
+            'installed_wheels': {
+                name: {
+                    'package_name': data['package_name'],
+                    'modules_count': len(data['modules']),
+                    'install_time': data['install_time'],
+                }
+                for name, data in installed_wheels.items()
+            },
+            'watched_directories': (
+                list(cls._wheel_watcher.watched_directories)
+                if cls._wheel_watcher
+                else []
+            ),
+        }
+
+        return info
+
+    @classmethod
+    def get_wheel_manager(cls) -> Optional[PipWheelManager]:
+        """Get the wheel manager for advanced operations"""
+        cls._ensure_wheel_manager()
+        return cls._wheel_manager
+
+    @classmethod
+    def get_wheel_watcher(cls) -> Optional[WheelDirectoryWatcher]:
+        """Get the wheel watcher for advanced operations"""
+        cls._ensure_wheel_manager()
+        return cls._wheel_watcher
+
+    @classmethod
+    def cleanup(cls):
+        """Clean up all resources"""
+        if cls._wheel_watcher:
+            cls._wheel_watcher.stop_watching()
+        if cls._wheel_manager:
+            cls._wheel_manager.cleanup()
+        logger.info("Query plan registry cleanup completed")
 
 
 def register_query_plan(name: str = None):

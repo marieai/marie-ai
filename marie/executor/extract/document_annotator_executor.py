@@ -5,7 +5,6 @@ from typing import Optional, Type, Union
 
 import torch
 from docarray import DocList
-from grapnel_g5.result_parser import load_config
 from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
@@ -17,6 +16,7 @@ from marie.extract.annotators.faiss_hybrid_annotator import FaissHybridAnnotator
 from marie.extract.annotators.llm_annotator import LLMAnnotator
 from marie.extract.annotators.llm_table_annotator import LLMTableAnnotator
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
+from marie.extract.results.result_parser import load_layout_config
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
@@ -257,6 +257,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self.logger.info(f"Base dir : {base_dir}")
         self.logger.info(f"Layout dir : {layout_dir}")
 
-        cfg = load_config(base_dir, layout_dir)
+        cfg = load_layout_config(base_dir, layout_dir)
         self.logger.debug(f"Layout config : {cfg}")
         return cfg

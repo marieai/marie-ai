@@ -285,12 +285,23 @@ CONFIG_DIR     > /mnt/data/marie-ai/config
 Console mode
 
 ```shell
-docker run --gpus all --rm -it --name=marieai --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --uses /etc/marie/config/service/marie.yml
+docker run --gpus all --rm -it --name=marieai --network=host \
+  -e JINA_LOG_LEVEL=debug \
+  -e MARIE_DEFAULT_MOUNT='/etc/marie' \
+  -v /mnt/data/marie-ai/config:/etc/marie/config:ro \
+  -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw \
+  marieai/marie:4.0.0-cuda server --uses /etc/marie/config/service/marie.yml
+
 ```
 
-Deamon mode
+Daemon mode
 ```shell
-docker run --gpus all --name=marieai -d --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.5-cuda server --uses /etc/marie/config/service/marie.yml
+docker run --gpus all --name=marieai -d --network=host \
+  -e JINA_LOG_LEVEL=debug \
+  -e MARIE_DEFAULT_MOUNT='/etc/marie' \
+  -v /mnt/data/marie-ai/config:/etc/marie/config:ro \
+  -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw \
+  marieai/marie:4.0.0-cuda server --uses /etc/marie/config/service/marie.yml
 ```
 
 ### References

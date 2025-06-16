@@ -18,4 +18,4 @@
 
 # Allow directories for wheels and patches
 !wheels/**
-!patches/**/G5-ERRORS/
+!patches/**

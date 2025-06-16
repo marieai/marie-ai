@@ -3,7 +3,6 @@ from typing import Optional, Union
 
 import torch
 from docarray import DocList
-from grapnel_g5.result_parser import extract_tables, highlight_tables, parse_tables
 from omegaconf import OmegaConf
 
 from marie import requests
@@ -11,6 +10,8 @@ from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import DocumentAnnotatorExecutor
 from marie.executor.extract.util import prepare_asset_directory, setup_table_directories
 from marie.extract.readers.meta_reader.meta_reader import MetaReader
+from marie.extract.results.core_parsers import parse_tables
+from marie.extract.results.result_parser import extract_tables, highlight_tables
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
