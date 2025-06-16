@@ -264,7 +264,7 @@ class BasePipeline(ABC):
         self,
         page_classifier_meta,
         prediction_agent="max_score",
-        tie_break_policy="best_with_diff",
+        tie_break_policy="best",
     ):
 
         # TODO : Read from config
