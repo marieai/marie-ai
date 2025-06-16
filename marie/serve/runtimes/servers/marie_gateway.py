@@ -974,7 +974,7 @@ class MarieServerGateway(CompositeServer):
         for executor in executors_:
             graph_description[executor] = ["end-gateway"]
 
-        print(f"graph_description: {graph_description}")
+        self.logger.info(f"graph_description: {graph_description}")
 
         # FIXME: testing with only one executor
         deployments_addresses = {}

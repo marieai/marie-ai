@@ -83,7 +83,9 @@ with:
     # Planners have to be available in the python path.
     # When running in a container, the planners should be available in the container's python path.
     query_planners:
-
+      watch_wheels: True
+      wheel_directories:
+        - /mnt/data/marie-ai/config/wheels
       planners:
         - name: tid_100985
           py_module: grapnel_g5.query.tid_100985.query

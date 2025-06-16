@@ -1,9 +1,6 @@
 from typing import TYPE_CHECKING
 
-from docarray.documents.legacy import LegacyDocument
-
 from marie.parsers.helper import _update_gateway_args
-from marie.utils.pydantic import patch_pydantic_schema_2x
 
 if TYPE_CHECKING:
     from argparse import Namespace
