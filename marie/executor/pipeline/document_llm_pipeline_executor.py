@@ -34,10 +34,10 @@ class DocumentLLMPipelineExecutor(DocumentPipelineExecutor):
     def handle_classify(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
-        self.run_pipeline(docs, parameters, *args, **kwargs)
+        return self.run_pipeline(docs, parameters, *args, **kwargs)
 
     @requests(on="/document/index")
     def handle_index(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
-        self.run_pipeline(docs, parameters, *args, **kwargs)
+        return self.run_pipeline(docs, parameters, *args, **kwargs)

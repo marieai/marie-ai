@@ -124,9 +124,9 @@ class DocumentPipelineExecutor(MarieExecutor, StorageMixin):
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
         if len(docs) == 0:
-            return {"error": "empty payload"}
+            return {"status": "error", "error": "empty payload"}
         if len(docs) > 1:
-            return {"error": "expected single document"}
+            return {"status": "error", "error": "expected single document"}
 
         # load documents from specified document asset key
         doc = docs[0]
@@ -154,7 +154,7 @@ class DocumentPipelineExecutor(MarieExecutor, StorageMixin):
 
         try:
             if "payload" not in parameters or parameters["payload"] is None:
-                return {"error": "empty payload"}
+                return {"status": "error", "error": "empty payload"}
             else:
                 payload = parameters["payload"]
 
@@ -250,7 +250,7 @@ class DocumentPipelineExecutor(MarieExecutor, StorageMixin):
                 del metadata["ocr"]
 
             response = {
-                "status": "succeeded",
+                "status": "success",
                 "runtime_info": self.runtime_info,
                 "metadata": metadata,
             }
