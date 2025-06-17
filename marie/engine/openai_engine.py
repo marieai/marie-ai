@@ -258,7 +258,8 @@ class OpenAIEngine(EngineLM):
 
         :param batch_content: A list of text prompts or multimodal inputs (image, text pairs).
         :param system_prompt: Optional system-level instructions for the model.
-        :param kwargs: Additional inference parameters.
+        :param kwargs: Additional inference parameters. This can include: reasoning_model (bool), mm_processor_kwargs (dict)
+
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
         system_prompt = system_prompt or self.system_prompt
@@ -267,8 +268,14 @@ class OpenAIEngine(EngineLM):
         )
 
         if self.is_multimodal:
+            default_options = {
+                'min_pixels': 512 * 28 * 28,
+                'max_pixels': 2560 * 28 * 28,
+            }
+            mm_kwargs = kwargs.get('mm_processor_kwargs', default_options)
             batch_content = [
-                open_ai_like_formatting(content, True) for content in batch_content
+                open_ai_like_formatting(content, True, **mm_kwargs)
+                for content in batch_content
             ]
 
         reasoning_model = kwargs.get("reasoning_model", False)
