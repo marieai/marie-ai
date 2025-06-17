@@ -81,7 +81,12 @@ class OptimizedDetectronPredictor:
         """
         return self.invoke_model(original_image, raise_oom=False)
 
-    def invoke_model(self, original_image, raise_oom=False):
+    def reinitialize_model(self, half_precision):
+        del self.model
+        torch.cuda.empty_cache()
+        self.__init__(self.cfg, half_precision)
+
+    def invoke_model(self, original_image: np.ndarray, raise_oom: bool = False) -> dict:
         """
         Invoke the model with the given image.
 
@@ -89,9 +94,6 @@ class OptimizedDetectronPredictor:
         :param raise_oom:  whether to raise OOM exception or not
         :return:  the output of the model for one image only.
         """
-        if raise_oom:
-            self.logger.warning("OOM detected, clearing cache and retrying")
-
         with torch.inference_mode():
             with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
                 try:
@@ -144,7 +146,6 @@ class OptimizedDetectronPredictor:
                     else:
                         predictions = self.model([inputs])[0]
 
-                    del inputs
                     return predictions
                 except RuntimeError as e:
                     if "out of memory" in str(e) and not raise_oom:
@@ -154,10 +155,20 @@ class OptimizedDetectronPredictor:
                                 del p.grad
                         if hasattr(torch.cuda, "empty_cache"):
                             torch.cuda.empty_cache()
+                        self.logger.warning("OOM detected, clearing cache and retrying")
+                        return self.invoke_model(original_image, raise_oom=True)
+                    elif "not implemented for Half" in str(e) and not raise_oom:
+                        self.logger.warning(f"Error: {e}")
+                        self.logger.warning("Re-initializing model with half_precision=False and retrying.")
+                        self.reinitialize_model(half_precision=False)
                         return self.invoke_model(original_image, raise_oom=True)
                     else:
                         raise e
                 finally:
+                    if 'image' in locals():
+                        del image
+                    if 'inputs' in locals():
+                        del inputs
                     torch_gc()
 
     def optimize_model(self, model: nn.Module) -> Callable | Module:
