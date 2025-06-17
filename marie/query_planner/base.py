@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Type
 from pydantic import BaseModel, Field, field_validator
 
 from marie.logging_core.predefined import default_logger as logger
+from marie.query_planner.model import QueryPlannersConf
 from marie.wheel_manager import PipWheelManager, WheelDirectoryWatcher
 
 DEFAULT_NAME = "query_plan_tool"
@@ -144,7 +145,9 @@ class QueryPlanRegistry:
             return False
 
     @classmethod
-    def initialize_from_config(cls, query_planners_conf) -> Dict[str, Any]:
+    def initialize_from_config(
+        cls, query_planners_conf: QueryPlannersConf
+    ) -> Dict[str, Any]:
         """
         Initialize query planners from configuration with wheel support.
 
@@ -163,8 +166,8 @@ class QueryPlanRegistry:
         }
 
         # Handle wheel directories
-        wheel_directories = getattr(query_planners_conf, 'wheel_directories', [])
-        wheel_watch = getattr(query_planners_conf, 'watch_wheels', True)
+        wheel_directories = query_planners_conf.wheel_directories
+        wheel_watch = query_planners_conf.watch_wheels
 
         if wheel_directories:
             logger.info(f"Processing wheel directories: {wheel_directories}")

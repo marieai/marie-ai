@@ -18,4 +18,4 @@ class SubClassifier(BaseModel):
 
 
 class ClassificationResult(ClassifierBase):
-    sub_classifier: List[SubClassifier] = None
+    sub_classifier: Optional[List[SubClassifier]] = None

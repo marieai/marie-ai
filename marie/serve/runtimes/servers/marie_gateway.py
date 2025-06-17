@@ -822,7 +822,6 @@ class MarieServerGateway(CompositeServer):
                     # set the ready event to indicate that we are ready to have scheduler
                     self.ready_event.set()
             except Exception as ex:
-                raise ex
                 self.logger.error(f"Error processing event: {ex}")
                 error_counter += 1
                 if error_counter >= max_errors:

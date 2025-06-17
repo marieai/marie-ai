@@ -1,4 +1,5 @@
 from abc import ABC
+from collections import defaultdict
 from typing import List
 
 from docarray import DocList
@@ -80,16 +81,10 @@ class BasePipeline(ABC):
             metadata["indexers"] = []
 
         for group, classifier_group in classifier_groups.items():
-            self.logger.info(
-                f"Processing classifier pipeline/group :  {pipeline_name}, {group}"
+            self.logger.info(f"Processing classifier: {pipeline_name}/{group}")
+            (document_classifiers, sub_classifiers) = self.build_classifier_component(
+                classifier_group, group
             )
-            document_classifiers = classifier_group["classifiers"]
-            sub_classifiers = (
-                classifier_group["sub_classifiers"]
-                if "sub_classifiers" in classifier_group
-                else {}
-            )
-
             processing_pipeline = [
                 ClassifierPipelineComponent(
                     name="classifier_pipeline",
@@ -108,7 +103,11 @@ class BasePipeline(ABC):
                     )
 
             results = self.execute_pipeline(
-                processing_pipeline, sub_classifiers, frames, ocr_results
+                processing_pipeline,
+                sub_classifiers,
+                frames,
+                ocr_results,
+                "classification_pipeline",
             )
 
             metadata["classifications"].append(
@@ -127,60 +126,104 @@ class BasePipeline(ABC):
                 }
             )
 
+    @staticmethod
+    def build_classifier_component(
+        classifier_group, group
+    ) -> (ClassifierPipelineComponent, dict):
+        document_classifiers = classifier_group["classifiers"]
+        sub_classifiers = (
+            classifier_group["sub_classifiers"]
+            if "sub_classifiers" in classifier_group
+            else dict()
+        )
+
+        return (
+            ClassifierPipelineComponent(
+                name=f"{group}_classifier_component",
+                document_classifiers=document_classifiers,
+            ),
+            sub_classifiers,
+        )
+
     def execute_pipeline(
         self,
         processing_pipeline: List[PipelineComponent],
         sub_classifiers: dict[str, any],
         frames: List,
         ocr_results: dict,
+        pipeline_id: str = "default_pipeline",
+        include_ocr_lines: bool = False,
     ) -> dict[str, any]:
         """Execute processing pipeline"""
 
         words = []
         boxes = []
+        lines = []
         documents = docs_from_image(frames)
         assert len(documents) == len(frames)
 
         for page_idx in range(len(frames)):
-            page_words, page_boxes = get_words_and_boxes(ocr_results, page_idx)
+            page_words, page_boxes, page_lines = get_words_and_boxes(
+                ocr_results, page_idx, include_lines=True
+            )
             words.append(page_words)
             boxes.append(page_boxes)
+            if include_ocr_lines:
+                lines.append(page_lines)
 
         assert len(words) == len(boxes)
+        if include_ocr_lines:
+            assert len(words) == len(lines)
 
-        context = PipelineContext(pipeline_id="classification_pipeline")
+        context = PipelineContext(pipeline_id=pipeline_id)
         context["metadata"] = {}
 
         for pipe in processing_pipeline:
             try:
                 # create a PipelineContext and pass it to the component
-                pipe_results = pipe.run(documents, context, words=words, boxes=boxes)
+                pipe_results = pipe.run(
+                    documents, context, words=words, boxes=boxes, lines=lines
+                )
                 if pipe_results.state is not None:
                     if not isinstance(pipe_results.state, DocList):
                         raise ValueError(
                             f"Invalid state type : {type(pipe_results.state)}"
                         )
-                    documents = pipe_results.state
             except Exception as e:
                 if not self.silence_exceptions:
                     raise ValueError("Error executing pipe") from e
                 self.logger.error(f"Error executing pipe : {e}")
 
-        # TODO : This is temporary, we need to make this configurable
-        self.logger.info("### ClassificationPipeline results")
-        self.logger.info(context["metadata"])
+        self.logger.info(f"### {pipeline_id} results")
+        self.logger.debug(context["metadata"])
 
-        page_indexer_meta = (
-            context["metadata"]["page_indexer"]
-            if "page_indexer" in context["metadata"]
-            else []
-        )
-        page_classifier_meta = (
-            context["metadata"]["page_classifier"]
-            if "page_classifier" in context["metadata"]
-            else []
-        )
+        pipeline_meta = dict()
+        for key in context["metadata"]:
+            key_meta = context["metadata"][key]
+            if key == "page_classifier":
+                self.run_sub_classifier_pipeline(
+                    key_meta,
+                    sub_classifiers,
+                    words,
+                    boxes,
+                    documents,
+                    pipeline_id=pipeline_id,
+                )
+                pipeline_meta["classifiers"] = self.get_classifier_results(key_meta)
+            if key == "page_indexer":
+                pipeline_meta["indexes"] = self.get_indexer_results(key_meta)
 
+        return pipeline_meta
+
+    def run_sub_classifier_pipeline(
+        self,
+        page_classifier_meta,
+        sub_classifiers: dict[str, any],
+        words: List,
+        boxes: List,
+        documents: DocList,
+        pipeline_id="default_pipeline",
+    ):
         for idx, page_result in enumerate(page_classifier_meta):
             for detail in page_result["details"]:
                 page = int(detail["page"])
@@ -205,9 +248,9 @@ class BasePipeline(ABC):
                         document_classifiers=filtered_classifiers,
                     )
 
-                    ctx = PipelineContext(pipeline_id="sub_classification_pipeline")
+                    ctx = PipelineContext(pipeline_id=f"sub_{pipeline_id}")
                     ctx["metadata"] = {}
-                    pipe_results = sub_classifier_pipeline.run(
+                    sub_classifier_pipeline.run(
                         documents[page : page + 1],
                         ctx,
                         words=[words[page]],
@@ -215,10 +258,23 @@ class BasePipeline(ABC):
                     )
                     detail["sub_classifier"] = ctx["metadata"]["page_classifier"]
 
+        return page_classifier_meta
+
+    def get_classifier_results(
+        self,
+        page_classifier_meta,
+        prediction_agent="max_score",
+        tie_break_policy="best",
+    ):
+
         # TODO : Read from config
         # Classification strategy: max_score, max_votes, max_score_with_diff
-        prediction_agent = "majority"
-        tie_break_policy = "best_with_diff"
+        classifier_results = {
+            "strategy": prediction_agent,
+            "tie_break_policy": tie_break_policy,
+            "pages": {},
+        }
+
         voter = get_voting_strategy(prediction_agent, tie_break_policy, max_diff=0.25)
 
         class_by_page = self.group_results_by_page("classifier", page_classifier_meta)
@@ -226,39 +282,51 @@ class BasePipeline(ABC):
         for page, details in class_by_page.items():
             score_by_page[page] = voter([ClassificationResult(**x) for x in details])
 
-        classifier_results = {
-            "strategy": prediction_agent,
-            "tie_break_policy": tie_break_policy,
-            "pages": {},
-        }
-
         for page in list(class_by_page.keys()):
             classifier_results["pages"][page] = {
                 "details": class_by_page[page],
                 "best": score_by_page[page],
             }
 
-        # Indexer results
-        indexer_by_page = self.group_results_by_page("indexer", page_indexer_meta)
-        indexer_results = {"strategy": "default", "pages": {}}
+        return classifier_results
 
-        for page in list(indexer_by_page.keys()):
-            indexer_results["pages"][page] = {"details": indexer_by_page[page]}
+    def get_indexer_results(self, page_indexer_meta, strategy="default"):
+        if strategy != "default":
+            raise NotImplementedError(
+                f"Strategy '{strategy}' not implemented for indexing results"
+            )
+        # TODO: add other indexing strategies
 
-        return {"classifier": classifier_results, "indexer": indexer_results}
+        results = defaultdict(
+            lambda: {
+                "strategy": strategy,
+                "pages": defaultdict(lambda: {"details": [], "best": None}),
+            }
+        )
+        for indexing_meta in page_indexer_meta:
+            indexing_task = indexing_meta["indexing"]
+            results[indexing_task]["task"] = indexing_task
+            for detail in indexing_meta["details"]:
+                page = str(detail["page"])
+                page_index = results[indexing_task]["pages"][page]
+                page_index["details"].append(detail)
+
+                # default strategy is just take the first for now
+                if page_index["best"] is None and strategy == "default":
+                    page_index["best"] = detail
+
+        return results
 
     def group_results_by_page(
         self, group_key: str, page_meta: List[dict[str, any]]
     ) -> dict:
         """Group the results by page"""
-        group_by_page = {}
+        group_by_page = defaultdict(list)
         for idx, page_result in enumerate(page_meta):
             indexer = page_result[group_key]
             for detail in page_result["details"]:
-                page = int(detail["page"])
-                if page not in group_by_page:
-                    group_by_page[page] = []
                 detail[group_key] = indexer
+                page = int(detail["page"])
                 group_by_page[page].append(detail)
 
         return group_by_page

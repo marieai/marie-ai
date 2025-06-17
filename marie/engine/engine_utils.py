@@ -168,7 +168,7 @@ def open_ai_like_formatting(
     """
 
     default_options = {
-        'min_pixels': 512 * 28 * 28,
+        'min_pixels': 1 * 28 * 28,
         'max_pixels': 1280 * 28 * 28,  # 2560 1280 - > will be the default after update
     }
 
