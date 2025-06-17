@@ -151,12 +151,28 @@ def smart_resize(
 
 
 def open_ai_like_formatting(
-    content: List[Union[str, bytes, Image.Image]], remote: bool = False
+    content: List[Union[str, bytes, Image.Image]], remote: bool = False, **options
 ) -> List[dict]:
-    """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API."""
+    """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API.
 
-    min_pixels = 512 * 28 * 28
-    max_pixels = 4096 * 28 * 28
+    Args:
+        content: List of content items (strings, bytes, or PIL Images)
+        remote: Whether to format for remote API calls
+        **options: Additional model-specific options that will be passed through to image entries.
+                  Common options include:
+                  - min_pixels: Minimum pixel count for images
+                  - max_pixels: Maximum pixel count for images
+                  - detail: Image detail level (e.g., "high", "low", "auto")
+                  - resize: Resize strategy
+                  And any other model-specific parameters
+    """
+
+    default_options = {
+        'min_pixels': 512 * 28 * 28,
+        'max_pixels': 1280 * 28 * 28,  # 2560 1280 - > will be the default after update
+    }
+
+    image_options = {**default_options, **options}
     formatted_content = []
 
     for item in content:
@@ -168,36 +184,40 @@ def open_ai_like_formatting(
                     bytes_data = buffer.getvalue()
                 image_type = get_image_type_from_bytes(bytes_data)
                 base64_image = base64.b64encode(bytes_data).decode('utf-8')
-                formatted_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}",
-                        },
-                        "min_pixels": min_pixels,
-                        "max_pixels": max_pixels,
-                    }
-                )
-            else:
-                formatted_content.append(
-                    {
-                        "type": "image",
-                        "image": item,
-                    }
-                )
-        elif isinstance(item, bytes):
-            # For now, bytes are assumed to be images
-            image_type = get_image_type_from_bytes(item)
-            base64_image = base64.b64encode(item).decode('utf-8')
-            formatted_content.append(
-                {
-                    "type": "image",
-                    "image_url": f"data:image/{image_type};base64,{base64_image}",
-                    "image_urlXXX": {
-                        "url": f"data:image/{image_type};base64,{base64_image}"
+
+                image_entry = {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_image}",
                     },
                 }
-            )
+
+                image_entry.update(image_options)
+                formatted_content.append(image_entry)
+            else:
+                # For local processing, we might still want to pass some options
+                image_entry = {
+                    "type": "image",
+                    "image": item,
+                }
+
+                local_options = {
+                    k: v for k, v in image_options.items() if k not in ['url', 'detail']
+                }  # Example of filtering
+
+                image_entry.update(local_options)
+                formatted_content.append(image_entry)
+        elif isinstance(item, bytes):
+            image_type = get_image_type_from_bytes(item)
+            base64_image = base64.b64encode(item).decode('utf-8')
+
+            image_entry = {
+                "type": "image",
+                "image_url": f"data:image/{image_type};base64,{base64_image}",
+            }
+
+            image_entry.update(image_options)
+            formatted_content.append(image_entry)
         elif isinstance(item, str):
             formatted_content.append({"type": "text", "text": item})
         else:

@@ -125,7 +125,7 @@ def config_qwen2_5_vl(model_name: str, modality: str = "image"):
 
     prompt = "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n"
 
-    return llm, prompt, None
+    return llm, prompt, None, mm_processor_kwargs
 
 
 def config_mistral(model_name: str, modality: str = "text"):
@@ -136,7 +136,7 @@ def config_mistral(model_name: str, modality: str = "text"):
         model_name, supports_quantization=True, quantization_method="fp8", dtype="fp8"
     )
 
-    return llm, None, None
+    return llm, None, None, None
 
 
 def config_opt125(model_name: str, modality: str = "text"):
@@ -151,7 +151,7 @@ def config_opt125(model_name: str, modality: str = "text"):
         max_model_len=2048,
     )
 
-    return llm, "QUESTION_PLACEHOLDER", None
+    return llm, "QUESTION_PLACEHOLDER", None, None
 
 
 def config_phi4(model_name: str, modality: str = "text"):
@@ -165,7 +165,7 @@ def config_phi4(model_name: str, modality: str = "text"):
         dtype="bfloat16",
     )
 
-    return llm, None, None
+    return llm, None, None, None
 
 
 def config_phi3v(model_name: str, modality: str):
@@ -184,7 +184,7 @@ def config_phi3v(model_name: str, modality: str):
 
     prompt = "<|user|>\n<|image_1|>\nQUESTION_PLACEHOLDER<|end|>\n<|assistant|>\n"
 
-    return llm, prompt, None
+    return llm, prompt, None, mm_processor_kwargs
 
 
 def config_llava_next(model_name: str, modality: str):
@@ -203,7 +203,7 @@ def config_llava_next(model_name: str, modality: str):
 
     prompt = "[INST] <image>\nQUESTION_PLACEHOLDER [/INST]"
 
-    return llm, prompt, None
+    return llm, prompt, None, mm_processor_kwargs
 
 
 def config_mllama(model_name: str, modality: str):
@@ -212,7 +212,7 @@ def config_mllama(model_name: str, modality: str):
 
     llm = create_llm_instance(model_name, supports_quantization=False, dtype="bfloat16")
 
-    return llm, None, None
+    return llm, None, None, None
 
 
 def config_qwen2_5(model_name: str, modality: str = "text"):
@@ -223,7 +223,7 @@ def config_qwen2_5(model_name: str, modality: str = "text"):
         model_name, supports_quantization=True, quantization_method="bitsandbytes"
     )
 
-    return llm, None, None
+    return llm, None, None, None
 
 
 def config_deepseek_r1(model_name: str, modality: str = "text"):
@@ -240,7 +240,7 @@ def config_deepseek_r1(model_name: str, modality: str = "text"):
         enforce_eager=True,  # Slower but better results
     )
 
-    return llm, None, None
+    return llm, None, None, None
 
 
 # ---- Model Mapping ----
