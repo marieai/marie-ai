@@ -214,8 +214,9 @@ build_image() {
     log_info "Contents of build context:"
     ls -la patches/ wheels/ || log_warn "Some directories might be missing"
 
+  #--no-cache \
+
     DOCKER_BUILDKIT=0 docker build . \
-        --no-cache \
         --network=host \
         --build-arg PIP_TAG="$PIP_TAG" \
         --build-arg VCS_REF=$(git rev-parse HEAD) \

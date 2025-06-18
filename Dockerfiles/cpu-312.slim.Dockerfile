@@ -42,8 +42,9 @@ ENV PIP_DEFAULT_TIMEOUT=100 \
     PIP_NO_CACHE_DIR=1
 
 
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
+
 RUN add-apt-repository ppa:deadsnakes/ppa
 
 RUN apt-get update && \
@@ -139,7 +140,7 @@ LABEL org.opencontainers.image.created=${BUILD_DATE} \
 
 
 # Install necessary apt packages
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     DEBIAN_FRONTEND=noninteractive apt-get -qq install software-properties-common
 RUN add-apt-repository ppa:deadsnakes/ppa
 

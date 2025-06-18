@@ -430,6 +430,14 @@ class PostgreSQLJobScheduler(PostgresqlMixin, JobScheduler):
                 os.path.join(__default_schema_dir__, "reset_failed_dags_and_jobs.sql"),
             ),
             create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "suspend_non_started_work.sql"),
+            ),
+            create_sql_from_file(
+                schema,
+                os.path.join(__default_schema_dir__, "unsuspend_work.sql"),
+            ),
+            create_sql_from_file(
                 schema, os.path.join(__default_psql_dir__, "cron_job_init.sql")
             ),
         ]

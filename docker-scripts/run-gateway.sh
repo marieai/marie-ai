@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 source ./container.sh id.gateway
-exec 1> >(exec logger -s -t "${CONTAINER_NAME} [${0##*/}]") 2>&1
+exec 1> >(exec logger -s -t "[${0##*/}]") 2>&1
 echo "Starting container : ${CONTAINER_NAME}"
 
 if  [ $(id -u) = 0 ]; then
@@ -55,6 +55,7 @@ else
 #    ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION}
 ##    gateway --uses /mnt/data/marie-ai/config/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
 
+# -v /mnt/data/marie-ai/config/wheels:/mnt/data/marie-ai/config/wheels:rw \
   # shellcheck disable=SC2090
   docker run --rm -u 0 --user root -it --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864 \
     -e COLUMNS=180 \
@@ -64,6 +65,7 @@ else
     --env-file ./service.env \
     --name $NAME \
     -v $CONFIG_DIR:/etc/marie:rw \
+    -v /mnt/data/marie-ai/:/mnt/data/marie-ai:rw \
     -v /mnt/data/marie-ai/model_zoo:/mnt/data/marie-ai/model_zoo:ro \
     -v /opt/logs/marie-ai:/opt/marie-ai/logs:rw \
     -v /mnt/data/marie-ai/config/extra_py_modules:/mnt/data/marie-ai/config/extra_py_modules:ro \
@@ -73,4 +75,5 @@ else
     ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} \
     gateway --uses /etc/marie/service/gateway.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules
 #docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:4.0.0-cpu
+# docker exec -it  marie-gateway  bash
 fi

@@ -139,7 +139,6 @@ async def process_batch(
                     max_tokens=4096 * 4,
                 )
 
-            print(f"Response: {len(responses)}")
             assert isinstance(responses, list), "Expected a list of responses."
             assert len(responses) == len(
                 batch

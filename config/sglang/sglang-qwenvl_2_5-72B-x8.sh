@@ -2,6 +2,7 @@ docker run --gpus '"device=0,1,2,3,4,5,6,7"' \
   --shm-size 32g \
   -p 8000:8000 \
   -e OMP_NUM_THREADS=1 \
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --ipc=host \
   lmsysorg/sglang:latest \
@@ -18,10 +19,10 @@ docker run --gpus '"device=0,1,2,3,4,5,6,7"' \
     --pp-size 1 \
     --schedule-policy fcfs \
     --schedule-conservativeness 0.1 \
-    --max-running-requests 32 \
+    --max-running-requests 4 \
     --mem-fraction-static 0.7 \
     --disable-radix-cache \
+    --disable-cuda-graph \
     --context-len 32000 \
     --max-total-tokens 32768 \
     --max-prefill-tokens 32000
-

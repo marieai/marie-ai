@@ -56,7 +56,7 @@ docker run --rm  -it marieai/marie:3.0.19-cuda
 ## Run the server with custom entrypoint
 
 ```shell
-docker run --rm  -it --entrypoint /bin/bash  marieai/marie:3.0.30-cuda
+docker run --rm  -it --entrypoint /bin/bash  marieai/marie:4.0.0-cuda
 
 marie server --start --uses sample.yml  
 ```
